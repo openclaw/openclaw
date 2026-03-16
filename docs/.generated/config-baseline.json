@@ -2957,6 +2957,16 @@
       "hasChildren": true
     },
     {
+      "path": "agents.defaults.sandbox.backend",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.sandbox.browser",
       "kind": "core",
       "type": "object",
@@ -3532,6 +3542,234 @@
     },
     {
       "path": "agents.defaults.sandbox.sessionToolsVisibility",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.certificateData",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security",
+        "storage"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.certificateData.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.certificateData.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.certificateData.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.certificateFile",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.command",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.identityData",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security",
+        "storage"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.identityData.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.identityData.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.identityData.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.identityFile",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.knownHostsData",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security",
+        "storage"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.knownHostsData.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.knownHostsData.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.knownHostsData.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.knownHostsFile",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.strictHostKeyChecking",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.target",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.updateHostKeys",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.sandbox.ssh.workspaceRoot",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -5049,6 +5287,16 @@
       "hasChildren": true
     },
     {
+      "path": "agents.list.*.sandbox.backend",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.sandbox.browser",
       "kind": "core",
       "type": "object",
@@ -5624,6 +5872,234 @@
     },
     {
       "path": "agents.list.*.sandbox.sessionToolsVisibility",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.certificateData",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security",
+        "storage"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.certificateData.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.certificateData.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.certificateData.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.certificateFile",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.command",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.identityData",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security",
+        "storage"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.identityData.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.identityData.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.identityData.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.identityFile",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.knownHostsData",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "security",
+        "storage"
+      ],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.knownHostsData.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.knownHostsData.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.knownHostsData.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.knownHostsFile",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.strictHostKeyChecking",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.target",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.updateHostKeys",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.sandbox.ssh.workspaceRoot",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -7559,21 +8035,7 @@
         "storage"
       ],
       "label": "Browser Profile Driver",
-      "help": "Per-profile browser driver mode: \"openclaw\" (or legacy \"clawd\") or \"extension\" depending on connection/runtime strategy. Use the driver that matches your browser control stack to avoid protocol mismatches.",
-      "hasChildren": false
-    },
-    {
-      "path": "browser.relayBindHost",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Browser Relay Bind Address",
-      "help": "Bind IP address for the Chrome extension relay listener. Leave unset for loopback-only access, or set an explicit non-loopback IP such as 0.0.0.0 only when the relay must be reachable across network namespaces (for example WSL2) and the surrounding network is already trusted.",
+      "help": "Per-profile browser driver mode. Use \"openclaw\" (or legacy \"clawd\") for CDP-based profiles, or use \"existing-session\" for host-local Chrome MCP attachment.",
       "hasChildren": false
     },
     {
@@ -30048,6 +30510,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.actions.editForumTopic",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.actions.editMessage",
       "kind": "channel",
       "type": "boolean",
@@ -31922,6 +32394,16 @@
     },
     {
       "path": "channels.telegram.actions.deleteMessage",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.actions.editForumTopic",
       "kind": "channel",
       "type": "boolean",
       "required": false,
@@ -39771,6 +40253,22 @@
       "hasChildren": false
     },
     {
+      "path": "gateway.reload.deferralTimeoutMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "network",
+        "performance",
+        "reliability"
+      ],
+      "label": "Restart Deferral Timeout (ms)",
+      "help": "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
+      "hasChildren": false
+    },
+    {
       "path": "gateway.reload.mode",
       "kind": "core",
       "type": "string",
@@ -44498,6 +44996,144 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.amazon-bedrock",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/amazon-bedrock-provider",
+      "help": "OpenClaw Amazon Bedrock provider plugin (plugin: amazon-bedrock)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/amazon-bedrock-provider Config",
+      "help": "Plugin-defined config payload for amazon-bedrock.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/amazon-bedrock-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/anthropic-provider",
+      "help": "OpenClaw Anthropic provider plugin (plugin: anthropic)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/anthropic-provider Config",
+      "help": "Plugin-defined config payload for anthropic.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/anthropic-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.anthropic.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.anthropic.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.bluebubbles",
       "kind": "plugin",
       "type": "object",
@@ -44554,6 +45190,213 @@
     },
     {
       "path": "plugins.entries.bluebubbles.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.brave",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/brave-plugin",
+      "help": "OpenClaw Brave plugin (plugin: brave)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.brave.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/brave-plugin Config",
+      "help": "Plugin-defined config payload for brave.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.brave.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/brave-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.brave.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.brave.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.byteplus",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/byteplus-provider",
+      "help": "OpenClaw BytePlus provider plugin (plugin: byteplus)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.byteplus.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/byteplus-provider Config",
+      "help": "Plugin-defined config payload for byteplus.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.byteplus.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/byteplus-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.byteplus.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.byteplus.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.cloudflare-ai-gateway",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/cloudflare-ai-gateway-provider",
+      "help": "OpenClaw Cloudflare AI Gateway provider plugin (plugin: cloudflare-ai-gateway)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.cloudflare-ai-gateway.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/cloudflare-ai-gateway-provider Config",
+      "help": "Plugin-defined config payload for cloudflare-ai-gateway.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.cloudflare-ai-gateway.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/cloudflare-ai-gateway-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.cloudflare-ai-gateway.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.cloudflare-ai-gateway.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -45332,7 +46175,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.google-gemini-cli-auth",
+      "path": "plugins.entries.firecrawl",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -45341,12 +46184,12 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/google-gemini-cli-auth",
-      "help": "OpenClaw Gemini CLI OAuth provider plugin (plugin: google-gemini-cli-auth)",
+      "label": "@openclaw/firecrawl-plugin",
+      "help": "OpenClaw Firecrawl plugin (plugin: firecrawl)",
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.google-gemini-cli-auth.config",
+      "path": "plugins.entries.firecrawl.config",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -45355,12 +46198,12 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/google-gemini-cli-auth Config",
-      "help": "Plugin-defined config payload for google-gemini-cli-auth.",
+      "label": "@openclaw/firecrawl-plugin Config",
+      "help": "Plugin-defined config payload for firecrawl.",
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.google-gemini-cli-auth.enabled",
+      "path": "plugins.entries.firecrawl.enabled",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -45369,11 +46212,11 @@
       "tags": [
         "advanced"
       ],
-      "label": "Enable @openclaw/google-gemini-cli-auth",
+      "label": "Enable @openclaw/firecrawl-plugin",
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.google-gemini-cli-auth.hooks",
+      "path": "plugins.entries.firecrawl.hooks",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -45387,7 +46230,145 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.google-gemini-cli-auth.hooks.allowPromptInjection",
+      "path": "plugins.entries.firecrawl.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.github-copilot",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/github-copilot-provider",
+      "help": "OpenClaw GitHub Copilot provider plugin (plugin: github-copilot)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.github-copilot.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/github-copilot-provider Config",
+      "help": "Plugin-defined config payload for github-copilot.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.github-copilot.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/github-copilot-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.github-copilot.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.github-copilot.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.google",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/google-plugin",
+      "help": "OpenClaw Google plugin (plugin: google)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.google.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/google-plugin Config",
+      "help": "Plugin-defined config payload for google.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.google.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/google-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.google.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.google.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -45457,6 +46438,75 @@
     },
     {
       "path": "plugins.entries.googlechat.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.huggingface",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/huggingface-provider",
+      "help": "OpenClaw Hugging Face provider plugin (plugin: huggingface)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.huggingface.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/huggingface-provider Config",
+      "help": "Plugin-defined config payload for huggingface.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.huggingface.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/huggingface-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.huggingface.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.huggingface.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -45595,6 +46645,144 @@
     },
     {
       "path": "plugins.entries.irc.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.kilocode",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/kilocode-provider",
+      "help": "OpenClaw Kilo Gateway provider plugin (plugin: kilocode)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.kilocode.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/kilocode-provider Config",
+      "help": "Plugin-defined config payload for kilocode.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.kilocode.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/kilocode-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.kilocode.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.kilocode.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.kimi-coding",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/kimi-coding-provider",
+      "help": "OpenClaw Kimi Coding provider plugin (plugin: kimi-coding)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.kimi-coding.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/kimi-coding-provider Config",
+      "help": "Plugin-defined config payload for kimi-coding.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.kimi-coding.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/kimi-coding-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.kimi-coding.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.kimi-coding.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -46290,7 +47478,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.minimax-portal-auth",
+      "path": "plugins.entries.minimax",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46299,12 +47487,12 @@
       "tags": [
         "performance"
       ],
-      "label": "@openclaw/minimax-portal-auth",
-      "help": "OpenClaw MiniMax Portal OAuth provider plugin (plugin: minimax-portal-auth)",
+      "label": "@openclaw/minimax-provider",
+      "help": "OpenClaw MiniMax provider and OAuth plugin (plugin: minimax)",
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.minimax-portal-auth.config",
+      "path": "plugins.entries.minimax.config",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46313,12 +47501,12 @@
       "tags": [
         "performance"
       ],
-      "label": "@openclaw/minimax-portal-auth Config",
-      "help": "Plugin-defined config payload for minimax-portal-auth.",
+      "label": "@openclaw/minimax-provider Config",
+      "help": "Plugin-defined config payload for minimax.",
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.minimax-portal-auth.enabled",
+      "path": "plugins.entries.minimax.enabled",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -46327,11 +47515,11 @@
       "tags": [
         "performance"
       ],
-      "label": "Enable @openclaw/minimax-portal-auth",
+      "label": "Enable @openclaw/minimax-provider",
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.minimax-portal-auth.hooks",
+      "path": "plugins.entries.minimax.hooks",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46345,7 +47533,214 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.minimax-portal-auth.hooks.allowPromptInjection",
+      "path": "plugins.entries.minimax.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.mistral",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/mistral-provider",
+      "help": "OpenClaw Mistral provider plugin (plugin: mistral)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.mistral.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/mistral-provider Config",
+      "help": "Plugin-defined config payload for mistral.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.mistral.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/mistral-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.mistral.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.mistral.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.modelstudio",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/modelstudio-provider",
+      "help": "OpenClaw Model Studio provider plugin (plugin: modelstudio)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.modelstudio.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/modelstudio-provider Config",
+      "help": "Plugin-defined config payload for modelstudio.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.modelstudio.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/modelstudio-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.modelstudio.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.modelstudio.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.moonshot",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/moonshot-provider",
+      "help": "OpenClaw Moonshot provider plugin (plugin: moonshot)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.moonshot.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/moonshot-provider Config",
+      "help": "Plugin-defined config payload for moonshot.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.moonshot.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/moonshot-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.moonshot.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.moonshot.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -46566,6 +47961,75 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.nvidia",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/nvidia-provider",
+      "help": "OpenClaw NVIDIA provider plugin (plugin: nvidia)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.nvidia.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/nvidia-provider Config",
+      "help": "Plugin-defined config payload for nvidia.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.nvidia.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/nvidia-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.nvidia.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.nvidia.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.ollama",
       "kind": "plugin",
       "type": "object",
@@ -46704,6 +48168,587 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.openai",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/openai-provider",
+      "help": "OpenClaw OpenAI provider plugins (plugin: openai)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openai.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/openai-provider Config",
+      "help": "Plugin-defined config payload for openai.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openai.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/openai-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openai.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openai.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.opencode",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/opencode-provider",
+      "help": "OpenClaw OpenCode Zen provider plugin (plugin: opencode)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.opencode-go",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/opencode-go-provider",
+      "help": "OpenClaw OpenCode Go provider plugin (plugin: opencode-go)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.opencode-go.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/opencode-go-provider Config",
+      "help": "Plugin-defined config payload for opencode-go.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.opencode-go.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/opencode-go-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.opencode-go.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.opencode-go.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.opencode.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/opencode-provider Config",
+      "help": "Plugin-defined config payload for opencode.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.opencode.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/opencode-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.opencode.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.opencode.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openrouter",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/openrouter-provider",
+      "help": "OpenClaw OpenRouter provider plugin (plugin: openrouter)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openrouter.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/openrouter-provider Config",
+      "help": "Plugin-defined config payload for openrouter.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openrouter.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/openrouter-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openrouter.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openrouter.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "OpenShell Sandbox",
+      "help": "Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution. (plugin: openshell)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openshell.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "OpenShell Sandbox Config",
+      "help": "Plugin-defined config payload for openshell.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openshell.config.autoProviders",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Auto-create Providers",
+      "help": "When enabled, pass --auto-providers during sandbox create.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.command",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "OpenShell Command",
+      "help": "Path or command name for the openshell CLI.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.from",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Sandbox Source",
+      "help": "OpenShell sandbox source for first-time create. Defaults to openclaw.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.gateway",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Gateway Name",
+      "help": "Optional OpenShell gateway name passed as --gateway.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.gatewayEndpoint",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Gateway Endpoint",
+      "help": "Optional OpenShell gateway endpoint passed as --gateway-endpoint.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.gpu",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "GPU",
+      "help": "Request GPU resources when creating the sandbox.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.policy",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Policy File",
+      "help": "Optional path to a custom OpenShell sandbox policy YAML.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.providers",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Providers",
+      "help": "Provider names to attach when a sandbox is created.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openshell.config.providers.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.remoteAgentWorkspaceDir",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "storage"
+      ],
+      "label": "Remote Agent Dir",
+      "help": "Mirror path for the real agent workspace when workspaceAccess is read-only.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.remoteWorkspaceDir",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "storage"
+      ],
+      "label": "Remote Workspace Dir",
+      "help": "Primary writable workspace inside the OpenShell sandbox.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.config.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "performance"
+      ],
+      "label": "Command Timeout Seconds",
+      "help": "Timeout for openshell CLI operations such as create/upload/download.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable OpenShell Sandbox",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.openshell.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openshell.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.perplexity",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/perplexity-plugin",
+      "help": "OpenClaw Perplexity plugin (plugin: perplexity)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.perplexity.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/perplexity-plugin Config",
+      "help": "Plugin-defined config payload for perplexity.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.perplexity.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/perplexity-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.perplexity.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.perplexity.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.phone-control",
       "kind": "plugin",
       "type": "object",
@@ -46760,6 +48805,75 @@
     },
     {
       "path": "plugins.entries.phone-control.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qianfan",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/qianfan-provider",
+      "help": "OpenClaw Qianfan provider plugin (plugin: qianfan)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qianfan.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/qianfan-provider Config",
+      "help": "Plugin-defined config payload for qianfan.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qianfan.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/qianfan-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.qianfan.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.qianfan.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -47118,6 +49232,75 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.synthetic",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/synthetic-provider",
+      "help": "OpenClaw Synthetic provider plugin (plugin: synthetic)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.synthetic.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/synthetic-provider Config",
+      "help": "Plugin-defined config payload for synthetic.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.synthetic.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/synthetic-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.synthetic.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.synthetic.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.talk-voice",
       "kind": "plugin",
       "type": "object",
@@ -47432,6 +49615,75 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.together",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/together-provider",
+      "help": "OpenClaw Together provider plugin (plugin: together)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.together.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/together-provider Config",
+      "help": "Plugin-defined config payload for together.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.together.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/together-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.together.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.together.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.twitch",
       "kind": "plugin",
       "type": "object",
@@ -47488,6 +49740,144 @@
     },
     {
       "path": "plugins.entries.twitch.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.venice",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/venice-provider",
+      "help": "OpenClaw Venice provider plugin (plugin: venice)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.venice.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/venice-provider Config",
+      "help": "Plugin-defined config payload for venice.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.venice.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/venice-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.venice.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.venice.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vercel-ai-gateway",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/vercel-ai-gateway-provider",
+      "help": "OpenClaw Vercel AI Gateway provider plugin (plugin: vercel-ai-gateway)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vercel-ai-gateway.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/vercel-ai-gateway-provider Config",
+      "help": "Plugin-defined config payload for vercel-ai-gateway.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vercel-ai-gateway.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/vercel-ai-gateway-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.vercel-ai-gateway.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.vercel-ai-gateway.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -49000,6 +51390,75 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.volcengine",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/volcengine-provider",
+      "help": "OpenClaw Volcengine provider plugin (plugin: volcengine)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.volcengine.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/volcengine-provider Config",
+      "help": "Plugin-defined config payload for volcengine.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.volcengine.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/volcengine-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.volcengine.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.volcengine.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.whatsapp",
       "kind": "plugin",
       "type": "object",
@@ -49056,6 +51515,213 @@
     },
     {
       "path": "plugins.entries.whatsapp.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/xai-plugin",
+      "help": "OpenClaw xAI plugin (plugin: xai)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/xai-plugin Config",
+      "help": "Plugin-defined config payload for xai.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/xai-plugin",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xiaomi",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/xiaomi-provider",
+      "help": "OpenClaw Xiaomi provider plugin (plugin: xiaomi)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xiaomi.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/xiaomi-provider Config",
+      "help": "Plugin-defined config payload for xiaomi.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xiaomi.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/xiaomi-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xiaomi.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xiaomi.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.zai",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/zai-provider",
+      "help": "OpenClaw Z.AI provider plugin (plugin: zai)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.zai.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/zai-provider Config",
+      "help": "Plugin-defined config payload for zai.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.zai.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/zai-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.zai.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.zai.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -49270,6 +51936,48 @@
       ],
       "label": "Plugin Resolved Integrity",
       "help": "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.marketplaceName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Marketplace Name",
+      "help": "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.marketplacePlugin",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Marketplace Plugin",
+      "help": "Plugin entry name inside the source marketplace, used for later updates.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.marketplaceSource",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Marketplace Source",
+      "help": "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
       "hasChildren": false
     },
     {
@@ -55444,6 +58152,79 @@
       "hasChildren": false
     },
     {
+      "path": "tools.web.search.firecrawl",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "label": "Firecrawl Search API Key",
+      "help": "Firecrawl API key for web search (fallback: FIRECRAWL_API_KEY env var).",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.search.firecrawl.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Firecrawl Search Base URL",
+      "help": "Firecrawl Search base URL override (default: \"https://api.firecrawl.dev\").",
+      "hasChildren": false
+    },
+    {
       "path": "tools.web.search.gemini",
       "kind": "core",
       "type": "object",
@@ -55803,7 +58584,7 @@
         "tools"
       ],
       "label": "Web Search Provider",
-      "help": "Search provider (\"brave\", \"gemini\", \"grok\", \"kimi\", or \"perplexity\"). Auto-detected from available API keys if omitted.",
+      "help": "Search provider (\"brave\", \"firecrawl\", \"gemini\", \"grok\", \"kimi\", or \"perplexity\"). Auto-detected from available API keys if omitted.",
       "hasChildren": false
     },
     {
@@ -56136,7 +58917,7 @@
         "advanced"
       ],
       "label": "Setup Wizard State",
-      "help": "Setup wizard state tracking fields that record the most recent guided onboarding run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
+      "help": "Setup wizard state tracking fields that record the most recent guided setup run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
       "hasChildren": true
     },
     {
@@ -56150,7 +58931,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Timestamp",
-      "help": "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm onboarding recency during support and operational audits.",
+      "help": "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm setup recency during support and operational audits.",
       "hasChildren": false
     },
     {
@@ -56164,7 +58945,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Command",
-      "help": "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce onboarding steps when verifying setup regressions.",
+      "help": "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
       "hasChildren": false
     },
     {
@@ -56178,7 +58959,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Commit",
-      "help": "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate onboarding behavior with exact source state during debugging.",
+      "help": "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate setup behavior with exact source state during debugging.",
       "hasChildren": false
     },
     {
@@ -56192,7 +58973,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Mode",
-      "help": "Wizard execution mode recorded as \"local\" or \"remote\" for the most recent onboarding flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.",
+      "help": "Wizard execution mode recorded as \"local\" or \"remote\" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.",
       "hasChildren": false
     },
     {
@@ -56206,7 +58987,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Version",
-      "help": "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version onboarding changes.",
+      "help": "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
       "hasChildren": false
     }
   ]

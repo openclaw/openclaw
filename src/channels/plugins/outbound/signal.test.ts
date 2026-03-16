@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { signalOutbound } from "../../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { signalOutbound } from "./signal.js";
 
 describe("signalOutbound", () => {
   const cfg: OpenClawConfig = {

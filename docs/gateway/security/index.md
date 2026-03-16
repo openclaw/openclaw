@@ -738,7 +738,7 @@ In minimal mode, the Gateway still broadcasts enough for device discovery (`role
 Gateway auth is **required by default**. If no token/password is configured,
 the Gateway refuses WebSocket connections (fail‑closed).
 
-The onboarding wizard generates a token by default (even for loopback) so
+The setup wizard generates a token by default (even for loopback) so
 local clients must authenticate.
 
 Set a token so **all** WS clients must authenticate:
@@ -990,10 +990,9 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
 - For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.
-- Keep the Gateway and node hosts tailnet-only; avoid exposing relay/control ports to LAN or public Internet.
-- The Chrome extension relay’s CDP endpoint is auth-gated; only OpenClaw clients can connect.
+- Keep the Gateway and node hosts tailnet-only; avoid exposing browser control ports to LAN or public Internet.
 - Disable browser proxy routing when you don’t need it (`gateway.nodes.browser.mode="off"`).
-- Chrome extension relay mode is **not** “safer”; it can take over your existing Chrome tabs. Assume it can act as you in whatever that tab/profile can reach.
+- Chrome MCP existing-session mode is **not** “safer”; it can act as you in whatever that host Chrome profile can reach.
 
 ### Browser SSRF policy (trusted-network default)
 

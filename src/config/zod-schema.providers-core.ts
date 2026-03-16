@@ -258,6 +258,7 @@ export const TelegramAccountSchemaBase = z
         editMessage: z.boolean().optional(),
         sticker: z.boolean().optional(),
         createForumTopic: z.boolean().optional(),
+        editForumTopic: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -276,6 +277,7 @@ export const TelegramAccountSchemaBase = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     linkPreview: z.boolean().optional(),
+    silentErrorReplies: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
   })
