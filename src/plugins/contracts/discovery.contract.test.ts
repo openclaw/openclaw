@@ -36,6 +36,11 @@ const githubCopilotPlugin = (await import("../../../extensions/github-copilot/in
 const ollamaPlugin = (await import("../../../extensions/ollama/index.js")).default;
 const vllmPlugin = (await import("../../../extensions/vllm/index.js")).default;
 const sglangPlugin = (await import("../../../extensions/sglang/index.js")).default;
+const minimaxPlugin = (await import("../../../extensions/minimax/index.js")).default;
+const modelStudioPlugin = (await import("../../../extensions/modelstudio/index.js")).default;
+const cloudflareAiGatewayPlugin = (
+  await import("../../../extensions/cloudflare-ai-gateway/index.js")
+).default;
 
 function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
   const captured = createCapturedPluginRegistration();
@@ -322,6 +327,192 @@ describe("provider discovery contract", () => {
     });
     expect(buildSglangProviderMock).toHaveBeenCalledWith({
       apiKey: "env-sglang-key",
+    });
+  });
+
+  it("keeps MiniMax API catalog provider-owned", async () => {
+    const provider = requireProvider(registerProviders(minimaxPlugin), "minimax");
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {},
+        env: {
+          MINIMAX_API_KEY: "minimax-key",
+        } as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: "minimax-key" }),
+      }),
+    ).resolves.toMatchObject({
+      provider: {
+        baseUrl: "https://api.minimax.io/anthropic",
+        api: "anthropic-messages",
+        authHeader: true,
+        apiKey: "minimax-key",
+        models: expect.arrayContaining([
+          expect.objectContaining({ id: "MiniMax-M2.5" }),
+          expect.objectContaining({ id: "MiniMax-VL-01" }),
+        ]),
+      },
+    });
+  });
+
+  it("keeps MiniMax portal oauth marker fallback provider-owned", async () => {
+    const provider = requireProvider(registerProviders(minimaxPlugin), "minimax-portal");
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        store: {
+          version: 1,
+          profiles: {
+            "minimax-portal:default": {
+              type: "oauth",
+              provider: "minimax-portal",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+        },
+      },
+    ]);
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+      }),
+    ).resolves.toMatchObject({
+      provider: {
+        baseUrl: "https://api.minimax.io/anthropic",
+        api: "anthropic-messages",
+        authHeader: true,
+        apiKey: "minimax-oauth",
+        models: expect.arrayContaining([expect.objectContaining({ id: "MiniMax-M2.5" })]),
+      },
+    });
+  });
+
+  it("keeps MiniMax portal explicit base URL override provider-owned", async () => {
+    const provider = requireProvider(registerProviders(minimaxPlugin), "minimax-portal");
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {
+          models: {
+            providers: {
+              "minimax-portal": {
+                baseUrl: "https://portal-proxy.example.com/anthropic",
+                apiKey: "explicit-key",
+              },
+            },
+          },
+        },
+        env: {} as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+      }),
+    ).resolves.toMatchObject({
+      provider: {
+        baseUrl: "https://portal-proxy.example.com/anthropic",
+        apiKey: "explicit-key",
+      },
+    });
+  });
+
+  it("keeps Model Studio catalog provider-owned", async () => {
+    const provider = requireProvider(registerProviders(modelStudioPlugin), "modelstudio");
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {
+          models: {
+            providers: {
+              modelstudio: {
+                baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+              },
+            },
+          },
+        },
+        env: {
+          MODELSTUDIO_API_KEY: "modelstudio-key",
+        } as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: "modelstudio-key" }),
+      }),
+    ).resolves.toMatchObject({
+      provider: {
+        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+        api: "openai-completions",
+        apiKey: "modelstudio-key",
+        models: expect.arrayContaining([
+          expect.objectContaining({ id: "qwen3.5-plus" }),
+          expect.objectContaining({ id: "MiniMax-M2.5" }),
+        ]),
+      },
+    });
+  });
+
+  it("keeps Cloudflare AI Gateway catalog disabled without stored metadata", async () => {
+    const provider = requireProvider(
+      registerProviders(cloudflareAiGatewayPlugin),
+      "cloudflare-ai-gateway",
+    );
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps Cloudflare AI Gateway env-managed catalog provider-owned", async () => {
+    const provider = requireProvider(
+      registerProviders(cloudflareAiGatewayPlugin),
+      "cloudflare-ai-gateway",
+    );
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        store: {
+          version: 1,
+          profiles: {
+            "cloudflare-ai-gateway:default": {
+              type: "api_key",
+              provider: "cloudflare-ai-gateway",
+              keyRef: {
+                source: "env",
+                provider: "default",
+                id: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+              },
+              metadata: {
+                accountId: "acc-123",
+                gatewayId: "gw-456",
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {},
+        env: {
+          CLOUDFLARE_AI_GATEWAY_API_KEY: "secret-value",
+        } as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+      }),
+    ).resolves.toEqual({
+      provider: {
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/acc-123/gw-456/anthropic",
+        api: "anthropic-messages",
+        apiKey: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+        models: [expect.objectContaining({ id: "claude-sonnet-4-5" })],
+      },
     });
   });
 });
