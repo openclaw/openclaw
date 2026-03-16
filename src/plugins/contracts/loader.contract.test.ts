@@ -75,15 +75,12 @@ describe("plugin loader contract", () => {
       webSearchProviderContractRegistry.map((entry) => entry.pluginId),
     );
 
-    resolvePluginWebSearchProviders({});
+    const providers = resolvePluginWebSearchProviders({});
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: webSearchPluginIds,
-        activate: false,
-        cache: false,
-      }),
+    expect(uniqueSortedPluginIds(providers.map((provider) => provider.pluginId))).toEqual(
+      webSearchPluginIds,
     );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("keeps bundled web search allowlist compatibility wired to the web search registry", () => {
@@ -91,7 +88,7 @@ describe("plugin loader contract", () => {
       webSearchProviderContractRegistry.map((entry) => entry.pluginId),
     );
 
-    resolvePluginWebSearchProviders({
+    const providers = resolvePluginWebSearchProviders({
       bundledAllowlistCompat: true,
       config: {
         plugins: {
@@ -100,15 +97,9 @@ describe("plugin loader contract", () => {
       },
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: expect.arrayContaining(webSearchPluginIds),
-          }),
-        }),
-        onlyPluginIds: webSearchPluginIds,
-      }),
+    expect(uniqueSortedPluginIds(providers.map((provider) => provider.pluginId))).toEqual(
+      webSearchPluginIds,
     );
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });
