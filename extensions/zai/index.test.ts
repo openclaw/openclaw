@@ -1,23 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderPlugin } from "../../src/plugins/types.js";
+import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 import {
   createProviderUsageFetch,
   makeResponse,
 } from "../../src/test-utils/provider-usage-fetch.js";
 import zaiPlugin from "./index.js";
 
-function registerProvider(): ProviderPlugin {
-  let provider: ProviderPlugin | undefined;
-  zaiPlugin.register({
-    registerProvider(nextProvider: ProviderPlugin) {
-      provider = nextProvider;
-    },
-  } as never);
-  if (!provider) {
-    throw new Error("provider registration missing");
-  }
-  return provider;
-}
+const registerProvider = () => registerSingleProviderPlugin(zaiPlugin);
 
 describe("zai plugin", () => {
   it("owns glm-5 forward-compat resolution", () => {
