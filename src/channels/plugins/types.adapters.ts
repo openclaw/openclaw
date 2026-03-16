@@ -1,11 +1,13 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentAcpBinding } from "../../config/types.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { ConfigWriteTarget } from "./config-writes.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -137,12 +139,23 @@ export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
   payload: ReplyPayload;
 };
 
+export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
+  abortSignal?: AbortSignal;
+};
+
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number) => string[]) | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   pollMaxOptions?: number;
+  normalizePayload?: (params: { payload: ReplyPayload }) => ReplyPayload | null;
+  shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
+  resolveEffectiveTextChunkLimit?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    fallbackLimit?: number;
+  }) => number | undefined;
   resolveTarget?: (params: {
     cfg?: OpenClawConfig;
     to?: string;
@@ -151,6 +164,10 @@ export type ChannelOutboundAdapter = {
     mode?: ChannelOutboundTargetMode;
   }) => { ok: true; to: string } | { ok: false; error: Error };
   sendPayload?: (ctx: ChannelOutboundPayloadContext) => Promise<OutboundDeliveryResult>;
+  sendFormattedText?: (ctx: ChannelOutboundFormattedContext) => Promise<OutboundDeliveryResult[]>;
+  sendFormattedMedia?: (
+    ctx: ChannelOutboundFormattedContext & { mediaUrl: string },
+  ) => Promise<OutboundDeliveryResult>;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
@@ -464,7 +481,79 @@ export type ChannelExecApprovalAdapter = {
 };
 
 export type ChannelAllowlistAdapter = {
+  applyConfigEdit?: (params: {
+    cfg: OpenClawConfig;
+    parsedConfig: Record<string, unknown>;
+    accountId?: string | null;
+    scope: "dm" | "group";
+    action: "add" | "remove";
+    entry: string;
+  }) =>
+    | {
+        kind: "ok";
+        changed: boolean;
+        pathLabel: string;
+        writeTarget: ConfigWriteTarget;
+      }
+    | {
+        kind: "invalid-entry";
+      }
+    | Promise<
+        | {
+            kind: "ok";
+            changed: boolean;
+            pathLabel: string;
+            writeTarget: ConfigWriteTarget;
+          }
+        | {
+            kind: "invalid-entry";
+          }
+      >
+    | null;
+  readConfig?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
+    | {
+        dmAllowFrom?: Array<string | number>;
+        groupAllowFrom?: Array<string | number>;
+        dmPolicy?: string;
+        groupPolicy?: string;
+        groupOverrides?: Array<{ label: string; entries: Array<string | number> }>;
+      }
+    | Promise<{
+        dmAllowFrom?: Array<string | number>;
+        groupAllowFrom?: Array<string | number>;
+        dmPolicy?: string;
+        groupPolicy?: string;
+        groupOverrides?: Array<{ label: string; entries: Array<string | number> }>;
+      }>;
+  resolveNames?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    scope: "dm" | "group";
+    entries: string[];
+  }) =>
+    | Array<{ input: string; resolved: boolean; name?: string | null }>
+    | Promise<Array<{ input: string; resolved: boolean; name?: string | null }>>;
   supportsScope?: (params: { scope: "dm" | "group" | "all" }) => boolean;
+};
+
+export type ChannelAcpBindingAdapter = {
+  normalizeConfiguredBindingTarget?: (params: {
+    binding: AgentAcpBinding;
+    conversationId: string;
+  }) => {
+    conversationId: string;
+    parentConversationId?: string;
+  } | null;
+  matchConfiguredBinding?: (params: {
+    binding: AgentAcpBinding;
+    bindingConversationId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  }) => {
+    conversationId: string;
+    parentConversationId?: string;
+    matchPriority?: number;
+  } | null;
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
