@@ -36,12 +36,21 @@ export async function fetchGraphJson<T>(params: {
   path: string;
   headers?: Record<string, string>;
 }): Promise<T> {
-  const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
-    headers: {
-      Authorization: `Bearer ${params.token}`,
-      ...params.headers,
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${GRAPH_ROOT}${params.path}`, {
+      headers: {
+        Authorization: `Bearer ${params.token}`,
+        ...params.headers,
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Graph ${params.path} request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Graph ${params.path} failed (${res.status}): ${text || "unknown error"}`);
