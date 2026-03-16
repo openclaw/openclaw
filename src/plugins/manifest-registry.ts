@@ -97,6 +97,7 @@ function shouldUseManifestCache(env: NodeJS.ProcessEnv): boolean {
 function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
+  repairBundledPermissions: boolean;
   env: NodeJS.ProcessEnv;
 }): string {
   const { roots, loadPaths } = resolvePluginCacheInputs({
@@ -109,7 +110,7 @@ function buildCacheKey(params: {
   const bundledRoot = roots.stock ?? "";
   // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
   // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
-  return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
+  return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${params.repairBundledPermissions ? "repair" : "no-repair"}::${JSON.stringify(loadPaths)}`;
 }
 
 function safeStatMtimeMs(filePath: string): number | null {
@@ -271,6 +272,7 @@ function resolveDuplicatePrecedenceRank(params: {
 export function loadPluginManifestRegistry(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  repairBundledPermissions?: boolean;
   cache?: boolean;
   env?: NodeJS.ProcessEnv;
   candidates?: PluginCandidate[];
@@ -279,7 +281,13 @@ export function loadPluginManifestRegistry(params: {
   const config = params.config ?? {};
   const normalized = normalizePluginsConfig(config.plugins);
   const env = params.env ?? process.env;
-  const cacheKey = buildCacheKey({ workspaceDir: params.workspaceDir, plugins: normalized, env });
+  const repairBundledPermissions = params.repairBundledPermissions !== false;
+  const cacheKey = buildCacheKey({
+    workspaceDir: params.workspaceDir,
+    plugins: normalized,
+    repairBundledPermissions,
+    env,
+  });
   const cacheEnabled = params.cache !== false && shouldUseManifestCache(env);
   if (cacheEnabled) {
     const cached = registryCache.get(cacheKey);
@@ -296,6 +304,7 @@ export function loadPluginManifestRegistry(params: {
     : discoverOpenClawPlugins({
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
+        repairBundledPermissions,
         env,
       });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];

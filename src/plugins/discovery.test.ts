@@ -494,6 +494,34 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "skips bundled permission repair when explicitly disabled",
+    async () => {
+      const stateDir = makeTempDir();
+      const bundledDir = path.join(stateDir, "bundled");
+      const packDir = path.join(bundledDir, "demo-pack");
+      mkdirSafe(packDir);
+      fs.writeFileSync(path.join(packDir, "index.ts"), "export default function () {}", "utf-8");
+      fs.chmodSync(packDir, 0o777);
+
+      const result = discoverOpenClawPlugins({
+        repairBundledPermissions: false,
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          CLAWDBOT_STATE_DIR: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+        },
+      });
+
+      expect(result.candidates.some((candidate) => candidate.idHint === "demo-pack")).toBe(false);
+      expect(result.diagnostics.some((diag) => diag.message.includes("world-writable path"))).toBe(
+        true,
+      );
+      expect(fs.statSync(packDir).mode & 0o777).toBe(0o777);
+    },
+  );
+
   it.runIf(process.platform !== "win32" && typeof process.getuid === "function")(
     "blocks suspicious ownership when uid mismatch is detected",
     async () => {

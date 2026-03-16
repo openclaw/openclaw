@@ -57,6 +57,7 @@ Do not edit these files under this plan:
 - [x] Split config read and validate from mutation APIs
 - [x] Prove `loadConfig()` does not write files
 - [x] Add deterministic tests for read-only config paths
+- [x] Disable bundled plugin permission repair writes during config validation read paths
 
 ### Stage 2B: global state registry hardening
 

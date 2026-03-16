@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./config.js";
 
@@ -183,6 +184,7 @@ describe("config plugin validation", () => {
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+    clearPluginDiscoveryCache();
     clearPluginManifestRegistryCache();
   });
 
@@ -239,6 +241,43 @@ describe("config plugin validation", () => {
     );
     expect(res.ok).toBe(true);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not chmod bundled plugin dirs during config validation reads",
+    async () => {
+      const bundledDir = path.join(suiteHome, "bundled-no-repair");
+      const packDir = path.join(bundledDir, "demo-pack");
+      await mkdirSafe(packDir);
+      await fs.writeFile(path.join(packDir, "index.ts"), "export default function () {}", "utf-8");
+      await fs.writeFile(
+        path.join(packDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "demo-pack" }, null, 2),
+        "utf-8",
+      );
+      await fs.chmod(packDir, 0o777);
+
+      clearPluginDiscoveryCache();
+      clearPluginManifestRegistryCache();
+
+      validateConfigObjectWithPlugins(
+        {
+          plugins: {
+            entries: {
+              "demo-pack": { enabled: true },
+            },
+          },
+        },
+        {
+          env: {
+            ...suiteEnv(),
+            OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          },
+        },
+      );
+
+      expect((await fs.stat(packDir)).mode & 0o777).toBe(0o777);
+    },
+  );
 
   it("warns for removed legacy plugin ids instead of failing validation", async () => {
     const removedId = "google-antigravity-auth";

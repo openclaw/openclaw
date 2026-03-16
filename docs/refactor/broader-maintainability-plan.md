@@ -84,7 +84,7 @@ No user-facing CLI flag removals in stages 1 to 3.
 - Stage 0: complete.
 - Stage 1A: complete with shared preflight helper used by route-first and Commander hooks.
 - Stage 1B: complete with runtime fingerprint diagnostics integrated into startup and status paths.
-- Stage 2A: complete with deterministic read and mutation seam splits in config paths.
+- Stage 2A: complete with deterministic read and mutation seam splits in config paths, including no-repair plugin validation reads to avoid discovery-side chmod writes during config validation.
 - Stage 2B: complete with `RuntimeStateContainer` seams threaded through startup/runtime overrides.
 - Stage 3A: in progress with startup phase extractions for config preflight, secrets precheck, auth bootstrap, runtime policy, control-ui root resolution, secrets activation controller, and runtime config reloader wiring; early-phase typed startup context handoff and shared startup preflight failure reporting are now in place.
 - Stages 3B to 5: not started.
