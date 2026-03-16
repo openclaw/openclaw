@@ -27,12 +27,15 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   dropThinkingBlockModelHints: [],
 };
 
-const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
-  anthropic: {
+const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+  "amazon-bedrock": {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
-  "amazon-bedrock": {
+};
+
+const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities>> = {
+  anthropic: {
     providerFamily: "anthropic",
     dropThinkingBlockModelHints: ["claude"],
   },
@@ -48,9 +51,6 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
       "mistralai",
     ],
   },
-  openai: {
-    providerFamily: "openai",
-  },
   opencode: {
     openAiCompatTurnValidation: false,
     geminiThoughtSignatureSanitization: true,
@@ -61,6 +61,9 @@ const PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
     geminiThoughtSignatureSanitization: true,
     geminiThoughtSignatureModelHints: ["gemini"],
   },
+  openai: {
+    providerFamily: "openai",
+  },
 };
 
 export function resolveProviderCapabilities(provider?: string | null): ProviderCapabilities {
@@ -70,8 +73,8 @@ export function resolveProviderCapabilities(provider?: string | null): ProviderC
     : undefined;
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
-    ...PROVIDER_CAPABILITIES[normalized],
-    ...pluginCapabilities,
+    ...CORE_PROVIDER_CAPABILITIES[normalized],
+    ...(pluginCapabilities ?? PLUGIN_CAPABILITIES_FALLBACKS[normalized]),
   };
 }
 

@@ -110,15 +110,23 @@ export type {
   ProviderAuthContext,
   ProviderAuthResult,
   ProviderCacheTtlEligibilityContext,
+  ProviderFetchUsageSnapshotContext,
   ProviderPreparedRuntimeAuth,
+  ProviderResolvedUsageAuth,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderResolveUsageAuthContext,
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
   ProviderWrapStreamFnContext,
 } from "../plugins/types.js";
+export type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+  UsageWindow,
+} from "../infra/provider-usage.types.js";
 export type {
   ConversationRef,
   SessionBindingBindInput,
@@ -678,7 +686,10 @@ export {
 export { inspectDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
 export type { InspectedDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
 export { collectDiscordAuditChannelIds } from "../../extensions/discord/src/audit.js";
-export { discordOnboardingAdapter } from "../../extensions/discord/src/onboarding.js";
+export {
+  discordSetupAdapter,
+  discordSetupWizard,
+} from "../../extensions/discord/src/setup-surface.js";
 export {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
@@ -693,7 +704,10 @@ export {
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "../../extensions/imessage/src/accounts.js";
-export { imessageOnboardingAdapter } from "../../extensions/imessage/src/onboarding.js";
+export {
+  imessageSetupAdapter,
+  imessageSetupWizard,
+} from "../../extensions/imessage/src/setup-surface.js";
 export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
@@ -727,7 +741,7 @@ export {
   extractSlackToolSend,
   listSlackMessageActions,
 } from "../../extensions/slack/src/message-actions.js";
-export { slackOnboardingAdapter } from "../../extensions/slack/src/onboarding.js";
+export { slackSetupAdapter, slackSetupWizard } from "../../extensions/slack/src/setup-surface.js";
 export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
@@ -743,7 +757,10 @@ export {
 } from "../../extensions/telegram/src/accounts.js";
 export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
-export { telegramOnboardingAdapter } from "../../extensions/telegram/src/onboarding.js";
+export {
+  telegramSetupAdapter,
+  telegramSetupWizard,
+} from "../../extensions/telegram/src/setup-surface.js";
 export {
   looksLikeTelegramTargetId,
   normalizeTelegramMessagingTarget,
@@ -762,7 +779,10 @@ export {
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "../../extensions/signal/src/accounts.js";
-export { signalOnboardingAdapter } from "../../extensions/signal/src/onboarding.js";
+export {
+  signalSetupAdapter,
+  signalSetupWizard,
+} from "../../extensions/signal/src/setup-surface.js";
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,

@@ -39,7 +39,7 @@ export {
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
-export { slackOnboardingAdapter } from "../../extensions/slack/src/onboarding.js";
+export { slackSetupAdapter, slackSetupWizard } from "../../extensions/slack/src/setup-surface.js";
 export { SlackConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { handleSlackMessageAction } from "./slack-message-actions.js";

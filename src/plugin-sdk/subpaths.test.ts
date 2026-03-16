@@ -59,29 +59,35 @@ describe("plugin-sdk subpath exports", () => {
   it("exports Discord helpers", () => {
     expect(typeof discordSdk.resolveDiscordAccount).toBe("function");
     expect(typeof discordSdk.inspectDiscordAccount).toBe("function");
-    expect(typeof discordSdk.discordOnboardingAdapter).toBe("object");
+    expect(typeof discordSdk.discordSetupWizard).toBe("object");
+    expect(typeof discordSdk.discordSetupAdapter).toBe("object");
   });
 
   it("exports Slack helpers", () => {
     expect(typeof slackSdk.resolveSlackAccount).toBe("function");
     expect(typeof slackSdk.inspectSlackAccount).toBe("function");
     expect(typeof slackSdk.handleSlackMessageAction).toBe("function");
+    expect(typeof slackSdk.slackSetupWizard).toBe("object");
+    expect(typeof slackSdk.slackSetupAdapter).toBe("object");
   });
 
   it("exports Telegram helpers", () => {
     expect(typeof telegramSdk.resolveTelegramAccount).toBe("function");
     expect(typeof telegramSdk.inspectTelegramAccount).toBe("function");
-    expect(typeof telegramSdk.telegramOnboardingAdapter).toBe("object");
+    expect(typeof telegramSdk.telegramSetupWizard).toBe("object");
+    expect(typeof telegramSdk.telegramSetupAdapter).toBe("object");
   });
 
   it("exports Signal helpers", () => {
     expect(typeof signalSdk.resolveSignalAccount).toBe("function");
-    expect(typeof signalSdk.signalOnboardingAdapter).toBe("object");
+    expect(typeof signalSdk.signalSetupWizard).toBe("object");
+    expect(typeof signalSdk.signalSetupAdapter).toBe("object");
   });
 
   it("exports iMessage helpers", () => {
     expect(typeof imessageSdk.resolveIMessageAccount).toBe("function");
-    expect(typeof imessageSdk.imessageOnboardingAdapter).toBe("object");
+    expect(typeof imessageSdk.imessageSetupWizard).toBe("object");
+    expect(typeof imessageSdk.imessageSetupAdapter).toBe("object");
   });
 
   it("exports WhatsApp helpers", () => {
