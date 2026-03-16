@@ -1,4 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  resolveProviderCacheTtlEligibility: (params: {
+    context: { provider: string; modelId: string };
+  }) =>
+    params.context.provider === "openrouter"
+      ? ["anthropic/", "moonshot/", "moonshotai/", "zai/"].some((prefix) =>
+          params.context.modelId.startsWith(prefix),
+        )
+      : undefined,
+}));
+
 import { isCacheTtlEligibleProvider } from "./cache-ttl.js";
 
 describe("isCacheTtlEligibleProvider", () => {

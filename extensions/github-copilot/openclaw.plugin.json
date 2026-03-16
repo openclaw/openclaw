@@ -1,0 +1,12 @@
+{
+  "id": "github-copilot",
+  "providers": ["github-copilot"],
+  "providerAuthEnvVars": {
+    "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

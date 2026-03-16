@@ -56,7 +56,7 @@ export async function installGatewayDaemonNonInteractive(params: {
       [
         "Gateway install blocked:",
         tokenResolution.unavailableReason,
-        "Fix gateway auth config/token input and rerun onboarding.",
+        "Fix gateway auth config/token input and rerun setup.",
       ].join(" "),
     );
     runtime.exit(1);

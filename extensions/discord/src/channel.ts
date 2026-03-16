@@ -1,3 +1,4 @@
+import { Separator, TextDisplay } from "@buape/carbon";
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedDmSecurityPolicy,
@@ -7,14 +8,12 @@ import {
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
 import {
-  applyAccountNameToChannelSection,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   collectDiscordAuditChannelIds,
   collectDiscordStatusIssues,
   DEFAULT_ACCOUNT_ID,
-  discordOnboardingAdapter,
   DiscordConfigSchema,
   getChatChannelMeta,
   inspectDiscordAccount,
@@ -22,8 +21,6 @@ import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
   looksLikeDiscordTargetId,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
   PAIRING_APPROVED_MESSAGE,
@@ -35,16 +32,25 @@ import {
   resolveDiscordGroupToolPolicy,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
+  type OpenClawConfig,
   type ResolvedDiscordAccount,
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
+import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import { getDiscordRuntime } from "./runtime.js";
+import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
+import { DiscordUiContainer } from "./ui.js";
 
 type DiscordSendFn = ReturnType<
   typeof getDiscordRuntime
 >["channel"]["discord"]["sendMessageDiscord"];
 
 const meta = getChatChannelMeta("discord");
+
+async function loadDiscordChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
 
 const discordMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) =>
@@ -58,7 +64,36 @@ const discordMessageActions: ChannelMessageActionAdapter = {
     }
     return ma.handleAction(ctx);
   },
+  requiresTrustedRequesterSender: ({ action, toolContext }) =>
+    Boolean(toolContext && (action === "timeout" || action === "kick" || action === "ban")),
 };
+
+function buildDiscordCrossContextComponents(params: {
+  originLabel: string;
+  message: string;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) {
+  const trimmed = params.message.trim();
+  const components: Array<TextDisplay | Separator> = [];
+  if (trimmed) {
+    components.push(new TextDisplay(params.message));
+    components.push(new Separator({ divider: true, spacing: "small" }));
+  }
+  components.push(new TextDisplay(`*From ${params.originLabel}*`));
+  return [new DiscordUiContainer({ cfg: params.cfg, accountId: params.accountId, components })];
+}
+
+function hasDiscordExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
+  return listDiscordAccountIds(cfg).some((accountId) => {
+    const execApprovals = resolveDiscordAccount({ cfg, accountId }).config.execApprovals;
+    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
+      return false;
+    }
+    const target = execApprovals.target ?? "dm";
+    return target === "dm" || target === "both";
+  });
+}
 
 const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
@@ -76,12 +111,16 @@ const discordConfigBase = createScopedChannelConfigBase({
   clearBaseFields: ["token", "name"],
 });
 
+const discordSetupWizard = createDiscordSetupWizardProxy(async () => ({
+  discordSetupWizard: (await loadDiscordChannelRuntime()).discordSetupWizard,
+}));
+
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   id: "discord",
   meta: {
     ...meta,
   },
-  onboarding: discordOnboardingAdapter,
+  setupWizard: discordSetupWizard,
   pairing: {
     idLabel: "discordUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(discord|user):/i, ""),
@@ -178,10 +217,21 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
+    buildCrossContextComponents: buildDiscordCrossContextComponents,
     targetResolver: {
       looksLikeId: looksLikeDiscordTargetId,
       hint: "<channelId|user:ID|channel:ID>",
     },
+  },
+  execApprovals: {
+    getInitiatingSurfaceState: ({ cfg, accountId }) =>
+      isDiscordExecApprovalClientEnabled({ cfg, accountId })
+        ? { kind: "enabled" }
+        : { kind: "disabled" },
+    hasConfiguredDmRoute: ({ cfg }) => hasDiscordExecApprovalDmRoute(cfg),
+    shouldSuppressForwardingFallback: ({ cfg, target }) =>
+      (normalizeMessageChannel(target.channel) ?? target.channel) === "discord" &&
+      isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
   },
   directory: {
     self: async () => null,
@@ -233,71 +283,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     },
   },
   actions: discordMessageActions,
-  setup: {
-    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-    applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "discord",
-        accountId,
-        name,
-      }),
-    validateInput: ({ accountId, input }) => {
-      if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-        return "DISCORD_BOT_TOKEN can only be used for the default account.";
-      }
-      if (!input.useEnv && !input.token) {
-        return "Discord requires token (or --use-env).";
-      }
-      return null;
-    },
-    applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
-        cfg,
-        channelKey: "discord",
-        accountId,
-        name: input.name,
-      });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: "discord",
-            })
-          : namedConfig;
-      if (accountId === DEFAULT_ACCOUNT_ID) {
-        return {
-          ...next,
-          channels: {
-            ...next.channels,
-            discord: {
-              ...next.channels?.discord,
-              enabled: true,
-              ...(input.useEnv ? {} : input.token ? { token: input.token } : {}),
-            },
-          },
-        };
-      }
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          discord: {
-            ...next.channels?.discord,
-            enabled: true,
-            accounts: {
-              ...next.channels?.discord?.accounts,
-              [accountId]: {
-                ...next.channels?.discord?.accounts?.[accountId],
-                enabled: true,
-                ...(input.token ? { token: input.token } : {}),
-              },
-            },
-          },
-        },
-      };
-    },
-  },
+  setup: discordSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: null,

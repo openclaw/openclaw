@@ -6,6 +6,7 @@ import {
   readStringParam,
 } from "../../agents/tools/common.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type {
   ChannelId,
@@ -20,6 +21,7 @@ import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
@@ -33,10 +35,9 @@ import {
   parseButtonsParam,
   parseCardParam,
   parseComponentsParam,
+  parseInteractiveParam,
   readBooleanParam,
   resolveAttachmentMediaPolicy,
-  resolveSlackAutoThreadId,
-  resolveTelegramAutoThreadId,
 } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import {
@@ -63,22 +64,23 @@ export type MessageActionRunnerGateway = {
 function resolveAndApplyOutboundThreadId(
   params: Record<string, unknown>,
   ctx: {
+    cfg: OpenClawConfig;
     channel: ChannelId;
     to: string;
+    accountId?: string | null;
     toolContext?: ChannelThreadingToolContext;
-    allowSlackAutoThread: boolean;
   },
 ): string | undefined {
   const threadId = readStringParam(params, "threadId");
-  const slackAutoThreadId =
-    ctx.allowSlackAutoThread && ctx.channel === "slack" && !threadId
-      ? resolveSlackAutoThreadId({ to: ctx.to, toolContext: ctx.toolContext })
-      : undefined;
-  const telegramAutoThreadId =
-    ctx.channel === "telegram" && !threadId
-      ? resolveTelegramAutoThreadId({ to: ctx.to, toolContext: ctx.toolContext })
-      : undefined;
-  const resolved = threadId ?? slackAutoThreadId ?? telegramAutoThreadId;
+  const resolved =
+    threadId ??
+    getChannelPlugin(ctx.channel)?.threading?.resolveAutoThreadId?.({
+      cfg: ctx.cfg,
+      accountId: ctx.accountId,
+      to: ctx.to,
+      toolContext: ctx.toolContext,
+      replyToId: readStringParam(params, "replyTo"),
+    });
   // Write auto-resolved threadId back into params so downstream dispatch
   // (plugin `readStringParam(params, "threadId")`) picks it up.
   if (resolved && !params.threadId) {
@@ -402,12 +404,18 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     readStringParam(params, "media", { trim: false }) ??
     readStringParam(params, "path", { trim: false }) ??
     readStringParam(params, "filePath", { trim: false });
+  const hasButtons = Array.isArray(params.buttons) && params.buttons.length > 0;
   const hasCard = params.card != null && typeof params.card === "object";
   const hasComponents = params.components != null && typeof params.components === "object";
+  const hasInteractive = params.interactive != null && typeof params.interactive === "object";
+  const hasBlocks =
+    (Array.isArray(params.blocks) && params.blocks.length > 0) ||
+    (typeof params.blocks === "string" && params.blocks.trim().length > 0);
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(params, "message", {
-      required: !mediaHint && !hasCard && !hasComponents,
+      required:
+        !mediaHint && !hasButtons && !hasCard && !hasComponents && !hasInteractive && !hasBlocks,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -473,7 +481,16 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       message = "";
     }
   }
-  if (!message.trim() && !mediaUrl && mergedMediaUrls.length === 0 && !hasCard && !hasComponents) {
+  if (
+    !message.trim() &&
+    !mediaUrl &&
+    mergedMediaUrls.length === 0 &&
+    !hasButtons &&
+    !hasCard &&
+    !hasComponents &&
+    !hasInteractive &&
+    !hasBlocks
+  ) {
     throw new Error("send requires text or media");
   }
   params.message = message;
@@ -484,10 +501,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
 
   const replyToId = readStringParam(params, "replyTo");
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
+    cfg,
     channel,
     to,
+    accountId,
     toolContext: input.toolContext,
-    allowSlackAutoThread: channel === "slack" && !replyToId,
   });
   const outboundRoute =
     agentId && !dryRun
@@ -602,10 +620,11 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
 
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
+    cfg,
     channel,
     to,
+    accountId,
     toolContext: input.toolContext,
-    allowSlackAutoThread: channel === "slack",
   });
 
   const base = typeof params.message === "string" ? params.message : "";
@@ -670,6 +689,11 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     };
   }
 
+  const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+  if (!plugin?.actions?.handleAction) {
+    throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
+  }
+
   const handled = await dispatchChannelMessageAction({
     channel,
     action,
@@ -708,6 +732,7 @@ export async function runMessageAction(
   parseButtonsParam(params);
   parseCardParam(params);
   parseComponentsParam(params);
+  parseInteractiveParam(params);
 
   const action = input.action;
   if (action === "broadcast") {

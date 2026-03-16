@@ -371,9 +371,10 @@ phase_run() {
   local timeout_s="$2"
   shift 2
 
-  local log_path pid rc timed_out
+  local log_path pid start rc timed_out
   log_path="$(phase_log_path "$phase_id")"
   say "$phase_id"
+  start=$SECONDS
   timed_out=0
 
   (
@@ -381,25 +382,21 @@ phase_run() {
   ) >"$log_path" 2>&1 &
   pid=$!
 
-  (
-    sleep "$timeout_s"
-    kill "$pid" >/dev/null 2>&1 || true
-    sleep 2
-    kill -9 "$pid" >/dev/null 2>&1 || true
-  ) &
-  local killer_pid=$!
+  while kill -0 "$pid" >/dev/null 2>&1; do
+    if (( SECONDS - start >= timeout_s )); then
+      timed_out=1
+      kill "$pid" >/dev/null 2>&1 || true
+      sleep 2
+      kill -9 "$pid" >/dev/null 2>&1 || true
+      break
+    fi
+    sleep 1
+  done
 
   set +e
   wait "$pid"
   rc=$?
   set -e
-
-  if kill -0 "$killer_pid" >/dev/null 2>&1; then
-    kill "$killer_pid" >/dev/null 2>&1 || true
-    wait "$killer_pid" >/dev/null 2>&1 || true
-  else
-    timed_out=1
-  fi
 
   if (( timed_out )); then
     warn "$phase_id timed out after ${timeout_s}s"
@@ -770,7 +767,7 @@ show_gateway_status_compat() {
 }
 
 verify_turn() {
-  guest_run_openclaw "" "" agent --agent main --message ping --json
+  guest_run_openclaw "" "" agent --agent main --message "Reply with exact ASCII text OK only." --json
 }
 
 capture_latest_ref_failure() {
