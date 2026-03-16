@@ -34,6 +34,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Manual setup is optional now. `userbot-send-live.sh` auto-bootstraps `.venv` only when missing/broken and stays quiet when healthy.
+
 First login will ask for Telegram code in your app:
 
 ```bash
@@ -44,6 +46,22 @@ python3 userbot_send.py \
   --reply-to <thread-anchor-message-id> \
   --text "hello from userbot"
 ```
+
+Canonical userbot path for reliability checks:
+
+```bash
+scripts/telegram-e2e/userbot-send-live.sh \
+  --chat "<chat-id-or-username>" \
+  --reply-to <thread-anchor-message-id> \
+  --text "hello from userbot"
+```
+
+What it does:
+
+1. Loads `scripts/telegram-e2e/.env.local` when present.
+2. Resolves/bootstraps Python deps only if needed.
+3. Runs `userbot_precheck.py` (creds/session/chat checks).
+4. Sends message with `userbot_send.py` only if precheck passes.
 
 ### 3) Create local env file
 
@@ -59,6 +77,7 @@ Fill `scripts/telegram-e2e/.env.local` with your real values.
 
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
+- `USERBOT_SESSION` (optional override; default is `scripts/telegram-e2e/tmp/userbot.session`)
 - `TG_BOT_TOKEN` (`<botId>:<token>`)
 - `TG_BIN` (absolute path to built `tg`)
 - `TG_FORUM_CHAT_ID` (group chat id, usually `-100...`)
@@ -169,6 +188,14 @@ Pass signal is `PASS: thread B reports expected model (...)`.
   - Set `TG_BOT_TOKEN` in `.env.local` (recommended) or configure `tg bot add`.
 - `userbot_send failed: EOF when reading a line` means Telethon session is not authenticated.
   - Re-run `userbot_send.py` once interactively to refresh login.
+- `E_MISSING_SESSION`: no session file at canonical path.
+  - Sync `scripts/telegram-e2e/tmp/userbot.session` or set `USERBOT_SESSION`.
+- `E_UNAUTHORIZED_SESSION`: session exists but is not logged in.
+  - Re-auth once with interactive `userbot_send.py`.
+- `E_CHAT_NOT_RESOLVABLE`: precheck cannot resolve `--chat`.
+  - Verify chat id/username and account access.
+- `E_AMBIGUOUS_SESSION`: both legacy and canonical session files exist.
+  - Set `USERBOT_SESSION` explicitly or remove one file.
 - HTTP `503` or no bot replies usually means gateway is not fully started yet.
   - Wait for provider-start logs and retry.
 - If inherited model fails while unchanged-existing-thread passes, verify gateway runtime path and branch first.
@@ -179,5 +206,5 @@ Pass signal is `PASS: thread B reports expected model (...)`.
 - For private topics, thread id can appear as `message_thread_id` or `direct_messages_topic.topic_id`.
 - Runner session selection order:
   - `USERBOT_SESSION` env var
-  - `scripts/telegram-e2e/userbot.session` (if present)
   - `scripts/telegram-e2e/tmp/userbot.session`
+  - `scripts/telegram-e2e/userbot.session` (legacy fallback if canonical missing)

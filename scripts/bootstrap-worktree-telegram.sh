@@ -15,8 +15,9 @@ copy_if_exists() {
   local dst="$2"
   if [[ -f "$src" ]]; then
     mkdir -p "$(dirname "$dst")"
-    cp "$src" "$dst"
-    echo "synced: ${dst}"
+    if [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
+      cp "$src" "$dst"
+    fi
   fi
 }
 
@@ -32,11 +33,14 @@ fi
 # Optional userbot E2E files for true inbound Telegram verification.
 copy_if_exists "$MAIN_REPO/scripts/telegram-e2e/.env" "./scripts/telegram-e2e/.env"
 copy_if_exists "$MAIN_REPO/scripts/telegram-e2e/.env.local" "./scripts/telegram-e2e/.env.local"
-copy_if_exists \
-  "$MAIN_REPO/scripts/telegram-e2e/tmp/userbot.session" \
-  "./scripts/telegram-e2e/tmp/userbot.session"
-copy_if_exists \
-  "$MAIN_REPO/scripts/telegram-e2e/userbot.session" \
-  "./scripts/telegram-e2e/userbot.session"
+if [[ -f "$MAIN_REPO/scripts/telegram-e2e/tmp/userbot.session" ]]; then
+  copy_if_exists \
+    "$MAIN_REPO/scripts/telegram-e2e/tmp/userbot.session" \
+    "./scripts/telegram-e2e/tmp/userbot.session"
+elif [[ -f "$MAIN_REPO/scripts/telegram-e2e/userbot.session" ]]; then
+  copy_if_exists \
+    "$MAIN_REPO/scripts/telegram-e2e/userbot.session" \
+    "./scripts/telegram-e2e/tmp/userbot.session"
+fi
 
 echo "telegram bootstrap complete"

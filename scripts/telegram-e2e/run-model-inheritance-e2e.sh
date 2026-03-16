@@ -7,7 +7,8 @@ set -euo pipefail
 # 3) Poll bot updates through tg (Bot API) and assert thread B reports expected model.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck source=scripts/telegram-e2e/userbot-common.sh
+source "${SCRIPT_DIR}/userbot-common.sh"
 
 CHAT=""
 SET_MODEL=""
@@ -85,6 +86,8 @@ if [[ -z "${CHAT}" || -z "${SET_MODEL}" || -z "${THREAD_A_REPLY_TO}" || -z "${TH
   exit 1
 fi
 
+load_userbot_env_if_present
+
 if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" || -z "${TG_BIN:-}" ]]; then
   echo "Missing required env vars (TELEGRAM_API_ID, TELEGRAM_API_HASH, TG_BIN)." >&2
   usage
@@ -100,13 +103,10 @@ fi
 "${ROOT_DIR}/scripts/telegram-live-preflight.sh"
 
 EXPECT_MODEL="${EXPECT_MODEL:-${SET_MODEL}}"
-if [[ -n "${USERBOT_SESSION:-}" ]]; then
-  USERBOT_SESSION="${USERBOT_SESSION}"
-elif [[ -f "${SCRIPT_DIR}/userbot.session" ]]; then
-  USERBOT_SESSION="${SCRIPT_DIR}/userbot.session"
-else
-  USERBOT_SESSION="${SCRIPT_DIR}/tmp/userbot.session"
-fi
+USERBOT_PYTHON="$(ensure_userbot_python)"
+USERBOT_SESSION="$(resolve_userbot_session_path)"
+run_userbot_precheck "${USERBOT_PYTHON}" "${USERBOT_SESSION}" "${CHAT}"
+
 TG_POLL_ATTEMPTS="${TG_POLL_ATTEMPTS:-10}"
 TG_POLL_TIMEOUT="${TG_POLL_TIMEOUT:-20}"
 TG_POLL_SLEEP="${TG_POLL_SLEEP:-2}"
@@ -118,13 +118,31 @@ fi
 send_user_message() {
   local text="$1"
   local reply_to="$2"
-  "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/userbot_send.py" \
+  run_userbot_send "${USERBOT_PYTHON}" "${USERBOT_SESSION}" "${CHAT}" "${reply_to}" "${text}"
+}
+
+wait_userbot_message() {
+  local after_id="$1"
+  local thread_anchor="$2"
+  local contains="$3"
+  local timeout="$4"
+  local sender_id="${5:-0}"
+
+  local wait_cmd=(
+    "${USERBOT_PYTHON}" "${SCRIPT_DIR}/userbot_wait.py"
     --api-id "${TELEGRAM_API_ID}" \
     --api-hash "${TELEGRAM_API_HASH}" \
     --session "${USERBOT_SESSION}" \
     --chat "${CHAT}" \
-    --reply-to "${reply_to}" \
-    --text "${text}"
+    --after-id "${after_id}" \
+    --thread-anchor "${thread_anchor}" \
+    --contains "${contains}" \
+    --timeout "${timeout}"
+  )
+  if [[ "${sender_id}" -gt 0 ]]; then
+    wait_cmd+=(--sender-id "${sender_id}")
+  fi
+  "${wait_cmd[@]}"
 }
 
 tg_poll_json() {
@@ -192,21 +210,7 @@ done
 
 if [[ "${tg_conflict}" -eq 1 ]]; then
   fallback_timeout=$((TG_POLL_ATTEMPTS * (TG_POLL_TIMEOUT + TG_POLL_SLEEP)))
-  wait_cmd=(
-    "${SCRIPT_DIR}/.venv/bin/python" "${SCRIPT_DIR}/userbot_wait.py"
-    --api-id "${TELEGRAM_API_ID}"
-    --api-hash "${TELEGRAM_API_HASH}"
-    --session "${USERBOT_SESSION}"
-    --chat "${CHAT}"
-    --after-id "${query_msg_id}"
-    --thread-anchor "${THREAD_B_REPLY_TO}"
-    --contains "Current: ${EXPECT_MODEL}"
-    --timeout "${fallback_timeout}"
-  )
-  if [[ -n "${TG_BOT_ID}" ]]; then
-    wait_cmd+=(--sender-id "${TG_BOT_ID}")
-  fi
-  if "${wait_cmd[@]}" >/dev/null; then
+  if wait_userbot_message "${query_msg_id}" "${THREAD_B_REPLY_TO}" "Current: ${EXPECT_MODEL}" "${fallback_timeout}" "${TG_BOT_ID:-0}" >/dev/null; then
     echo "PASS: thread B reports expected model (${EXPECT_MODEL}) [userbot fallback]"
     exit 0
   fi
