@@ -34,6 +34,10 @@ export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
   return supportsMessageFeature(cfg, (actions) => actions?.supportsButtons?.({ cfg }) === true);
 }
 
+export function supportsChannelMessageInteractive(cfg: OpenClawConfig): boolean {
+  return supportsMessageFeature(cfg, (actions) => actions?.supportsInteractive?.({ cfg }) === true);
+}
+
 export function supportsChannelMessageButtonsForChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
@@ -41,6 +45,16 @@ export function supportsChannelMessageButtonsForChannel(params: {
   return supportsMessageFeatureForChannel(
     params,
     (actions) => actions.supportsButtons?.(params) === true,
+  );
+}
+
+export function supportsChannelMessageInteractiveForChannel(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+}): boolean {
+  return supportsMessageFeatureForChannel(
+    params,
+    (actions) => actions.supportsInteractive?.(params) === true,
   );
 }
 
