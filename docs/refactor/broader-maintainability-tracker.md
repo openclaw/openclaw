@@ -58,6 +58,7 @@ Do not edit these files under this plan:
 - [x] Prove `loadConfig()` does not write files
 - [x] Add deterministic tests for read-only config paths
 - [x] Disable bundled plugin permission repair writes during config validation read paths
+- [x] Route daemon status config loading through explicit read-only config loads
 
 ### Stage 2B: global state registry hardening
 

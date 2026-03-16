@@ -164,8 +164,8 @@ async function loadDaemonConfigContext(
     cliIO.readConfigFileSnapshot().catch(() => null),
     daemonIO.readConfigFileSnapshot().catch(() => null),
   ]);
-  const cliCfg = cliIO.loadConfig();
-  const daemonCfg = daemonIO.loadConfig();
+  const cliCfg = cliIO.loadConfigReadOnly();
+  const daemonCfg = daemonIO.loadConfigReadOnly();
 
   const cliConfigSummary: ConfigSummary = {
     path: cliSnapshot?.path ?? cliConfigPath,
