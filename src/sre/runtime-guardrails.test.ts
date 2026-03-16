@@ -236,6 +236,21 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).not.toContain("Latest human correction overrides older bot theories");
   });
 
+  it("requires retraction when a correction immediately precedes the latest exact artifact", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Previous theory: pricing cache drift"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"This is wrong. We confirmed the old lead is stale."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } traceId=abc123"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "investigate the exact query",
+      transcriptText,
+    });
+
+    expect(context).toContain("Explicitly retract the outdated theory");
+  });
+
   it("treats the current prompt as the newest exact artifact", () => {
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
@@ -285,6 +300,23 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).not.toContain("Explicitly retract the outdated theory");
   });
 
+  it("does not require retraction for stale corrections that are separated from the latest artifact", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Previous theory: pricing cache drift"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"This is wrong, the previous guess was stale"}]}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Send the exact query and trace so I can replay it."}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } traceId=abc123"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "investigate the exact query",
+      transcriptText,
+    });
+
+    expect(context).toContain("Latest human correction overrides older bot theories");
+    expect(context).not.toContain("Explicitly retract the outdated theory");
+  });
+
   it("detects reverse resolver mismatch", () => {
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultV2ByAddress realtime state is missing"}]}}
@@ -299,6 +331,21 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     expect(context).toContain("Resolver mismatch detected");
     expect(context).toContain("`vaultV2ByAddress`");
     expect(context).toContain("`vaultByAddress`");
+  });
+
+  it("ignores resolver names that only appear in tool output", () => {
+    const transcriptText = `
+{"type":"message","message":{"role":"toolResult","toolName":"read","content":[{"type":"text","text":"comparison doc: use vaultByAddress for legacy entities"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } traceId=abc123"}]}}
+`;
+    const context = buildSreRuntimeGuardrailContextFromTranscript({
+      agentId: "sre",
+      prompt: "investigate the exact query",
+      transcriptText,
+    });
+
+    expect(context).not.toContain("Resolver mismatch detected");
+    expect(context).not.toContain("Explicitly retract the outdated theory");
   });
 
   it("suppresses data-incident retrieval guidance when the playbook was already read", () => {

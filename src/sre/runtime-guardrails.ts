@@ -9,6 +9,7 @@ import {
 } from "./patterns.js";
 
 type GuardrailFailureFamily = "shell" | "rbac" | "git_auth" | "model_auth";
+type TranscriptPreview = { line: number; preview: string; rawText: string };
 
 const RETRIEVAL_DOC_RE =
   /(knowledge-index\.md|runbook-map\.md|repo-root-model\.md|notion-postmortem-index\.md|incident-dossier)/i;
@@ -17,6 +18,10 @@ const DEFAULT_SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT =
   "/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh";
 const HUMAN_CORRECTION_RE =
   /\b(wrong|actual issue|current lead is|we confirmed|this is connected|my only explanation|outdated|not the issue)\b/i;
+const RESOLVER_TOKEN_RE = {
+  vaultByAddress: /\bvaultByAddress\b/,
+  vaultV2ByAddress: /\bvaultV2ByAddress\b/,
+} as const;
 
 function isSreAgent(agentId: string): boolean {
   return agentId === "sre" || agentId.startsWith("sre-");
@@ -66,6 +71,23 @@ function isErrnoCode(err: unknown, code: string): err is NodeJS.ErrnoException {
     "code" in err &&
     typeof (err as NodeJS.ErrnoException).code === "string" &&
     (err as NodeJS.ErrnoException).code === code
+  );
+}
+
+function hasRelatedHumanCorrection(params: {
+  currentHumanCorrection?: { line: number; preview: string };
+  currentUserArtifact?: TranscriptPreview;
+  promptHasHumanCorrection: boolean;
+}): boolean {
+  if (!params.currentHumanCorrection || !params.currentUserArtifact) {
+    return false;
+  }
+  if (params.promptHasHumanCorrection) {
+    return true;
+  }
+  return (
+    params.currentHumanCorrection.line >= params.currentUserArtifact.line - 1 &&
+    params.currentHumanCorrection.line <= params.currentUserArtifact.line
   );
 }
 
@@ -123,11 +145,11 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   let sawRetrievalDoc = false;
   let sawDbDataPlaybook = false;
   let sawRepoRead = false;
-  let latestHumanCorrection: string | undefined;
-  let latestUserArtifact: { line: number; preview: string; rawText: string } | undefined;
+  let latestHumanCorrection: { line: number; preview: string } | undefined;
+  let latestUserArtifact: TranscriptPreview | undefined;
   let latestDataIncidentText: string | undefined;
   const failureCounts = new Map<GuardrailFailureFamily, number>();
-  const assistantOrToolLines: Array<{ line: number; text: string }> = [];
+  const assistantTextLines: Array<{ line: number; text: string }> = [];
 
   for (const [index, line] of lines.entries()) {
     const lineNo = index + 1;
@@ -150,7 +172,7 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
       const text = extractInlineJsonTextValue(line) ?? "";
       const preview = cleanLine(text);
       if (HUMAN_CORRECTION_RE.test(text)) {
-        latestHumanCorrection = preview;
+        latestHumanCorrection = { line: lineNo, preview };
       }
       if (DATA_INCIDENT_RE.test(text)) {
         latestDataIncidentText = text;
@@ -162,22 +184,33 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
 
     if (line.includes('"role":"toolResult"') || line.includes('"role":"assistant"')) {
       const normalized = line.replace(/\\"/g, '"');
-      assistantOrToolLines.push({ line: lineNo, text: normalized });
       const family = classifyFailure(normalized);
       if (family) {
         failureCounts.set(family, (failureCounts.get(family) ?? 0) + 1);
+      }
+    }
+
+    if (line.includes('"role":"assistant"')) {
+      const assistantText = extractInlineJsonTextValue(line);
+      if (assistantText) {
+        assistantTextLines.push({ line: lineNo, text: assistantText });
       }
     }
   }
 
   const guidance: string[] = [];
   const promptPreview = cleanLine(params.prompt);
+  const promptHasHumanCorrection = HUMAN_CORRECTION_RE.test(params.prompt);
   const promptArtifact = EXACT_ARTIFACT_RE.test(params.prompt)
-    ? { line: Number.POSITIVE_INFINITY, preview: promptPreview, rawText: params.prompt }
+    ? ({
+        line: Number.POSITIVE_INFINITY,
+        preview: promptPreview,
+        rawText: params.prompt,
+      } satisfies TranscriptPreview)
     : undefined;
   const currentUserArtifact = promptArtifact ?? latestUserArtifact;
-  const currentHumanCorrection = HUMAN_CORRECTION_RE.test(params.prompt)
-    ? promptPreview
+  const currentHumanCorrection = promptHasHumanCorrection
+    ? { line: Number.POSITIVE_INFINITY, preview: promptPreview }
     : latestHumanCorrection;
   const currentArtifactText = currentUserArtifact?.rawText ?? params.prompt;
   const hasDataIncidentSignal = DATA_INCIDENT_RE.test(
@@ -190,9 +223,9 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   if (currentUserArtifact && userResolver) {
     const otherResolver =
       userResolver === "vaultV2ByAddress" ? "vaultByAddress" : "vaultV2ByAddress";
-    const userResolverRe = new RegExp(`\\b${userResolver}\\b`);
-    const otherResolverRe = new RegExp(`\\b${otherResolver}\\b`);
-    const priorResolverMismatch = assistantOrToolLines.some(
+    const userResolverRe = RESOLVER_TOKEN_RE[userResolver];
+    const otherResolverRe = RESOLVER_TOKEN_RE[otherResolver];
+    const priorResolverMismatch = assistantTextLines.some(
       (entry) =>
         entry.line < currentUserArtifact.line &&
         otherResolverRe.test(entry.text) &&
@@ -205,11 +238,19 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
 
   if (currentHumanCorrection) {
     guidance.push(
-      `- Latest human correction overrides older bot theories unless disproved by newer live evidence: "${currentHumanCorrection}"`,
+      `- Latest human correction overrides older bot theories unless disproved by newer live evidence: "${currentHumanCorrection.preview}"`,
     );
   }
 
-  if (hasExactArtifactSignal && (currentHumanCorrection || priorResolverMismatchMessage)) {
+  if (
+    hasExactArtifactSignal &&
+    (hasRelatedHumanCorrection({
+      currentHumanCorrection,
+      currentUserArtifact,
+      promptHasHumanCorrection,
+    }) ||
+      priorResolverMismatchMessage)
+  ) {
     guidance.push(
       "- New evidence contradicted an older theory. Explicitly retract the outdated theory in-thread before continuing from fresh live evidence.",
     );
