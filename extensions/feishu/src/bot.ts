@@ -542,15 +542,14 @@ export function decodeFeishuFilename(filename: string | undefined): string {
   if (!filename) return "";
   // Strip RFC 5987 prefix (case-insensitive): filename*=UTF-8'language'encoded
   const rfcMatch = /^filename\*=utf-8'[^']*'/i.exec(filename);
+  const isRfc5987 = !!rfcMatch;
   if (rfcMatch) {
     filename = filename.substring(rfcMatch[0].length);
   }
-  // Only decode if result contains non-ASCII characters.
-  // This preserves literal percent signs like "report%202026.pdf".
+  // For RFC 5987 format, always decode. For plain names, only decode if contains non-ASCII.
   try {
     const decoded = decodeURIComponent(filename);
-    // Use decoded only if it contains non-ASCII (Chinese, etc.)
-    if (decoded && /[^\x00-\x7F]/.test(decoded)) {
+    if (isRfc5987 || (decoded && /[^\x00-\x7F]/.test(decoded))) {
       return decoded;
     }
     return filename;
