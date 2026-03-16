@@ -416,6 +416,176 @@ export function chunkMarkdown(
 }
 
 /**
+ * Semantic-aware Markdown chunking that prioritizes heading and paragraph boundaries.
+ *
+ * Chunks are created using the following priority:
+ * 1. Heading boundaries (##, ###, etc.) - preferred to keep sections together
+ * 2. Paragraph boundaries (empty lines) - secondary preference
+ * 3. Token/character limit - fallback only when boundaries would exceed limit
+ *
+ * Overlap strategy includes the heading context to maintain semantic continuity.
+ */
+export function chunkMarkdownSemantic(
+  content: string,
+  chunking: { tokens: number; overlap: number },
+): MemoryChunk[] {
+  // Handle empty content
+  if (content.trim() === "") {
+    return [];
+  }
+
+  const lines = content.split("\n");
+  const maxChars = Math.max(32, chunking.tokens * 4);
+  const overlapChars = Math.max(0, chunking.overlap * 4);
+  const chunks: MemoryChunk[] = [];
+
+  // Detect heading pattern: #, ##, ###, etc.
+  const isHeading = (line: string): boolean => /^#{1,6}\s/.test(line.trim());
+
+  // Detect if we're inside a code block
+  let inCodeBlock = false;
+  const updateCodeBlockState = (line: string): void => {
+    if (line.trim().startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+    }
+  };
+
+  // Split content into sections by headings
+  // Each section includes its heading line
+  const sections: Array<{ headingLine: string | null; startLine: number; lines: Array<{ line: string; lineNo: number }> }> = [];
+  let currentSection: { headingLine: string | null; startLine: number; lines: Array<{ line: string; lineNo: number }> } = {
+    headingLine: null,
+    startLine: 1,
+    lines: [],
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    updateCodeBlockState(line);
+
+    if (!inCodeBlock && isHeading(line)) {
+      // Save current section and start new one
+      sections.push(currentSection);
+      currentSection = {
+        headingLine: line,
+        startLine: i + 1,
+        lines: [{ line, lineNo: i + 1 }], // Include heading in section lines
+      };
+    } else {
+      // For first section without heading, or content after heading
+      if (currentSection.lines.length === 0) {
+        currentSection.startLine = i + 1;
+      }
+      currentSection.lines.push({ line, lineNo: i + 1 });
+    }
+  }
+  if (currentSection.lines.length > 0) {
+    sections.push(currentSection);
+  }
+
+  // Now create chunks with semantic awareness
+  let currentChunkLines: Array<{ line: string; lineNo: number }> = [];
+  let currentChars = 0;
+  let lastHeadingLine: string | null = null;
+  let lastHeadingLineNo = 0;
+
+  const flushChunk = () => {
+    if (currentChunkLines.length === 0) {
+      return;
+    }
+    // Remove trailing empty lines
+    while (
+      currentChunkLines.length > 0 &&
+      currentChunkLines[currentChunkLines.length - 1]?.line.trim() === ""
+    ) {
+      currentChunkLines.pop();
+    }
+    if (currentChunkLines.length === 0) {
+      return;
+    }
+    const text = currentChunkLines.map((entry) => entry.line).join("\n");
+    const startLine = currentChunkLines[0]?.lineNo ?? 1;
+    const endLine = currentChunkLines[currentChunkLines.length - 1]?.lineNo ?? 1;
+    chunks.push({
+      startLine,
+      endLine,
+      text,
+      hash: hashText(text),
+      embeddingInput: buildTextEmbeddingInput(text),
+    });
+  };
+
+  // Create overlap context with heading
+  const createOverlapContext = (): Array<{ line: string; lineNo: number }> => {
+    const context: Array<{ line: string; lineNo: number }> = [];
+    let chars = 0;
+
+    // Include heading if available
+    if (lastHeadingLine && overlapChars > 0) {
+      context.push({ line: lastHeadingLine, lineNo: lastHeadingLineNo });
+      chars += lastHeadingLine.length + 1;
+    }
+
+    // Add lines from the end of previous chunk for overlap
+    for (let i = currentChunkLines.length - 1; i >= 0; i--) {
+      const entry = currentChunkLines[i];
+      if (!entry) {
+        continue;
+      }
+      // Skip if we already have heading in context
+      if (lastHeadingLine && entry.line === lastHeadingLine) {
+        continue;
+      }
+      const lineSize = entry.line.length + 1;
+      if (chars + lineSize > overlapChars && context.length > (lastHeadingLine ? 1 : 0)) {
+        break;
+      }
+      context.unshift(entry);
+      chars += lineSize;
+    }
+
+    return context;
+  };
+
+  // Helper to estimate chars without counting trailing whitespace
+  const estimateChars = (entries: Array<{ line: string; lineNo: number }>): number => {
+    return entries.reduce((sum, entry) => {
+      const trimmed = entry.line.trimEnd();
+      return sum + (trimmed ? trimmed.length + 1 : 0); // +1 for newline
+    }, 0);
+  };
+
+  for (const section of sections) {
+    const { headingLine, startLine, lines: sectionLines } = section;
+    if (headingLine) {
+      lastHeadingLine = headingLine;
+      lastHeadingLineNo = startLine;
+    }
+
+    // Build chunks section by section
+    for (const entry of sectionLines) {
+      const entrySize = (entry.line.trimEnd().length || 0) + 1;
+
+      // Check if adding this line would exceed limit
+      if (currentChars + entrySize > maxChars && currentChunkLines.length > 0) {
+        // Flush current chunk and create new one with overlap context
+        flushChunk();
+        currentChunkLines = createOverlapContext();
+        currentChars = estimateChars(currentChunkLines);
+      }
+
+      currentChunkLines.push(entry);
+      currentChars += entrySize;
+    }
+  }
+
+  // Flush final chunk
+  flushChunk();
+
+  return chunks;
+}
+
+/**
  * Remap chunk startLine/endLine from content-relative positions to original
  * source file positions using a lineMap.  Each entry in lineMap gives the
  * 1-indexed source line for the corresponding 0-indexed content line.

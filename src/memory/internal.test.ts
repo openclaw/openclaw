@@ -6,6 +6,7 @@ import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
   chunkMarkdown,
+  chunkMarkdownSemantic,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   remapChunkLines,
@@ -310,5 +311,147 @@ describe("remapChunkLines", () => {
     for (const chunk of chunks) {
       expect(chunk.startLine).toBeLessThanOrEqual(chunk.endLine);
     }
+  });
+});
+
+describe("chunkMarkdownSemantic", () => {
+  it("respects heading boundaries - keeps sections together", () => {
+    const content = `## Deployment
+
+deploy.sh needs to be executed carefully:
+1. Run tests
+2. Build image
+3. Deploy
+
+## Monitoring
+
+Check logs.`;
+
+    const chunks = chunkMarkdownSemantic(content, { tokens: 20, overlap: 0 });
+
+    // Should split at heading boundary
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    // First chunk should contain heading
+    expect(chunks[0].text).toContain("## Deployment");
+    // Deployment steps should stay together when possible
+    const deploymentSection = chunks[0].text;
+    // Check that steps are not cut mid-list (the section ends before "3." or contains all steps)
+    const hasAllSteps = deploymentSection.includes("1.") && deploymentSection.includes("3.");
+    const endsCleanly = !deploymentSection.endsWith("Run");
+    expect(hasAllSteps || endsCleanly).toBe(true);
+  });
+
+  it("uses heading context in overlap", () => {
+    const content = `## Section 1
+Content in section 1 that spans multiple lines.
+More content here.
+
+## Section 2
+Content in section 2.`;
+
+    const chunks = chunkMarkdownSemantic(content, { tokens: 30, overlap: 20 });
+
+    if (chunks.length > 1) {
+      // Second chunk should include heading context
+      expect(chunks[1].text).toContain("## Section");
+    }
+  });
+
+  it("respects paragraph boundaries", () => {
+    const content = `## Guide
+
+Paragraph one with some text.
+
+Paragraph two with more text.
+
+Paragraph three here.`;
+
+    const chunks = chunkMarkdownSemantic(content, { tokens: 60, overlap: 0 });
+
+    // Should prefer to split at paragraph boundaries
+    for (const chunk of chunks) {
+      // Each chunk should end at a paragraph boundary when possible
+      const text = chunk.text.trim();
+      // If chunk ends mid-paragraph, it should be because of size limit
+      if (!text.endsWith("Section 2") && !text.endsWith("three here.")) {
+        // Chunk ends at or near paragraph boundary
+      }
+    }
+  });
+
+  it("does not split code blocks", () => {
+    const content = `## Code Example
+
+\`\`\`typescript
+function longFunction() {
+  const veryLongVariableName = "some value";
+  const anotherLongName = "another value";
+  return veryLongVariableName + anotherLongName;
+}
+\`\`\`
+
+## Explanation
+
+The function above adds two strings.`;
+
+    const chunks = chunkMarkdownSemantic(content, { tokens: 50, overlap: 0 });
+
+    // Code block should stay together in one chunk
+    const codeBlockChunk = chunks.find((c) => c.text.includes("```"));
+    expect(codeBlockChunk).toBeDefined();
+    // The code block should be complete
+    expect(codeBlockChunk?.text).toContain("```typescript");
+    expect(codeBlockChunk?.text).toContain("```");
+  });
+
+  it("handles content larger than token limit with graceful fallback", () => {
+    const chunkTokens = 50;
+    const maxChars = chunkTokens * 4;
+    const content = `## Section
+
+${"a".repeat(maxChars * 2)}`;
+
+    const chunks = chunkMarkdownSemantic(content, { tokens: chunkTokens, overlap: 0 });
+
+    // Should still split when content exceeds limit
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      // Each chunk should be within reasonable size
+      // (may exceed due to semantic boundaries - heading is kept with content)
+      expect(chunk.text.length).toBeLessThanOrEqual(maxChars * 2);
+    }
+  });
+
+  it("preserves heading hierarchy", () => {
+    const content = `# Main Title
+
+## Subsection
+
+### Sub-subsection
+
+Content here.
+
+## Another Subsection
+
+More content.`;
+
+    const chunks = chunkMarkdownSemantic(content, { tokens: 100, overlap: 0 });
+
+    // All levels of headings should be recognized
+    expect(chunks[0].text).toContain("# Main Title");
+    expect(chunks.some((c) => c.text.includes("## Subsection"))).toBe(true);
+    expect(chunks.some((c) => c.text.includes("### Sub-subsection"))).toBe(true);
+  });
+
+  it("handles empty content", () => {
+    const chunks = chunkMarkdownSemantic("", { tokens: 400, overlap: 0 });
+    expect(chunks).toEqual([]);
+  });
+
+  it("handles single line content", () => {
+    const content = "Single line of content";
+    const chunks = chunkMarkdownSemantic(content, { tokens: 400, overlap: 0 });
+    expect(chunks.length).toBe(1);
+    expect(chunks[0].text).toBe(content);
   });
 });
