@@ -47,18 +47,6 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .sre.promptTemplates.monitoringIncident | contains("Never send progress-only replies")
-' "$CONFIG" >/dev/null
-
-jq -e '
-  .sre.promptTemplates.monitoringIncident | contains("Before accepting any task that requires repo access")
-' "$CONFIG" >/dev/null
-
-jq -e '
-  .sre.promptTemplates.monitoringIncident | contains("If a human challenges or contradicts a technical claim in any thread")
-' "$CONFIG" >/dev/null
-
-jq -e '
   .channels.slack.channels["#platform-monitoring"].systemPrompt == "Template: sre.promptTemplates.monitoringIncident"
 ' "$CONFIG" >/dev/null
 
@@ -86,7 +74,10 @@ rg -Fq 'wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"' "$S
 rg -Fq -- '--arg wrapper_bin_dir "${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"' "$START_GATEWAY"
 rg -q '\.id == "sre" or \.id == "sre-verifier"' "$START_GATEWAY"
 rg -q '\.tools\.exec\.pathPrepend = ' "$START_GATEWAY"
-rg -q '\.sre\.promptTemplates\.monitoringIncident as \$monitoring_prompt' "$START_GATEWAY"
+rg -Fq 'build_monitoring_incident_prompt() {' "$START_GATEWAY"
+rg -Fq 'Never send progress-only replies' "$START_GATEWAY"
+rg -Fq 'Before accepting any task that requires repo access' "$START_GATEWAY"
+rg -Fq 'If a human challenges or contradicts a technical claim in any thread' "$START_GATEWAY"
 rg -q '\.channels\.slack\.channels\["#staging-infra-monitoring"\]\.systemPrompt =' "$START_GATEWAY"
 rg -q '\.channels\.slack\.channels\["#public-api-monitoring"\]\.systemPrompt =' "$START_GATEWAY"
 
