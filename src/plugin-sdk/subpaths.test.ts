@@ -1,3 +1,4 @@
+import * as extensionApi from "openclaw/extension-api";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
@@ -58,34 +59,43 @@ describe("plugin-sdk subpath exports", () => {
   it("exports Discord helpers", () => {
     expect(typeof discordSdk.resolveDiscordAccount).toBe("function");
     expect(typeof discordSdk.inspectDiscordAccount).toBe("function");
-    expect(typeof discordSdk.discordOnboardingAdapter).toBe("object");
+    expect(typeof discordSdk.discordSetupWizard).toBe("object");
+    expect(typeof discordSdk.discordSetupAdapter).toBe("object");
   });
 
   it("exports Slack helpers", () => {
     expect(typeof slackSdk.resolveSlackAccount).toBe("function");
     expect(typeof slackSdk.inspectSlackAccount).toBe("function");
     expect(typeof slackSdk.handleSlackMessageAction).toBe("function");
+    expect(typeof slackSdk.slackSetupWizard).toBe("object");
+    expect(typeof slackSdk.slackSetupAdapter).toBe("object");
   });
 
   it("exports Telegram helpers", () => {
     expect(typeof telegramSdk.resolveTelegramAccount).toBe("function");
     expect(typeof telegramSdk.inspectTelegramAccount).toBe("function");
-    expect(typeof telegramSdk.telegramOnboardingAdapter).toBe("object");
+    expect(typeof telegramSdk.telegramSetupWizard).toBe("object");
+    expect(typeof telegramSdk.telegramSetupAdapter).toBe("object");
   });
 
   it("exports Signal helpers", () => {
     expect(typeof signalSdk.resolveSignalAccount).toBe("function");
-    expect(typeof signalSdk.signalOnboardingAdapter).toBe("object");
+    expect(typeof signalSdk.signalSetupWizard).toBe("object");
+    expect(typeof signalSdk.signalSetupAdapter).toBe("object");
   });
 
   it("exports iMessage helpers", () => {
     expect(typeof imessageSdk.resolveIMessageAccount).toBe("function");
-    expect(typeof imessageSdk.imessageOnboardingAdapter).toBe("object");
+    expect(typeof imessageSdk.imessageSetupWizard).toBe("object");
+    expect(typeof imessageSdk.imessageSetupAdapter).toBe("object");
   });
 
   it("exports WhatsApp helpers", () => {
-    expect(typeof whatsappSdk.resolveWhatsAppAccount).toBe("function");
-    expect(typeof whatsappSdk.whatsappOnboardingAdapter).toBe("object");
+    // WhatsApp-specific functions (resolveWhatsAppAccount, whatsappOnboardingAdapter) moved to extensions/whatsapp/src/
+    expect(typeof whatsappSdk.WhatsAppConfigSchema).toBe("object");
+    expect(typeof whatsappSdk.resolveWhatsAppOutboundTarget).toBe("function");
+    expect(typeof whatsappSdk.resolveWhatsAppMentionStripRegexes).toBe("function");
+    expect("resolveWhatsAppMentionStripPatterns" in whatsappSdk).toBe(false);
   });
 
   it("exports LINE helpers", () => {
@@ -125,5 +135,12 @@ describe("plugin-sdk subpath exports", () => {
     const twitch = await import("openclaw/plugin-sdk/twitch");
     expect(typeof twitch.DEFAULT_ACCOUNT_ID).toBe("string");
     expect(typeof twitch.normalizeAccountId).toBe("function");
+
+    const zalo = await import("openclaw/plugin-sdk/zalo");
+    expect(typeof zalo.resolveClientIp).toBe("function");
+  });
+
+  it("exports the extension api bridge", () => {
+    expect(typeof extensionApi.runEmbeddedPiAgent).toBe("function");
   });
 });

@@ -4,23 +4,12 @@ import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
 import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
-const sourceRoots = [
-  "src/telegram",
-  "src/discord",
-  "src/slack",
-  "src/signal",
-  "src/imessage",
-  "src/web",
-  "src/channels",
-  "src/routing",
-  "src/line",
-  "extensions",
-];
+const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  "extensions/bluebubbles/src/types.ts:133",
+  "extensions/bluebubbles/src/types.ts:137",
   "extensions/feishu/src/streaming-card.ts:31",
   "extensions/feishu/src/streaming-card.ts:101",
   "extensions/feishu/src/streaming-card.ts:143",
@@ -54,16 +43,16 @@ const allowedRawFetchCallsites = new Set([
   "extensions/voice-call/src/providers/telnyx.ts:61",
   "extensions/voice-call/src/providers/tts-openai.ts:122",
   "extensions/voice-call/src/providers/twilio/api.ts:23",
-  "src/channels/telegram/api.ts:8",
-  "src/discord/monitor/gateway-plugin.ts:189",
-  "src/discord/monitor/gateway-plugin.ts:209",
-  "src/discord/send.outbound.ts:363",
-  "src/discord/voice-message.ts:264",
-  "src/discord/voice-message.ts:308",
-  "src/slack/monitor/media.ts:55",
-  "src/slack/monitor/media.ts:59",
-  "src/slack/monitor/media.ts:73",
-  "src/slack/monitor/media.ts:99",
+  "extensions/telegram/src/api-fetch.ts:8",
+  "extensions/discord/src/monitor/gateway-plugin.ts:189",
+  "extensions/discord/src/monitor/gateway-plugin.ts:209",
+  "extensions/discord/src/send.outbound.ts:363",
+  "extensions/discord/src/voice-message.ts:268",
+  "extensions/discord/src/voice-message.ts:312",
+  "extensions/slack/src/monitor/media.ts:55",
+  "extensions/slack/src/monitor/media.ts:59",
+  "extensions/slack/src/monitor/media.ts:73",
+  "extensions/slack/src/monitor/media.ts:99",
 ]);
 
 function isRawFetchCall(expression) {

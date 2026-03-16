@@ -2,14 +2,32 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginLogger } from "../plugins/types.js";
 
 const log = createSubsystemLogger("plugins");
-let pluginRegistryLoaded = false;
+let pluginRegistryLoaded: "none" | "channels" | "all" = "none";
 
-export function ensurePluginRegistryLoaded(): void {
-  if (pluginRegistryLoaded) {
+export type PluginRegistryScope = "channels" | "all";
+
+function resolveChannelPluginIds(params: {
+  config: ReturnType<typeof loadConfig>;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  return loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })
+    .plugins.filter((plugin) => plugin.channels.length > 0)
+    .map((plugin) => plugin.id);
+}
+
+export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistryScope }): void {
+  const scope = options?.scope ?? "all";
+  if (pluginRegistryLoaded === "all" || pluginRegistryLoaded === scope) {
     return;
   }
   const active = getActivePluginRegistry();
@@ -19,7 +37,7 @@ export function ensurePluginRegistryLoaded(): void {
     active &&
     (active.plugins.length > 0 || active.channels.length > 0 || active.tools.length > 0)
   ) {
-    pluginRegistryLoaded = true;
+    pluginRegistryLoaded = "all";
     return;
   }
   const config = loadConfig();
@@ -34,6 +52,15 @@ export function ensurePluginRegistryLoaded(): void {
     config,
     workspaceDir,
     logger,
+    ...(scope === "channels"
+      ? {
+          onlyPluginIds: resolveChannelPluginIds({
+            config,
+            workspaceDir,
+            env: process.env,
+          }),
+        }
+      : {}),
   });
-  pluginRegistryLoaded = true;
+  pluginRegistryLoaded = scope;
 }
