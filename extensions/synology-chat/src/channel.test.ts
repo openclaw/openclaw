@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeSecurityAccount, registerPluginHttpRouteMock } from "./channel.test-mocks.js";
 
+vi.mock("zod", async () => await vi.importActual("zod"));
+
 vi.mock("./webhook-handler.js", () => ({
   createWebhookHandler: vi.fn(() => vi.fn()),
 }));
