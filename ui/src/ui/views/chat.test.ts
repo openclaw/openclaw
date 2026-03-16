@@ -28,7 +28,7 @@ function createChatHeaderState(
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
-  let currentModelProvider = currentModel ? "openai" : undefined;
+  let currentModelProvider = currentModel ? "openai" : null;
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? [
     { id: "gpt-5", name: "GPT-5", provider: "openai" },
@@ -39,7 +39,7 @@ function createChatHeaderState(
       const nextModel = (params.model as string | null | undefined) ?? null;
       if (!nextModel) {
         currentModel = null;
-        currentModelProvider = undefined;
+        currentModelProvider = null;
       } else {
         const normalized = nextModel.trim();
         const slashIndex = normalized.indexOf("/");
