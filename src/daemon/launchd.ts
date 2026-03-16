@@ -451,11 +451,25 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
-  if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+  const serviceTarget = `${domain}/${label}`;
+
+  // Disable the service so launchd won't auto-restart it, then send SIGTERM.
+  // Previously this used `bootout` which completely removes the service
+  // registration, making a subsequent `gateway start` (which calls `kickstart`)
+  // fail because the service is no longer known to launchd.
+  // Using disable + kill preserves the registration so start/restart work
+  // symmetrically. See: https://github.com/openclaw/openclaw/issues/48311
+  await execLaunchctl(["disable", serviceTarget]);
+
+  const kill = await execLaunchctl(["kill", "SIGTERM", serviceTarget]);
+  if (kill.code !== 0 && !isLaunchctlNotLoaded(kill)) {
+    // Service may already be stopped; that's fine.
+    const detail = (kill.stderr || kill.stdout).trim();
+    if (!detail.toLowerCase().includes("no such process")) {
+      throw new Error(`launchctl kill failed: ${detail}`);
+    }
   }
-  stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+  stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
 export async function installLaunchAgent({
@@ -557,6 +571,9 @@ export async function restartLaunchAgent({
   if (cleanupPort !== null) {
     cleanStaleGatewayProcessesSync(cleanupPort);
   }
+
+  // Re-enable the service in case it was disabled by a previous `gateway stop`.
+  await execLaunchctl(["enable", serviceTarget]);
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
