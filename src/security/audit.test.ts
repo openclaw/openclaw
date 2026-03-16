@@ -1378,6 +1378,32 @@ description: test skill
     expectFinding(res, "browser.remote_cdp_http", "warn");
   });
 
+  it("warns when remote CDP targets a private/internal host", async () => {
+    const cfg: OpenClawConfig = {
+      browser: {
+        profiles: {
+          remote: {
+            cdpUrl:
+              "http://169.254.169.254:9222/json/version?token=supersecrettokenvalue1234567890",
+            color: "#0066CC",
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expectFinding(res, "browser.remote_cdp_private_host", "warn");
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "browser.remote_cdp_private_host",
+          detail: expect.stringContaining("token=supers…7890"),
+        }),
+      ]),
+    );
+  });
+
   it("warns when control UI allows insecure auth", async () => {
     const cfg: OpenClawConfig = {
       gateway: {

@@ -102,8 +102,11 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../discord/monitor/thread-bindings.js")>();
+vi.mock("../../extensions/discord/src/monitor/thread-bindings.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../extensions/discord/src/monitor/thread-bindings.js")
+    >();
   return {
     ...actual,
     unbindThreadBindingsBySessionKey: (params: unknown) =>
@@ -266,6 +269,7 @@ describe("gateway server sessions", () => {
           lastChannel: "whatsapp",
           lastTo: "+1555",
           lastAccountId: "work",
+          lastThreadId: "1737500000.123456",
         },
         "discord:group:dev": {
           sessionId: "sess-group",
@@ -336,6 +340,7 @@ describe("gateway server sessions", () => {
       channel: "whatsapp",
       to: "+1555",
       accountId: "work",
+      threadId: "1737500000.123456",
     });
 
     const active = await rpcReq<{
@@ -545,13 +550,27 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string; modelProvider?: string; model?: string };
+      entry: {
+        sessionId: string;
+        modelProvider?: string;
+        model?: string;
+        lastAccountId?: string;
+        lastThreadId?: string | number;
+      };
     }>(ws, "sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
     expect(reset.payload?.entry.modelProvider).toBe("openai");
     expect(reset.payload?.entry.model).toBe("gpt-test-a");
+    expect(reset.payload?.entry.lastAccountId).toBe("work");
+    expect(reset.payload?.entry.lastThreadId).toBe("1737500000.123456");
+    const storeAfterReset = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { lastAccountId?: string; lastThreadId?: string | number }
+    >;
+    expect(storeAfterReset["agent:main:main"]?.lastAccountId).toBe("work");
+    expect(storeAfterReset["agent:main:main"]?.lastThreadId).toBe("1737500000.123456");
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 

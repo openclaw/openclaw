@@ -4,6 +4,11 @@ import {
   resolveCdpReachabilityTimeouts,
 } from "./cdp-timeouts.js";
 import {
+  closeChromeMcpSession,
+  ensureChromeMcpAvailable,
+  listChromeMcpTabs,
+} from "./chrome-mcp.js";
+import {
   isChromeCdpReady,
   isChromeReachable,
   launchOpenClawChrome,
@@ -60,13 +65,26 @@ export function createProfileAvailability({
     });
 
   const isReachable = async (timeoutMs?: number) => {
+    if (capabilities.usesChromeMcp) {
+      // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
+      await listChromeMcpTabs(profile.name);
+      return true;
+    }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeCdpReady(profile.cdpUrl, httpTimeoutMs, wsTimeoutMs);
+    return await isChromeCdpReady(
+      profile.cdpUrl,
+      httpTimeoutMs,
+      wsTimeoutMs,
+      state().resolved.ssrfPolicy,
+    );
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
+    if (capabilities.usesChromeMcp) {
+      return await isReachable(timeoutMs);
+    }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
+    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, state().resolved.ssrfPolicy);
   };
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
@@ -109,6 +127,9 @@ export function createProfileAvailability({
     if (previousProfile.driver === "extension") {
       await stopChromeExtensionRelayServer({ cdpUrl: previousProfile.cdpUrl }).catch(() => false);
     }
+    if (getBrowserProfileCapabilities(previousProfile).usesChromeMcp) {
+      await closeChromeMcpSession(previousProfile.name).catch(() => false);
+    }
     await closePlaywrightBrowserConnectionForProfile(previousProfile.cdpUrl);
     if (previousProfile.cdpUrl !== profile.cdpUrl) {
       await closePlaywrightBrowserConnectionForProfile(profile.cdpUrl);
@@ -138,6 +159,10 @@ export function createProfileAvailability({
 
   const ensureBrowserAvailable = async (): Promise<void> => {
     await reconcileProfileRuntime();
+    if (capabilities.usesChromeMcp) {
+      await ensureChromeMcpAvailable(profile.name);
+      return;
+    }
     const current = state();
     const remoteCdp = capabilities.isRemote;
     const attachOnly = profile.attachOnly;
@@ -238,6 +263,10 @@ export function createProfileAvailability({
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
     await reconcileProfileRuntime();
+    if (capabilities.usesChromeMcp) {
+      const stopped = await closeChromeMcpSession(profile.name);
+      return { stopped };
+    }
     if (capabilities.requiresRelay) {
       const stopped = await stopChromeExtensionRelayServer({
         cdpUrl: profile.cdpUrl,

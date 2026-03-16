@@ -58,6 +58,10 @@ export default defineConfig({
   resolve: {
     // Keep this ordered: the base `openclaw/plugin-sdk` alias is a prefix match.
     alias: [
+      {
+        find: "openclaw/extension-api",
+        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
+      },
       ...pluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -82,7 +86,9 @@ export default defineConfig({
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",
       "test/**/*.test.ts",
+      "ui/src/ui/app-chat.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
+      "ui/src/ui/views/chat.test.ts",
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
@@ -181,16 +187,8 @@ export default defineConfig({
         "src/tui/**",
         "src/wizard/**",
         // Channel surfaces are largely integration-tested (or manually validated).
-        "src/discord/**",
-        "src/imessage/**",
-        "src/signal/**",
-        "src/slack/**",
         "src/browser/**",
         "src/channels/web/**",
-        "src/telegram/index.ts",
-        "src/telegram/proxy.ts",
-        "src/telegram/webhook-set.ts",
-        "src/telegram/**",
         "src/webchat/**",
         "src/gateway/server.ts",
         "src/gateway/client.ts",

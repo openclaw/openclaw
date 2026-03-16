@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSandbox,
   createSandboxFsBridge,
+  createSeededSandboxFsBridge,
   dockerExecResult,
   findCallsByScriptFragment,
   findCallByDockerArg,
@@ -103,17 +104,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
   it.each(pinnedCases)("$name", async (testCase) => {
     await withTempDir("openclaw-fs-bridge-contract-write-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "from.txt"), "hello", "utf8");
-      await fs.writeFile(path.join(workspaceDir, "nested", "file.txt"), "bye", "utf8");
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-      });
+      const { bridge } = await createSeededSandboxFsBridge(stateDir);
 
       await testCase.invoke(bridge);
 
