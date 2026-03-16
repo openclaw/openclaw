@@ -7,6 +7,7 @@ import {
   buildChannelConfigSchema,
   getChatChannelMeta,
   inspectSlackAccount,
+  isSlackInteractiveRepliesEnabled,
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -68,8 +69,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   agentPrompt: {
     messageToolHints: ({ cfg, accountId }) =>
-      cfg.channels?.slack?.accounts?.[accountId ?? "default"]?.capabilities?.interactiveReplies ===
-        true || cfg.channels?.slack?.capabilities?.interactiveReplies === true
+      isSlackInteractiveRepliesEnabled({ cfg, accountId })
         ? [
             "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
             "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
