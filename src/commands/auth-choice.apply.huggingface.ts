@@ -38,15 +38,15 @@ export async function applyAuthChoiceHuggingface(
     expectedProviders: ["huggingface"],
     provider: "huggingface",
     envLabel: "Hugging Face token",
-    promptMessage: "Enter Hugging Face API key (HF token)",
+    promptMessage: "输入 Hugging Face API Key（HF token）",
     normalize: normalizeApiKeyInput,
     validate: validateApiKeyInput,
     prompter: params.prompter,
     setCredential: async (apiKey, mode) =>
       setHuggingfaceApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
     noteMessage: [
-      "Hugging Face Inference Providers offer OpenAI-compatible chat completions.",
-      "Create a token at: https://huggingface.co/settings/tokens (fine-grained, 'Make calls to Inference Providers').",
+      "Hugging Face Inference Providers 提供兼容 OpenAI 的聊天补全接口。",
+      "在此创建令牌：https://huggingface.co/settings/tokens（细粒度权限，勾选 “Make calls to Inference Providers”）。",
     ].join("\n"),
     noteTitle: "Hugging Face",
   });
@@ -82,7 +82,7 @@ export async function applyAuthChoiceHuggingface(
       : options.length === 1
         ? options[0].value
         : await params.prompter.select({
-            message: "Default Hugging Face model",
+            message: "默认 Hugging Face 模型",
             options,
             initialValue: options.some((o) => o.value === defaultRef)
               ? defaultRef
@@ -90,10 +90,7 @@ export async function applyAuthChoiceHuggingface(
           });
 
   if (isHuggingfacePolicyLocked(selectedModelRef)) {
-    await params.prompter.note(
-      "Provider locked — router will choose backend by cost or speed.",
-      "Hugging Face",
-    );
+    await params.prompter.note("提供方已锁定，路由器将按成本或速度自动选择后端。", "Hugging Face");
   }
 
   const applied = await applyDefaultModelChoice({

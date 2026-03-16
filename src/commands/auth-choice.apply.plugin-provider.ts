@@ -100,7 +100,7 @@ export async function runProviderPluginAuthMethod(params: {
   }
 
   if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
-    await params.prompter.note(result.notes.join("\n"), "Provider notes");
+    await params.prompter.note(result.notes.join("\n"), "提供方说明");
   }
 
   return {
@@ -155,10 +155,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
         agentDir: params.agentDir,
         workspaceDir,
       });
-      await params.prompter.note(
-        `Default model set to ${applied.defaultModel}`,
-        "Model configured",
-      );
+      await params.prompter.note(`已设置默认模型：${applied.defaultModel}`, "模型已配置");
       return { config: nextConfig };
     }
     agentModelOverride = applied.defaultModel;
@@ -179,7 +176,7 @@ export async function applyAuthChoicePluginProvider(
   let nextConfig = enableResult.config;
   if (!enableResult.enabled) {
     await params.prompter.note(
-      `${options.label} plugin is disabled (${enableResult.reason ?? "blocked"}).`,
+      `${options.label} 插件已禁用（${enableResult.reason ?? "blocked"}）。`,
       options.label,
     );
     return { config: nextConfig };
@@ -204,7 +201,7 @@ export async function applyAuthChoicePluginProvider(
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
     await params.prompter.note(
-      `${options.label} auth plugin is not available. Enable it and re-run the wizard.`,
+      `${options.label} 的认证插件不可用。请启用后重新运行向导。`,
       options.label,
     );
     return { config: nextConfig };
@@ -212,7 +209,7 @@ export async function applyAuthChoicePluginProvider(
 
   const method = pickAuthMethod(provider, options.methodId) ?? provider.auth[0];
   if (!method) {
-    await params.prompter.note(`${options.label} auth method missing.`, options.label);
+    await params.prompter.note(`${options.label} 缺少认证方式。`, options.label);
     return { config: nextConfig };
   }
 
@@ -241,15 +238,12 @@ export async function applyAuthChoicePluginProvider(
         agentDir,
         workspaceDir,
       });
-      await params.prompter.note(
-        `Default model set to ${applied.defaultModel}`,
-        "Model configured",
-      );
+      await params.prompter.note(`已设置默认模型：${applied.defaultModel}`, "模型已配置");
     } else if (params.agentId) {
       agentModelOverride = applied.defaultModel;
       await params.prompter.note(
-        `Default model set to ${applied.defaultModel} for agent "${params.agentId}".`,
-        "Model configured",
+        `已为智能体 "${params.agentId}" 设置默认模型：${applied.defaultModel}。`,
+        "模型已配置",
       );
     }
   }

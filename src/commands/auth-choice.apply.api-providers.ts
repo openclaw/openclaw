@@ -142,15 +142,15 @@ export async function applyAuthChoiceApiProviders(
     const ensureAccountGateway = async () => {
       if (!accountId) {
         const value = await params.prompter.text({
-          message: "Enter Cloudflare Account ID",
-          validate: (val) => (String(val ?? "").trim() ? undefined : "Account ID is required"),
+          message: "输入 Cloudflare Account ID",
+          validate: (val) => (String(val ?? "").trim() ? undefined : "Account ID 为必填项"),
         });
         accountId = String(value ?? "").trim();
       }
       if (!gatewayId) {
         const value = await params.prompter.text({
-          message: "Enter Cloudflare AI Gateway ID",
-          validate: (val) => (String(val ?? "").trim() ? undefined : "Gateway ID is required"),
+          message: "输入 Cloudflare AI Gateway ID",
+          validate: (val) => (String(val ?? "").trim() ? undefined : "Gateway ID 为必填项"),
         });
         gatewayId = String(value ?? "").trim();
       }
@@ -166,7 +166,7 @@ export async function applyAuthChoiceApiProviders(
       expectedProviders: ["cloudflare-ai-gateway"],
       provider: "cloudflare-ai-gateway",
       envLabel: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-      promptMessage: "Enter Cloudflare AI Gateway API key",
+      promptMessage: "输入 Cloudflare AI Gateway API Key",
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
@@ -207,7 +207,7 @@ export async function applyAuthChoiceApiProviders(
       config: nextConfig,
       expectedProviders: ["google"],
       envLabel: "GEMINI_API_KEY",
-      promptMessage: "Enter Gemini API key",
+      promptMessage: "输入 Gemini API Key",
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
@@ -223,10 +223,7 @@ export async function applyAuthChoiceApiProviders(
       const applied = applyGoogleGeminiModelDefault(nextConfig);
       nextConfig = applied.next;
       if (applied.changed) {
-        await params.prompter.note(
-          `Default model set to ${GOOGLE_GEMINI_DEFAULT_MODEL}`,
-          "Model configured",
-        );
+        await params.prompter.note(`已设置默认模型：${GOOGLE_GEMINI_DEFAULT_MODEL}`, "模型已配置");
       }
     } else {
       agentModelOverride = GOOGLE_GEMINI_DEFAULT_MODEL;
@@ -252,7 +249,7 @@ export async function applyAuthChoiceApiProviders(
       config: nextConfig,
       expectedProviders: ["zai"],
       envLabel: "ZAI_API_KEY",
-      promptMessage: "Enter Z.AI API key",
+      promptMessage: "输入 Z.AI API Key",
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
@@ -265,7 +262,7 @@ export async function applyAuthChoiceApiProviders(
       const detected = await detectZaiEndpoint({ apiKey, endpoint });
       if (detected) {
         modelIdOverride = detected.modelId;
-        await params.prompter.note(detected.note, "Z.AI endpoint");
+        await params.prompter.note(detected.note, "Z.AI 端点");
       }
     } else {
       // zai-api-key: auto-detect endpoint + choose a working default model.
@@ -273,30 +270,30 @@ export async function applyAuthChoiceApiProviders(
       if (detected) {
         endpoint = detected.endpoint;
         modelIdOverride = detected.modelId;
-        await params.prompter.note(detected.note, "Z.AI endpoint");
+        await params.prompter.note(detected.note, "Z.AI 端点");
       } else {
         endpoint = await params.prompter.select({
-          message: "Select Z.AI endpoint",
+          message: "选择 Z.AI 端点",
           options: [
             {
               value: "coding-global",
-              label: "Coding-Plan-Global",
-              hint: "GLM Coding Plan Global (api.z.ai)",
+              label: "Coding Plan Global",
+              hint: "GLM Coding Plan Global（api.z.ai）",
             },
             {
               value: "coding-cn",
-              label: "Coding-Plan-CN",
-              hint: "GLM Coding Plan CN (open.bigmodel.cn)",
+              label: "Coding Plan CN",
+              hint: "GLM Coding Plan CN（open.bigmodel.cn）",
             },
             {
               value: "global",
               label: "Global",
-              hint: "Z.AI Global (api.z.ai)",
+              hint: "Z.AI Global（api.z.ai）",
             },
             {
               value: "cn",
               label: "CN",
-              hint: "Z.AI CN (open.bigmodel.cn)",
+              hint: "Z.AI CN（open.bigmodel.cn）",
             },
           ],
           initialValue: "global",

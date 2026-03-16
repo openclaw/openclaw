@@ -321,8 +321,8 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     expect(result).toBe("env-key");
     expectMinimaxEnvRefCredentialStored(setCredential);
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate provider reference"),
-      "Reference check failed",
+      expect.stringContaining("无法验证提供方引用"),
+      "引用校验失败",
     );
   });
 
@@ -345,7 +345,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
 
     expect(result).toBe("sk-minimax-redacted-value");
     const noteMessages = note.mock.calls.map((call) => String(call.at(0) ?? "")).join("\n");
-    expect(noteMessages).toContain("Validated environment variable MINIMAX_API_KEY.");
+    expect(noteMessages).toContain("已验证环境变量 MINIMAX_API_KEY。");
     expect(noteMessages).not.toContain("sk-minimax-redacted-value");
   });
 });

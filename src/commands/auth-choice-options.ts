@@ -97,7 +97,7 @@ export function buildAuthChoiceOptions(params: {
   );
 
   if (params.includeSkip) {
-    options.push({ value: "skip", label: "Skip for now" });
+    options.push({ value: "skip", label: "暂时跳过" });
   }
 
   return options;
@@ -143,7 +143,7 @@ export function buildAuthChoiceGroups(params: {
     .toSorted(compareGroupLabels);
 
   const skipOption = params.includeSkip
-    ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)
+    ? ({ value: "skip", label: "暂时跳过" } satisfies AuthChoiceOption)
     : undefined;
 
   return { groups, skipOption };

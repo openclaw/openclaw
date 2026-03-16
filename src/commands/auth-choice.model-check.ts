@@ -26,7 +26,7 @@ export async function warnIfModelConfigLooksOff(
     );
     if (!known) {
       warnings.push(
-        `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`,
+        `未找到模型：${ref.provider}/${ref.model}。请更新 agents.defaults.model，或运行 /models list。`,
       );
     }
   }
@@ -37,7 +37,7 @@ export async function warnIfModelConfigLooksOff(
   const hasCustomKey = hasUsableCustomProviderApiKey(config, ref.provider);
   if (!hasProfile && !envKey && !hasCustomKey) {
     warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
+      `提供方 "${ref.provider}" 尚未配置认证。在补充凭证前，智能体可能无法正常工作。${buildProviderAuthRecoveryHint(
         {
           provider: ref.provider,
           config,
@@ -48,6 +48,6 @@ export async function warnIfModelConfigLooksOff(
   }
 
   if (warnings.length > 0) {
-    await prompter.note(warnings.join("\n"), "Model check");
+    await prompter.note(warnings.join("\n"), "模型检查");
   }
 }

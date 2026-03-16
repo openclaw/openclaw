@@ -18,9 +18,9 @@ export async function applyAuthChoiceOAuth(
       process.env.CHUTES_CLIENT_ID?.trim() ||
       String(
         await params.prompter.text({
-          message: "Enter Chutes OAuth client id",
+          message: "输入 Chutes OAuth Client ID",
           placeholder: "cid_xxx",
-          validate: (value) => (value?.trim() ? undefined : "Required"),
+          validate: (value) => (value?.trim() ? undefined : "必填"),
         }),
       ).trim();
     const clientSecret = process.env.CHUTES_CLIENT_SECRET?.trim() || undefined;
@@ -28,22 +28,22 @@ export async function applyAuthChoiceOAuth(
     await params.prompter.note(
       isRemote
         ? [
-            "You are running in a remote/VPS environment.",
-            "A URL will be shown for you to open in your LOCAL browser.",
-            "After signing in, paste the redirect URL back here.",
+            "你当前运行在远程/VPS 环境中。",
+            "稍后会显示一个 URL，请在你的本地浏览器中打开。",
+            "登录完成后，请把重定向 URL 粘贴回这里。",
             "",
-            `Redirect URI: ${redirectUri}`,
+            `回调 URI：${redirectUri}`,
           ].join("\n")
         : [
-            "Browser will open for Chutes authentication.",
-            "If the callback doesn't auto-complete, paste the redirect URL.",
+            "浏览器将自动打开进行 Chutes 认证。",
+            "如果回调未自动完成，请手动粘贴重定向 URL。",
             "",
-            `Redirect URI: ${redirectUri}`,
+            `回调 URI：${redirectUri}`,
           ].join("\n"),
       "Chutes OAuth",
     );
 
-    const spin = params.prompter.progress("Starting OAuth flow…");
+    const spin = params.prompter.progress("正在启动 OAuth 流程…");
     try {
       const { onAuth, onPrompt } = createVpsAwareOAuthHandlers({
         isRemote,
@@ -51,7 +51,7 @@ export async function applyAuthChoiceOAuth(
         runtime: params.runtime,
         spin,
         openUrl,
-        localBrowserMessage: "Complete sign-in in browser…",
+        localBrowserMessage: "请在浏览器中完成登录…",
       });
 
       const creds = await loginChutes({
@@ -67,7 +67,7 @@ export async function applyAuthChoiceOAuth(
         onProgress: (msg) => spin.update(msg),
       });
 
-      spin.stop("Chutes OAuth complete");
+      spin.stop("Chutes OAuth 已完成");
       const profileId = await writeOAuthCredentials("chutes", creds, params.agentDir);
       nextConfig = applyAuthProfileConfig(nextConfig, {
         profileId,
@@ -75,16 +75,16 @@ export async function applyAuthChoiceOAuth(
         mode: "oauth",
       });
     } catch (err) {
-      spin.stop("Chutes OAuth failed");
+      spin.stop("Chutes OAuth 失败");
       params.runtime.error(String(err));
       await params.prompter.note(
         [
-          "Trouble with OAuth?",
-          "Verify CHUTES_CLIENT_ID (and CHUTES_CLIENT_SECRET if required).",
-          `Verify the OAuth app redirect URI includes: ${redirectUri}`,
-          "Chutes docs: https://chutes.ai/docs/sign-in-with-chutes/overview",
+          "OAuth 遇到问题？",
+          "请检查 CHUTES_CLIENT_ID（如果需要，也检查 CHUTES_CLIENT_SECRET）。",
+          `请确认 OAuth 应用的回调 URI 包含：${redirectUri}`,
+          "Chutes 文档：https://chutes.ai/docs/sign-in-with-chutes/overview",
         ].join("\n"),
-        "OAuth help",
+        "OAuth 帮助",
       );
     }
     return { config: nextConfig };

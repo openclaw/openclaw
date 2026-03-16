@@ -46,7 +46,7 @@ export async function applyAuthChoiceMiniMax(
     const keyLink = isCn
       ? "https://platform.minimaxi.com/user-center/basic-information/interface-key"
       : "https://platform.minimax.io/user-center/basic-information/interface-key";
-    const promptMessage = `Enter MiniMax ${isCn ? "CN " : ""}API key (sk-api- or sk-cp-)\n${keyLink}`;
+    const promptMessage = `输入 MiniMax ${isCn ? "CN " : ""}API Key（sk-api- 或 sk-cp-）\n${keyLink}`;
 
     let nextConfig = params.config;
     let agentModelOverride: string | undefined;
@@ -64,7 +64,7 @@ export async function applyAuthChoiceMiniMax(
     const otherProfileId = isCn ? "minimax:global" : "minimax:cn";
     const hasOtherProfile = Boolean(nextConfig.auth?.profiles?.[otherProfileId]);
     const noteMessage = hasOtherProfile
-      ? `Note: Global and CN both use the "minimax" provider entry. Saving this key will overwrite the existing ${isCn ? "Global" : "CN"} endpoint (${otherProfileId}).`
+      ? `提示：Global 和 CN 共用 "minimax" 提供方条目。保存此密钥会覆盖现有的 ${isCn ? "Global" : "CN"} 端点（${otherProfileId}）。`
       : undefined;
 
     await ensureApiKeyFromOptionEnvOrPrompt({

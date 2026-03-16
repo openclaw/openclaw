@@ -287,14 +287,14 @@ describe("applyAuthChoice", () => {
     }> = [
       {
         authChoice: "minimax-global-api" as const,
-        promptContains: "Enter MiniMax API key",
+        promptContains: "输入 MiniMax API Key",
         profileId: "minimax:global",
         provider: "minimax",
         token: "sk-minimax-test",
       },
       {
         authChoice: "minimax-cn-api" as const,
-        promptContains: "Enter MiniMax CN API key",
+        promptContains: "输入 MiniMax CN API Key",
         profileId: "minimax:cn",
         provider: "minimax",
         token: "sk-minimax-test",
@@ -302,7 +302,7 @@ describe("applyAuthChoice", () => {
       },
       {
         authChoice: "synthetic-api-key" as const,
-        promptContains: "Enter Synthetic API key",
+        promptContains: "输入 Synthetic API Key",
         profileId: "synthetic:default",
         provider: "synthetic",
         token: "sk-synthetic-test",
@@ -416,7 +416,7 @@ describe("applyAuthChoice", () => {
 
       const text = vi.fn().mockResolvedValue(scenario.token);
       const select = vi.fn(async (params: { message: string }) => {
-        if (params.message === "Select Z.AI endpoint") {
+        if (params.message === "选择 Z.AI 端点") {
           return scenario.endpointSelection ?? "global";
         }
         return "default";
@@ -438,13 +438,20 @@ describe("applyAuthChoice", () => {
         expect(detectZaiEndpoint).toHaveBeenCalledWith(scenario.expectedDetectCall);
       }
       if (scenario.shouldPromptForEndpoint) {
-        expect(select).toHaveBeenCalledWith(
-          expect.objectContaining({ message: "Select Z.AI endpoint", initialValue: "global" }),
-        );
+        expect(
+          select.mock.calls.some(
+            (call) =>
+              (call[0] as { message?: string; initialValue?: string })?.message ===
+                "选择 Z.AI 端点" &&
+              (call[0] as { initialValue?: string })?.initialValue === "global",
+          ),
+        ).toBe(true);
       } else {
-        expect(select).not.toHaveBeenCalledWith(
-          expect.objectContaining({ message: "Select Z.AI endpoint" }),
-        );
+        expect(
+          select.mock.calls.some(
+            (call) => (call[0] as { message?: string })?.message === "选择 Z.AI 端点",
+          ),
+        ).toBe(false);
       }
       expect(result.config.models?.providers?.zai?.baseUrl).toBe(scenario.expectedBaseUrl);
       if (scenario.expectedModel) {
@@ -708,13 +715,10 @@ describe("applyAuthChoice", () => {
       setDefaultModel: true,
     });
 
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("privacy-focused inference"),
-      "Venice AI",
-    );
+    expect(note).toHaveBeenCalledWith(expect.stringContaining("注重隐私的推理服务"), "Venice AI");
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Enter Venice AI API key",
+        message: "输入 Venice AI API Key",
       }),
     );
     expect(result.config.auth?.profiles?.["venice:default"]).toMatchObject({
@@ -893,12 +897,12 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate provider reference"),
-      "Reference check failed",
+      expect.stringContaining("无法验证提供方引用"),
+      "引用校验失败",
     );
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Validated environment variable OPENAI_API_KEY."),
-      "Reference validated",
+      expect.stringContaining("已验证环境变量 OPENAI_API_KEY。"),
+      "引用已验证",
     );
     expect(await readAuthProfile("openai:default")).toMatchObject({
       keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
@@ -921,7 +925,7 @@ describe("applyAuthChoice", () => {
       {
         authChoice: "xai-api-key",
         token: "sk-xai-test",
-        promptMessage: "Enter xAI API key",
+        promptMessage: "输入 xAI API Key",
         existingPrimary: "openai/gpt-4o-mini",
         expectedOverride: "xai/grok-4",
         profileId: "xai:default",
@@ -931,7 +935,7 @@ describe("applyAuthChoice", () => {
       {
         authChoice: "opencode-zen",
         token: "sk-opencode-zen-test",
-        promptMessage: "Enter OpenCode API key",
+        promptMessage: "输入 OpenCode API Key",
         existingPrimary: "anthropic/claude-opus-4-5",
         expectedOverride: "opencode/claude-opus-4-6",
         profileId: "opencode:default",
@@ -942,7 +946,7 @@ describe("applyAuthChoice", () => {
       {
         authChoice: "opencode-go",
         token: "sk-opencode-go-test",
-        promptMessage: "Enter OpenCode API key",
+        promptMessage: "输入 OpenCode API Key",
         existingPrimary: "anthropic/claude-opus-4-5",
         expectedOverride: "opencode-go/kimi-k2.5",
         profileId: "opencode-go:default",

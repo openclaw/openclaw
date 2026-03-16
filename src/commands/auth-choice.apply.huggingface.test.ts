@@ -105,9 +105,11 @@ describe("applyAuthChoiceHuggingface", () => {
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("Hugging Face") }),
     );
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Default Hugging Face model" }),
-    );
+    expect(
+      select.mock.calls.some(
+        (call) => (call[0] as { message?: string })?.message === "默认 Hugging Face 模型",
+      ),
+    ).toBe(true);
 
     const parsed = await readAuthProfiles(agentDir);
     expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-test-token");
@@ -187,7 +189,7 @@ describe("applyAuthChoiceHuggingface", () => {
       ":cheapest",
     );
     expect(note).toHaveBeenCalledWith(
-      "Provider locked — router will choose backend by cost or speed.",
+      "提供方已锁定，路由器将按成本或速度自动选择后端。",
       "Hugging Face",
     );
   });
