@@ -16,12 +16,7 @@ import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
-  extractSlackToolSend,
   getChatChannelMeta,
-  handleSlackMessageAction,
-  inspectSlackAccount,
-  listSlackMessageActions,
-  listSlackAccountIds,
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
   looksLikeSlackTargetId,
@@ -29,22 +24,28 @@ import {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromRequiredCredentialStatuses,
-  resolveDefaultSlackAccountId,
-  resolveSlackAccount,
-  resolveSlackReplyToMode,
-  isSlackInteractiveRepliesEnabled,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
-  buildSlackThreadingToolContext,
   SlackConfigSchema,
   type ChannelPlugin,
   type OpenClawConfig,
-  type ResolvedSlackAccount,
 } from "openclaw/plugin-sdk/slack";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
+import { inspectSlackAccount } from "./account-inspect.js";
+import {
+  listEnabledSlackAccounts,
+  listSlackAccountIds,
+  resolveDefaultSlackAccountId,
+  resolveSlackAccount,
+  resolveSlackReplyToMode,
+  type ResolvedSlackAccount,
+} from "./accounts.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
+import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import { handleSlackMessageAction } from "./message-action-dispatch.js";
+import { extractSlackToolSend, listSlackMessageActions } from "./message-actions.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
@@ -52,6 +53,7 @@ import { getSlackRuntime } from "./runtime.js";
 import { fetchSlackScopes } from "./scopes.js";
 import { createSlackSetupWizardProxy, slackSetupAdapter } from "./setup-core.js";
 import { parseSlackTarget } from "./targets.js";
+import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const meta = getChatChannelMeta("slack");
 const SLACK_CHANNEL_TYPE_CACHE = new Map<string, "channel" | "group" | "dm" | "unknown">();

@@ -90,6 +90,10 @@ function serviceSummary(label: string, svc: BonjourService): string {
   return `${label} fqdn=${fqdn} host=${hostname} port=${port} state=${state}`;
 }
 
+function isAnnouncedState(state: BonjourServiceState | "unknown") {
+  return String(state) === "announced";
+}
+
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
 ): Promise<GatewayBonjourAdvertiser> {
@@ -181,6 +185,20 @@ export async function startGatewayBonjourAdvertiser(
     if (!cycle) {
       return;
     }
+    const responder = cycle.responder as unknown as {
+      advertiseService?: (...args: unknown[]) => unknown;
+      announce?: (...args: unknown[]) => unknown;
+      probe?: (...args: unknown[]) => unknown;
+      republishService?: (...args: unknown[]) => unknown;
+    };
+    const noopAsync = async () => {};
+    // ciao schedules its own 2s retry timers after failed probe/announce attempts.
+    // Those callbacks target the original responder instance, so disarm it before
+    // destroy/shutdown to prevent a dead cycle from re-entering advertise/probe.
+    responder.advertiseService = noopAsync;
+    responder.announce = noopAsync;
+    responder.probe = noopAsync;
+    responder.republishService = noopAsync;
     for (const { svc } of cycle.services) {
       try {
         await svc.destroy();
@@ -257,8 +275,12 @@ export async function startGatewayBonjourAdvertiser(
       const nextState: BonjourServiceState | "unknown" =
         typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
       const current = stateTracker.get(label);
-      if (!current || current.state !== nextState) {
-        stateTracker.set(label, { state: nextState, sinceMs: now });
+      const nextEnteredAt =
+        current && !isAnnouncedState(current.state) && !isAnnouncedState(nextState)
+          ? current.sinceMs
+          : now;
+      if (!current || current.state !== nextState || current.sinceMs !== nextEnteredAt) {
+        stateTracker.set(label, { state: nextState, sinceMs: nextEnteredAt });
       }
     }
   };
@@ -299,12 +321,12 @@ export async function startGatewayBonjourAdvertiser(
       }
       const tracked = stateTracker.get(label);
       if (
-        stateUnknown === "announcing" &&
+        stateUnknown !== "announced" &&
         tracked &&
         Date.now() - tracked.sinceMs >= STUCK_ANNOUNCING_MS
       ) {
         void recreateAdvertiser(
-          `service stuck announcing for ${Date.now() - tracked.sinceMs}ms (${serviceSummary(
+          `service stuck in ${stateUnknown} for ${Date.now() - tracked.sinceMs}ms (${serviceSummary(
             label,
             svc,
           )})`,
