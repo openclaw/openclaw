@@ -92,7 +92,7 @@ export function createProfileAvailability({
       );
       // Chrome MCP startup/attach often takes longer than CDP ping windows.
       // Clamp to a sane minimum so status/list checks avoid false negatives.
-      await ensureChromeMcpAvailable(profile.name, {
+      await ensureChromeMcpAvailable(profile.name, profile.userDataDir, {
         timeoutMs: readyTimeoutMs,
       });
       traceAvailabilityStage(
@@ -190,7 +190,9 @@ export function createProfileAvailability({
     let lastError: unknown;
     while (Date.now() < deadlineMs) {
       try {
-        await listChromeMcpTabs(profile.name, { timeoutMs: readyTimeoutMs });
+        await listChromeMcpTabs(profile.name, profile.userDataDir, {
+          timeoutMs: readyTimeoutMs,
+        });
         return;
       } catch (err) {
         lastError = err;
@@ -216,7 +218,9 @@ export function createProfileAvailability({
       traceAvailabilityStage(
         `browser-availability-ensure profile=${profile.name} transport=chrome-mcp timeoutMs=${readyTimeoutMs}`,
       );
-      await ensureChromeMcpAvailable(profile.name, { timeoutMs: readyTimeoutMs });
+      await ensureChromeMcpAvailable(profile.name, profile.userDataDir, {
+        timeoutMs: readyTimeoutMs,
+      });
       await waitForChromeMcpReadyAfterAttach(readyTimeoutMs);
       traceAvailabilityStage(
         `browser-availability-ensure-ok profile=${profile.name} transport=chrome-mcp timeoutMs=${readyTimeoutMs}`,

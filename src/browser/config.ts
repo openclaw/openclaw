@@ -7,6 +7,7 @@ import {
 } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
@@ -44,6 +45,7 @@ export type ResolvedBrowserProfile = {
   cdpUrl: string;
   cdpHost: string;
   cdpIsLoopback: boolean;
+  userDataDir?: string;
   color: string;
   driver: "openclaw" | "existing-session";
   cloneFromUserProfile?: boolean;
@@ -338,6 +340,7 @@ export function resolveProfile(
       cdpUrl: "",
       cdpHost: "",
       cdpIsLoopback: true,
+      userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       color: profile.color,
       driver,
       cloneFromUserProfile: false,
