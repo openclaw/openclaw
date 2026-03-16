@@ -219,6 +219,9 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "instances") {
     await loadPresence(host as unknown as OpenClawApp);
   }
+  if (host.tab === "usage") {
+    await loadUsage(host as unknown as OpenClawApp);
+  }
   if (host.tab === "sessions") {
     await loadSessions(host as unknown as OpenClawApp);
   }

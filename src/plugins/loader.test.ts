@@ -348,7 +348,9 @@ afterEach(() => {
 
 describe("bundle plugins", () => {
   it("reports Codex bundles as loaded bundle plugins without importing runtime code", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
     mkdirSafe(path.join(bundleRoot, ".codex-plugin"));
     mkdirSafe(path.join(bundleRoot, "skills"));
@@ -366,19 +368,22 @@ describe("bundle plugins", () => {
       "---\ndescription: fixture\n---\n",
     );
 
-    const registry = loadOpenClawPlugins({
-      workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            "sample-bundle": {
-              enabled: true,
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadOpenClawPlugins({
+        workspaceDir,
+        onlyPluginIds: ["sample-bundle"],
+        config: {
+          plugins: {
+            entries: {
+              "sample-bundle": {
+                enabled: true,
+              },
             },
           },
         },
-      },
-      cache: false,
-    });
+        cache: false,
+      }),
+    );
 
     const plugin = registry.plugins.find((entry) => entry.id === "sample-bundle");
     expect(plugin?.status).toBe("loaded");
@@ -388,7 +393,9 @@ describe("bundle plugins", () => {
   });
 
   it("treats Claude command roots and settings as supported bundle surfaces", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-skills");
     mkdirSafe(path.join(bundleRoot, "commands"));
     fs.writeFileSync(
@@ -397,19 +404,22 @@ describe("bundle plugins", () => {
     );
     fs.writeFileSync(path.join(bundleRoot, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
 
-    const registry = loadOpenClawPlugins({
-      workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            "claude-skills": {
-              enabled: true,
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadOpenClawPlugins({
+        workspaceDir,
+        onlyPluginIds: ["claude-skills"],
+        config: {
+          plugins: {
+            entries: {
+              "claude-skills": {
+                enabled: true,
+              },
             },
           },
         },
-      },
-      cache: false,
-    });
+        cache: false,
+      }),
+    );
 
     const plugin = registry.plugins.find((entry) => entry.id === "claude-skills");
     expect(plugin?.status).toBe("loaded");
@@ -427,7 +437,9 @@ describe("bundle plugins", () => {
   });
 
   it("treats Cursor command roots as supported bundle skill surfaces", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "cursor-skills");
     mkdirSafe(path.join(bundleRoot, ".cursor-plugin"));
     mkdirSafe(path.join(bundleRoot, ".cursor", "commands"));
@@ -443,19 +455,22 @@ describe("bundle plugins", () => {
       "---\ndescription: fixture\n---\n",
     );
 
-    const registry = loadOpenClawPlugins({
-      workspaceDir,
-      config: {
-        plugins: {
-          entries: {
-            "cursor-skills": {
-              enabled: true,
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadOpenClawPlugins({
+        workspaceDir,
+        onlyPluginIds: ["cursor-skills"],
+        config: {
+          plugins: {
+            entries: {
+              "cursor-skills": {
+                enabled: true,
+              },
             },
           },
         },
-      },
-      cache: false,
-    });
+        cache: false,
+      }),
+    );
 
     const plugin = registry.plugins.find((entry) => entry.id === "cursor-skills");
     expect(plugin?.status).toBe("loaded");
@@ -2785,6 +2800,7 @@ module.exports = {
 
   it("preserves runtime reflection semantics when runtime is lazily initialized", () => {
     useNoBundledPlugins();
+    const stateDir = makeTempDir();
     const plugin = writePlugin({
       id: "runtime-introspection",
       filename: "runtime-introspection.cjs",
@@ -2803,12 +2819,17 @@ module.exports = {
 } };`,
     });
 
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["runtime-introspection"],
-      },
-    });
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["runtime-introspection"],
+        },
+        options: {
+          onlyPluginIds: ["runtime-introspection"],
+        },
+      }),
+    );
 
     const record = registry.plugins.find((entry) => entry.id === "runtime-introspection");
     expect(record?.status).toBe("loaded");

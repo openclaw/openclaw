@@ -79,11 +79,14 @@ function clearActiveSecretsRuntimeState(): void {
   clearRuntimeAuthProfileStoreSnapshots();
 }
 
-function collectCandidateAgentDirs(config: OpenClawConfig): string[] {
+function collectCandidateAgentDirs(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
   const dirs = new Set<string>();
-  dirs.add(resolveUserPath(resolveOpenClawAgentDir()));
+  dirs.add(resolveUserPath(resolveOpenClawAgentDir(env), env));
   for (const agentId of listAgentIds(config)) {
-    dirs.add(resolveUserPath(resolveAgentDir(config, agentId)));
+    dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
   }
   return [...dirs];
 }
@@ -92,7 +95,7 @@ function resolveRefreshAgentDirs(
   config: OpenClawConfig,
   context: SecretsRuntimeRefreshContext,
 ): string[] {
-  const configDerived = collectCandidateAgentDirs(config);
+  const configDerived = collectCandidateAgentDirs(config, context.env);
   if (!context.explicitAgentDirs || context.explicitAgentDirs.length === 0) {
     return configDerived;
   }
@@ -119,8 +122,12 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 
   const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
-    ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry)))]
-    : collectCandidateAgentDirs(resolvedConfig);
+    ? [
+        ...new Set(
+          params.agentDirs.map((entry) => resolveUserPath(entry, params.env ?? process.env)),
+        ),
+      ]
+    : collectCandidateAgentDirs(resolvedConfig, params.env ?? process.env);
 
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   for (const agentDir of candidateDirs) {
