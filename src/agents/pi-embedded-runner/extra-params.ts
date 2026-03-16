@@ -347,7 +347,7 @@ export function applyExtraParamsToAgent(
       provider,
       modelId,
       extraParams: effectiveExtraParams,
-      thinkingLevel: resolveThinkingLevelSource(thinkingLevel),
+      thinkingLevel,
       streamFn: providerStreamBase,
     },
   });

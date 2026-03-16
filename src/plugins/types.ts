@@ -429,7 +429,11 @@ export type ProviderPrepareExtraParamsContext = {
  * Use this for provider-specific payload/header/model mutations that still run
  * through the normal `pi-ai` stream path.
  */
-export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
+export type ProviderWrapStreamFnContext = Omit<
+  ProviderPrepareExtraParamsContext,
+  "thinkingLevel"
+> & {
+  thinkingLevel?: ThinkLevel | (() => ThinkLevel | undefined);
   streamFn?: StreamFn;
 };
 
