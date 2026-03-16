@@ -19,6 +19,11 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
+import type {
+  ChannelMessageActionContext as SharedChannelMessageActionContext,
+  OpenClawPluginApi as SharedOpenClawPluginApi,
+  PluginRuntime as SharedPluginRuntime,
+} from "./channel-plugin-common.js";
 import { pluginSdkSubpaths } from "./entrypoints.js";
 
 const bundledExtensionSubpathLoaders = [
@@ -87,6 +92,12 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<PluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
+  });
+
+  it("keeps core shared types aligned with the channel prelude", () => {
+    expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<SharedOpenClawPluginApi>();
+    expectTypeOf<CorePluginRuntime>().toMatchTypeOf<SharedPluginRuntime>();
+    expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<SharedChannelMessageActionContext>();
   });
 
   it("exports Discord helpers", () => {
