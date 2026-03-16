@@ -38,8 +38,8 @@ openclaw agent --local --agent main --thinking low -m "Reply with exactly WINDOW
 
 Current caveats:
 
-- `openclaw setup --wizard --non-interactive` still expects a reachable local gateway unless you pass `--skip-health`
-- `openclaw setup --wizard --non-interactive --install-daemon` and `openclaw gateway install` try Windows Scheduled Tasks first
+- `openclaw onboard --non-interactive` still expects a reachable local gateway unless you pass `--skip-health`
+- `openclaw onboard --non-interactive --install-daemon` and `openclaw gateway install` try Windows Scheduled Tasks first
 - if Scheduled Task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately
 - if `schtasks` itself wedges or stops responding, OpenClaw now aborts that path quickly and falls back instead of hanging forever
 - Scheduled Tasks are still preferred when available because they provide better supervisor status
@@ -47,7 +47,7 @@ Current caveats:
 If you want the native CLI only, without gateway service install, use one of these:
 
 ```powershell
-openclaw setup --wizard --non-interactive --skip-health
+openclaw onboard --non-interactive --skip-health
 openclaw gateway run
 ```
 
@@ -70,7 +70,7 @@ If Scheduled Task creation is blocked, the fallback service mode still auto-star
 Inside WSL2:
 
 ```
-openclaw setup --wizard --install-daemon
+openclaw onboard --install-daemon
 ```
 
 Or:
@@ -230,7 +230,7 @@ cd openclaw
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-openclaw setup --wizard
+openclaw onboard
 ```
 
 Full guide: [Getting Started](/start/getting-started)

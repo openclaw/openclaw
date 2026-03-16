@@ -25,6 +25,12 @@ Docs: https://docs.openclaw.ai
 - secrets: harden read-only SecretRef command paths and diagnostics. (#47794) Thanks @joshavant.
 - Sandbox/runtime: add pluggable sandbox backends, ship an OpenShell backend with `mirror` and `remote` workspace modes, and make sandbox list/recreate/prune backend-aware instead of Docker-only.
 - Sandbox/SSH: add a core SSH sandbox backend with secret-backed key, certificate, and known_hosts inputs, move shared remote exec/filesystem tooling into core, and keep OpenShell focused on sandbox lifecycle plus optional `mirror` mode.
+- Feishu/cards: add structured interactive approval and quick-action launcher cards, preserve callback user and conversation context through routing, and keep legacy card-action fallback behavior so common actions can run without typing raw commands. (#47873)
+- Feishu/ACP: add current-conversation ACP and subagent session binding for supported DMs and topic conversations, including completion delivery back to the originating Feishu conversation. (#46819)
+
+### Breaking
+
+- Browser/Chrome MCP: remove the legacy Chrome extension relay path, bundled extension assets, `driver: "extension"`, and `browser.relayBindHost`. Run `openclaw doctor --fix` to migrate host-local browser config to `existing-session` / `user`; Docker, headless, sandbox, and remote browser flows still use raw CDP. Thanks @vincentkoc.
 
 ### Fixes
 
@@ -33,6 +39,8 @@ Docs: https://docs.openclaw.ai
 - Control UI: scope persisted session selection per gateway, prevent stale session bleed across tokenized gateway opens, and cap stored gateway session history. (#47453) Thanks @sallyom.
 - Slack/interactive replies: preserve `channelData.slack.blocks` through live DM delivery and preview-finalized edits so Block Kit button and select directives render instead of falling back to raw text. (#45890) Thanks @vincentkoc.
 - Feishu/topic threads: fetch full thread context, including prior bot replies, when starting a topic-thread session so follow-up turns in Feishu topics keep the right conversation state. (#45254) Thanks @Coobiw.
+- Feishu/media: keep native image, file, audio, and video/media handling aligned across outbound sends, inbound downloads, thread replies, directory/action aliases, and capability docs so unsupported areas are explicit instead of implied.
+- Feishu/actions: expand the runtime action surface with message read/edit, explicit thread replies, pinning, and operator-facing chat/member inspection so Feishu can operate more of the workspace directly.
 - Configure/startup: move outbound send-deps resolution into a lightweight helper so `openclaw configure` no longer stalls after the banner while eagerly loading channel plugins. (#46301) thanks @scoootscooob.
 - Control UI/dashboard: preserve structured gateway shutdown reasons across restart disconnects so config-triggered restarts no longer fall back to `disconnected (1006): no reason`. (#46532) Thanks @vincentkoc.
 - Android/chat: theme the thinking dropdown and TLS trust dialogs explicitly so popup surfaces match the active app theme instead of falling back to mismatched Material defaults.
@@ -59,6 +67,7 @@ Docs: https://docs.openclaw.ai
 - Agents/openai-compatible tool calls: deduplicate repeated tool call ids across live assistant messages and replayed history so OpenAI-compatible backends no longer reject duplicate `tool_call_id` values with HTTP 400. (#40996) Thanks @xaeon2026.
 - Security/device pairing: harden `device.token.rotate` deny handling by keeping public failures generic while logging internal deny reasons and preserving approved-baseline enforcement. (`GHSA-7jrw-x62h-64p8`)
 - Slack/interactive replies: preserve `channelData.slack.blocks` through live DM delivery and preview-finalized edits so Block Kit button and select directives render instead of falling back to raw text. (#45890) Thanks @vincentkoc.
+- Gateway/restart: defer externally signaled unmanaged restarts through the in-process idle drain, and preserve the restored subagent run as remap fallback during orphan recovery so resumed sessions do not duplicate work. (#47719) Thanks @joeykrug.
 - Zalo/plugin runtime: export `resolveClientIp` from `openclaw/plugin-sdk/zalo` so installed builds no longer crash on startup when the webhook monitor loads from the packaged extension instead of the monorepo source tree. (#46549) Thanks @No898.
 - CI/channel test routing: move the built-in channel suites into `test:channels` and keep them out of `test:extensions`, so extension CI no longer fails after the channel migration while targeted test routing still sends Slack, Signal, and iMessage suites to the right lane. (#46066) Thanks @scoootscooob.
 - Browser/profiles: drop the auto-created `chrome-relay` browser profile; users who need the Chrome extension relay must now create their own profile via `openclaw browser create-profile`. (#45777) Thanks @odysseus0.
@@ -82,6 +91,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/watch mode: restart on bundled-plugin package and manifest metadata changes, rebuild `dist` for extension source and `tsdown.config.ts` changes, and still ignore extension docs. (#47571) thanks @gumadeiras.
 - Gateway/watch mode: recreate bundled plugin runtime metadata after clean or stale `dist` states, so `pnpm gateway:watch` no longer fails on missing `dist/extensions/*/openclaw.plugin.json` manifests after a rebuild. Thanks @gumadeiras.
 - Plugins/context engines: enforce owner-aware context-engine registration on both loader and public SDK paths so plugins cannot spoof privileged ownership, claim the core `legacy` engine id, or overwrite an existing engine id through direct SDK imports. (#47595) Thanks @vincentkoc.
+- Windows/gateway status: accept `schtasks` `Last Result` output as an alias for `Last Run Result`, so running scheduled-task installs no longer show `Runtime: unknown`. (#47844) Thanks @MoerAI.
+- Control UI/session routing: preserve established external delivery routes when webchat views or sends in externally originated sessions, so subagent completions still return to the original channel instead of the dashboard. (#47797) Thanks @brokemac79.
 
 ## 2026.3.13
 

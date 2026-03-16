@@ -8035,21 +8035,7 @@
         "storage"
       ],
       "label": "Browser Profile Driver",
-      "help": "Per-profile browser driver mode: \"openclaw\" (or legacy \"clawd\") or \"extension\" depending on connection/runtime strategy. Use the driver that matches your browser control stack to avoid protocol mismatches.",
-      "hasChildren": false
-    },
-    {
-      "path": "browser.relayBindHost",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Browser Relay Bind Address",
-      "help": "Bind IP address for the Chrome extension relay listener. Leave unset for loopback-only access, or set an explicit non-loopback IP such as 0.0.0.0 only when the relay must be reachable across network namespaces (for example WSL2) and the surrounding network is already trusted.",
+      "help": "Per-profile browser driver mode. Use \"openclaw\" (or legacy \"clawd\") for CDP-based profiles, or use \"existing-session\" for host-local Chrome MCP attachment.",
       "hasChildren": false
     },
     {
@@ -40267,6 +40253,22 @@
       "hasChildren": false
     },
     {
+      "path": "gateway.reload.deferralTimeoutMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "network",
+        "performance",
+        "reliability"
+      ],
+      "label": "Restart Deferral Timeout (ms)",
+      "help": "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
+      "hasChildren": false
+    },
+    {
       "path": "gateway.reload.mode",
       "kind": "core",
       "type": "string",
@@ -58804,7 +58806,7 @@
         "advanced"
       ],
       "label": "Setup Wizard State",
-      "help": "Setup wizard state tracking fields that record the most recent guided onboarding run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
+      "help": "Setup wizard state tracking fields that record the most recent guided setup run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
       "hasChildren": true
     },
     {
@@ -58818,7 +58820,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Timestamp",
-      "help": "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm onboarding recency during support and operational audits.",
+      "help": "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm setup recency during support and operational audits.",
       "hasChildren": false
     },
     {
@@ -58832,7 +58834,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Command",
-      "help": "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce onboarding steps when verifying setup regressions.",
+      "help": "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
       "hasChildren": false
     },
     {
@@ -58846,7 +58848,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Commit",
-      "help": "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate onboarding behavior with exact source state during debugging.",
+      "help": "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate setup behavior with exact source state during debugging.",
       "hasChildren": false
     },
     {
@@ -58874,7 +58876,7 @@
         "advanced"
       ],
       "label": "Wizard Last Run Version",
-      "help": "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version onboarding changes.",
+      "help": "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
       "hasChildren": false
     }
   ]
