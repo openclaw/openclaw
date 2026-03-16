@@ -33,6 +33,8 @@ export async function applyAuthChoice(
   const normalizedProviderAuthChoice = normalizeApiKeyTokenProviderAuthChoice({
     authChoice: normalizedAuthChoice,
     tokenProvider: params.opts?.tokenProvider,
+    config: params.config,
+    env: process.env,
   });
   const normalizedParams =
     normalizedProviderAuthChoice === params.authChoice

@@ -4,6 +4,7 @@ import type { SecretInput } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
+import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
 import {
   applyAzureOpenAIConfig,
   normalizeAzureOpenAIBaseUrl,
@@ -43,7 +44,13 @@ export async function applyNonInteractiveAuthChoice(params: {
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
 }): Promise<OpenClawConfig | null> {
-  const { authChoice, opts, runtime, baseConfig } = params;
+  const { opts, runtime, baseConfig } = params;
+  const authChoice = normalizeApiKeyTokenProviderAuthChoice({
+    authChoice: params.authChoice,
+    tokenProvider: opts.tokenProvider,
+    config: params.nextConfig,
+    env: process.env,
+  });
   let nextConfig = params.nextConfig;
   const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
   if (opts.secretInputMode && !requestedSecretInputMode) {
