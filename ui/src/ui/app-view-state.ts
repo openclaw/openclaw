@@ -178,6 +178,8 @@ export type AppViewState = {
   agentSkillsError: string | null;
   agentSkillsReport: SkillStatusReport | null;
   agentSkillsAgentId: string | null;
+  /** Per-session unread counts. Incremented on foreign final chat events, cleared on session switch. */
+  sessionUnreadCounts: Map<string, number>;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
