@@ -121,6 +121,50 @@ function installHooks() {
   });
 }
 
+// Extension to prevent auto-linking algorithms from swallowing adjacent CJK characters.
+const cjkAutoLinkExtension = {
+  name: "url",
+  level: "inline",
+  // Indicate where an auto-link might start
+  start(src: string) {
+    const match = src.match(/https?:\/\//i);
+    return match ? match.index! : -1;
+  },
+  tokenizer(src: string) {
+    // GFM standard regex for auto-links
+    const rule = /^https?:\/\/[^\s<]+[^<.,:;"')\]\s]/i;
+    const match = rule.exec(src);
+    if (match) {
+      let urlText = match[0];
+
+      // Stop before any CJK character or typical punctuation following CJK
+      // This stops link boundaries from bleeding into mixed-language paragraphs.
+      const cjkMatch = urlText.match(/([\u4E00-\u9FFF\u3000-\u303F\uFF01-\uFF5E]+.*)$/);
+      if (cjkMatch) {
+        urlText = urlText.substring(0, urlText.length - cjkMatch[1].length);
+      }
+
+      return {
+        type: "link",
+        raw: urlText,
+        text: urlText,
+        href: urlText,
+        tokens: [
+          {
+            type: "text",
+            raw: urlText,
+            text: urlText,
+          },
+        ],
+      };
+    }
+  },
+};
+
+marked.use({
+  extensions: [cjkAutoLinkExtension as unknown as import("marked").TokenizerAndRendererExtension],
+});
+
 export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
   if (!input) {
