@@ -366,11 +366,11 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }
       return ["poll"] satisfies ChannelMessageActionName[];
     },
-    supportsCards: ({ cfg }) => {
-      return (
-        cfg.channels?.msteams?.enabled !== false &&
+    getCapabilities: ({ cfg }) => {
+      return cfg.channels?.msteams?.enabled !== false &&
         Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams))
-      );
+        ? (["cards"] as const)
+        : [];
     },
     handleAction: async (ctx) => {
       // Handle send action with card parameter

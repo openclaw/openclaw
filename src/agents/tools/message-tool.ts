@@ -2,14 +2,11 @@ import { Type } from "@sinclair/typebox";
 import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
-  supportsChannelMessageInteractive,
-  supportsChannelMessageInteractiveForChannel,
+  channelSupportsMessageCapability,
+  channelSupportsMessageCapabilityForChannel,
   listChannelMessageActions,
-  supportsChannelMessageButtons,
-  supportsChannelMessageButtonsForChannel,
-  supportsChannelMessageCards,
-  supportsChannelMessageCardsForChannel,
 } from "../../channels/plugins/message-actions.js";
+import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
@@ -199,6 +196,7 @@ function buildSendSchema(options: {
   includeButtons: boolean;
   includeCards: boolean;
   includeComponents: boolean;
+  includeBlocks: boolean;
 }) {
   const props: Record<string, unknown> = {
     message: Type.Optional(Type.String()),
@@ -265,6 +263,17 @@ function buildSendSchema(options: {
       ),
     ),
     components: Type.Optional(discordComponentMessageSchema),
+    blocks: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {},
+          {
+            additionalProperties: true,
+            description: "Slack Block Kit payload blocks (Slack only).",
+          },
+        ),
+      ),
+    ),
   };
   if (!options.includeButtons) {
     delete props.buttons;
@@ -277,6 +286,9 @@ function buildSendSchema(options: {
   }
   if (!options.includeComponents) {
     delete props.components;
+  }
+  if (!options.includeBlocks) {
+    delete props.blocks;
   }
   return props;
 }
@@ -487,6 +499,7 @@ function buildMessageToolSchemaProps(options: {
   includeButtons: boolean;
   includeCards: boolean;
   includeComponents: boolean;
+  includeBlocks: boolean;
   includeTelegramPollExtras: boolean;
 }) {
   return {
@@ -513,6 +526,7 @@ function buildMessageToolSchemaFromActions(
     includeButtons: boolean;
     includeCards: boolean;
     includeComponents: boolean;
+    includeBlocks: boolean;
     includeTelegramPollExtras: boolean;
   },
 ) {
@@ -528,6 +542,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includeButtons: true,
   includeCards: true,
   includeComponents: true,
+  includeBlocks: true,
   includeTelegramPollExtras: true,
 });
 
@@ -578,30 +593,59 @@ function resolveMessageToolSchemaActions(params: {
   return actions.length > 0 ? actions : ["send"];
 }
 
+function resolveIncludeCapability(
+  params: {
+    cfg: OpenClawConfig;
+    currentChannelProvider?: string;
+  },
+  capability: ChannelMessageCapability,
+): boolean {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentChannel) {
+    return channelSupportsMessageCapabilityForChannel(
+      {
+        cfg: params.cfg,
+        channel: currentChannel,
+      },
+      capability,
+    );
+  }
+  return channelSupportsMessageCapability(params.cfg, capability);
+}
+
 function resolveIncludeComponents(params: {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
 }): boolean {
-  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
-  if (currentChannel) {
-    return currentChannel === "discord";
-  }
-  // Components are currently Discord-specific.
-  return listChannelSupportedActions({ cfg: params.cfg, channel: "discord" }).length > 0;
+  return resolveIncludeCapability(params, "components");
 }
 
 function resolveIncludeInteractive(params: {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
 }): boolean {
-  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
-  if (currentChannel) {
-    return supportsChannelMessageInteractiveForChannel({
-      cfg: params.cfg,
-      channel: currentChannel,
-    });
-  }
-  return supportsChannelMessageInteractive(params.cfg);
+  return resolveIncludeCapability(params, "interactive");
+}
+
+function resolveIncludeButtons(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+}): boolean {
+  return resolveIncludeCapability(params, "buttons");
+}
+
+function resolveIncludeCards(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+}): boolean {
+  return resolveIncludeCapability(params, "cards");
+}
+
+function resolveIncludeBlocks(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+}): boolean {
+  return resolveIncludeCapability(params, "blocks");
 }
 
 function resolveIncludeTelegramPollExtras(params: {
@@ -619,22 +663,19 @@ function buildMessageToolSchema(params: {
   currentChannelProvider?: string;
   currentChannelId?: string;
 }) {
-  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
   const actions = resolveMessageToolSchemaActions(params);
   const includeInteractive = resolveIncludeInteractive(params);
-  const includeButtons = currentChannel
-    ? supportsChannelMessageButtonsForChannel({ cfg: params.cfg, channel: currentChannel })
-    : supportsChannelMessageButtons(params.cfg);
-  const includeCards = currentChannel
-    ? supportsChannelMessageCardsForChannel({ cfg: params.cfg, channel: currentChannel })
-    : supportsChannelMessageCards(params.cfg);
+  const includeButtons = resolveIncludeButtons(params);
+  const includeCards = resolveIncludeCards(params);
   const includeComponents = resolveIncludeComponents(params);
+  const includeBlocks = resolveIncludeBlocks(params);
   const includeTelegramPollExtras = resolveIncludeTelegramPollExtras(params);
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includeInteractive,
     includeButtons,
     includeCards,
     includeComponents,
+    includeBlocks,
     includeTelegramPollExtras,
   });
 }
