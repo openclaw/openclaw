@@ -320,7 +320,11 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     const profiles = { ...rawProfiles };
     let profilesChanged = false;
     for (const [profileName, rawProfile] of Object.entries(rawProfiles)) {
-      if (!isRecord(rawProfile) || rawProfile.driver !== "extension") {
+      if (!isRecord(rawProfile)) {
+        continue;
+      }
+      const rawDriver = typeof rawProfile.driver === "string" ? rawProfile.driver.trim() : "";
+      if (rawDriver !== "extension") {
         continue;
       }
       profiles[profileName] = {
