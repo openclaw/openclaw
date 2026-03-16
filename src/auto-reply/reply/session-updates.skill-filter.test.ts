@@ -102,4 +102,35 @@ describe("ensureSkillSnapshot skill filter refresh", () => {
     expect(buildWorkspaceSkillSnapshot).not.toHaveBeenCalled();
     expect(result.skillsSnapshot).toEqual(cachedSnapshot);
   });
+
+  it("does not rebuild the snapshot twice on first turn when a filtered session starts empty", async () => {
+    const refreshedSnapshot = {
+      prompt: "<available_skills><skill>weather</skill></available_skills>",
+      skills: [{ name: "weather" }],
+      skillFilter: ["weather"],
+      version: 0,
+    };
+    vi.mocked(buildWorkspaceSkillSnapshot).mockReturnValue(refreshedSnapshot);
+
+    const sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-3",
+        updatedAt: 1,
+      } satisfies SessionEntry,
+    };
+
+    const result = await ensureSkillSnapshot({
+      sessionEntry: sessionStore["agent:main:main"],
+      sessionStore,
+      sessionKey: "agent:main:main",
+      isFirstTurnInSession: true,
+      workspaceDir: "/tmp/workspace",
+      cfg: {},
+      skillFilter: ["weather"],
+    });
+
+    expect(buildWorkspaceSkillSnapshot).toHaveBeenCalledOnce();
+    expect(result.skillsSnapshot).toEqual(refreshedSnapshot);
+    expect(sessionStore["agent:main:main"]?.skillsSnapshot).toEqual(refreshedSnapshot);
+  });
 });
