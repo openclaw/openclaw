@@ -32,13 +32,21 @@ import {
   CANVAS_CAPABILITY_TTL_MS,
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
+import {
+  createSessionCapabilities,
+  hasCapability,
+  validateCapabilityAccess,
+} from "../../capabilities.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
+import { authorizeMessage, createMessageAuthContext } from "../../message-auth.js";
 import {
   extractNormalizedHeader,
   isLocalishHost,
   isLoopbackAddress,
   isTrustedProxyAddress,
   resolveClientIp,
+  strictHeader,
+  validateSensitiveHeaders,
 } from "../../net.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
@@ -68,7 +76,14 @@ import {
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { formatError } from "../../server-utils.js";
+import { classifyWsEndpoint, getEndpointSecurity, WS_ENDPOINT } from "../../ws-endpoint.js";
 import { formatForLog, logWs } from "../../ws-log.js";
+import {
+  createRateLimiterState,
+  checkRateLimit,
+  DEFAULT_FRAME_LIMITS,
+  type FrameLimits,
+} from "../../ws-protocol.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {
   buildGatewaySnapshot,
@@ -202,6 +217,7 @@ export function attachGatewayWsMessageHandler(params: {
   const configSnapshot = loadConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
   const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+  const securityConfig = configSnapshot.gateway?.security ?? {};
   const clientIp = resolveClientIp({
     remoteAddr,
     forwardedFor,
@@ -238,6 +254,43 @@ export function attachGatewayWsMessageHandler(params: {
   })();
 
   const forwardedHeader = extractNormalizedHeader(upgradeReq.headers, "forwarded");
+
+  // Security: Strict header validation (reject duplicates/chains) - configurable
+  const strictHeaderValidation = securityConfig.strictHeaderValidation !== false;
+  if (strictHeaderValidation) {
+    const headerValidation = validateSensitiveHeaders(upgradeReq.headers);
+    if (!headerValidation.ok) {
+      logWsControl.warn("Strict header validation failed: duplicate or chained header detected", {
+        header: headerValidation.header,
+        reason: headerValidation.reason,
+      });
+      send({
+        type: "error",
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: `Invalid headers: ${headerValidation.header} header validation failed`,
+        },
+      });
+      close(1008, "invalid headers");
+      return;
+    }
+  }
+
+  // Classify WebSocket endpoint for isolation
+  const wsPath = new URL(upgradeReq.url ?? "/", "http://localhost").pathname;
+  const wsEndpoint = classifyWsEndpoint(wsPath);
+  const endpointSecurity = getEndpointSecurity(wsEndpoint);
+
+  // Security: Load security config
+  const enableRateLimiting = securityConfig.enableRateLimiting !== false;
+  const enableMessageAuth = securityConfig.enableMessageAuthorization !== false;
+
+  // Initialize rate limiter state for frame/message limiting
+  const rateLimiterState = enableRateLimiting ? createRateLimiterState() : null;
+  const frameLimits: FrameLimits = DEFAULT_FRAME_LIMITS;
+
+  // Message authorization context - set after successful authentication
+  let messageAuthContext: ReturnType<typeof createMessageAuthContext> | null = null;
 
   // If proxy headers are present but the remote address isn't trusted, don't treat
   // the connection as local. This prevents auth bypass when running behind a reverse
@@ -324,6 +377,21 @@ export function attachGatewayWsMessageHandler(params: {
           : undefined;
       if (frameType || frameMethod || frameId) {
         setLastFrameMeta({ type: frameType, method: frameMethod, id: frameId });
+      }
+
+      // Security: Rate limiting check
+      if (rateLimiterState) {
+        const rateLimitResult = checkRateLimit(rateLimiterState, frameLimits);
+        if (!rateLimitResult.ok) {
+          logWsControl.warn(
+            `rate limit exceeded conn=${connId} remote=${remoteAddr ?? "?"} reason=${rateLimitResult.reason}`,
+          );
+          send({
+            type: "error",
+            error: errorShape(ErrorCodes.RATE_LIMITED, rateLimitResult.reason),
+          });
+          return;
+        }
       }
 
       const client = getClient();
@@ -433,9 +501,11 @@ export function attachGatewayWsMessageHandler(params: {
 
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
-        if (enforceOriginCheckForAnyClient || isControlUi || isWebchat) {
+        const requiresOriginCheck = endpointSecurity.requireOrigin || isControlUi || isWebchat;
+        if (enforceOriginCheckForAnyClient || requiresOriginCheck) {
           const hostHeaderOriginFallbackEnabled =
-            configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+            configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true ||
+            configSnapshot.gateway?.security?.dangerouslyAllowHostHeaderOriginFallback === true;
           const originCheck = checkBrowserOrigin({
             requestHost,
             requestForwardedHost,
@@ -446,6 +516,8 @@ export function attachGatewayWsMessageHandler(params: {
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
             isLocalClient,
             isTrustedProxy: remoteIsTrustedProxy,
+            disableLocalhostPrivilege: securityConfig.disableLocalhostPrivilege === true,
+            validateHostHeader: securityConfig.validateHostHeader,
           });
           if (!originCheck.ok) {
             const errorMessage =
@@ -715,6 +787,41 @@ export function attachGatewayWsMessageHandler(params: {
           rejectUnauthorized(authResult);
           return;
         }
+
+        const sessionCapabilities = createSessionCapabilities(scopes);
+        const endpointRequiredCaps = endpointSecurity.allowedCapabilities;
+        if (endpointRequiredCaps.length > 0 && !endpointRequiredCaps.includes("*")) {
+          const capValidation = validateCapabilityAccess(sessionCapabilities, endpointRequiredCaps);
+          if (!capValidation.ok) {
+            markHandshakeFailure("capability-denied", {
+              endpoint: wsEndpoint,
+              required: capValidation.missing,
+              provided: [...sessionCapabilities.capabilities],
+            });
+            sendHandshakeErrorResponse(
+              ErrorCodes.INVALID_REQUEST,
+              `Capability denied: ${capValidation.missing} required for ${wsEndpoint}`,
+              {
+                details: {
+                  code: ConnectErrorDetailCodes.CAPABILITY_DENIED,
+                  reason: `endpoint ${wsEndpoint} requires ${capValidation.missing}`,
+                },
+              },
+            );
+            close(1008, "capability denied");
+            return;
+          }
+        }
+
+        // Create message authorization context for per-message capability checks
+        messageAuthContext = enableMessageAuth
+          ? createMessageAuthContext({
+              clientId: connectParams.client.id,
+              role: role,
+              scopes: scopes,
+              endpoint: wsEndpoint,
+            })
+          : null;
 
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
           isControlUi,
@@ -1171,6 +1278,22 @@ export function attachGatewayWsMessageHandler(params: {
       };
 
       void (async () => {
+        // Security: Message-level capability authorization
+        if (messageAuthContext && req.method) {
+          const messageType = `gateway.method.${req.method}`;
+          const authResult = authorizeMessage(messageAuthContext, messageType, {
+            requireCapabilityForAll: false,
+            logDenied: true,
+          });
+          if (!authResult.ok) {
+            logWsControl.warn(
+              `message authorization denied conn=${connId} remote=${remoteAddr ?? "?"} method=${req.method} required=${authResult.missingCapability}`,
+            );
+            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, authResult.reason));
+            return;
+          }
+        }
+
         await handleGatewayRequest({
           req,
           respond,

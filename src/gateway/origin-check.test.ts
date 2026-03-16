@@ -607,4 +607,111 @@ describe("checkBrowserOrigin", () => {
       }
     });
   });
+
+  describe("host header validation", () => {
+    it("accepts when host matches origin (default port normalization)", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com",
+        origin: "https://example.com",
+        allowedOrigins: ["https://example.com"],
+        validateHostHeader: true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("accepts when host has explicit port that normalizes to origin", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:443",
+        origin: "https://example.com",
+        allowedOrigins: ["https://example.com"],
+        validateHostHeader: true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("accepts when host matches origin with port", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:443",
+        origin: "https://example.com:443",
+        allowedOrigins: ["https://example.com:443"],
+        validateHostHeader: true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects when host does not match origin and not in allowlist", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "attacker.com",
+        origin: "https://example.com",
+        allowedOrigins: ["https://example.com"],
+        validateHostHeader: true,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("host header does not match origin or allowlist");
+      }
+    });
+
+    it("accepts when host is in allowlist even if different from origin host", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com",
+        origin: "https://other.com",
+        allowedOrigins: ["https://example.com", "https://other.com"],
+        validateHostHeader: true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("allows bypass when validateHostHeader is false", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "attacker.com",
+        origin: "https://example.com",
+        allowedOrigins: ["https://example.com"],
+        validateHostHeader: false,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("does not validate host by default (backward compatible)", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "attacker.com",
+        origin: "https://example.com",
+        allowedOrigins: ["https://example.com"],
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("skips validation when host header is missing", () => {
+      const result = checkBrowserOrigin({
+        requestHost: undefined,
+        origin: "https://example.com",
+        allowedOrigins: ["https://example.com"],
+        validateHostHeader: true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("validates host with non-standard port against allowlist with same port", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:8443",
+        origin: "https://example.com:8443",
+        allowedOrigins: ["https://example.com:8443"],
+        validateHostHeader: true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects host with non-standard port that differs from origin port", () => {
+      const result = checkBrowserOrigin({
+        requestHost: "example.com:8443",
+        origin: "https://example.com:443",
+        allowedOrigins: ["https://example.com:443"],
+        validateHostHeader: true,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("host header does not match origin or allowlist");
+      }
+    });
+  });
 });

@@ -21,6 +21,7 @@ type OriginCheckParams = {
   forwardedHeader?: string | string[];
   strictProtoValidation?: boolean;
   disableLocalhostPrivilege?: boolean;
+  validateHostHeader?: boolean;
 };
 
 function normalizeOriginToMatchUrlHost(origin: string): string | null {
@@ -119,11 +120,25 @@ export function checkBrowserOrigin(params: OriginCheckParams): OriginCheckResult
   }
 
   const wildcardMatched = allowlist.has("*");
-  if (
+  const isInAllowlist =
     wildcardMatched ||
     allowlist.has(parsedOrigin.origin) ||
-    (normalizedOrigin && normalizedAllowlist.has(normalizedOrigin))
-  ) {
+    (normalizedOrigin && normalizedAllowlist.has(normalizedOrigin));
+
+  if (isInAllowlist) {
+    const validateHostHeader = params.validateHostHeader === true;
+    if (validateHostHeader && parsedOrigin.origin && params.requestHost) {
+      const hostNormalized = normalizeHostToMatchUrlHost(params.requestHost);
+      if (hostNormalized && hostNormalized !== parsedOrigin.host) {
+        const normalizedHostOrigin = `https://${hostNormalized}`;
+        const hostInAllowlist =
+          normalizedAllowlist.has(normalizedHostOrigin) ||
+          allowlist.has(`https://${hostNormalized}`);
+        if (!hostInAllowlist) {
+          return { ok: false, reason: "host header does not match origin or allowlist" };
+        }
+      }
+    }
     return { ok: true, matchedBy: "allowlist", wildcardMatched };
   }
 

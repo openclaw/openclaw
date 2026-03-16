@@ -450,4 +450,59 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+  /**
+   * Security hardening options for WebSocket connections.
+   */
+  security?: GatewaySecurityConfig;
 };
+
+export interface GatewaySecurityConfig {
+  /**
+   * Disable localhost/loopback privilege bypass.
+   * When enabled, localhost clients must still authenticate - they cannot bypass
+   * origin or capability checks. Recommended for production deployments.
+   * Default: false (allows legacy behavior for backwards compatibility)
+   */
+  disableLocalhostPrivilege?: boolean;
+  /**
+   * Require strict header validation (reject duplicate/chained headers).
+   * Recommended for production deployments behind reverse proxies.
+   * Default: true
+   */
+  strictHeaderValidation?: boolean;
+  /**
+   * Enable per-message capability authorization.
+   * When enabled, each message type requires specific capabilities.
+   * Default: true
+   */
+  enableMessageAuthorization?: boolean;
+  /**
+   * Enable single-use handshake tokens to prevent replay attacks.
+   * Default: true
+   */
+  enableHandshakeTokens?: boolean;
+  /**
+   * Enable rate limiting on WebSocket connections.
+   * Default: true
+   */
+  enableRateLimiting?: boolean;
+  /**
+   * Require WebSocket subprotocol negotiation.
+   * Clients must request 'openclaw-gateway-v1' subprotocol.
+   * Default: false (for backwards compatibility)
+   */
+  requireSubprotocol?: boolean;
+  /**
+   * DANGEROUS: Allow origin validation to fall back to Host header.
+   * This weakens origin security and should only be used for legacy compatibility.
+   * Default: false (safe - requires explicit allowedOrigins)
+   */
+  dangerouslyAllowHostHeaderOriginFallback?: boolean;
+  /**
+   * Validate Host header against Origin for security.
+   * When enabled, requests with an Origin header must have a matching or allowlisted Host header.
+   * This prevents Host header spoofing attacks where an attacker sends a valid Origin but malicious Host.
+   * Default: false (opt-in for backward compatibility)
+   */
+  validateHostHeader?: boolean;
+}

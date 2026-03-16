@@ -721,6 +721,19 @@ export const OpenClawSchema = z
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
         channelMaxRestartsPerHour: z.number().int().min(1).optional(),
+        security: z
+          .object({
+            disableLocalhostPrivilege: z.boolean().optional(),
+            strictHeaderValidation: z.boolean().optional(),
+            enableMessageAuthorization: z.boolean().optional(),
+            enableHandshakeTokens: z.boolean().optional(),
+            enableRateLimiting: z.boolean().optional(),
+            requireSubprotocol: z.boolean().optional(),
+            dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
+            validateHostHeader: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
