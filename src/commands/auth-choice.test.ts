@@ -139,6 +139,27 @@ describe("applyAuthChoice", () => {
     await setupTempState();
 
     loginOpenAICodexOAuth.mockRejectedValueOnce(new Error("oauth failed"));
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT OAuth",
+            kind: "oauth",
+            run: vi.fn(async () => {
+              try {
+                await loginOpenAICodexOAuth();
+              } catch {
+                return { profiles: [] };
+              }
+              return { profiles: [] };
+            }),
+          },
+        ],
+      },
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -163,6 +184,41 @@ describe("applyAuthChoice", () => {
       access: "access-token",
       expires: Date.now() + 60_000,
     });
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT OAuth",
+            kind: "oauth",
+            run: vi.fn(async () => {
+              const creds = await loginOpenAICodexOAuth();
+              if (!creds) {
+                return { profiles: [] };
+              }
+              return {
+                profiles: [
+                  {
+                    profileId: "openai-codex:user@example.com",
+                    credential: {
+                      type: "oauth",
+                      provider: "openai-codex",
+                      refresh: "refresh-token",
+                      access: "access-token",
+                      expires: creds.expires,
+                      email: "user@example.com",
+                    },
+                  },
+                ],
+                defaultModel: "openai-codex/gpt-5.4",
+              };
+            }),
+          },
+        ],
+      },
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();

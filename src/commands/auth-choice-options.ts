@@ -41,24 +41,23 @@ export function buildAuthChoiceOptions(params: {
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
   void params.store;
-  const options: AuthChoiceOption[] = [...BASE_AUTH_CHOICE_OPTIONS];
-  const seen = new Set(options.map((option) => option.value));
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>(
+    BASE_AUTH_CHOICE_OPTIONS.map((option) => [option.value, option]),
+  );
 
   for (const option of resolveProviderWizardOptions({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   })) {
-    if (seen.has(option.value as AuthChoice)) {
-      continue;
-    }
-    options.push({
+    optionByValue.set(option.value as AuthChoice, {
       value: option.value as AuthChoice,
       label: option.label,
       hint: option.hint,
     });
-    seen.add(option.value as AuthChoice);
   }
+
+  const options: AuthChoiceOption[] = Array.from(optionByValue.values());
 
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
