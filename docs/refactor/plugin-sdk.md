@@ -28,7 +28,7 @@ Contents (examples):
 - Config helpers: `buildChannelConfigSchema`, `setAccountEnabledInConfigSection`, `deleteAccountFromConfigSection`,
   `applyAccountNameToChannelSection`.
 - Pairing helpers: `PAIRING_APPROVED_MESSAGE`, `formatPairingApproveHint`.
-- Onboarding helpers: `promptChannelAccessConfig`, `addWildcardAllowFrom`, onboarding types.
+- Setup entry points: host-owned `setup` + `setupWizard`; avoid broad public onboarding helpers.
 - Tool param helpers: `createActionGate`, `readStringParam`, `readNumberParam`, `readReactionParams`, `jsonResult`.
 - Docs link helper: `formatDocsLink`.
 
