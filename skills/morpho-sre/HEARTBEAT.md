@@ -52,6 +52,7 @@ HEARTBEAT_OK
 ```
 
 Include created PR URL in the alert.
+`autofix-pr.sh` creates or reuses the linked Linear follow-up ticket first and uses the ticket `gitBranchName` as the branch.
 `autofix-pr.sh` sends a Slack DM warning to the configured operator user before creating the PR.
 
 3c. If `health_status` contains `state\tincident` but `incident_gate` contains `should_alert\tno`, reply exactly:
@@ -81,18 +82,24 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Enrich with BetterStack API context when needed:
   `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh GET '/incidents/<id>'`
 - If confidence is high and fix is scoped/reversible, run `autofix-pr.sh` and post PR URL in-thread.
+- If the fix is plausible but not open-PR ready, still name 1-2 concrete suggested PRs with repo/path/title/validation.
+- Create or reuse a Linear follow-up ticket for code/config work and mention it in-thread.
+- Any incident PR must use the Linear ticket `gitBranchName` as the branch and attach the PR URL back to the ticket.
 - If auto-fix is blocked, post blocked reason + exact manual next step.
 - First four lines must answer: what broke, who feels it, what services are impacted, and what is happening now.
 - If only monitoring/internal tooling is degraded, say exactly: `No confirmed customer impact. Internal observability degraded.`
 - Keep unrelated warnings under `*Also watching:*`.
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
+- Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into monitored incident threads.
 - Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
+- For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
 - For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile `_fetchMerklSingleRates()` / the merged reward row before stale-row theories or PRs.
 - Until dedicated collectors exist, satisfy those rewards/provider gates only from explicit live probe outputs; if those outputs are absent, keep the gate closed and say so.
 - If a human questions the proposed fix or PR, re-open RCA with fresh evidence instead of repeating the prior theory.
 - If current code, query output, or live evidence disproves an earlier theory, say `Disproved theory:` before the replacement cause or PR.
+- If a human asks whether the issue is DB, RPC/eRPC, or queue/backpressure, answer those branches explicitly from fresh evidence before ending the update.
 - If a user ask is vague:
   - do not answer with refusal-only language.
   - infer most likely intent from current thread incident context and latest triage output.
@@ -111,6 +118,8 @@ Suggested thread reply template:
 *Mitigation:* <reversible fix + rollback>
 *Validate:* <2-3 checks>
 *Next:* <owner/action>
+*Suggested PR:* <repo/path/title/validation | none yet + blocker>
+*Linear:* <ticket | blocked reason + exact next command>
 *Also watching:* <secondary warning, if any>
 *Auto-fix PR:* <url | blocked reason + exact next command>
 ```

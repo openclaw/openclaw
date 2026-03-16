@@ -8,6 +8,9 @@ CONFIG="$ROOT/config/openclaw.json"
 jq -e '
   .channels.slack.requireMention == true and
   .channels.slack.allowImplicitMention == false and
+  .channels.slack.streaming == "off" and
+  .channels.slack.nativeStreaming == false and
+  (.channels.slack.channels["#bug-report"].systemPrompt | contains("ignore replies unless a human explicitly asks to continue RCA") | not) and
   .channels.slack.channels["#bug-report"].requireMention == false and
   .channels.slack.channels["#platform-monitoring"].requireMention == false and
   .channels.slack.channels["#public-api-monitoring"].requireMention == false and

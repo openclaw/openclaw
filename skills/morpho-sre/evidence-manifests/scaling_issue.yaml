@@ -5,3 +5,10 @@ critical:
 optional:
   - changes_in_window
   - aws_critical
+  - db_vs_live_head_gap
+  - processed_vs_head_rate_gap
+  - metric_blind_spot
+  - resources_missing
+  - queue_backlog
+  - rpc_mismatch
+  - recurring_incident

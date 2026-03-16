@@ -38,6 +38,14 @@ Env guards:
   AUTO_PR_GIT_USER_EMAIL=<email>     (default: openclaw-sre-bot@morpho.dev)
   AUTO_PR_TRACKING_LABEL=<label>     (default: openclaw-sre; empty disables)
   AUTO_PR_LINEAR_TICKET_API=<path>   (default: ./linear-ticket-api.sh next to this script)
+  AUTO_PR_LINEAR_CREATE=1|0          (default: 1; create Linear issue when missing)
+  AUTO_PR_LINEAR_STRICT=1|0          (default: 1; fail PR creation if Linear flow fails)
+  AUTO_PR_LINEAR_TEAM=<name>         (default: Platform; override per runtime as needed)
+  AUTO_PR_LINEAR_PROJECT=<name>      (default: [PLATFORM] Backlog; override per runtime as needed)
+  AUTO_PR_LINEAR_ASSIGNEE=<user|me>  (default: me; override per runtime as needed)
+  AUTO_PR_LINEAR_STATE=<name>        (default: In Progress)
+  AUTO_PR_LINEAR_LABELS=<labels>     (default: openclaw-sre|Bug|Monitoring|Improvement)
+  AUTO_PR_LINEAR_ATTACH_PR=1|0       (default: 1; add PR link/comment back to Linear)
 EOF
 }
 
@@ -83,6 +91,19 @@ ensure_pr_title_prefix() {
   printf '%s %s\n' "$PR_TITLE_PREFIX" "$raw"
 }
 
+strip_pr_title_prefix() {
+  local raw="${1:-}"
+  local prefix_lower suffix
+  raw="$(printf '%s' "$raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+  prefix_lower="$(printf '%s' "${raw:0:${#PR_TITLE_PREFIX}}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$prefix_lower" == "$(printf '%s' "$PR_TITLE_PREFIX" | tr '[:upper:]' '[:lower:]')" ]]; then
+    suffix="${raw:${#PR_TITLE_PREFIX}}"
+    printf '%s\n' "$(printf '%s' "$suffix" | sed -E 's/^[[:space:]]+//')"
+    return 0
+  fi
+  printf '%s\n' "$raw"
+}
+
 normalize_repo_slug() {
   local raw="${1:-}"
   raw="$(printf '%s' "$raw" | sed -E 's#^https?://github\.com/##; s#\.git$##')"
@@ -108,6 +129,36 @@ split_csv_nonempty_lines() {
     | tr ',' '\n' \
     | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' \
     | awk 'NF > 0 { print }'
+}
+
+validate_linear_selector_value() {
+  local env_name="$1"
+  local value="${2:-}"
+  local pattern="${3:-}"
+  [[ -n "$env_name" ]] || return 1
+  [[ -n "$value" ]] || return 0
+  if [[ "$pattern" == "__SAFE_TEXT__" ]]; then
+    case "$value" in
+      *[$'\n\r\t`\\$;&|<>']*)
+        printf 'invalid %s value: %s\n' "$env_name" "$value" >&2
+        return 1
+        ;;
+    esac
+    return 0
+  fi
+  printf '%s\n' "$value" | grep -Eq -- "$pattern" || {
+    printf 'invalid %s value: %s\n' "$env_name" "$value" >&2
+    return 1
+  }
+}
+
+validate_linear_labels_value() {
+  local raw="${1:-}" label
+  [[ -n "$raw" ]] || return 0
+  while IFS= read -r label; do
+    [[ -n "$label" ]] || continue
+    validate_linear_selector_value "AUTO_PR_LINEAR_LABELS" "$label" "__SAFE_TEXT__" || return 1
+  done < <(printf '%s\n' "$raw" | tr '|,' '\n')
 }
 
 parse_int_in_range() {
@@ -827,6 +878,329 @@ resolve_linear_issue_refs() {
   printf '%s\n' "${refs[@]}" | awk 'NF > 0 && !seen[$0]++'
 }
 
+linear_ticket_scope_token() {
+  local ticket_ref="${1:-}"
+  printf '%s\n' "$ticket_ref" | tr '[:lower:]' '[:upper:]'
+}
+
+is_linear_ticket_ref() {
+  [[ "${1:-}" =~ ^[A-Za-z][A-Za-z0-9]+-[0-9]+$ ]]
+}
+
+escape_extended_regex() {
+  local raw="${1:-}"
+  printf '%s\n' "$raw" | sed -E 's/[][{}().^$+*?|\\-]/\\&/g'
+}
+
+parse_conventional_commit_title() {
+  local raw="${1:-}"
+  local stripped regex_scoped regex_plain
+  local kind type scope summary
+
+  stripped="$(strip_pr_title_prefix "$raw")"
+  stripped="$(printf '%s' "$stripped" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+  kind="other"
+  type=""
+  scope=""
+  summary="$stripped"
+
+  regex_scoped='^(feat|fix|refactor|build|ci|chore|docs|style|perf|test)\(([^)]*)\):[[:space:]]*(.+)$'
+  regex_plain='^(feat|fix|refactor|build|ci|chore|docs|style|perf|test):[[:space:]]*(.+)$'
+  if [[ "$stripped" =~ $regex_scoped ]]; then
+    kind="scoped"
+    type="${BASH_REMATCH[1]}"
+    scope="$(printf '%s' "${BASH_REMATCH[2]}" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    summary="${BASH_REMATCH[3]}"
+  elif [[ "$stripped" =~ $regex_plain ]]; then
+    kind="plain"
+    type="${BASH_REMATCH[1]}"
+    scope=""
+    summary="${BASH_REMATCH[2]}"
+  fi
+
+  printf 'kind=%s\n' "$kind"
+  printf 'type=%s\n' "$type"
+  printf 'scope=%s\n' "$scope"
+  printf 'summary=%s\n' "$summary"
+}
+
+extract_named_output_value() {
+  local key="${1:-}"
+  local raw="${2:-}"
+  [[ -n "$key" ]] || return 1
+  printf '%s\n' "$raw" \
+    | awk -v key="$key" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }'
+}
+
+capture_command_output() {
+  local __target_var="${1:-}"
+  shift || true
+  local __output __status
+  [[ "$__target_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+    echo "invalid capture target variable: $__target_var" >&2
+    return 1
+  }
+
+  set +e
+  __output="$("$@")"
+  __status=$?
+  set -e
+
+  printf -v "$__target_var" '%s' "$__output"
+  return "$__status"
+}
+
+parse_linear_create_field() {
+  local output="${1:-}"
+  local jq_filter="${2:-}"
+  local field_name="${3:-field}"
+  local value
+
+  set +e
+  value="$(printf '%s\n' "$output" | jq -r "$jq_filter")"
+  local status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    echo "failed to parse Linear issue ${field_name} from helper output" >&2
+    return 1
+  fi
+  if [[ -z "$value" ]]; then
+    echo "failed to parse Linear issue ${field_name} from helper output" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
+ensure_linear_ticket_in_conventional_title() {
+  local raw="${1:-}"
+  local ticket_ref="${2:-}"
+  local ticket_token stripped scope type summary kind ticket_regex parsed_title
+  local stripped_lower ticket_token_regex
+
+  parsed_title="$(parse_conventional_commit_title "$raw")"
+  kind="$(extract_named_output_value kind "$parsed_title")"
+  type="$(extract_named_output_value type "$parsed_title")"
+  scope="$(extract_named_output_value scope "$parsed_title")"
+  summary="$(extract_named_output_value summary "$parsed_title")"
+  stripped="$(strip_pr_title_prefix "$raw")"
+  stripped="$(printf '%s' "$stripped" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+  [[ -n "$ticket_ref" ]] || {
+    printf '%s\n' "$stripped"
+    return 0
+  }
+  if ! is_linear_ticket_ref "$ticket_ref"; then
+    printf '%s\n' "$stripped"
+    return 0
+  fi
+
+  ticket_token="$(linear_ticket_scope_token "$ticket_ref")"
+  stripped_lower="$(printf '%s' "$stripped" | tr '[:upper:]' '[:lower:]')"
+  ticket_token_regex="$(escape_extended_regex "$(printf '%s' "$ticket_token" | tr '[:upper:]' '[:lower:]')")"
+  ticket_regex="$(escape_extended_regex "$(printf '%s' "$ticket_ref" | tr '[:upper:]' '[:lower:]')")"
+  if printf '%s\n' "$stripped_lower" | grep -Eq "[(][^)]*${ticket_token_regex}[^)]*[)]"; then
+    printf '%s\n' "$stripped"
+    return 0
+  fi
+  if [[ "$stripped_lower" =~ (^|[^[:alnum:]])${ticket_regex}([^[:alnum:]]|$) ]]; then
+    printf '%s\n' "$stripped"
+    return 0
+  fi
+
+  if [[ "$kind" == "scoped" ]]; then
+    if [[ -n "$scope" ]]; then
+      printf '%s(%s:%s): %s\n' "$type" "$scope" "$ticket_token" "$summary"
+    else
+      printf '%s(%s): %s\n' "$type" "$ticket_token" "$summary"
+    fi
+    return 0
+  fi
+
+  if [[ "$kind" == "plain" ]]; then
+    printf '%s(%s): %s\n' "$type" "$ticket_token" "$summary"
+    return 0
+  fi
+
+  printf 'chore(%s): %s\n' "$ticket_token" "$stripped"
+}
+
+build_linear_issue_title_from_pr_title() {
+  local raw="${1:-}"
+  local summary parsed_title
+  parsed_title="$(parse_conventional_commit_title "$raw")"
+  summary="$(extract_named_output_value summary "$parsed_title")"
+  printf '%s\n' "$summary"
+}
+
+resolve_linear_api_cmd() {
+  local api_cmd="${AUTO_PR_LINEAR_TICKET_API:-${SCRIPT_DIR}/linear-ticket-api.sh}"
+  [[ -x "$api_cmd" ]] || {
+    echo "missing executable Linear ticket API helper: $api_cmd" >&2
+    return 1
+  }
+  printf '%s\n' "$api_cmd"
+}
+
+resolve_primary_linear_issue_ref() {
+  if [[ "$#" -eq 0 ]]; then
+    return 0
+  fi
+  printf '%s\n' "$1"
+}
+
+ensure_pr_body_linear_section() {
+  local body_file="${1:-}"
+  local ticket_ref="${2:-}"
+  local ticket_url="${3:-}"
+  if [[ -z "$body_file" || ! -f "$body_file" || -z "$ticket_ref" ]]; then
+    return 0
+  fi
+  if grep -Eqi '^##[[:space:]]+Linear([[:space:]]|$)' "$body_file"; then
+    return 0
+  fi
+  {
+    printf '\n## Linear\n'
+    if [[ -n "$ticket_url" ]]; then
+      printf -- '- %s: %s\n' "$ticket_ref" "$ticket_url"
+    else
+      printf -- '- %s\n' "$ticket_ref"
+    fi
+  } >>"$body_file"
+}
+
+create_linear_issue_for_pr() {
+  local title="${1:-}"
+  local body_file="${2:-}"
+  local api_cmd output issue_ref issue_url issue_branch status
+  local team_name project_name assignee_name state_name labels_raw
+  local strict="${AUTO_PR_LINEAR_STRICT:-1}"
+
+  api_cmd="$(resolve_linear_api_cmd)" || return 1
+  team_name="${AUTO_PR_LINEAR_TEAM:-Platform}"
+  project_name="${AUTO_PR_LINEAR_PROJECT:-[PLATFORM] Backlog}"
+  assignee_name="${AUTO_PR_LINEAR_ASSIGNEE:-me}"
+  state_name="${AUTO_PR_LINEAR_STATE:-In Progress}"
+  labels_raw="${AUTO_PR_LINEAR_LABELS:-openclaw-sre|Bug|Monitoring|Improvement}"
+
+  validate_linear_selector_value "AUTO_PR_LINEAR_TEAM" "$team_name" "__SAFE_TEXT__" || return 1
+  validate_linear_selector_value "AUTO_PR_LINEAR_PROJECT" "$project_name" "__SAFE_TEXT__" || return 1
+  validate_linear_selector_value "AUTO_PR_LINEAR_ASSIGNEE" "$assignee_name" '^(me|[[:alnum:]_.-]+)$' || return 1
+  validate_linear_selector_value "AUTO_PR_LINEAR_STATE" "$state_name" "__SAFE_TEXT__" || return 1
+  validate_linear_labels_value "$labels_raw" || return 1
+
+  set +e
+  output="$("$api_cmd" issue create --title "$title" --file "$body_file" --team "$team_name" --project "$project_name" --assignee "$assignee_name" --state "$state_name" --labels "$labels_raw" 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    printf '%s\n' "$output" >&2
+    if truthy "$strict"; then
+      return 1
+    fi
+    return 0
+  fi
+
+  issue_ref="$(parse_linear_create_field "$output" '.identifier // empty' 'identifier')" || {
+    truthy "$strict" && return 1
+    return 0
+  }
+  issue_url="$(parse_linear_create_field "$output" '.url // empty' 'url')" || {
+    truthy "$strict" && return 1
+    return 0
+  }
+  issue_branch="$(parse_linear_create_field "$output" '.gitBranchName // empty' 'branch')" || {
+    truthy "$strict" && return 1
+    return 0
+  }
+  [[ -n "$issue_ref" ]] || {
+    echo "failed to parse Linear issue identifier from helper output" >&2
+    truthy "$strict" && return 1
+    return 0
+  }
+  printf 'identifier=%s\n' "$issue_ref"
+  printf 'url=%s\n' "$issue_url"
+  printf 'branch=%s\n' "$issue_branch"
+}
+
+resolve_linear_issue_branch_name() {
+  local ticket_ref="${1:-}"
+  local api_cmd output status strict="${AUTO_PR_LINEAR_STRICT:-1}"
+  local stderr_file stderr_output branch_name
+  [[ -n "$ticket_ref" ]] || return 0
+  api_cmd="$(resolve_linear_api_cmd)" || return 1
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/openclaw-sre-linear-branch.XXXXXX")"
+  set +e
+  output="$("$api_cmd" issue get-branch "$ticket_ref" 2>"$stderr_file")"
+  status=$?
+  set -e
+  stderr_output="$(cat "$stderr_file" 2>/dev/null || true)"
+  rm -f "$stderr_file"
+  if [[ "$status" -ne 0 ]]; then
+    [[ -n "$stderr_output" ]] && printf '%s\n' "$stderr_output" >&2
+    if truthy "$strict"; then
+      return 1
+    fi
+    return 0
+  fi
+  branch_name="$(printf '%s\n' "$output" | tail -n1)"
+  [[ -n "$branch_name" ]] || {
+    echo "failed to parse Linear issue branch from helper output" >&2
+    if truthy "$strict"; then
+      return 1
+    fi
+    return 0
+  }
+  printf '%s\n' "$branch_name"
+}
+
+attach_pr_to_linear_issue() {
+  local ticket_ref="${1:-}"
+  local pr_url="${2:-}"
+  local repo_slug="${3:-}"
+  local head_branch="${4:-}"
+  local title="${5:-}"
+  local api_cmd strict output status comment_body
+  strict="${AUTO_PR_LINEAR_STRICT:-1}"
+  truthy "${AUTO_PR_LINEAR_ATTACH_PR:-1}" || return 0
+  if [[ -z "$ticket_ref" || -z "$pr_url" ]]; then
+    echo "missing Linear ticket ref or PR URL for PR attachment" >&2
+    if truthy "$strict"; then
+      return 1
+    fi
+    return 0
+  fi
+
+  api_cmd="$(resolve_linear_api_cmd)" || return 1
+
+  set +e
+  output="$("$api_cmd" issue add-attachment "$ticket_ref" "$pr_url" "GitHub PR" "${repo_slug} ${head_branch}" 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    printf '%s\n' "$output" >&2
+    if truthy "$strict"; then
+      return 1
+    fi
+  fi
+
+  printf -v comment_body \
+'Opened remediation PR.
+- URL: %s
+- Repo: `%s`
+- Branch: `%s`
+- Title: %s' \
+    "$pr_url" "$repo_slug" "$head_branch" "$title"
+  set +e
+  output="$("$api_cmd" issue add-comment "$ticket_ref" --text "$comment_body" 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    printf '%s\n' "$output" >&2
+    if truthy "$strict"; then
+      return 1
+    fi
+  fi
+}
+
 apply_pr_tracking_label() {
   local repo_slug="${1:-}"
   local pr_ref="${2:-}"
@@ -994,7 +1368,6 @@ if [[ -n "$BODY_INLINE" && -n "$BODY_FILE" ]]; then
 fi
 
 TITLE_RAW="$TITLE"
-TITLE="$(ensure_pr_title_prefix "$TITLE_RAW")"
 
 REPO_SLUG="$(normalize_repo_slug "$REPO_INPUT")"
 if ! [[ "$REPO_SLUG" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]]; then
@@ -1074,6 +1447,93 @@ fi
 if [[ -z "$(git -C "$REPO_PATH" status --porcelain)" ]]; then
   echo "no local changes to commit in $REPO_PATH" >&2
   exit 1
+fi
+
+tmp_body=""
+cleanup() {
+  if [[ -n "${tmp_body:-}" && -f "$tmp_body" ]]; then
+    rm -f "$tmp_body"
+  fi
+  return 0
+}
+trap cleanup EXIT
+
+if [[ -n "$BODY_FILE" ]]; then
+  if [[ ! -f "$BODY_FILE" ]]; then
+    echo "missing --body-file path: $BODY_FILE" >&2
+    exit 1
+  fi
+  PR_BODY_FILE="$BODY_FILE"
+elif [[ -n "$BODY_INLINE" ]]; then
+  tmp_body="$(mktemp)"
+  printf '%s\n' "$BODY_INLINE" >"$tmp_body"
+  PR_BODY_FILE="$tmp_body"
+else
+  tmp_body="$(mktemp)"
+  cat >"$tmp_body" <<EOF
+## Summary
+- Automated remediation PR from OpenClaw SRE.
+- Confidence score: ${CONFIDENCE}/100 (threshold: ${MIN_CONFIDENCE}).
+
+## Validation
+- Incident triage + targeted checks completed in-cluster before patch.
+
+## Safety
+- Secrets redaction checks passed before push.
+EOF
+  PR_BODY_FILE="$tmp_body"
+fi
+
+compact_pr_body_file "$PR_BODY_FILE"
+
+TRACKING_LABEL="${AUTO_PR_TRACKING_LABEL:-openclaw-sre}"
+LINEAR_ISSUE_REFS=()
+while IFS= read -r linear_ref; do
+  [[ -n "$linear_ref" ]] || continue
+  LINEAR_ISSUE_REFS+=("$linear_ref")
+done < <(
+  resolve_linear_issue_refs "$PR_BODY_FILE" "$TITLE_RAW" "$COMMIT_MSG"
+)
+
+PRIMARY_LINEAR_ISSUE="$(resolve_primary_linear_issue_ref "${LINEAR_ISSUE_REFS[@]:-}" || true)"
+PRIMARY_LINEAR_URL=""
+if [[ -z "$PRIMARY_LINEAR_ISSUE" && "$DRY_RUN" -ne 1 ]] && truthy "${AUTO_PR_LINEAR_CREATE:-1}"; then
+  linear_create_output=""
+  if ! capture_command_output linear_create_output create_linear_issue_for_pr \
+    "$(build_linear_issue_title_from_pr_title "$TITLE_RAW")" "$PR_BODY_FILE"; then
+    echo "auto-pr blocked: Linear issue creation failed" >&2
+    exit 1
+  fi
+  PRIMARY_LINEAR_ISSUE="$(extract_named_output_value identifier "$linear_create_output")"
+  PRIMARY_LINEAR_URL="$(extract_named_output_value url "$linear_create_output")"
+  PRIMARY_LINEAR_BRANCH="$(extract_named_output_value branch "$linear_create_output")"
+  if [[ -n "$PRIMARY_LINEAR_ISSUE" ]]; then
+    LINEAR_ISSUE_REFS=("$PRIMARY_LINEAR_ISSUE")
+  fi
+fi
+
+if [[ -n "$PRIMARY_LINEAR_ISSUE" ]]; then
+  TITLE="$(ensure_linear_ticket_in_conventional_title "$TITLE_RAW" "$PRIMARY_LINEAR_ISSUE")"
+  COMMIT_MSG="$(ensure_linear_ticket_in_conventional_title "$COMMIT_MSG" "$PRIMARY_LINEAR_ISSUE")"
+  if [[ -z "${PRIMARY_LINEAR_BRANCH:-}" ]]; then
+    if ! capture_command_output PRIMARY_LINEAR_BRANCH resolve_linear_issue_branch_name "$PRIMARY_LINEAR_ISSUE"; then
+      echo "auto-pr blocked: failed to resolve Linear gitBranchName for ${PRIMARY_LINEAR_ISSUE}" >&2
+      exit 1
+    fi
+  fi
+  if [[ -n "$PRIMARY_LINEAR_BRANCH" ]]; then
+    if [[ -n "$HEAD_BRANCH" && "$(sanitize_branch_fragment "$HEAD_BRANCH")" != "$(sanitize_branch_fragment "$PRIMARY_LINEAR_BRANCH")" ]]; then
+      echo "auto-pr linear branch guard: --branch ${HEAD_BRANCH} does not match Linear gitBranchName ${PRIMARY_LINEAR_BRANCH}" >&2
+      exit 1
+    fi
+    HEAD_BRANCH="$PRIMARY_LINEAR_BRANCH"
+  fi
+  if [[ -z "$PRIMARY_LINEAR_URL" ]]; then
+    PRIMARY_LINEAR_URL="https://linear.app/morpho-labs/issue/${PRIMARY_LINEAR_ISSUE}"
+  fi
+  ensure_pr_body_linear_section "$PR_BODY_FILE" "$PRIMARY_LINEAR_ISSUE" "$PRIMARY_LINEAR_URL"
+else
+  TITLE="$(ensure_pr_title_prefix "$TITLE_RAW")"
 fi
 
 if [[ -z "$HEAD_BRANCH" ]]; then
@@ -1192,50 +1652,12 @@ else
     push -u origin "$HEAD_BRANCH"
 fi
 
-tmp_body=""
-cleanup() {
-  if [[ -n "${tmp_body:-}" && -f "$tmp_body" ]]; then
-    rm -f "$tmp_body"
-  fi
-  return 0
-}
-trap cleanup EXIT
-
-if [[ -n "$BODY_FILE" ]]; then
-  if [[ ! -f "$BODY_FILE" ]]; then
-    echo "missing --body-file path: $BODY_FILE" >&2
-    exit 1
-  fi
-  PR_BODY_FILE="$BODY_FILE"
-elif [[ -n "$BODY_INLINE" ]]; then
-  tmp_body="$(mktemp)"
-  printf '%s\n' "$BODY_INLINE" >"$tmp_body"
-  PR_BODY_FILE="$tmp_body"
-else
-  tmp_body="$(mktemp)"
-  cat >"$tmp_body" <<EOF
-## Summary
-- Automated remediation PR from OpenClaw SRE.
-- Confidence score: ${CONFIDENCE}/100 (threshold: ${MIN_CONFIDENCE}).
-
-## Validation
-- Incident triage + targeted checks completed in-cluster before patch.
-
-## Safety
-- Secrets redaction checks passed before push.
-EOF
-  PR_BODY_FILE="$tmp_body"
-fi
-
-compact_pr_body_file "$PR_BODY_FILE"
-
-TRACKING_LABEL="${AUTO_PR_TRACKING_LABEL:-openclaw-sre}"
 LINEAR_ISSUE_REFS=()
 while IFS= read -r linear_ref; do
   [[ -n "$linear_ref" ]] || continue
   LINEAR_ISSUE_REFS+=("$linear_ref")
 done < <(
-  resolve_linear_issue_refs "$PR_BODY_FILE" "$TITLE_RAW" "$TITLE" "$COMMIT_MSG" "$HEAD_BRANCH"
+  resolve_linear_issue_refs "$PR_BODY_FILE" "$TITLE_RAW" "$TITLE" "$COMMIT_MSG" "$HEAD_BRANCH" "$PRIMARY_LINEAR_ISSUE"
 )
 
 pr_cmd=(
@@ -1286,6 +1708,13 @@ if [[ -n "$TRACKING_LABEL" ]]; then
       echo "failed to add tracking label '${TRACKING_LABEL}' on linked Linear ticket(s)" >&2
       exit 1
     fi
+  fi
+fi
+
+if [[ -n "${PRIMARY_LINEAR_ISSUE:-}" ]]; then
+  if ! attach_pr_to_linear_issue "$PRIMARY_LINEAR_ISSUE" "$pr_url" "$REPO_SLUG" "$HEAD_BRANCH" "$TITLE"; then
+    echo "failed to attach PR to Linear issue ${PRIMARY_LINEAR_ISSUE}" >&2
+    exit 1
   fi
 fi
 

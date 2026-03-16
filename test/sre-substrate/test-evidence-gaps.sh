@@ -201,3 +201,24 @@ printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["artifact_check","code_path_reconciled","disproved_theory_recorded"]' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == []' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 54' >/dev/null
+
+cat >"$TMP" <<'EOF'
+pod_issues=1
+prom_critical=1
+changes_in_window=1
+aws_critical=0
+db_vs_live_head_gap=1
+processed_vs_head_rate_gap=0
+metric_blind_spot=1
+resources_missing=0
+queue_backlog=1
+rpc_mismatch=0
+recurring_incident=1
+EOF
+
+OUTPUT="$(evidence_gaps_assess scaling_issue "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "scaling_issue"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == []' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["aws_critical","processed_vs_head_rate_gap","resources_missing","rpc_mismatch"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 20' >/dev/null

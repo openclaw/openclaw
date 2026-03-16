@@ -24,6 +24,8 @@ done
 cp "$REPO_ROOT/skills/morpho-sre/SKILL.md" "$SKILL_ROOT/SKILL.md"
 cp "$REPO_ROOT/skills/morpho-sre/HEARTBEAT.md" "$SKILL_ROOT/HEARTBEAT.md"
 cp "$REPO_ROOT/skills/morpho-sre/config/openclaw.json" "$SKILL_ROOT/config/openclaw.json"
+cp "$REPO_ROOT/skills/morpho-sre/bug-report-routing.json" "$SKILL_ROOT/bug-report-routing.json"
+cp "$REPO_ROOT/skills/morpho-sre/bug-report-triage.sh" "$SKILL_ROOT/bug-report-triage.sh"
 cp "$REPO_ROOT/skills/morpho-sre/sentinel-triage.sh" "$SKILL_ROOT/sentinel-triage.sh"
 cp "$REPO_ROOT/skills/morpho-sre/repo-ownership.json" "$SKILL_ROOT/repo-ownership.json"
 cp "$REPO_ROOT/skills/morpho-sre/knowledge-index.md" "$SKILL_ROOT/knowledge-index.md"
@@ -40,6 +42,8 @@ bash "$REPO_ROOT/scripts/sre-runtime/seed-state.sh" >/dev/null
 
 test -f "$STATE_DIR/openclaw.json"
 test -f "$STATE_DIR/skills/morpho-sre/SKILL.md"
+test -f "$STATE_DIR/skills/morpho-sre/bug-report-routing.json"
+test -x "$STATE_DIR/skills/morpho-sre/scripts/bug-report-triage.sh"
 test -f "$STATE_DIR/skills/morpho-sre/scripts/sentinel-triage.sh"
 test -f "$STATE_DIR/skills/morpho-sre/knowledge-index.md"
 test -f "$STATE_DIR/skills/morpho-sre/incident-dossier-blue-api-hyperevm-vault-v2-state-gap-2026-03-12.md"

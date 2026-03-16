@@ -76,6 +76,8 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Auto PR helper: `/home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh`
 - Grafana API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh`
 - BetterStack API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh`
+- Bug report routing config: `/home/node/.openclaw/skills/morpho-sre/bug-report-routing.json`
+- Bug report triage helper: `/home/node/.openclaw/skills/morpho-sre/scripts/bug-report-triage.sh`
 - Consumer bug preflight helper: `/home/node/.openclaw/skills/morpho-sre/scripts/consumer-bug-preflight.sh`
 - Frontend project resolver: `/home/node/.openclaw/skills/morpho-sre/scripts/frontend-project-resolver.sh`
 - PostHog MCP launcher: `/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh`
@@ -153,8 +155,10 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 5. Find affected image, app, repo, revision.
 6. Cross-check k8s state + logs + metrics + traces.
 7. Clone related repo and inspect suspect commit/config only after live evidence or clear config-driven need.
-8. If confidence is high and fix is scoped, create fix PR automatically.
-9. Return evidence, hypotheses, confidence, and PR URL (or blocked reason).
+8. If fix path is clear, name the concrete follow-up PR candidate first: repo, path, title, and validation command.
+9. Create or reuse a Linear follow-up ticket before opening a PR; use that ticket's `gitBranchName` as the PR branch.
+10. If confidence is high and fix is scoped, create the fix PR automatically and link it back to Linear.
+11. Return evidence, hypotheses, confidence, suggested PRs, Linear ticket, and PR URL (or blocked reason).
 
 ## DB-First Data Incidents
 
@@ -269,6 +273,39 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - direct RPC fact
   - which public paths see the entity vs miss it
 
+## Recurring Indexer Freshness Incidents
+
+- Start with `references/indexer-freshness-playbook.md`.
+- Use `incident-dossier-arbitrum-indexing-throughput-backpressure-2026-03-13.md` as the first prior for repeated Arbitrum freshness alerts.
+- Trigger:
+  - Grafana `MorphoIndexerDelay`
+  - BetterStack `Indexing latency`
+  - repeated `indexer-<chain>-morpho-sh` lag alerts
+  - `check-indexing-latency` / `headBlock` freshness drift
+- Treat Grafana block-gap alerts and BetterStack heartbeat failures as the same incident family when chain + workload match.
+- Same workload fires 3+ times in 24h:
+  - stop treating each alert as a fresh transient
+  - answer as one ongoing RCA
+  - lead with `primary trigger`, `local amplifier`, `still-open checks`
+- Mandatory order:
+  1. compare DB latest block or public `headBlock` against live RPC head
+  2. compare processed blocks per window against chain-head growth
+  3. check `eth_getLogs` / block-not-found / not-yet-available retries
+  4. check eRPC head age / upstream failure rate
+  5. check queue / state-materialization backlog
+  6. check explicit resources, node pressure, and per-chain overrides
+- Required answer shape:
+  - `primary trigger`
+  - `local amplifier`
+  - `monitoring blind spot` when internal lag metrics disagree with DB-vs-RPC freshness
+  - `still-open checks`
+- Do not keep repeating only `pod healthy`, `0 restarts`, or `same image healthy elsewhere` once those are already established.
+- If a human asks `DB or RPC/eRPC or queue/backpressure?`:
+  - answer each checked branch explicitly
+  - say which branch is ruled out, still-open, or leading
+  - do not go silent
+- Never leak progress chatter, tool JSON, exec-approval warnings, or command-construction failures into the thread reply.
+
 ## Slack BetterStack Alert Intake
 
 - Monitored channels:
@@ -296,14 +333,20 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - `*Next:*` owner/action
 - Put unrelated warnings under `*Also watching:*`.
 - Do not open with routing hints, fingerprint changes, raw step names, signal counts, confidence percentages, or `primary/supporting` namespace jargon.
+- Never leak progress chatter, tool-call JSON, exec-approval warnings, or command-construction failures into the thread.
 - Do not send progress-only thread replies like `On it`, `Found it`, or `Let me verify`; wait for net-new evidence, mitigation, validation, or a PR URL.
+- For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
 - If fix is scoped/reversible and confidence >= `AUTO_PR_MIN_CONFIDENCE`, create PR via `autofix-pr.sh` and post PR URL in-thread.
+- If fix is not open-PR ready yet, still name 1-2 concrete PR candidates with repo/path/title/validation.
+- For every incident follow-up that needs code/config work, create or reuse a Linear ticket first and mention it in-thread.
+- Any PR opened from incident follow-up must use the Linear ticket `gitBranchName` as the branch and add the PR URL back to the ticket.
 - If a thread question is vague/underspecified:
   - Do not refuse with “insufficient context” only.
   - Infer likely intent from latest triage sections (`impact_scope`, `signal_summary`, `rca_result`, `top_*` tables).
   - State assumptions explicitly in one line (`Assumption: ...`).
   - Propose 2-3 concrete next actions/solutions with commands and rollback when relevant.
   - Ask at most one clarifying question only if it materially changes the recommendation.
+- If a human asks whether the issue is DB, RPC/eRPC, or queue/backpressure, answer those branches explicitly from fresh evidence before ending the update.
 
 ## Mandatory First Commands
 
@@ -356,6 +399,20 @@ If `command -v` fails or PATH looks wrong, stop and reply in blocked mode instea
 # Inspect issue
 /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue get PLA-318
 
+# Create issue and return identifier + gitBranchName
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue create \
+  --title "Raise public replica memory limit after DB OOM incident" \
+  --file /tmp/pla-318.md \
+  --team Platform \
+  --project "[PLATFORM] Backlog" \
+  --assignee florian \
+  --state "In Progress" \
+  --priority 2 \
+  --labels "openclaw-sre|Bug|Monitoring|Improvement"
+
+# Resolve canonical git branch name from the ticket
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue get-branch PLA-318
+
 # Update description from file (preferred for long context)
 /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue update-description PLA-318 --file /tmp/pla-318.md
 
@@ -364,12 +421,52 @@ If `command -v` fails or PATH looks wrong, stop and reply in blocked mode instea
 
 # Ensure tracking label on ticket
 /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue ensure-label PLA-318 openclaw-sre
+
+# Attach PR URL back to the ticket
+/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue add-attachment PLA-318 https://github.com/morpho-org/morpho-infra-helm/pull/123
 ```
 
 - If asked to “verify Linear write access”, run:
 
 ```bash
 /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh probe-write PLA-318
+```
+
+## Bug Report Intake
+
+- Trigger: new root post in `#bug-report`.
+- Default path:
+  1. run `bug-report-triage.sh plan` on the root report text,
+  2. reuse any existing Linear issue already linked in the thread,
+  3. otherwise run `bug-report-triage.sh create-issue`,
+  4. reply in-thread with the Linear link, route, owner, summary, signals, and next step.
+- Deterministic first:
+  - planner output is the default source of truth for team, priority, labels, owner, and whether deep RCA is needed
+  - if the planner says routing is ambiguous, say so plainly and keep the issue tagged for manual review instead of guessing
+- Owner rule:
+  - current bug-owner rotation must come from `bug-report-routing.json`
+  - if no current owner is configured for the routed pool, say exactly: `Owner rotation missing in bug-report config; manual assignment needed.`
+- Depth rule:
+  - light triage by default
+  - deep RCA only when `analysisMode=deep`, a human explicitly asks for analysis, or the report is clearly severe
+- Example:
+
+```bash
+/home/node/.openclaw/skills/morpho-sre/scripts/bug-report-triage.sh plan --stdin <<'EOF'
+Title: Can't repay from Safe app
+Environment: prod
+Source URL: https://app.morpho.org/ethereum/vault/0xabc
+Actual result: User gets execution reverted during repay
+Expected result: Repay succeeds
+EOF
+
+/home/node/.openclaw/skills/morpho-sre/scripts/bug-report-triage.sh create-issue --stdin <<'EOF'
+Title: Can't repay from Safe app
+Environment: prod
+Source URL: https://app.morpho.org/ethereum/vault/0xabc
+Actual result: User gets execution reverted during repay
+Expected result: Repay succeeds
+EOF
 ```
 
 ## DB Query Guardrail (Slack Threads)
@@ -627,9 +724,13 @@ Use this flow only when:
 - repo allowlist (`AUTO_PR_ALLOWED_REPOS`)
 - confidence threshold (`AUTO_PR_MIN_CONFIDENCE`)
 - secret-pattern scan in staged diff before push
+- create/reuse Linear ticket when missing (`AUTO_PR_LINEAR_*`)
+- branch = Linear `gitBranchName`
+- conventional PR title carries the Linear ticket scope token
 - authenticated push + `gh pr create`
 - tracking label `openclaw-sre` on PR (`AUTO_PR_TRACKING_LABEL`)
 - tracking label `openclaw-sre` on linked Linear tickets detected from branch/title/commit/body
+- PR URL attachment + implementation comment back on the linked Linear ticket
 - Slack DM warning to operator before PR creation (`AUTO_PR_NOTIFY_*`)
 
 PR convention requirement:
@@ -638,6 +739,7 @@ PR convention requirement:
 - Always add label `openclaw-sre`.
 - Always add same label on linked Linear ticket:
   - `/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue ensure-label <TICKET> openclaw-sre`
+- If PR gate is still closed, reply with `*Suggested PR:* <repo> <path> <title> <validation>` and `*Linear:* <ticket | blocked reason>`.
 
 If gate fails, report blocked reason and fallback manual next step.
 

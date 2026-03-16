@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "ownerMissingMessage": "Owner rotation missing in bug-report config; manual assignment needed.",
+  "defaultRoute": "general-bug",
+  "defaultLabels": ["openclaw-sre", "Bug"],
+  "defaultTeam": "Platform",
+  "defaultProject": "[PLATFORM] Backlog",
+  "ownerPools": {
+    "consumer-app": {
+      "current": "florian",
+      "rotation": ["florian"]
+    },
+    "rewards-provider": {
+      "current": "florian",
+      "rotation": ["florian"]
+    },
+    "indexer": {
+      "current": "florian",
+      "rotation": ["florian"]
+    },
+    "platform-data": {
+      "current": "florian",
+      "rotation": ["florian"]
+    },
+    "general": {}
+  },
+  "routes": [
+    {
+      "id": "consumer-app",
+      "team": "Platform",
+      "project": "[PLATFORM] Backlog",
+      "ownerPool": "consumer-app",
+      "priority": "2",
+      "analysisMode": "deep",
+      "labels": ["consumer-app"],
+      "matchAny": [
+        "repay",
+        "permit",
+        "approval",
+        "wallet connect",
+        "wallet",
+        "safe app",
+        "offchain approval"
+      ],
+      "next": "Run consumer-bug-preflight before capability disclaimers."
+    },
+    {
+      "id": "rewards-provider",
+      "team": "Platform",
+      "project": "[PLATFORM] Backlog",
+      "ownerPool": "rewards-provider",
+      "priority": "2",
+      "analysisMode": "deep",
+      "labels": ["rewards-provider"],
+      "matchAny": ["reward", "rewards", "merkl", "apr", "apy", "provider"],
+      "next": "Verify provider-side truth and one live reward row before PR suggestions."
+    },
+    {
+      "id": "indexer-freshness",
+      "team": "Platform",
+      "project": "[PLATFORM] Backlog",
+      "ownerPool": "indexer",
+      "priority": "2",
+      "analysisMode": "deep",
+      "labels": ["Monitoring", "indexer-freshness"],
+      "matchAny": [
+        "indexer",
+        "indexing latency",
+        "freshness",
+        "head block",
+        "backpressure",
+        "queue",
+        "erpc",
+        "rpc"
+      ],
+      "next": "Answer DB vs RPC/eRPC vs queue branches from fresh evidence."
+    },
+    {
+      "id": "data-path",
+      "team": "Platform",
+      "project": "[PLATFORM] Backlog",
+      "ownerPool": "platform-data",
+      "priority": "2",
+      "analysisMode": "deep",
+      "labels": ["data-path"],
+      "matchAny": ["database", "postgres", "replica", "stale data", "stale row", "sql"],
+      "next": "Validate one live DB row and provenance before naming a fix."
+    },
+    {
+      "id": "general-bug",
+      "team": "Platform",
+      "project": "[PLATFORM] Backlog",
+      "ownerPool": "general",
+      "priority": "3",
+      "analysisMode": "light",
+      "labels": [],
+      "matchAny": [],
+      "next": "Manual review before deep RCA or PR work."
+    }
+  ]
+}

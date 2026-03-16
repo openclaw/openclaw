@@ -29,9 +29,13 @@ Runtime model: the container assumes a shared repo root. Start with
   Shared-root path model for the merged container and local dev.
 - `references/db-data-incident-playbook.md`
   DB-first investigation order for stale/wrong-value and replica incidents.
+- `references/indexer-freshness-playbook.md`
+  Freshness-first order for Grafana `MorphoIndexerDelay`, BetterStack `Indexing latency`, and recurring `indexer-<chain>-morpho-sh` lag incidents.
 - `references/rewards-provider-incident-playbook.md`
   Rewards/APR incidents where upstream provider data, campaign TVL, or consumer
   code-path fanout may be the trigger.
+- `incident-dossier-arbitrum-indexing-throughput-backpressure-2026-03-13.md`
+  Repeated Arbitrum freshness lag pattern: healthy pod, stale data, internal lag blind spot, likely throughput/headroom amplifier.
 - `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`
   Consumer wallet / approval / permit failure playbook. Use when a workaround already narrows scope to the offchain path.
 - `notion-postmortem-index.md`
@@ -93,6 +97,8 @@ investigation.
   Start `morpho-infra/docs/operations/erpc-operations.md`, `morpho-infra/docs/architecture/erpc.md`, `openclaw-sre/skills/morpho-sre/erpc-context.sh`.
 - Monitoring stack / missing data / alert path:
   Start `morpho-infra/docs/guides/observability-stack-onboarding.md`, `morpho-infra/docs/architecture/alerting.md`, `morpho-infra/docs/operations/critical-monitoring.md`.
+- Indexer freshness / repeated lag / stale chain reads:
+  Start `references/indexer-freshness-playbook.md`, then `morpho-infra/docs/guides/observability-stack-onboarding.md`, then the closest indexing dossier.
 - Consumer app frontend / JS error / replay / conversion drop:
   Start `frontend-project-resolver.sh`, then the matching `posthog-<env>-<project-key>` MCP server, then `sentry-api.sh` / `sentry-cli.sh`, then `morpho-infra/docs/guides/ai-agents-incident-troubleshooting.md`, then `morpho-infra/docs/operations/incident-response.md`.
 - Consumer wallet / approval / permit / repay failure:

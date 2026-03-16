@@ -546,6 +546,25 @@ normalize_pipe_atoms() {
     | paste -sd'|' -
 }
 
+pipe_atom_sets_intersect() {
+  local left="${1:-}"
+  local right="${2:-}"
+  local normalized_left normalized_right atom
+
+  normalized_left="$(normalize_pipe_atoms "$left")"
+  normalized_right="$(normalize_pipe_atoms "$right")"
+  [[ -n "$normalized_left" && -n "$normalized_right" ]] || return 1
+
+  while IFS= read -r atom; do
+    [[ -n "$atom" ]] || continue
+    if [[ "|$normalized_left|" == *"|$atom|"* ]]; then
+      return 0
+    fi
+  done < <(printf '%s\n' "$normalized_right" | tr '|' '\n')
+
+  return 1
+}
+
 normalize_csv_atoms() {
   local raw="${1:-}"
   if [[ -z "$raw" ]]; then
@@ -584,16 +603,17 @@ normalize_pod_workload_name() {
 derive_step11_workloads() {
   local deploy_rows_input="${1:-}"
   local pod_rows_input="${2:-}"
-  {
-    printf '%s\n' "$deploy_rows_input" | awk -F'\t' 'NF >= 2 { print $2 }'
-    while IFS=$'\t' read -r _ns pod_name _rest; do
-      [[ -z "${pod_name:-}" ]] && continue
-      normalize_pod_workload_name "$pod_name"
-    done < <(printf '%s\n' "$pod_rows_input")
-  } \
-    | awk 'NF > 0 { print }' \
-    | sort -u \
-    | tr '\n' '|'
+  local raw_workloads
+  raw_workloads="$(
+    {
+      printf '%s\n' "$deploy_rows_input" | awk -F'\t' 'NF >= 2 { print $2 }'
+      while IFS=$'\t' read -r _ns pod_name _rest; do
+        [[ -z "${pod_name:-}" ]] && continue
+        normalize_pod_workload_name "$pod_name"
+      done < <(printf '%s\n' "$pod_rows_input")
+    } | awk 'NF > 0 { print }'
+  )"
+  normalize_pipe_atoms "$raw_workloads"
 }
 
 tsv_field() {
@@ -2060,6 +2080,244 @@ collect_phase2_db_evidence() {
   fi
 }
 
+if ! declare -F collect_phase2_rewards_provider_context >/dev/null 2>&1; then
+collect_phase2_rewards_provider_context() {
+  rewards_provider_mode=0
+  provider_api_check=0
+  artifact_check=0
+  code_path_check=0
+  disproved_theory_recorded=0
+  rewards_provider_context_note=""
+  provider_api_evidence_output=""
+  artifact_evidence_output=""
+  code_path_evidence_output=""
+  disproved_theory_evidence_output=""
+
+  local raw_combined combined
+  local provider_api_evidence_output_local artifact_evidence_output_local
+  local code_path_evidence_output_local disproved_theory_evidence_output_local
+  raw_combined="$(
+    {
+      printf '%s\n' "${BETTERSTACK_CONTEXT:-}"
+      printf '%s\n' "${alert_rows:-}"
+      printf '%s\n' "${event_rows:-}"
+      printf '%s\n' "${log_signal_rows:-}"
+      printf '%s\n' "${repo_map_rows:-}"
+      printf '%s\n' "${revision_rows:-}"
+      printf '%s\n' "${ci_rows:-}"
+      printf '%s\n' "${changes_in_window_summary:-}"
+    }
+  )"
+  combined="$(printf '%s' "$raw_combined" | tr '[:upper:]' '[:lower:]')"
+
+  rewards_provider_should_collect "$combined" || return 0
+  rewards_provider_mode=1
+
+  provider_api_evidence_output_local="$(printf '%s' "${provider_api_evidence_input:-}" | awk 'NF > 0 { print }')"
+  artifact_evidence_output_local="$(printf '%s' "${artifact_evidence_input:-}" | awk 'NF > 0 { print }')"
+  code_path_evidence_output_local="$(printf '%s' "${code_path_evidence_input:-}" | awk 'NF > 0 { print }')"
+  disproved_theory_evidence_output_local="$(printf '%s' "${disproved_theory_evidence_input:-}" | awk 'NF > 0 { print }')"
+
+  if [[ -z "$provider_api_evidence_output_local" ]]; then
+    provider_api_evidence_output_local="$(
+      printf '%s\n' "$raw_combined" \
+        | grep -Eom1 '(GET /v4/opportunities/campaigns[^[:space:]]*|https?://[^[:space:]]*api\.merkl[^[:space:]]*|campaigns\.morpho\.org[^[:space:]]*)' \
+        || true
+    )"
+  fi
+
+  if [[ -z "$artifact_evidence_output_local" ]]; then
+    if [[ -n "${changes_in_window_summary:-}" ]] && printf '%s\n' "${changes_in_window_summary:-}" | grep -Eiq '(artifact|snapshot|dump|cache|workflow)'; then
+      artifact_evidence_output_local="$(sanitize_signal_line "$changes_in_window_summary")"
+    elif [[ -n "${ci_rows:-}" ]]; then
+      artifact_evidence_output_local="$(sanitize_signal_line "$(printf '%s\n' "$ci_rows" | awk 'NF > 0 { print; exit }')")"
+    fi
+  fi
+
+  if [[ -z "$code_path_evidence_output_local" ]]; then
+    code_path_evidence_output_local="$(
+      printf '%s\n' "$raw_combined" \
+        | grep -Eom1 '([A-Za-z0-9._-]+/)+[A-Za-z0-9._-]+\.(ts|tsx|js|jsx|sql|ya?ml|json|sh)(:[0-9]+)?' \
+        || true
+    )"
+  fi
+
+  if [[ -n "$provider_api_evidence_output_local" ]]; then
+    provider_api_check=1
+  fi
+
+  if [[ -n "$artifact_evidence_output_local" ]]; then
+    artifact_check=1
+  fi
+
+  if [[ -n "$code_path_evidence_output_local" ]]; then
+    code_path_check=1
+  fi
+
+  if [[ -n "$disproved_theory_evidence_output_local" ]]; then
+    disproved_theory_recorded=1
+  fi
+
+  provider_api_evidence_output="$provider_api_evidence_output_local"
+  artifact_evidence_output="$artifact_evidence_output_local"
+  code_path_evidence_output="$code_path_evidence_output_local"
+  disproved_theory_evidence_output="$disproved_theory_evidence_output_local"
+
+  if [[ "$provider_api_check" -eq 0 || "$artifact_check" -eq 0 || "$code_path_check" -eq 0 ]]; then
+    rewards_provider_context_note="explicit or raw provider/artifact/code-path evidence outputs are still incomplete; rewards/provider gate remains closed until those live facts are recorded"
+  fi
+}
+fi
+
+indexer_freshness_should_collect() {
+  local combined="${1:-}"
+  [[ -n "$combined" ]] || return 1
+  combined="$(printf '%s' "$combined" | tr '[:upper:]' '[:lower:]')"
+  case "$combined" in
+    *indexer\ delay*|*indexing\ latency*|*check-indexing-latency*|*sqd_processor_chain_height*|*sqd_processor_last_block*|*headblock*|*eth_getlogs*|*indexer-*morpho*|*create-historical-rewards-state*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+count_recent_matching_incidents() {
+  local workload_key="${1:-}"
+  local cutoff_ts="${2:-0}"
+  local rows=""
+  local normalized_workload_key row affected last_seen
+  local count=0
+
+  if [[ -z "$workload_key" ]] || ! [[ "$cutoff_ts" =~ ^[0-9]+$ ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  normalized_workload_key="$(normalize_pipe_atoms "$workload_key")"
+  if [[ -z "$normalized_workload_key" ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  if [[ "$HAS_LIB_STATE_FILE" -eq 1 ]] && declare -F state_read_all >/dev/null 2>&1; then
+    rows="$(
+      {
+        state_read_all "$ACTIVE_INCIDENTS_FILE" 2>/dev/null || true
+        state_read_all "$RESOLVED_INCIDENTS_FILE" 2>/dev/null || true
+      } | awk -F'\t' 'NF >= 12 { print }'
+    )"
+  else
+    rows="$(
+      {
+        cat "$ACTIVE_INCIDENTS_FILE" 2>/dev/null || true
+        cat "$RESOLVED_INCIDENTS_FILE" 2>/dev/null || true
+      } | awk -F'\t' 'NF >= 12 { print }'
+    )"
+  fi
+
+  if [[ -z "$rows" ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  while IFS= read -r row; do
+    [[ -n "$row" ]] || continue
+    affected="$(tsv_field "$row" 12)"
+    last_seen="$(tsv_field "$row" 5)"
+    [[ "$last_seen" =~ ^[0-9]+$ ]] || continue
+    (( last_seen >= cutoff_ts )) || continue
+    if pipe_atom_sets_intersect "$affected" "$normalized_workload_key"; then
+      count=$((count + 1))
+    fi
+  done <<<"$rows"
+
+  printf '%s\n' "$count"
+}
+
+collect_phase2_indexer_freshness_context() {
+  indexer_freshness_mode=0
+  indexer_db_vs_live_head_gap=0
+  indexer_processed_vs_head_rate_gap=0
+  indexer_metric_blind_spot=0
+  indexer_resources_missing=0
+  indexer_queue_backlog=0
+  indexer_rpc_mismatch=0
+  indexer_recurring_incident=0
+  indexer_recent_match_count=0
+  indexer_workloads=""
+  indexer_canonical_category_hint="unknown"
+  indexer_freshness_note="disabled"
+
+  local raw_combined combined current_ts cutoff_ts
+  raw_combined="$(
+    {
+      printf '%s\n' "${BETTERSTACK_CONTEXT:-}"
+      printf '%s\n' "${alert_rows:-}"
+      printf '%s\n' "${event_rows:-}"
+      printf '%s\n' "${log_signal_rows:-}"
+      printf '%s\n' "${pod_rows:-}"
+      printf '%s\n' "${container_state_rows:-}"
+      printf '%s\n' "${db_evidence_rows:-}"
+      printf '%s\n' "${changes_in_window_summary:-}"
+      printf '%s\n' "${revision_rows:-}"
+      printf '%s\n' "${ci_rows:-}"
+    } | awk 'NF > 0 { print }'
+  )"
+  combined="$(printf '%s' "$raw_combined" | tr '[:upper:]' '[:lower:]')"
+
+  indexer_freshness_should_collect "$combined" || {
+    indexer_freshness_note="not_indexer_freshness"
+    return 0
+  }
+
+  indexer_freshness_mode=1
+  indexer_freshness_note="trigger_only"
+  indexer_workloads="$(derive_step11_workloads "${deploy_rows:-}" "${pod_rows:-}" 2>/dev/null || true)"
+
+  if printf '%s\n' "$combined" | grep -Eiq 'db latest .* behind|headblock.*behind|live rpc.*ahead|stale by .*minutes|[0-9]+ blocks / [0-9]+s behind|timestamp gap'; then
+    indexer_db_vs_live_head_gap=1
+  fi
+  if printf '%s\n' "$combined" | grep -Eiq 'chain head advanced .* while the indexer processed|not keeping up|throughput degradation|outpacing this single indexer replica|treading water|blocks/sec'; then
+    indexer_processed_vs_head_rate_gap=1
+  fi
+  if printf '%s\n' "$combined" | grep -Eiq 'internal sqd lag metric.*0|under-reports this failure mode|lag metric .*missing|lag metric.*blind spot'; then
+    indexer_metric_blind_spot=1
+  fi
+  if printf '%s\n' "$combined" | grep -Eiq 'no cpu/memory requests|no cpu/memory reservations|resource contention|99% requested cpu|temporary resource bump|explicit cpu/memory reservations'; then
+    indexer_resources_missing=1
+  fi
+  if printf '%s\n' "$combined" | grep -Eiq 'create-historical-rewards-state|state materialization backlog|queue backlog|bullmq backlog|long-running .*historical rewards'; then
+    indexer_queue_backlog=1
+  fi
+  if printf '%s\n' "$combined" | grep -Eiq 'eth_getlogs.*block not found|not yet available on the node|rpc availability mismatch|erpc head jitter|erpc head age|rpc/e?rpc'; then
+    indexer_rpc_mismatch=1
+  fi
+
+  current_ts="$(date +%s 2>/dev/null || echo 0)"
+  if [[ "$current_ts" =~ ^[0-9]+$ ]] && [[ -n "$indexer_workloads" ]]; then
+    cutoff_ts=$((current_ts - 86400))
+    indexer_recent_match_count="$(count_recent_matching_incidents "$indexer_workloads" "$cutoff_ts")"
+    if [[ "$indexer_recent_match_count" =~ ^[0-9]+$ ]] && [[ "$indexer_recent_match_count" -ge 3 ]]; then
+      indexer_recurring_incident=1
+    fi
+  fi
+  if printf '%s\n' "$combined" | grep -Eiq 'repeated|re-fired|fires often|same issue|again|flapped|recurring'; then
+    indexer_recurring_incident=1
+  fi
+
+  if [[ "$indexer_resources_missing" -eq 1 || "$indexer_processed_vs_head_rate_gap" -eq 1 || "$indexer_queue_backlog" -eq 1 || "$indexer_recurring_incident" -eq 1 || "$indexer_metric_blind_spot" -eq 1 ]]; then
+    indexer_canonical_category_hint="scaling_issue"
+  elif [[ "$indexer_rpc_mismatch" -eq 1 ]]; then
+    indexer_canonical_category_hint="dependency_failure"
+  elif [[ "$indexer_db_vs_live_head_gap" -eq 1 ]]; then
+    indexer_canonical_category_hint="scaling_issue"
+  fi
+
+  if [[ "$indexer_db_vs_live_head_gap" -eq 1 || "$indexer_processed_vs_head_rate_gap" -eq 1 || "$indexer_metric_blind_spot" -eq 1 || "$indexer_resources_missing" -eq 1 || "$indexer_queue_backlog" -eq 1 || "$indexer_rpc_mismatch" -eq 1 || "$indexer_recurring_incident" -eq 1 ]]; then
+    indexer_freshness_note="signals_ready"
+  fi
+}
+
 build_phase3_gap_input_file() {
   local target_file="$1"
   cat >"$target_file" <<EOF
@@ -2095,6 +2353,14 @@ code_path_reconciled=${code_path_reconciled:-0}
 disproved_theory_recorded=${disproved_theory_recorded:-0}
 disproved_theory_expected=${disproved_theory_expected:-0}
 same_token_both_sides_expected=${same_token_both_sides_expected:-0}
+indexer_freshness_mode=${indexer_freshness_mode:-0}
+db_vs_live_head_gap=${indexer_db_vs_live_head_gap:-0}
+processed_vs_head_rate_gap=${indexer_processed_vs_head_rate_gap:-0}
+metric_blind_spot=${indexer_metric_blind_spot:-0}
+resources_missing=${indexer_resources_missing:-0}
+queue_backlog=${indexer_queue_backlog:-0}
+rpc_mismatch=${indexer_rpc_mismatch:-0}
+recurring_incident=${indexer_recurring_incident:-0}
 EOF
 }
 
@@ -2640,7 +2906,11 @@ if [[ "$suspect_pr_count" -gt 0 ]]; then
 fi
 
 step11_dedup_namespace="$(printf '%s' "$SCOPE_NAMESPACES" | awk -F',' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $1); print ($1 == "" ? "unknown" : $1)}')"
-step11_dedup_category="$(printf '%s' "${severity_reason:-unknown}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '-')"
+step11_category_hint="${indexer_canonical_category_hint:-}"
+if [[ -z "$step11_category_hint" || "$step11_category_hint" == "unknown" ]]; then
+  step11_category_hint="${severity_reason:-unknown}"
+fi
+step11_dedup_category="$(printf '%s' "$step11_category_hint" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '-')"
 if [[ -z "$step11_dedup_category" ]]; then
   step11_dedup_category="unknown"
 fi
@@ -2897,6 +3167,7 @@ incident_fingerprint="$(printf '%s\n' "$incident_fingerprint_source" | cksum | a
 collect_change_window_context
 collect_phase2_drift_and_lineage
 collect_phase2_rewards_provider_context_if_available
+collect_phase2_indexer_freshness_context
 
 should_alert="no"
 gate_reason="healthy"
@@ -3067,6 +3338,7 @@ if [[ "$incident" -eq 1 ]]; then
     [[ "$argocd_critical_count" -gt 0 || "$argocd_warning_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}argocd_sync|"
     [[ "$cert_health_critical_count" -gt 0 || "$cert_health_warning_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}cert_secret_health|"
     [[ "$aws_signal_critical_count" -gt 0 || "$aws_signal_warning_count" -gt 0 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}aws_resource_signals|"
+    [[ "${indexer_freshness_mode:-0}" -eq 1 ]] && evidence_signal_keys_raw="${evidence_signal_keys_raw}indexer_freshness|"
     evidence_signal_keys="$(sanitize_state_field "$(normalize_pipe_atoms "${evidence_signal_keys_raw%|}")")"
 
     category_drift_log="$existing_category_drift"
@@ -3819,6 +4091,20 @@ fi
 if [[ -n "${disproved_theory_evidence_output:-}" ]]; then
   printf 'disproved_theory_evidence_output\t%s\n' "$disproved_theory_evidence_output"
 fi
+
+section "indexer_freshness_context"
+printf 'mode\t%s\n' "${indexer_freshness_mode:-0}"
+printf 'note\t%s\n' "${indexer_freshness_note:-disabled}"
+printf 'workloads\t%s\n' "${indexer_workloads:-}"
+printf 'recent_match_count\t%s\n' "${indexer_recent_match_count:-0}"
+printf 'canonical_category_hint\t%s\n' "${indexer_canonical_category_hint:-unknown}"
+printf 'db_vs_live_head_gap\t%s\n' "${indexer_db_vs_live_head_gap:-0}"
+printf 'processed_vs_head_rate_gap\t%s\n' "${indexer_processed_vs_head_rate_gap:-0}"
+printf 'metric_blind_spot\t%s\n' "${indexer_metric_blind_spot:-0}"
+printf 'resources_missing\t%s\n' "${indexer_resources_missing:-0}"
+printf 'queue_backlog\t%s\n' "${indexer_queue_backlog:-0}"
+printf 'rpc_mismatch\t%s\n' "${indexer_rpc_mismatch:-0}"
+printf 'recurring_incident\t%s\n' "${indexer_recurring_incident:-0}"
 
 section "rca_result"
 printf 'status\t%s\n' "$rca_result_status"
