@@ -21,7 +21,7 @@ Ollama is a local LLM runtime that makes it easy to run open-source models on yo
 The fastest way to set up Ollama is through the setup wizard:
 
 ```bash
-openclaw setup --wizard
+openclaw onboard
 ```
 
 Select **Ollama** from the provider list. The wizard will:
@@ -35,7 +35,7 @@ Select **Ollama** from the provider list. The wizard will:
 Non-interactive mode is also supported:
 
 ```bash
-openclaw setup --wizard --non-interactive \
+openclaw onboard --non-interactive \
   --auth-choice ollama \
   --accept-risk
 ```
@@ -43,7 +43,7 @@ openclaw setup --wizard --non-interactive \
 Optionally specify a custom base URL or model:
 
 ```bash
-openclaw setup --wizard --non-interactive \
+openclaw onboard --non-interactive \
   --auth-choice ollama \
   --custom-base-url "http://ollama-host:11434" \
   --custom-model-id "qwen3.5:27b" \
@@ -73,7 +73,7 @@ ollama signin
 4. Run onboarding and choose `Ollama`:
 
 ```bash
-openclaw setup --wizard
+openclaw onboard
 ```
 
 - `Local`: local models only
