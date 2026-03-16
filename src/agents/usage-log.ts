@@ -68,14 +68,25 @@ async function readJsonArray(file: string): Promise<TokenUsageRecord[]> {
 //   • uses exponential backoff with jitter capped at stale ms
 // ---------------------------------------------------------------------------
 const APPEND_LOCK_OPTIONS: FileLockOptions = {
-  // ~100 retries × 50 ms ≈ 5 s total — matches the previous LOCK_TIMEOUT_MS.
+  // appendRecord rewrites the full token-usage.json on every call, so hold
+  // time scales with file size and disk speed.  5 s was too tight: a slow
+  // write on a large history could exceed the stale window and allow a
+  // concurrent waiter to steal an active lock, causing overlapping
+  // read-modify-write cycles that silently drop entries.
+  //
+  // 30 s gives plenty of headroom for large files on slow disks while still
+  // reclaiming locks left by crashed processes within a reasonable window.
+  // The retry budget (~150 × 200 ms = 30 s) matches the stale window so
+  // waiters exhaust retries only if the holder holds longer than stale,
+  // i.e., is genuinely stuck or crashed.
   retries: {
-    retries: 100,
+    retries: 150,
     factor: 1,
-    minTimeout: 50,
-    maxTimeout: 50,
+    minTimeout: 200,
+    maxTimeout: 200,
+    randomize: true,
   },
-  stale: 5_000,
+  stale: 30_000,
 };
 
 async function appendRecord(file: string, entry: TokenUsageRecord): Promise<void> {
