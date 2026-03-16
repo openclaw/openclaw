@@ -17,7 +17,7 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
-import { formatExecCommand, resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 
 export type ApprovedCwdSnapshot = {
   cwd: string;
@@ -630,8 +630,8 @@ export function buildSystemRunApprovalPlan(params: {
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
-}): { ok: true; plan: SystemRunApprovalPlan; cmdText: string } | { ok: false; message: string } {
-  const command = resolveSystemRunCommand({
+}): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
+  const command = resolveSystemRunCommandRequest({
     command: params.command,
     rawCommand: params.rawCommand,
   });
@@ -644,15 +644,15 @@ export function buildSystemRunApprovalPlan(params: {
   const hardening = hardenApprovedExecutionPaths({
     approvedByAsk: true,
     argv: command.argv,
-    shellCommand: command.shellCommand,
+    shellCommand: command.shellPayload,
     cwd: normalizeString(params.cwd) ?? undefined,
   });
   if (!hardening.ok) {
     return { ok: false, message: hardening.message };
   }
-  const rawCommand = formatExecCommand(hardening.argv) || null;
+  const commandText = formatExecCommand(hardening.argv);
   const commandPreview =
-    command.previewText?.trim() && command.previewText.trim() !== rawCommand
+    command.previewText?.trim() && command.previewText.trim() !== commandText
       ? command.previewText.trim()
       : null;
   const mutableFileOperand = resolveMutableFileOperandSnapshotSync({
@@ -667,12 +667,11 @@ export function buildSystemRunApprovalPlan(params: {
     plan: {
       argv: hardening.argv,
       cwd: hardening.cwd ?? null,
-      rawCommand,
+      commandText,
       commandPreview,
       agentId: normalizeString(params.agentId),
       sessionKey: normalizeString(params.sessionKey),
       mutableFileOperand: mutableFileOperand.snapshot ?? undefined,
     },
-    cmdText: commandPreview ?? rawCommand ?? formatExecCommand(hardening.argv),
   };
 }

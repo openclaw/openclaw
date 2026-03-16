@@ -665,7 +665,7 @@ export function createNodesTool(options?: {
             }
             const runParams = {
               command: prepared.plan.argv,
-              rawCommand: prepared.plan.rawCommand ?? prepared.cmdText,
+              rawCommand: prepared.plan.commandText,
               cwd: prepared.plan.cwd ?? cwd,
               env,
               timeoutMs: commandTimeoutMs,
@@ -700,8 +700,6 @@ export function createNodesTool(options?: {
               { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
               {
                 id: approvalId,
-                command: prepared.cmdText,
-                commandArgv: prepared.plan.argv,
                 systemRunPlan: prepared.plan,
                 cwd: prepared.plan.cwd ?? cwd,
                 nodeId,

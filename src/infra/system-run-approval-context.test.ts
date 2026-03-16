@@ -9,7 +9,7 @@ describe("resolveSystemRunApprovalRequestContext", () => {
       systemRunPlan: {
         argv: ["./env", "sh", "-c", "jq --version"],
         cwd: "/tmp",
-        rawCommand: './env sh -c "jq --version"',
+        commandText: './env sh -c "jq --version"',
         commandPreview: "jq --version",
         agentId: "main",
         sessionKey: "agent:main:main",

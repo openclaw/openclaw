@@ -58,7 +58,7 @@ export type SystemRunApprovalFileOperand = {
 export type SystemRunApprovalPlan = {
   argv: string[];
   cwd: string | null;
-  rawCommand: string | null;
+  commandText: string;
   commandPreview?: string | null;
   agentId: string | null;
   sessionKey: string | null;
