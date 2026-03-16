@@ -1,3 +1,4 @@
+import { isSlackInteractiveRepliesEnabled } from "../../../extensions/slack/src/interactive-replies.js";
 import {
   extractSlackToolSend,
   listSlackMessageActions,
@@ -10,6 +11,7 @@ import type { ChannelMessageActionAdapter } from "./types.js";
 export function createSlackActions(providerId: string): ChannelMessageActionAdapter {
   return {
     listActions: ({ cfg }) => listSlackMessageActions(cfg),
+    supportsInteractive: ({ cfg }) => isSlackInteractiveRepliesEnabled({ cfg }),
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({
