@@ -158,11 +158,21 @@ async function writeCachedCommandHash(
 ): Promise<void> {
   const filePath = resolveCommandHashPath(accountId, botIdentity);
   try {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const dirPath = path.dirname(filePath);
+    // Guard against invalid paths from malformed state dir resolution on Windows.
+    // "\\?" (incomplete extended-length prefix) resolves to "\?" via path.resolve
+    // and causes ENOENT on mkdir. Fixes #44199.
+    const isAbsolute = path.isAbsolute(dirPath) || path.win32.isAbsolute(dirPath);
+    if (!dirPath || dirPath === "." || /^\\?\\[?][/\\]?$/.test(dirPath) || !isAbsolute) {
+      throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
+    }
+    await fs.mkdir(dirPath, { recursive: true });
     await fs.writeFile(filePath, hash, "utf-8");
-  } catch {
-    // Best-effort: failing to cache the hash just means the next restart
-    // will sync commands again, which is the pre-fix behaviour.
+  } catch (err) {
+    // Best-effort: cache write failure means commands re-sync on next restart.
+    if (err instanceof Error) {
+      logVerbose(`telegram: failed to cache command hash: ${err.message}`);
+    }
   }
 }
 

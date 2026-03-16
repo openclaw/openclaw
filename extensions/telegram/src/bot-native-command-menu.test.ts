@@ -279,4 +279,31 @@ describe("bot-native-command-menu", () => {
     );
     expect(runtimeError).not.toHaveBeenCalled();
   });
+}
+  describe("Windows path validation in command hash cache (#44199)", () => {
+    it("continues menu sync even if command hash mkdir fails", async () => {
+      const fs = await import("node:fs/promises");
+      const fsMkdirSpy = vi.spyOn(fs, "mkdir");
+      fsMkdirSpy.mockRejectedValue(new Error("EACCES: permission denied"));
+
+      const setMyCommands = vi.fn(async () => undefined);
+      const deleteMyCommands = vi.fn(async () => undefined);
+      const runtimeLog = vi.fn();
+
+      syncMenuCommandsWithMocks({
+        setMyCommands,
+        deleteMyCommands,
+        runtimeLog,
+        commandsToRegister: [{ command: "cmd", description: "Test" }],
+        accountId: `acc-${Date.now()}`,
+        botIdentity: "bot-test",
+      });
+
+      await vi.waitFor(() => { expect(setMyCommands).toHaveBeenCalled(); });
+
+      // Menu sync succeeds despite cache write failure (best-effort)
+      expect(setMyCommands).toHaveBeenCalledWith([{ command: "cmd", description: "Test" }]);
+      fsMkdirSpy.mockRestore();
+    });
+  });
 });
