@@ -61,7 +61,7 @@ function transformAzureUrl(baseUrl: string, modelId: string): string {
   return `${normalizedUrl}/openai/deployments/${modelId}`;
 }
 
-export type CustomApiCompatibility = "openai" | "anthropic";
+export type CustomApiCompatibility = "openai" | "anthropic" | "openai-responses";
 type CustomApiCompatibilityChoice = CustomApiCompatibility | "unknown";
 export type CustomApiResult = {
   config: OpenClawConfig;
@@ -134,6 +134,11 @@ const COMPATIBILITY_OPTIONS: Array<{
     value: "openai",
     label: "OpenAI-compatible",
     hint: "Uses /chat/completions",
+  },
+  {
+    value: "openai-responses",
+    label: "OpenAI Responses-compatible",
+    hint: "Uses /v1/responses",
   },
   {
     value: "anthropic",
@@ -276,7 +281,7 @@ function normalizeOptionalProviderApiKey(value: unknown): SecretInput | undefine
 function resolveVerificationEndpoint(params: {
   baseUrl: string;
   modelId: string;
-  endpointPath: "chat/completions" | "messages";
+  endpointPath: "chat/completions" | "messages" | "responses";
 }) {
   const resolvedUrl = isAzureUrl(params.baseUrl)
     ? transformAzureUrl(params.baseUrl, params.modelId)
@@ -381,6 +386,31 @@ async function requestAnthropicVerification(params: {
   });
 }
 
+async function requestOpenAiResponsesVerification(params: {
+  baseUrl: string;
+  apiKey: string;
+  modelId: string;
+}): Promise<VerificationResult> {
+  const baseUrlForRequest = /\/v1\/?$/.test(params.baseUrl.trim())
+    ? params.baseUrl.trim()
+    : params.baseUrl.trim().replace(/\/?$/, "") + "/v1";
+  const endpoint = resolveVerificationEndpoint({
+    baseUrl: baseUrlForRequest,
+    modelId: params.modelId,
+    endpointPath: "responses",
+  });
+  return await requestVerification({
+    endpoint,
+    headers: buildOpenAiHeaders(params.apiKey),
+    body: {
+      model: params.modelId,
+      input: [{ type: "message", role: "user", content: "Hi" }],
+      max_output_tokens: 5,
+      stream: false,
+    },
+  });
+}
+
 async function promptBaseUrlAndKey(params: {
   prompter: WizardPrompter;
   config: OpenClawConfig;
@@ -473,8 +503,14 @@ async function applyCustomApiRetryChoice(params: {
 
 function resolveProviderApi(
   compatibility: CustomApiCompatibility,
-): "openai-completions" | "anthropic-messages" {
-  return compatibility === "anthropic" ? "anthropic-messages" : "openai-completions";
+): "openai-completions" | "anthropic-messages" | "openai-responses" {
+  if (compatibility === "anthropic") {
+    return "anthropic-messages";
+  }
+  if (compatibility === "openai-responses") {
+    return "openai-responses";
+  }
+  return "openai-completions";
 }
 
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
@@ -482,10 +518,14 @@ function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
   if (!compatibilityRaw) {
     return "openai";
   }
-  if (compatibilityRaw !== "openai" && compatibilityRaw !== "anthropic") {
+  if (
+    compatibilityRaw !== "openai" &&
+    compatibilityRaw !== "anthropic" &&
+    compatibilityRaw !== "openai-responses"
+  ) {
     throw new CustomApiError(
       "invalid_compatibility",
-      'Invalid --custom-compatibility (use "openai" or "anthropic").',
+      'Invalid --custom-compatibility (use "openai", "anthropic", or "openai-responses").',
     );
   }
   return compatibilityRaw;
@@ -560,10 +600,14 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
   }
 
-  if (params.compatibility !== "openai" && params.compatibility !== "anthropic") {
+  if (
+    params.compatibility !== "openai" &&
+    params.compatibility !== "anthropic" &&
+    params.compatibility !== "openai-responses"
+  ) {
     throw new CustomApiError(
       "invalid_compatibility",
-      'Custom provider compatibility must be "openai" or "anthropic".',
+      'Custom provider compatibility must be "openai", "anthropic", or "openai-responses".',
     );
   }
 
@@ -750,7 +794,9 @@ export async function promptCustomApiConfig(params: {
     const result =
       compatibility === "anthropic"
         ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
-        : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
+        : compatibility === "openai-responses"
+          ? await requestOpenAiResponsesVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
+          : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
     if (result.ok) {
       verifySpinner.stop("Verification successful.");
       break;
