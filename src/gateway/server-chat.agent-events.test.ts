@@ -865,4 +865,39 @@ describe("agent event handler", () => {
     // Should NOT be suppressed - primary has isHeartbeat=false
     expect(chatBroadcastCalls(broadcast)).toHaveLength(1);
   });
+
+  // Verify fallback behavior: when primary is undefined but sourceRunId is heartbeat, suppress
+  it("suppresses when primary is undefined but sourceRunId isHeartbeat=true", () => {
+    const { broadcast, chatRunState, handler } = createHarness({
+      now: 2_000,
+      resolveSessionKeyForRun: (runId) => {
+        if (runId === "source-run") {
+          return "session-source";
+        }
+        return undefined;
+      },
+    });
+    // Only register source-run as heartbeat (primary is NOT registered)
+    registerAgentRunContext("source-run", {
+      sessionKey: "session-source",
+      isHeartbeat: true,
+      verboseLevel: "off",
+    });
+    // Chat-link: source-run -> client-run (client has no context)
+    chatRunState.registry.add("source-run", {
+      sessionKey: "session-source",
+      clientRunId: "client-run",
+    });
+
+    handler({
+      runId: "source-run",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "HEARTBEAT_OK" },
+    });
+
+    // Should be suppressed - primary undefined, sourceRunId is heartbeat
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+  });
 });
