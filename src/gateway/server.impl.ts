@@ -163,6 +163,29 @@ function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | un
   return { rateLimiter, browserRateLimiter };
 }
 
+function createGatewayStartupPhaseTimer(params: {
+  enabled: boolean;
+  log: { info: (msg: string) => void };
+}) {
+  const startedAt = Date.now();
+
+  return {
+    async timed<T>(label: string, operation: () => Promise<T> | T): Promise<T> {
+      const phaseStartedAt = Date.now();
+      try {
+        return await operation();
+      } finally {
+        if (params.enabled) {
+          const finishedAt = Date.now();
+          params.log.info(
+            `[startup] ${label}: ${finishedAt - phaseStartedAt}ms (total ${finishedAt - startedAt}ms)`,
+          );
+        }
+      }
+    },
+  };
+}
+
 function logGatewayAuthSurfaceDiagnostics(prepared: {
   sourceConfig: OpenClawConfig;
   warnings: Array<{ code: string; path: string; message: string }>;
@@ -270,6 +293,10 @@ export async function startGatewayServer(
 ): Promise<GatewayServer> {
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
+  const startupPhaseTimer = createGatewayStartupPhaseTimer({
+    enabled: process.env.OPENCLAW_STARTUP_TIMING === "1",
+    log,
+  });
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -281,55 +308,63 @@ export async function startGatewayServer(
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
+  logAcceptedEnvOption({
+    key: "OPENCLAW_STARTUP_TIMING",
+    description: "gateway startup phase timing logs enabled",
+  });
 
-  let configSnapshot = await readConfigFileSnapshot();
-  if (configSnapshot.legacyIssues.length > 0) {
-    if (isNixMode) {
+  await startupPhaseTimer.timed("config validation + auto-enable", async () => {
+    let snapshot = await readConfigFileSnapshot();
+    if (snapshot.legacyIssues.length > 0) {
+      if (isNixMode) {
+        throw new Error(
+          "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+        );
+      }
+      const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
+      if (!migrated) {
+        log.warn(
+          "gateway: legacy config entries detected but no auto-migration changes were produced; continuing with validation.",
+        );
+      } else {
+        await writeConfigFile(migrated);
+        if (changes.length > 0) {
+          log.info(
+            `gateway: migrated legacy config entries:\n${changes
+              .map((entry) => `- ${entry}`)
+              .join("\n")}`,
+          );
+        }
+      }
+    }
+
+    snapshot = await readConfigFileSnapshot();
+    if (snapshot.exists && !snapshot.valid) {
+      const issues =
+        snapshot.issues.length > 0
+          ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+          : "Unknown validation issue.";
       throw new Error(
-        "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+        `Invalid config at ${snapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
       );
     }
-    const { config: migrated, changes } = migrateLegacyConfig(configSnapshot.parsed);
-    if (!migrated) {
-      log.warn(
-        "gateway: legacy config entries detected but no auto-migration changes were produced; continuing with validation.",
-      );
-    } else {
-      await writeConfigFile(migrated);
-      if (changes.length > 0) {
+
+    const autoEnable = applyPluginAutoEnable({ config: snapshot.config, env: process.env });
+    if (autoEnable.changes.length > 0) {
+      try {
+        await writeConfigFile(autoEnable.config);
         log.info(
-          `gateway: migrated legacy config entries:\n${changes
+          `gateway: auto-enabled plugins:\n${autoEnable.changes
             .map((entry) => `- ${entry}`)
             .join("\n")}`,
         );
+      } catch (err) {
+        log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
       }
     }
-  }
 
-  configSnapshot = await readConfigFileSnapshot();
-  if (configSnapshot.exists && !configSnapshot.valid) {
-    const issues =
-      configSnapshot.issues.length > 0
-        ? formatConfigIssueLines(configSnapshot.issues, "", { normalizeRoot: true }).join("\n")
-        : "Unknown validation issue.";
-    throw new Error(
-      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
-    );
-  }
-
-  const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
-  if (autoEnable.changes.length > 0) {
-    try {
-      await writeConfigFile(autoEnable.config);
-      log.info(
-        `gateway: auto-enabled plugins:\n${autoEnable.changes
-          .map((entry) => `- ${entry}`)
-          .join("\n")}`,
-      );
-    } catch (err) {
-      log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
-    }
-  }
+    return snapshot;
+  });
 
   let secretsDegraded = false;
   const emitSecretsStateEvent = (
@@ -399,7 +434,7 @@ export async function startGatewayServer(
 
   // Fail fast before startup if required refs are unresolved.
   let cfgAtStart: OpenClawConfig;
-  {
+  await startupPhaseTimer.timed("startup secret preflight", async () => {
     const freshSnapshot = await readConfigFileSnapshot();
     if (!freshSnapshot.valid) {
       const issues =
@@ -419,34 +454,36 @@ export async function startGatewayServer(
       reason: "startup",
       activate: false,
     });
-  }
-
-  cfgAtStart = loadConfig();
-  const authBootstrap = await ensureGatewayStartupAuth({
-    cfg: cfgAtStart,
-    env: process.env,
-    authOverride: opts.auth,
-    tailscaleOverride: opts.tailscale,
-    persist: true,
   });
-  cfgAtStart = authBootstrap.cfg;
-  if (authBootstrap.generatedToken) {
-    if (authBootstrap.persistedGeneratedToken) {
-      log.info(
-        "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
-      );
-    } else {
-      log.warn(
-        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
-      );
+
+  cfgAtStart = await startupPhaseTimer.timed("startup auth + secret activation", async () => {
+    let cfg = loadConfig();
+    const authBootstrap = await ensureGatewayStartupAuth({
+      cfg,
+      env: process.env,
+      authOverride: opts.auth,
+      tailscaleOverride: opts.tailscale,
+      persist: true,
+    });
+    cfg = authBootstrap.cfg;
+    if (authBootstrap.generatedToken) {
+      if (authBootstrap.persistedGeneratedToken) {
+        log.info(
+          "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
+        );
+      } else {
+        log.warn(
+          "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
+        );
+      }
     }
-  }
-  cfgAtStart = (
-    await activateRuntimeSecrets(cfgAtStart, {
-      reason: "startup",
-      activate: true,
-    })
-  ).config;
+    return (
+      await activateRuntimeSecrets(cfg, {
+        reason: "startup",
+        activate: true,
+      })
+    ).config;
+  });
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
     startDiagnosticHeartbeat();
@@ -457,10 +494,12 @@ export async function startGatewayServer(
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
-  cfgAtStart = await maybeSeedControlUiAllowedOriginsAtStartup({
-    config: cfgAtStart,
-    writeConfig: writeConfigFile,
-    log,
+  cfgAtStart = await startupPhaseTimer.timed("seed control UI origins", async () => {
+    return await maybeSeedControlUiAllowedOriginsAtStartup({
+      config: cfgAtStart,
+      writeConfig: writeConfigFile,
+      log,
+    });
   });
 
   initSubagentRegistry();
@@ -468,15 +507,19 @@ export async function startGatewayServer(
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const baseMethods = listGatewayMethods();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  const { pluginRegistry, gatewayMethods: baseGatewayMethods } = minimalTestGateway
-    ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
-    : loadGatewayPlugins({
-        cfg: cfgAtStart,
-        workspaceDir: defaultWorkspaceDir,
-        log,
-        coreGatewayHandlers,
-        baseMethods,
-      });
+  const { pluginRegistry, gatewayMethods: baseGatewayMethods } = await startupPhaseTimer.timed(
+    "load gateway plugins",
+    async () =>
+      minimalTestGateway
+        ? { pluginRegistry: emptyPluginRegistry, gatewayMethods: baseMethods }
+        : loadGatewayPlugins({
+            cfg: cfgAtStart,
+            workspaceDir: defaultWorkspaceDir,
+            log,
+            coreGatewayHandlers,
+            baseMethods,
+          }),
+  );
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -486,17 +529,22 @@ export async function startGatewayServer(
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
   const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
   let pluginServices: PluginServicesHandle | null = null;
-  const runtimeConfig = await resolveGatewayRuntimeConfig({
-    cfg: cfgAtStart,
-    port,
-    bind: opts.bind,
-    host: opts.host,
-    controlUiEnabled: opts.controlUiEnabled,
-    openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
-    openResponsesEnabled: opts.openResponsesEnabled,
-    auth: opts.auth,
-    tailscale: opts.tailscale,
-  });
+  const runtimeConfig = await startupPhaseTimer.timed(
+    "resolve gateway runtime config",
+    async () => {
+      return await resolveGatewayRuntimeConfig({
+        cfg: cfgAtStart,
+        port,
+        bind: opts.bind,
+        host: opts.host,
+        controlUiEnabled: opts.controlUiEnabled,
+        openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+        openResponsesEnabled: opts.openResponsesEnabled,
+        auth: opts.auth,
+        tailscale: opts.tailscale,
+      });
+    },
+  );
   const {
     bindHost,
     controlUiEnabled,
@@ -521,16 +569,21 @@ export async function startGatewayServer(
     createGatewayAuthRateLimiters(rateLimitConfig);
 
   let controlUiRootState: ControlUiRootState | undefined;
-  if (controlUiRootOverride) {
-    const resolvedOverride = resolveControlUiRootOverrideSync(controlUiRootOverride);
-    const resolvedOverridePath = path.resolve(controlUiRootOverride);
-    controlUiRootState = resolvedOverride
-      ? { kind: "resolved", path: resolvedOverride }
-      : { kind: "invalid", path: resolvedOverridePath };
-    if (!resolvedOverride) {
-      log.warn(`gateway: controlUi.root not found at ${resolvedOverridePath}`);
+  await startupPhaseTimer.timed("resolve control UI root", async () => {
+    if (controlUiRootOverride) {
+      const resolvedOverride = resolveControlUiRootOverrideSync(controlUiRootOverride);
+      const resolvedOverridePath = path.resolve(controlUiRootOverride);
+      controlUiRootState = resolvedOverride
+        ? { kind: "resolved", path: resolvedOverride }
+        : { kind: "invalid", path: resolvedOverridePath };
+      if (!resolvedOverride) {
+        log.warn(`gateway: controlUi.root not found at ${resolvedOverridePath}`);
+      }
+      return;
     }
-  } else if (controlUiEnabled) {
+    if (!controlUiEnabled) {
+      return;
+    }
     let resolvedRoot = resolveControlUiRootSync({
       moduleUrl: import.meta.url,
       argv1: process.argv[1],
@@ -559,14 +612,16 @@ export async function startGatewayServer(
           path: resolvedRoot,
         }
       : { kind: "missing" };
-  }
+  });
 
   const wizardRunner = opts.wizardRunner ?? runOnboardingWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
   let canvasHostServer: CanvasHostServer | null = null;
-  const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
+  const gatewayTls = await startupPhaseTimer.timed("load TLS runtime", async () => {
+    return await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
+  });
   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
@@ -599,33 +654,35 @@ export async function startGatewayServer(
     removeChatRun,
     chatAbortControllers,
     toolEventRecipients,
-  } = await createGatewayRuntimeState({
-    cfg: cfgAtStart,
-    bindHost,
-    port,
-    controlUiEnabled,
-    controlUiBasePath,
-    controlUiRoot: controlUiRootState,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
-    resolvedAuth,
-    rateLimiter: authRateLimiter,
-    gatewayTls,
-    hooksConfig: () => hooksConfig,
-    getHookClientIpConfig: () => hookClientIpConfig,
-    pluginRegistry,
-    deps,
-    canvasRuntime,
-    canvasHostEnabled,
-    allowCanvasHostInTests: opts.allowCanvasHostInTests,
-    logCanvas,
-    log,
-    logHooks,
-    logPlugins,
-    getReadiness,
+  } = await startupPhaseTimer.timed("create gateway runtime state", async () => {
+    return await createGatewayRuntimeState({
+      cfg: cfgAtStart,
+      bindHost,
+      port,
+      controlUiEnabled,
+      controlUiBasePath,
+      controlUiRoot: controlUiRootState,
+      openAiChatCompletionsEnabled,
+      openAiChatCompletionsConfig,
+      openResponsesEnabled,
+      openResponsesConfig,
+      strictTransportSecurityHeader,
+      resolvedAuth,
+      rateLimiter: authRateLimiter,
+      gatewayTls,
+      hooksConfig: () => hooksConfig,
+      getHookClientIpConfig: () => hookClientIpConfig,
+      pluginRegistry,
+      deps,
+      canvasRuntime,
+      canvasHostEnabled,
+      allowCanvasHostInTests: opts.allowCanvasHostInTests,
+      logCanvas,
+      log,
+      logHooks,
+      logPlugins,
+      getReadiness,
+    });
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
@@ -660,17 +717,19 @@ export async function startGatewayServer(
 
   if (!minimalTestGateway) {
     const machineDisplayName = await getMachineDisplayName();
-    const discovery = await startGatewayDiscovery({
-      machineDisplayName,
-      port,
-      gatewayTls: gatewayTls.enabled
-        ? { enabled: true, fingerprintSha256: gatewayTls.fingerprintSha256 }
-        : undefined,
-      wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
-      wideAreaDiscoveryDomain: cfgAtStart.discovery?.wideArea?.domain,
-      tailscaleMode,
-      mdnsMode: cfgAtStart.discovery?.mdns?.mode,
-      logDiscovery,
+    const discovery = await startupPhaseTimer.timed("start gateway discovery", async () => {
+      return await startGatewayDiscovery({
+        machineDisplayName,
+        port,
+        gatewayTls: gatewayTls.enabled
+          ? { enabled: true, fingerprintSha256: gatewayTls.fingerprintSha256 }
+          : undefined,
+        wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
+        wideAreaDiscoveryDomain: cfgAtStart.discovery?.wideArea?.domain,
+        tailscaleMode,
+        mdnsMode: cfgAtStart.discovery?.mdns?.mode,
+        logDiscovery,
+      });
     });
     bonjourStop = discovery.bonjourStop;
   }
@@ -926,17 +985,21 @@ export async function startGatewayServer(
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
-    ({ browserControl, pluginServices } = await startGatewaySidecars({
-      cfg: cfgAtStart,
-      pluginRegistry,
-      defaultWorkspaceDir,
-      deps,
-      startChannels,
-      log,
-      logHooks,
-      logChannels,
-      logBrowser,
-    }));
+    ({ browserControl, pluginServices } = await startupPhaseTimer.timed(
+      "start gateway sidecars",
+      async () =>
+        await startGatewaySidecars({
+          cfg: cfgAtStart,
+          pluginRegistry,
+          defaultWorkspaceDir,
+          deps,
+          startChannels,
+          log,
+          logHooks,
+          logChannels,
+          logBrowser,
+        }),
+    ));
   }
 
   // Run gateway_start plugin hook (fire-and-forget)

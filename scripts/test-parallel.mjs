@@ -197,6 +197,10 @@ const runs = [
         },
       ]
     : []),
+  {
+    name: "mission-control-ui",
+    args: ["--dir", "mission-control-ui", "exec", "vitest", "run"],
+  },
 ];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const configuredShardCount =
@@ -341,6 +345,7 @@ const allKnownTestFiles = [
   ...new Set([
     ...walkTestFiles("src"),
     ...walkTestFiles("extensions"),
+    ...walkTestFiles(path.join("mission-control-ui", "src")),
     ...walkTestFiles("test"),
     ...walkTestFiles(path.join("ui", "src", "ui")),
   ]),
@@ -355,6 +360,9 @@ const inferTarget = (fileFilter) => {
   }
   if (fileFilter.startsWith("extensions/")) {
     return { owner: "extensions", isolated };
+  }
+  if (fileFilter.startsWith("mission-control-ui/")) {
+    return { owner: "mission-control-ui", isolated };
   }
   if (fileFilter.startsWith("src/gateway/")) {
     return { owner: "gateway", isolated };
@@ -446,6 +454,23 @@ const createTargetedEntry = (owner, isolated, filters) => {
     return {
       name,
       args: ["vitest", "run", "--config", "vitest.e2e.config.ts", ...filters],
+    };
+  }
+  if (owner === "mission-control-ui") {
+    return {
+      name,
+      args: [
+        "--dir",
+        "mission-control-ui",
+        "exec",
+        "vitest",
+        "run",
+        ...filters.map((filter) =>
+          filter.startsWith("mission-control-ui/")
+            ? filter.slice("mission-control-ui/".length)
+            : filter,
+        ),
+      ],
     };
   }
   return {
