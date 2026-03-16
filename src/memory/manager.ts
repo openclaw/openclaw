@@ -348,18 +348,25 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
 
     // If strict hybrid results are empty but keyword matches exist, fall back to
-    // the keyword-backed subset directly. Applying another merged-score floor
-    // here can still drop exact lexical hits after temporal decay / MMR even
-    // though keyword search already found them.
+    // the keyword-backed subset. Derive the relaxed threshold from the already-
+    // merged post-decay/MMR scores so we preserve the best lexical hits without
+    // ignoring minScore entirely.
     const keywordKeys = new Set(
       keywordResults.map(
         (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
       ),
     );
-    return merged
-      .filter((entry) =>
-        keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
-      )
+    const keywordOnlyEntries = merged.filter((entry) =>
+      keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
+    );
+    const relaxedMinScore = Math.min(
+      minScore,
+      keywordOnlyEntries.length > 0
+        ? Math.max(...keywordOnlyEntries.map((entry) => entry.score))
+        : 0,
+    );
+    return keywordOnlyEntries
+      .filter((entry) => entry.score >= relaxedMinScore)
       .slice(0, maxResults);
   }
 

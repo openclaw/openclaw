@@ -194,7 +194,13 @@ describe("memory index", () => {
     vectorEnabled?: boolean;
     cacheEnabled?: boolean;
     minScore?: number;
-    hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
+    hybrid?: {
+      enabled: boolean;
+      vectorWeight?: number;
+      textWeight?: number;
+      temporalDecay?: { enabled: boolean; halfLifeDays: number };
+      mmr?: { enabled: boolean; lambda: number };
+    };
   }): TestCfg {
     return {
       agents: {
