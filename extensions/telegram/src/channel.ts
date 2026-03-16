@@ -42,7 +42,8 @@ import {
   resolveOutboundSendDep,
 } from "../../../src/infra/outbound/send-deps.js";
 import { getTelegramRuntime } from "./runtime.js";
-import { telegramSetupAdapter, telegramSetupWizard } from "./setup-surface.js";
+import { telegramSetupAdapter } from "./setup-core.js";
+import { telegramSetupWizard } from "./setup-surface.js";
 
 type TelegramSendFn = ReturnType<
   typeof getTelegramRuntime

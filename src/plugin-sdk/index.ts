@@ -743,10 +743,8 @@ export {
 } from "../../extensions/telegram/src/accounts.js";
 export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
-export {
-  telegramSetupAdapter,
-  telegramSetupWizard,
-} from "../../extensions/telegram/src/setup-surface.js";
+export { telegramSetupWizard } from "../../extensions/telegram/src/setup-surface.js";
+export { telegramSetupAdapter } from "../../extensions/telegram/src/setup-core.js";
 export {
   looksLikeTelegramTargetId,
   normalizeTelegramMessagingTarget,
