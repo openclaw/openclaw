@@ -1686,6 +1686,7 @@ async function dispatchDiscordCommandInteraction(params: {
       globalName: user.globalName,
     },
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
+    workspaceOverride: effectiveRoute.workspaceOverride,
   });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({

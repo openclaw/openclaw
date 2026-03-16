@@ -813,6 +813,135 @@ describe("role-based agent routing", () => {
   });
 });
 
+describe("binding-level workspace override", () => {
+  test("route carries workspaceOverride when binding has workspace field", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main" }] },
+      bindings: [
+        {
+          agentId: "main",
+          workspace: "/home/user/project-a/",
+          match: {
+            channel: "matrix",
+            accountId: "bot",
+            peer: { kind: "group", id: "!room-a" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "matrix",
+      accountId: "bot",
+      peer: { kind: "group", id: "!room-a" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("binding.peer");
+    expect(route.workspaceOverride).toBe("/home/user/project-a/");
+  });
+
+  test("route has no workspaceOverride when binding lacks workspace field", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main" }] },
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "matrix",
+            accountId: "bot",
+            peer: { kind: "group", id: "!room-b" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "matrix",
+      accountId: "bot",
+      peer: { kind: "group", id: "!room-b" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.workspaceOverride).toBeUndefined();
+  });
+
+  test("route has no workspaceOverride when no binding matches (default route)", () => {
+    const cfg: OpenClawConfig = {};
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: null,
+      peer: { kind: "direct", id: "user-1" },
+    });
+    expect(route.matchedBy).toBe("default");
+    expect(route.workspaceOverride).toBeUndefined();
+  });
+
+  test("workspaceOverride is trimmed and empty strings are excluded", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main" }] },
+      bindings: [
+        {
+          agentId: "main",
+          workspace: "   ",
+          match: {
+            channel: "matrix",
+            accountId: "bot",
+            peer: { kind: "group", id: "!room-empty" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "matrix",
+      accountId: "bot",
+      peer: { kind: "group", id: "!room-empty" },
+    });
+    expect(route.workspaceOverride).toBeUndefined();
+  });
+
+  test("different bindings can have different workspace overrides for same agent", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main" }] },
+      bindings: [
+        {
+          agentId: "main",
+          workspace: "/workspace/project-a/",
+          match: {
+            channel: "matrix",
+            accountId: "bot",
+            peer: { kind: "group", id: "!room-a" },
+          },
+        },
+        {
+          agentId: "main",
+          workspace: "/workspace/project-b/",
+          match: {
+            channel: "matrix",
+            accountId: "bot",
+            peer: { kind: "group", id: "!room-b" },
+          },
+        },
+      ],
+    };
+    const routeA = resolveAgentRoute({
+      cfg,
+      channel: "matrix",
+      accountId: "bot",
+      peer: { kind: "group", id: "!room-a" },
+    });
+    const routeB = resolveAgentRoute({
+      cfg,
+      channel: "matrix",
+      accountId: "bot",
+      peer: { kind: "group", id: "!room-b" },
+    });
+    expect(routeA.workspaceOverride).toBe("/workspace/project-a/");
+    expect(routeB.workspaceOverride).toBe("/workspace/project-b/");
+    expect(routeA.agentId).toBe(routeB.agentId);
+  });
+});
+
 describe("binding evaluation cache scalability", () => {
   test("does not rescan full bindings after channel/account cache rollover (#36915)", () => {
     const bindingCount = 2_205;

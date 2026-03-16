@@ -1108,6 +1108,7 @@ async function dispatchDiscordComponentEvent(params: {
     Timestamp: timestamp,
     OriginatingChannel: "discord" as const,
     OriginatingTo: `channel:${interactionCtx.channelId}`,
+    WorkspaceOverride: route.workspaceOverride,
   });
 
   await recordInboundSession({

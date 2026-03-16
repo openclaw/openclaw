@@ -86,6 +86,7 @@ async function processTwitchMessage(params: {
     MessageSid: message.id,
     OriginatingChannel: "twitch",
     OriginatingTo: `twitch:channel:${message.channel}`,
+    WorkspaceOverride: route.workspaceOverride,
   });
 
   const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {

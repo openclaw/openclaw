@@ -728,6 +728,7 @@ export async function prepareSlackMessage(params: {
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,
+    WorkspaceOverride: route.workspaceOverride,
     NativeChannelId: message.channel,
   }) satisfies FinalizedMsgContext;
   const pinnedMainDmOwner = isDirectMessage

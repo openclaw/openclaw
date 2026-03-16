@@ -111,6 +111,7 @@ export function createWebOnMessageHandler(params: {
         Surface: "whatsapp",
         OriginatingChannel: "whatsapp",
         OriginatingTo: conversationId,
+        WorkspaceOverride: route.workspaceOverride,
       } satisfies MsgContext;
       updateLastRouteInBackground({
         cfg: params.cfg,

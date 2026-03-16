@@ -102,10 +102,14 @@ export async function getReplyFromConfig(
     }
   }
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const hasWorkspaceOverride = Boolean(ctx.WorkspaceOverride?.trim());
+  const workspaceDirRaw =
+    ctx.WorkspaceOverride?.trim() ||
+    (resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+    // Skip auto-creating bootstrap files in override workspaces — users manage those explicitly.
+    ensureBootstrapFiles: !hasWorkspaceOverride && !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);

@@ -327,6 +327,7 @@ export async function handleIrcInbound(params: {
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: `irc:${peerId}`,
     CommandAuthorized: commandAuthorized,
+    WorkspaceOverride: route.workspaceOverride,
   });
 
   await dispatchInboundReplyWithBase({

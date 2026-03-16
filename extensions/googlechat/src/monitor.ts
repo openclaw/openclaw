@@ -259,6 +259,7 @@ async function processMessageWithPipeline(params: {
     GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
     OriginatingChannel: "googlechat",
     OriginatingTo: `googlechat:${spaceId}`,
+    WorkspaceOverride: route.workspaceOverride,
   });
 
   void core.channel.session
