@@ -19,3 +19,4 @@ Notes:
 
 - `--verbose` runs live probes and prints per-account timings when multiple accounts are configured.
 - Output includes per-agent session stores when multiple agents are configured.
+- Gateway health output may include OAG channel/session/task summaries when sentinel state is available. See [OAG Runtime](/gateway/oag).
