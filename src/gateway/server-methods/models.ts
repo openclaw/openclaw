@@ -25,12 +25,36 @@ export const modelsHandlers: GatewayRequestHandlers = {
     try {
       const catalog = await context.loadGatewayModelCatalog();
       const cfg = loadConfig();
+
+      // When models.mode is "replace", restrict the catalog to only models
+      // from explicitly configured providers (cfg.models.providers).  This
+      // mirrors the CLI behavior and prevents the dashboard dropdown from
+      // showing all 600+ built-in models.  (#48483)
+      const effectiveCatalog = (() => {
+        if (cfg.models?.mode !== "replace") {
+          return catalog;
+        }
+        const configuredProviders = cfg.models?.providers;
+        if (!configuredProviders || typeof configuredProviders !== "object") {
+          return catalog;
+        }
+        const providerKeys = new Set(
+          Object.keys(configuredProviders).map((p) => p.toLowerCase().trim()),
+        );
+        if (providerKeys.size === 0) {
+          return catalog;
+        }
+        return catalog.filter((entry) =>
+          providerKeys.has(entry.provider.toLowerCase().trim()),
+        );
+      })();
+
       const { allowedCatalog } = buildAllowedModelSet({
         cfg,
-        catalog,
+        catalog: effectiveCatalog,
         defaultProvider: DEFAULT_PROVIDER,
       });
-      const models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
+      const models = allowedCatalog.length > 0 ? allowedCatalog : effectiveCatalog;
       respond(true, { models }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
