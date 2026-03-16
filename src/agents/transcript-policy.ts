@@ -86,7 +86,18 @@ export function resolveTranscriptPolicy(params: {
   // Anthropic Claude endpoints can reject replayed `thinking` blocks unless the
   // original signatures are preserved byte-for-byte. Drop them at send-time to
   // keep persisted sessions usable across follow-up turns.
-  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId });
+  //
+  // Third-party proxies (brconnector, litellm, openrouter, etc.) that front-end
+  // the Anthropic API via `anthropic-messages` cannot reliably preserve thinking
+  // signatures — the proxy may mangle or strip the `thinkingSignature` field,
+  // causing a 400 "thinking blocks cannot be modified" error on the next turn.
+  // Only the native "anthropic" provider (direct API access) can be trusted to
+  // pass signatures through byte-for-byte; any other provider using the
+  // anthropic-messages API should drop thinking blocks before replay.
+  const isNativeAnthropicProvider = provider === "anthropic";
+  const dropThinkingBlocks =
+    shouldDropThinkingBlocksForModel({ provider, modelId }) ||
+    (isAnthropic && !isNativeAnthropicProvider);
 
   const needsNonImageSanitize =
     isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;

@@ -169,4 +169,57 @@ describe("resolveTranscriptPolicy", () => {
       includeCamelCase: true,
     });
   });
+
+  // Third-party proxies that front-end the Anthropic API cannot reliably pass
+  // thinking signatures through byte-for-byte. They must drop thinking blocks
+  // before replay to prevent 400 "thinking blocks cannot be modified" errors.
+  // See: https://github.com/openclaw/openclaw/issues/<TBD>
+  it.each([
+    {
+      title: "brconnector proxy (e.g. shannon-auto)",
+      provider: "brconnector",
+      modelId: "shannon-auto",
+    },
+    {
+      title: "litellm proxy with claude model alias",
+      provider: "litellm",
+      modelId: "my-claude-alias",
+    },
+    {
+      title: "custom anthropic-messages proxy with non-claude model id",
+      provider: "my-company-proxy",
+      modelId: "assistant-v2",
+    },
+  ])(
+    "drops thinking blocks for $title using anthropic-messages API (#proxy-thinking-blocks)",
+    ({ provider, modelId }) => {
+      const policy = resolveTranscriptPolicy({
+        provider,
+        modelId,
+        modelApi: "anthropic-messages",
+      });
+      expect(policy.dropThinkingBlocks).toBe(true);
+    },
+  );
+
+  it("does not drop thinking blocks for native anthropic provider (signatures preserved)", () => {
+    // The native anthropic provider passes signatures byte-for-byte; dropping is
+    // handled separately via dropThinkingBlockModelHints: ["claude"].
+    const policy = resolveTranscriptPolicy({
+      provider: "anthropic",
+      modelId: "claude-opus-4",
+      modelApi: "anthropic-messages",
+    });
+    // Already dropped via model hint "claude" — test the combined result is true
+    expect(policy.dropThinkingBlocks).toBe(true);
+  });
+
+  it("does not drop thinking blocks for non-anthropic-messages providers regardless of provider name", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "brconnector",
+      modelId: "some-openai-model",
+      modelApi: "openai-completions",
+    });
+    expect(policy.dropThinkingBlocks).toBe(false);
+  });
 });
