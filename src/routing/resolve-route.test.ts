@@ -852,3 +852,49 @@ describe("binding evaluation cache scalability", () => {
     }
   });
 });
+
+describe("peer ID case-insensitive matching", () => {
+  test("matches binding with mixed-case peer ID against lowercased peer ID", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "signal-group-agent",
+          match: {
+            channel: "signal",
+            peer: { kind: "channel", id: "NPy/PPdwLKD996QtL3+0d2JdQgzPY3Ysf9NTY4P7BaE=" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "signal",
+      accountId: "default",
+      peer: { kind: "channel", id: "npy/ppdwlkd996qtl3+0d2jdqgzpy3ysf9nty4p7bae=" },
+    });
+    expect(route.agentId).toBe("signal-group-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("matches binding with lowercased peer ID against mixed-case peer ID", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "signal-group-agent",
+          match: {
+            channel: "signal",
+            peer: { kind: "channel", id: "npy/ppdwlkd996qtl3+0d2jdqgzpy3ysf9nty4p7bae=" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "signal",
+      accountId: "default",
+      peer: { kind: "channel", id: "NPy/PPdwLKD996QtL3+0d2JdQgzPY3Ysf9NTY4P7BaE=" },
+    });
+    expect(route.agentId).toBe("signal-group-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+});
