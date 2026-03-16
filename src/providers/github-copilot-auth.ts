@@ -43,14 +43,23 @@ async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeR
     scope: params.scope,
   });
 
-  const res = await fetch(DEVICE_CODE_URL, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body,
-  });
+  let res: Response;
+  try {
+    res = await fetch(DEVICE_CODE_URL, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body,
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `GitHub device code request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   if (!res.ok) {
     throw new Error(`GitHub device code failed: HTTP ${res.status}`);
@@ -75,14 +84,22 @@ async function pollForAccessToken(params: {
   });
 
   while (Date.now() < params.expiresAt) {
-    const res = await fetch(ACCESS_TOKEN_URL, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: bodyBase,
-    });
+    let res: Response;
+    try {
+      res = await fetch(ACCESS_TOKEN_URL, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: bodyBase,
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      // Single-poll timeout — retry on next interval instead of aborting the flow.
+      await new Promise((r) => setTimeout(r, params.intervalMs));
+      continue;
+    }
 
     if (!res.ok) {
       throw new Error(`GitHub device token failed: HTTP ${res.status}`);
