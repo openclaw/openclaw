@@ -29,6 +29,7 @@ import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
 import { logDebug } from "../../../../src/logger.js";
 import { getChildLogger } from "../../../../src/logging.js";
 import { buildPairingReply } from "../../../../src/pairing/pairing-messages.js";
+import { isPluginOwnedSessionBindingRecord } from "../../../../src/plugins/conversation-binding.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../../src/routing/session-key.js";
 import { fetchPluralKitMessageInfo } from "../pluralkit.js";
 import { sendMessageDiscord } from "../send.js";
@@ -350,12 +351,13 @@ export async function preflightDiscordMessage(
     }),
     parentConversationId: earlyThreadParentId,
   });
+  const bindingConversationId = isDirectMessage ? `user:${author.id}` : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
   threadBinding =
     getSessionBindingService().resolveByConversation({
       channel: "discord",
       accountId: params.accountId,
-      conversationId: messageChannelId,
+      conversationId: bindingConversationId,
       parentConversationId: earlyThreadParentId,
     }) ?? undefined;
   const configuredRoute =
@@ -384,7 +386,9 @@ export async function preflightDiscordMessage(
     logVerbose(`discord: drop bound-thread webhook echo message ${message.id}`);
     return null;
   }
-  const boundSessionKey = threadBinding?.targetSessionKey?.trim();
+  const boundSessionKey = isPluginOwnedSessionBindingRecord(threadBinding)
+    ? ""
+    : threadBinding?.targetSessionKey?.trim();
   const effectiveRoute = resolveDiscordEffectiveRoute({
     route,
     boundSessionKey,
@@ -392,7 +396,7 @@ export async function preflightDiscordMessage(
     matchedBy: "binding.channel",
   });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
-  const isBoundThreadSession = Boolean(boundSessionKey && earlyThreadChannel);
+  const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,

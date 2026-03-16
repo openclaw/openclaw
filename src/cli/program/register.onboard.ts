@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
-import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
+import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -11,7 +11,8 @@ import type {
   SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
-import { onboardCommand } from "../../commands/onboard.js";
+import { setupWizardCommand } from "../../commands/onboard.js";
+import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -45,6 +46,19 @@ const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
   includeLegacyAliases: true,
   includeSkip: true,
 });
+
+const ONBOARD_AUTH_FLAGS = [
+  ...CORE_ONBOARD_AUTH_FLAGS,
+  ...resolveManifestProviderOnboardAuthFlags(),
+] as const;
+
+function pickOnboardProviderAuthOptionValues(
+  opts: Record<string, unknown>,
+): Partial<Record<string, string | undefined>> {
+  return Object.fromEntries(
+    ONBOARD_AUTH_FLAGS.map((flag) => [flag.optionKey, opts[flag.optionKey] as string | undefined]),
+  );
+}
 
 export function registerOnboardCommand(program: Command) {
   const command = program
@@ -87,7 +101,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
 
-  for (const providerFlag of ONBOARD_PROVIDER_AUTH_FLAGS) {
+  for (const providerFlag of ONBOARD_AUTH_FLAGS) {
     command.option(providerFlag.cliOption, providerFlag.description);
   }
 
@@ -132,7 +146,10 @@ export function registerOnboardCommand(program: Command) {
       });
       const gatewayPort =
         typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
-      await onboardCommand(
+      const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
+        opts as Record<string, unknown>,
+      );
+      await setupWizardCommand(
         {
           workspace: opts.workspace as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),
@@ -145,34 +162,9 @@ export function registerOnboardCommand(program: Command) {
           tokenProfileId: opts.tokenProfileId as string | undefined,
           tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
           secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
-          anthropicApiKey: opts.anthropicApiKey as string | undefined,
-          openaiApiKey: opts.openaiApiKey as string | undefined,
-          mistralApiKey: opts.mistralApiKey as string | undefined,
-          openrouterApiKey: opts.openrouterApiKey as string | undefined,
-          kilocodeApiKey: opts.kilocodeApiKey as string | undefined,
-          aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
+          ...providerAuthOptionValues,
           cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
           cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
-          cloudflareAiGatewayApiKey: opts.cloudflareAiGatewayApiKey as string | undefined,
-          moonshotApiKey: opts.moonshotApiKey as string | undefined,
-          kimiCodeApiKey: opts.kimiCodeApiKey as string | undefined,
-          geminiApiKey: opts.geminiApiKey as string | undefined,
-          zaiApiKey: opts.zaiApiKey as string | undefined,
-          xiaomiApiKey: opts.xiaomiApiKey as string | undefined,
-          qianfanApiKey: opts.qianfanApiKey as string | undefined,
-          modelstudioApiKeyCn: opts.modelstudioApiKeyCn as string | undefined,
-          modelstudioApiKey: opts.modelstudioApiKey as string | undefined,
-          minimaxApiKey: opts.minimaxApiKey as string | undefined,
-          syntheticApiKey: opts.syntheticApiKey as string | undefined,
-          veniceApiKey: opts.veniceApiKey as string | undefined,
-          togetherApiKey: opts.togetherApiKey as string | undefined,
-          huggingfaceApiKey: opts.huggingfaceApiKey as string | undefined,
-          opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
-          opencodeGoApiKey: opts.opencodeGoApiKey as string | undefined,
-          xaiApiKey: opts.xaiApiKey as string | undefined,
-          litellmApiKey: opts.litellmApiKey as string | undefined,
-          volcengineApiKey: opts.volcengineApiKey as string | undefined,
-          byteplusApiKey: opts.byteplusApiKey as string | undefined,
           customBaseUrl: opts.customBaseUrl as string | undefined,
           customApiKey: opts.customApiKey as string | undefined,
           customModelId: opts.customModelId as string | undefined,

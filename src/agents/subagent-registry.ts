@@ -684,6 +684,19 @@ function restoreSubagentRunsOnce() {
     for (const runId of subagentRuns.keys()) {
       resumeSubagentRun(runId);
     }
+
+    // Schedule orphan recovery for subagent sessions that were aborted
+    // by a SIGUSR1 reload. This runs after a short delay to let the
+    // gateway fully bootstrap first. Dynamic import to avoid increasing
+    // startup memory footprint. (#47711)
+    void import("./subagent-orphan-recovery.js").then(
+      ({ scheduleOrphanRecovery }) => {
+        scheduleOrphanRecovery({ getActiveRuns: () => subagentRuns });
+      },
+      () => {
+        // Ignore import failures — orphan recovery is best-effort.
+      },
+    );
   } catch {
     // ignore restore failures
   }

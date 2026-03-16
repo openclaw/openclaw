@@ -7,9 +7,6 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { resolveSignalReactionLevel } from "../../../../extensions/signal/src/reaction-level.js";
-import { resolveTelegramInlineButtonsScope } from "../../../../extensions/telegram/src/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../../../extensions/telegram/src/reaction-level.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -19,6 +16,11 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { resolveSignalReactionLevel } from "../../../plugin-sdk-internal/signal.js";
+import {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramReactionLevel,
+} from "../../../plugin-sdk-internal/telegram.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -97,6 +99,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
+import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
@@ -130,6 +133,8 @@ import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
+  resolveRunTimeoutDuringCompaction,
+  resolveRunTimeoutWithCompactionGraceMs,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
@@ -664,6 +669,7 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
   }
 
   let fallbackIndex = 1;
+  const assignedIds = new Set<string>();
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
@@ -675,20 +681,23 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
     if (typeof typedBlock.id === "string") {
       const trimmedId = typedBlock.id.trim();
       if (trimmedId) {
-        if (typedBlock.id !== trimmedId) {
-          typedBlock.id = trimmedId;
+        if (!assignedIds.has(trimmedId)) {
+          if (typedBlock.id !== trimmedId) {
+            typedBlock.id = trimmedId;
+          }
+          assignedIds.add(trimmedId);
+          continue;
         }
-        usedIds.add(trimmedId);
-        continue;
       }
     }
 
     let fallbackId = "";
-    while (!fallbackId || usedIds.has(fallbackId)) {
+    while (!fallbackId || usedIds.has(fallbackId) || assignedIds.has(fallbackId)) {
       fallbackId = `call_auto_${fallbackIndex++}`;
     }
     typedBlock.id = fallbackId;
     usedIds.add(fallbackId);
+    assignedIds.add(fallbackId);
   }
 }
 
@@ -1706,7 +1715,10 @@ export async function runEmbeddedAttempt(
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: params.timeoutMs,
+        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
+          runTimeoutMs: params.timeoutMs,
+          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
+        }),
       }),
     });
 
@@ -2150,6 +2162,20 @@ export async function runEmbeddedAttempt(
         err.name = "AbortError";
         return err;
       };
+      const abortCompaction = () => {
+        if (!activeSession.isCompacting) {
+          return;
+        }
+        try {
+          activeSession.abortCompaction();
+        } catch (err) {
+          if (!isProbeSession) {
+            log.warn(
+              `embedded run abortCompaction failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
+            );
+          }
+        }
+      };
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
@@ -2160,6 +2186,7 @@ export async function runEmbeddedAttempt(
         } else {
           runAbortController.abort(reason);
         }
+        abortCompaction();
         void activeSession.abort();
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
@@ -2240,38 +2267,63 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      const abortTimer = setTimeout(
-        () => {
-          if (!isProbeSession) {
-            log.warn(
-              `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
-            );
-          }
-          if (
-            shouldFlagCompactionTimeout({
-              isTimeout: true,
+      const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+      let abortTimer: NodeJS.Timeout | undefined;
+      let compactionGraceUsed = false;
+      const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
+        abortTimer = setTimeout(
+          () => {
+            const timeoutAction = resolveRunTimeoutDuringCompaction({
               isCompactionPendingOrRetrying: subscription.isCompacting(),
               isCompactionInFlight: activeSession.isCompacting,
-            })
-          ) {
-            timedOutDuringCompaction = true;
-          }
-          abortRun(true);
-          if (!abortWarnTimer) {
-            abortWarnTimer = setTimeout(() => {
-              if (!activeSession.isStreaming) {
-                return;
-              }
+              graceAlreadyUsed: compactionGraceUsed,
+            });
+            if (timeoutAction === "extend") {
+              compactionGraceUsed = true;
               if (!isProbeSession) {
                 log.warn(
-                  `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+                  `embedded run timeout reached during compaction; extending deadline: ` +
+                    `runId=${params.runId} sessionId=${params.sessionId} extraMs=${compactionTimeoutMs}`,
                 );
               }
-            }, 10_000);
-          }
-        },
-        Math.max(1, params.timeoutMs),
-      );
+              scheduleAbortTimer(compactionTimeoutMs, "compaction-grace");
+              return;
+            }
+
+            if (!isProbeSession) {
+              log.warn(
+                reason === "compaction-grace"
+                  ? `embedded run timeout after compaction grace: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs} compactionGraceMs=${compactionTimeoutMs}`
+                  : `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
+              );
+            }
+            if (
+              shouldFlagCompactionTimeout({
+                isTimeout: true,
+                isCompactionPendingOrRetrying: subscription.isCompacting(),
+                isCompactionInFlight: activeSession.isCompacting,
+              })
+            ) {
+              timedOutDuringCompaction = true;
+            }
+            abortRun(true);
+            if (!abortWarnTimer) {
+              abortWarnTimer = setTimeout(() => {
+                if (!activeSession.isStreaming) {
+                  return;
+                }
+                if (!isProbeSession) {
+                  log.warn(
+                    `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+                  );
+                }
+              }, 10_000);
+            }
+          },
+          Math.max(1, delayMs),
+        );
+      };
+      scheduleAbortTimer(params.timeoutMs, "initial");
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;

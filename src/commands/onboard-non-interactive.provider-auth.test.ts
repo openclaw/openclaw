@@ -1,10 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
+import {
+  MINIMAX_API_BASE_URL,
+  MINIMAX_CN_API_BASE_URL,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "./onboard-auth.js";
 import {
   createThrowingRuntime,
   readJsonFile,
@@ -18,8 +24,6 @@ type OnboardEnv = {
 };
 
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
-type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
-const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 
 vi.mock("./onboard-helpers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
@@ -29,11 +33,7 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./zai-endpoint-detect.js", () => ({
-  detectZaiEndpoint,
-}));
-
-const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+const { runNonInteractiveSetup } = await import("./onboard-non-interactive.js");
 
 const NON_INTERACTIVE_DEFAULT_OPTIONS = {
   nonInteractive: true,
@@ -60,6 +60,45 @@ type ProviderAuthConfigSnapshot = {
     >;
   };
 };
+
+function createZaiFetchMock(responses: Record<string, number>): typeof fetch {
+  return vi.fn(async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : "";
+    const parsedBody =
+      typeof init?.body === "string" ? (JSON.parse(init.body) as { model?: string }) : {};
+    const key = `${url}::${parsedBody.model ?? ""}`;
+    const status = responses[key] ?? 404;
+    return new Response(
+      JSON.stringify(
+        status === 200 ? { ok: true } : { error: { code: "unsupported", message: "unsupported" } },
+      ),
+      {
+        status,
+        headers: { "content-type": "application/json" },
+      },
+    );
+  }) as typeof fetch;
+}
+
+async function withZaiProbeFetch<T>(
+  responses: Record<string, number>,
+  run: (fetchMock: typeof fetch) => Promise<T>,
+): Promise<T> {
+  const originalVitest = process.env.VITEST;
+  delete process.env.VITEST;
+  const fetchMock = createZaiFetchMock(responses);
+  vi.stubGlobal("fetch", fetchMock);
+  try {
+    return await run(fetchMock);
+  } finally {
+    vi.unstubAllGlobals();
+    if (originalVitest === undefined) {
+      delete process.env.VITEST;
+    } else {
+      process.env.VITEST = originalVitest;
+    }
+  }
+}
 
 async function removeDirWithRetry(dir: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -109,11 +148,11 @@ async function withOnboardEnv(
   }
 }
 
-async function runNonInteractiveOnboardingWithDefaults(
+async function runNonInteractiveSetupWithDefaults(
   runtime: NonInteractiveRuntime,
   options: Record<string, unknown>,
 ): Promise<void> {
-  await runNonInteractiveOnboarding(
+  await runNonInteractiveSetup(
     {
       ...NON_INTERACTIVE_DEFAULT_OPTIONS,
       ...options,
@@ -126,7 +165,7 @@ async function runOnboardingAndReadConfig(
   env: OnboardEnv,
   options: Record<string, unknown>,
 ): Promise<ProviderAuthConfigSnapshot> {
-  await runNonInteractiveOnboardingWithDefaults(env.runtime, {
+  await runNonInteractiveSetupWithDefaults(env.runtime, {
     skipSkills: true,
     ...options,
   });
@@ -141,7 +180,7 @@ async function runCustomLocalNonInteractive(
   runtime: NonInteractiveRuntime,
   overrides: Record<string, unknown> = {},
 ): Promise<void> {
-  await runNonInteractiveOnboardingWithDefaults(runtime, {
+  await runNonInteractiveSetupWithDefaults(runtime, {
     authChoice: "custom-api-key",
     customBaseUrl: CUSTOM_LOCAL_BASE_URL,
     customModelId: CUSTOM_LOCAL_MODEL_ID,
@@ -186,11 +225,6 @@ describe("onboard (non-interactive): provider auth", () => {
     ({ ensureAuthProfileStore, upsertAuthProfile } = await import("../agents/auth-profiles.js"));
   });
 
-  beforeEach(() => {
-    detectZaiEndpoint.mockReset();
-    detectZaiEndpoint.mockResolvedValue(null);
-  });
-
   it("stores MiniMax API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
@@ -230,62 +264,68 @@ describe("onboard (non-interactive): provider auth", () => {
   });
 
   it("stores Z.AI API key and uses global baseUrl by default", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
-      detectZaiEndpoint.mockResolvedValueOnce({
-        endpoint: "global",
-        baseUrl: "https://api.z.ai/api/paas/v4",
-        modelId: "glm-5",
-        note: "Verified GLM-5 on global endpoint.",
-      });
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "zai-api-key",
-        zaiApiKey: "zai-test-key", // pragma: allowlist secret
-      });
+    await withZaiProbeFetch(
+      {
+        [`${ZAI_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
+      },
+      async (fetchMock) =>
+        await withOnboardEnv("openclaw-onboard-zai-", async (env) => {
+          const cfg = await runOnboardingAndReadConfig(env, {
+            authChoice: "zai-api-key",
+            zaiApiKey: "zai-test-key", // pragma: allowlist secret
+          });
 
-      expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
-      expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/paas/v4");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
-      await expectApiKeyProfile({ profileId: "zai:default", provider: "zai", key: "zai-test-key" });
-    });
+          expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
+          expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
+          expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
+          expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
+          expect(fetchMock).toHaveBeenCalled();
+          await expectApiKeyProfile({
+            profileId: "zai:default",
+            provider: "zai",
+            key: "zai-test-key",
+          });
+        }),
+    );
   });
 
   it("supports Z.AI CN coding endpoint auth choice", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
-      detectZaiEndpoint.mockResolvedValueOnce({
-        endpoint: "coding-cn",
-        baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
-        modelId: "glm-4.7",
-        note: "Coding Plan CN endpoint verified, but this key/plan does not expose GLM-5 there. Defaulting to GLM-4.7.",
-      });
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "zai-coding-cn",
-        zaiApiKey: "zai-test-key", // pragma: allowlist secret
-      });
+    await withZaiProbeFetch(
+      {
+        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-5`]: 404,
+        [`${ZAI_CODING_CN_BASE_URL}/chat/completions::glm-4.7`]: 200,
+      },
+      async (fetchMock) =>
+        await withOnboardEnv("openclaw-onboard-zai-cn-", async (env) => {
+          const cfg = await runOnboardingAndReadConfig(env, {
+            authChoice: "zai-coding-cn",
+            zaiApiKey: "zai-test-key", // pragma: allowlist secret
+          });
 
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe(
-        "https://open.bigmodel.cn/api/coding/paas/v4",
-      );
-      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
-    });
+          expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+          expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
+          expect(fetchMock).toHaveBeenCalled();
+        }),
+    );
   });
 
   it("supports Z.AI Coding Plan global endpoint with GLM-5 when available", async () => {
-    await withOnboardEnv("openclaw-onboard-zai-coding-global-", async (env) => {
-      detectZaiEndpoint.mockResolvedValueOnce({
-        endpoint: "coding-global",
-        baseUrl: "https://api.z.ai/api/coding/paas/v4",
-        modelId: "glm-5",
-        note: "Verified GLM-5 on coding-global endpoint.",
-      });
-      const cfg = await runOnboardingAndReadConfig(env, {
-        authChoice: "zai-coding-global",
-        zaiApiKey: "zai-test-key", // pragma: allowlist secret
-      });
+    await withZaiProbeFetch(
+      {
+        [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
+      },
+      async (fetchMock) =>
+        await withOnboardEnv("openclaw-onboard-zai-coding-global-", async (env) => {
+          const cfg = await runOnboardingAndReadConfig(env, {
+            authChoice: "zai-coding-global",
+            zaiApiKey: "zai-test-key", // pragma: allowlist secret
+          });
 
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
-    });
+          expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_GLOBAL_BASE_URL);
+          expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
+          expect(fetchMock).toHaveBeenCalled();
+        }),
+    );
   });
 
   it("stores xAI API key and sets default model", async () => {
@@ -366,7 +406,7 @@ describe("onboard (non-interactive): provider auth", () => {
       const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
-      await runNonInteractiveOnboardingWithDefaults(runtime, {
+      await runNonInteractiveSetupWithDefaults(runtime, {
         authChoice: "token",
         tokenProvider: "anthropic",
         token,
@@ -466,7 +506,7 @@ describe("onboard (non-interactive): provider auth", () => {
         await withEnvAsync(envOverrides, async () => {
           let thrown: Error | undefined;
           try {
-            await runNonInteractiveOnboardingWithDefaults(runtime, options);
+            await runNonInteractiveSetupWithDefaults(runtime, options);
           } catch (error) {
             thrown = error as Error;
           }
@@ -492,7 +532,7 @@ describe("onboard (non-interactive): provider auth", () => {
           OPENCODE_ZEN_API_KEY: "opencode-zen-env-key", // pragma: allowlist secret
         },
         async () => {
-          await runNonInteractiveOnboardingWithDefaults(runtime, {
+          await runNonInteractiveSetupWithDefaults(runtime, {
             authChoice: "opencode-zen",
             secretInputMode: "ref", // pragma: allowlist secret
             skipSkills: true,
@@ -609,7 +649,7 @@ describe("onboard (non-interactive): provider auth", () => {
     },
   ])("$name", async ({ prefix, options }) => {
     await withOnboardEnv(prefix, async ({ configPath, runtime }) => {
-      await runNonInteractiveOnboardingWithDefaults(runtime, {
+      await runNonInteractiveSetupWithDefaults(runtime, {
         cloudflareAiGatewayAccountId: "cf-account-id",
         cloudflareAiGatewayGatewayId: "cf-gateway-id",
         cloudflareAiGatewayApiKey: "cf-gateway-test-key", // pragma: allowlist secret
@@ -689,7 +729,7 @@ describe("onboard (non-interactive): provider auth", () => {
 
   it("configures a custom provider from non-interactive flags", async () => {
     await withOnboardEnv("openclaw-onboard-custom-provider-", async ({ configPath, runtime }) => {
-      await runNonInteractiveOnboardingWithDefaults(runtime, {
+      await runNonInteractiveSetupWithDefaults(runtime, {
         authChoice: "custom-api-key",
         customBaseUrl: "https://llm.example.com/v1",
         customApiKey: "custom-test-key", // pragma: allowlist secret
@@ -713,7 +753,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv(
       "openclaw-onboard-custom-provider-infer-",
       async ({ configPath, runtime }) => {
-        await runNonInteractiveOnboardingWithDefaults(runtime, {
+        await runNonInteractiveSetupWithDefaults(runtime, {
           customBaseUrl: "https://models.custom.local/v1",
           customModelId: "local-large",
           customApiKey: "custom-test-key", // pragma: allowlist secret
@@ -810,7 +850,7 @@ describe("onboard (non-interactive): provider auth", () => {
       "openclaw-onboard-custom-provider-invalid-compat-",
       async ({ runtime }) => {
         await expect(
-          runNonInteractiveOnboardingWithDefaults(runtime, {
+          runNonInteractiveSetupWithDefaults(runtime, {
             authChoice: "custom-api-key",
             customBaseUrl: "https://models.custom.local/v1",
             customModelId: "local-large",
@@ -825,7 +865,7 @@ describe("onboard (non-interactive): provider auth", () => {
   it("fails custom provider auth when explicit provider id is invalid", async () => {
     await withOnboardEnv("openclaw-onboard-custom-provider-invalid-id-", async ({ runtime }) => {
       await expect(
-        runNonInteractiveOnboardingWithDefaults(runtime, {
+        runNonInteractiveSetupWithDefaults(runtime, {
           authChoice: "custom-api-key",
           customBaseUrl: "https://models.custom.local/v1",
           customModelId: "local-large",
@@ -843,7 +883,7 @@ describe("onboard (non-interactive): provider auth", () => {
       "openclaw-onboard-custom-provider-missing-required-",
       async ({ runtime }) => {
         await expect(
-          runNonInteractiveOnboardingWithDefaults(runtime, {
+          runNonInteractiveSetupWithDefaults(runtime, {
             customApiKey: "custom-test-key", // pragma: allowlist secret
             skipSkills: true,
           }),
