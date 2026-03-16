@@ -35,23 +35,32 @@ type DeviceTokenResult =
   | { status: "error"; message: string };
 
 async function requestDeviceCode(params: { challenge: string }): Promise<QwenDeviceAuthorization> {
-  const response = await fetch(QWEN_OAUTH_DEVICE_CODE_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      "x-request-id": randomUUID(),
-    },
-    body: toFormUrlEncoded({
-      client_id: QWEN_OAUTH_CLIENT_ID,
-      scope: QWEN_OAUTH_SCOPE,
-      code_challenge: params.challenge,
-      code_challenge_method: "S256",
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(QWEN_OAUTH_DEVICE_CODE_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        "x-request-id": randomUUID(),
+      },
+      body: toFormUrlEncoded({
+        client_id: QWEN_OAUTH_CLIENT_ID,
+        scope: QWEN_OAUTH_SCOPE,
+        code_challenge: params.challenge,
+        code_challenge_method: "S256",
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Qwen device code request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   if (!response.ok) {
-    const text = await response.text();
+    const text = await response.text().catch(() => "");
     throw new Error(`Qwen device authorization failed: ${text || response.statusText}`);
   }
 
@@ -69,26 +78,39 @@ async function pollDeviceToken(params: {
   deviceCode: string;
   verifier: string;
 }): Promise<DeviceTokenResult> {
-  const response = await fetch(QWEN_OAUTH_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    body: toFormUrlEncoded({
-      grant_type: QWEN_OAUTH_GRANT_TYPE,
-      client_id: QWEN_OAUTH_CLIENT_ID,
-      device_code: params.deviceCode,
-      code_verifier: params.verifier,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(QWEN_OAUTH_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: toFormUrlEncoded({
+        grant_type: QWEN_OAUTH_GRANT_TYPE,
+        client_id: QWEN_OAUTH_CLIENT_ID,
+        device_code: params.deviceCode,
+        code_verifier: params.verifier,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      // Single-poll timeout — treat as pending so the caller retries on next interval.
+      return { status: "pending" };
+    }
+    throw new Error(
+      `Qwen token poll failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   if (!response.ok) {
     let payload: { error?: string; error_description?: string } | undefined;
     try {
       payload = (await response.json()) as { error?: string; error_description?: string };
     } catch {
-      const text = await response.text();
+      const text = await response.text().catch(() => "");
       return { status: "error", message: text || response.statusText };
     }
 

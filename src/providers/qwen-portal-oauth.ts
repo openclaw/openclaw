@@ -13,21 +13,30 @@ export async function refreshQwenPortalCredentials(
     throw new Error("Qwen OAuth refresh token missing; re-authenticate.");
   }
 
-  const response = await fetch(QWEN_OAUTH_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: QWEN_OAUTH_CLIENT_ID,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(QWEN_OAUTH_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: QWEN_OAUTH_CLIENT_ID,
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Qwen OAuth refresh request failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   if (!response.ok) {
-    const text = await response.text();
+    const text = await response.text().catch(() => "");
     if (response.status === 400) {
       throw new Error(
         `Qwen OAuth refresh token expired or invalid. Re-authenticate with \`${formatCliCommand("openclaw models auth login --provider qwen-portal")}\`.`,
