@@ -56,6 +56,10 @@
     "target": "CLI 设置参考"
   },
   {
+    "source": "Setup Overview",
+    "target": "设置概览"
+  },
+  {
     "source": "Setup Wizard (CLI)",
     "target": "设置向导（CLI）"
   },

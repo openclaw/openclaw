@@ -22,7 +22,7 @@ read_when:
 ### Via onboarding
 
 ```bash
-openclaw onboard --auth-choice litellm-api-key
+openclaw setup --wizard --auth-choice litellm-api-key
 ```
 
 ### Manual setup

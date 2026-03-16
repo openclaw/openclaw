@@ -13,7 +13,7 @@ This page describes the current CLI behavior. If commands change, update this do
 ## Command pages
 
 - [`setup`](/cli/setup)
-- [`onboard`](/cli/onboard)
+- [`onboard`](/cli/onboard) (legacy alias for `setup --wizard`)
 - [`configure`](/cli/configure)
 - [`config`](/cli/config)
 - [`completion`](/cli/completion)
