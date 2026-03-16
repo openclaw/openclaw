@@ -1,10 +1,16 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/feishu";
 import { describe, expect, it } from "vitest";
-import { feishuOnboardingAdapter } from "./onboarding.js";
+import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { feishuPlugin } from "./channel.js";
 
-describe("feishu onboarding status", () => {
+const feishuConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+  plugin: feishuPlugin,
+  wizard: feishuPlugin.setupWizard!,
+});
+
+describe("feishu setup wizard status", () => {
   it("treats SecretRef appSecret as configured when appId is present", async () => {
-    const status = await feishuOnboardingAdapter.getStatus({
+    const status = await feishuConfigureAdapter.getStatus({
       cfg: {
         channels: {
           feishu: {
