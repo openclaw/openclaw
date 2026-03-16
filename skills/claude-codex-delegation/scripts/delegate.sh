@@ -170,11 +170,14 @@ run_delegation() {
 echo "Delegating to $AGENT in $WORKDIR (timeout: ${TIMEOUT}s)"
 echo "Log: $LOG_FILE"
 
+ESCAPED_WORKDIR="$(printf '%q' "$WORKDIR")"
+ESCAPED_LOG="$(printf '%q' "$LOG_FILE")"
+
 if $BACKGROUND; then
     (
         timeout "$TIMEOUT" bash -c "$(declare -f run_delegation build_claude_cmd build_codex_cmd); \
             AGENT='$AGENT' PROMPT='$(printf '%s' "$PROMPT" | sed "s/'/'\\\\''/g")' \
-            WORKDIR='$WORKDIR' LOG_FILE='$LOG_FILE' FULL_AUTO=$FULL_AUTO \
+            WORKDIR=$ESCAPED_WORKDIR LOG_FILE=$ESCAPED_LOG FULL_AUTO=$FULL_AUTO \
             run_delegation"
         EXIT_CODE=$?
         echo ""
@@ -186,7 +189,7 @@ if $BACKGROUND; then
 else
     timeout "$TIMEOUT" bash -c "$(declare -f run_delegation build_claude_cmd build_codex_cmd); \
         AGENT='$AGENT' PROMPT='$(printf '%s' "$PROMPT" | sed "s/'/'\\\\''/g")' \
-        WORKDIR='$WORKDIR' LOG_FILE='$LOG_FILE' FULL_AUTO=$FULL_AUTO \
+        WORKDIR=$ESCAPED_WORKDIR LOG_FILE=$ESCAPED_LOG FULL_AUTO=$FULL_AUTO \
         run_delegation"
     EXIT_CODE=$?
     if [[ $EXIT_CODE -eq 0 ]]; then
