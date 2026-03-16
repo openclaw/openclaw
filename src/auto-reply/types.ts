@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { InteractiveReply } from "../interactive/payload.js";
 import type { TypingController } from "./reply/typing.js";
 
 export type BlockReplyContext = {
@@ -76,6 +77,7 @@ export type ReplyPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  interactive?: InteractiveReply;
   btw?: {
     question: string;
   };
