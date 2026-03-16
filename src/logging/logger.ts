@@ -43,11 +43,20 @@ export type LogTransportRecord = Record<string, unknown>;
 export type LogTransport = (logObj: LogTransportRecord) => void;
 
 const EXTERNAL_TRANSPORTS_KEY = Symbol.for("openclaw.logging.externalTransports");
+const CACHED_LOGGER_KEY = Symbol.for("openclaw.logging.cachedLogger");
 
 const externalTransports = resolveGlobalSingleton(
   EXTERNAL_TRANSPORTS_KEY,
   () => new Set<LogTransport>(),
 );
+
+function getGlobalCachedLogger(): TsLogger<LogObj> | null {
+  return ((globalThis as Record<symbol, unknown>)[CACHED_LOGGER_KEY] as TsLogger<LogObj>) ?? null;
+}
+
+function setGlobalCachedLogger(logger: TsLogger<LogObj> | null): void {
+  (globalThis as Record<symbol, unknown>)[CACHED_LOGGER_KEY] = logger;
+}
 
 function shouldSkipLoadConfigFallback(argv: string[] = process.argv): boolean {
   const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
@@ -218,8 +227,10 @@ export function getLogger(): TsLogger<LogObj> {
   const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   const cachedSettings = loggingState.cachedSettings as ResolvedSettings | null;
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
-    loggingState.cachedLogger = buildLogger(settings);
+    const logger = buildLogger(settings);
+    loggingState.cachedLogger = logger;
     loggingState.cachedSettings = settings;
+    setGlobalCachedLogger(logger);
   }
   return loggingState.cachedLogger as TsLogger<LogObj>;
 }
@@ -288,11 +299,14 @@ export function resetLogger() {
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
+  setGlobalCachedLogger(null);
 }
 
 export function registerLogTransport(transport: LogTransport): () => void {
   externalTransports.add(transport);
-  const logger = loggingState.cachedLogger as TsLogger<LogObj> | null;
+  // Use the global cached logger so plugin bundles with their own module
+  // instance can still attach transports to the already-active core logger.
+  const logger = getGlobalCachedLogger();
   if (logger) {
     attachExternalTransport(logger, transport);
   }
