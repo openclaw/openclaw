@@ -3,7 +3,14 @@ import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
 import type { ProgramContext } from "./context.js";
+import {
+  type CoreCliCommandDescriptor,
+  getCoreCliCommandDescriptors,
+  getCoreCliCommandsWithSubcommands,
+} from "./core-command-descriptors.js";
 import { registerSubCliCommands } from "./register.subclis.js";
+
+export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
 
 type CommandRegisterParams = {
   program: Command;
@@ -14,12 +21,6 @@ type CommandRegisterParams = {
 export type CommandRegistration = {
   id: string;
   register: (params: CommandRegisterParams) => void;
-};
-
-type CoreCliCommandDescriptor = {
-  name: string;
-  description: string;
-  hasSubcommands: boolean;
 };
 
 type CoreCliEntry = {
@@ -217,34 +218,8 @@ const coreEntries: CoreCliEntry[] = [
   },
 ];
 
-function collectCoreCliCommandNames(predicate?: (command: CoreCliCommandDescriptor) => boolean) {
-  const seen = new Set<string>();
-  const names: string[] = [];
-  for (const entry of coreEntries) {
-    for (const command of entry.commands) {
-      if (predicate && !predicate(command)) {
-        continue;
-      }
-      if (seen.has(command.name)) {
-        continue;
-      }
-      seen.add(command.name);
-      names.push(command.name);
-    }
-  }
-  return names;
-}
-
-export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
-  return coreEntries.flatMap((entry) => entry.commands);
-}
-
 export function getCoreCliCommandNames(): string[] {
-  return collectCoreCliCommandNames();
-}
-
-export function getCoreCliCommandsWithSubcommands(): string[] {
-  return collectCoreCliCommandNames((command) => command.hasSubcommands);
+  return getCoreCliCommandDescriptors().map((command) => command.name);
 }
 
 function removeEntryCommands(program: Command, entry: CoreCliEntry) {
