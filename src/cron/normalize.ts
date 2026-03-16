@@ -203,6 +203,12 @@ function coerceDelivery(delivery: UnknownRecord) {
   } else if ("accountId" in next && typeof next.accountId !== "string") {
     delete next.accountId;
   }
+  // Handle additionalTargets array
+  if (Array.isArray(delivery.additionalTargets)) {
+    next.additionalTargets = delivery.additionalTargets.filter(
+      (target) => target && typeof target === "object"
+    );
+  }
   return next;
 }
 

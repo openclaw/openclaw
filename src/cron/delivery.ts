@@ -16,6 +16,8 @@ export type CronDeliveryPlan = {
   to?: string;
   /** Explicit channel account id from the delivery config, if set. */
   accountId?: string;
+  /** Additional delivery targets for multi-channel delivery */
+  additionalTargets?: Array<{ channel?: CronMessageChannel; to?: string; accountId?: string }>;
   source: "delivery" | "payload";
   requested: boolean;
 };
@@ -77,11 +79,19 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   );
   if (hasDelivery) {
     const resolvedMode = mode ?? "announce";
+    // Extract additionalTargets from delivery config
+    const deliveryAdditionalTargets = (delivery as { additionalTargets?: unknown })?.additionalTargets;
+    const additionalTargets = Array.isArray(deliveryAdditionalTargets)
+      ? deliveryAdditionalTargets.filter((t): t is { channel?: CronMessageChannel; to?: string; accountId?: string } =>
+          t && typeof t === "object"
+        )
+      : undefined;
     return {
       mode: resolvedMode,
       channel: resolvedMode === "announce" ? channel : undefined,
       to,
       accountId: deliveryAccountId,
+      additionalTargets,
       source: "delivery",
       requested: resolvedMode === "announce",
     };
