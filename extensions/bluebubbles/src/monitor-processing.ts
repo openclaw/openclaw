@@ -496,15 +496,17 @@ export async function processMessage(
     : text || placeholder;
   const isSelfChatMessage = isBlueBubblesSelfChatMessage(message, isGroup);
   const knownSenderId = resolveKnownBlueBubblesSenderId(message.senderId);
-  const selfChatLookup = {
-    accountId: account.accountId,
-    chatGuid: message.chatGuid,
-    chatIdentifier: message.chatIdentifier,
-    chatId: message.chatId,
-    senderId: knownSenderId,
-    body: rawBody,
-    timestamp: message.timestamp,
-  };
+  const selfChatLookup = knownSenderId
+    ? {
+        accountId: account.accountId,
+        chatGuid: message.chatGuid,
+        chatIdentifier: message.chatIdentifier,
+        chatId: message.chatId,
+        senderId: knownSenderId,
+        body: rawBody,
+        timestamp: message.timestamp,
+      }
+    : null;
 
   const cacheMessageId = message.messageId?.trim();
   const confirmedOutboundCacheEntry = cacheMessageId
@@ -544,7 +546,7 @@ export async function processMessage(
     const confirmedAssistantOutbound =
       confirmedOutboundCacheEntry?.senderLabel === "me" &&
       normalizeSnippet(confirmedOutboundCacheEntry.body ?? "") === normalizeSnippet(rawBody);
-    if (isSelfChatMessage && confirmedAssistantOutbound) {
+    if (isSelfChatMessage && confirmedAssistantOutbound && selfChatLookup) {
       rememberBlueBubblesSelfChatCopy(selfChatLookup);
     }
     if (cacheMessageId) {
@@ -570,7 +572,7 @@ export async function processMessage(
     return;
   }
 
-  if (isSelfChatMessage && hasBlueBubblesSelfChatCopy(selfChatLookup)) {
+  if (isSelfChatMessage && selfChatLookup && hasBlueBubblesSelfChatCopy(selfChatLookup)) {
     logVerbose(
       core,
       runtime,
