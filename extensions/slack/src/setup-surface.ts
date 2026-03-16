@@ -1,7 +1,4 @@
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../../../src/channels/plugins/onboarding-types.js";
+import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -17,13 +14,11 @@ import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "../../../src/channels/plugins/setup-helpers.js";
-import {
-  buildChannelOnboardingAdapterFromSetupWizard,
-  type ChannelSetupWizard,
-  type ChannelSetupWizardAllowFromEntry,
+import type {
+  ChannelSetupWizard,
+  ChannelSetupWizardAllowFromEntry,
 } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { getChatChannelMeta } from "../../../src/channels/registry.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
@@ -507,25 +502,3 @@ export const slackSetupWizard: ChannelSetupWizard = {
   },
   disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
 };
-
-const slackSetupPlugin = {
-  id: channel,
-  meta: {
-    ...getChatChannelMeta(channel),
-    quickstartAllowFrom: true,
-  },
-  config: {
-    listAccountIds: listSlackAccountIds,
-    resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
-      resolveSlackAccount({ cfg, accountId }),
-    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-      resolveSlackAccount({ cfg, accountId }).dm?.allowFrom,
-  },
-  setup: slackSetupAdapter,
-} as const;
-
-export const slackOnboardingAdapter: ChannelOnboardingAdapter =
-  buildChannelOnboardingAdapterFromSetupWizard({
-    plugin: slackSetupPlugin,
-    wizard: slackSetupWizard,
-  });
