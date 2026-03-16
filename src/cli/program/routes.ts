@@ -47,6 +47,11 @@ const routeStatus: RouteSpec = {
     if (timeoutMs === null) {
       return false;
     }
+    if (json) {
+      const { statusJsonCommand } = await import("../../commands/status-json.js");
+      await statusJsonCommand({ deep, all, usage, timeoutMs }, defaultRuntime);
+      return true;
+    }
     const { statusCommand } = await import("../../commands/status.js");
     await statusCommand({ json, deep, all, usage, timeoutMs, verbose }, defaultRuntime);
     return true;
@@ -76,26 +81,36 @@ const routeGatewayStatus: RouteSpec = {
     if (ssh === null) {
       return false;
     }
+    if (ssh !== undefined) {
+      return false;
+    }
     const sshIdentity = getFlagValue(argv, "--ssh-identity");
     if (sshIdentity === null) {
       return false;
     }
-    const sshAuto = hasFlag(argv, "--ssh-auto");
+    if (sshIdentity !== undefined) {
+      return false;
+    }
+    if (hasFlag(argv, "--ssh-auto")) {
+      return false;
+    }
+    const deep = hasFlag(argv, "--deep");
     const json = hasFlag(argv, "--json");
-    const { gatewayStatusCommand } = await import("../../commands/gateway-status.js");
-    await gatewayStatusCommand(
-      {
+    const requireRpc = hasFlag(argv, "--require-rpc");
+    const probe = !hasFlag(argv, "--no-probe");
+    const { runDaemonStatus } = await import("../daemon-cli/status.js");
+    await runDaemonStatus({
+      rpc: {
         url: url ?? undefined,
         token: token ?? undefined,
         password: password ?? undefined,
         timeout: timeout ?? undefined,
-        json,
-        ssh: ssh ?? undefined,
-        sshIdentity: sshIdentity ?? undefined,
-        sshAuto,
       },
-      defaultRuntime,
-    );
+      probe,
+      requireRpc,
+      deep,
+      json,
+    });
     return true;
   },
 };

@@ -4,8 +4,18 @@ import {
 } from "openclaw/plugin-sdk/core";
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import { normalizeProviderId } from "../../src/agents/model-selection.js";
+import {
+  applyOpenAIConfig,
+  OPENAI_DEFAULT_MODEL,
+} from "../../src/commands/openai-model-default.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
-import { cloneFirstTemplateModel, findCatalogTemplate, isOpenAIApiBaseUrl } from "./shared.js";
+import {
+  cloneFirstTemplateModel,
+  findCatalogTemplate,
+  isOpenAIApiBaseUrl,
+  matchesExactOrPrefix,
+} from "./shared.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
@@ -14,6 +24,8 @@ const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = ["gpt-5.2"] as const;
 const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = ["gpt-5.2-pro", "gpt-5.2"] as const;
+const OPENAI_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.4-pro", "gpt-5.2"] as const;
+const OPENAI_MODERN_MODEL_IDS = ["gpt-5.4", "gpt-5.4-pro", "gpt-5.2", "gpt-5.0"] as const;
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 
@@ -82,7 +94,28 @@ export function buildOpenAIProvider(): ProviderPlugin {
     label: "OpenAI",
     docsPath: "/providers/models",
     envVars: ["OPENAI_API_KEY"],
-    auth: [],
+    auth: [
+      createProviderApiKeyAuthMethod({
+        providerId: PROVIDER_ID,
+        methodId: "api-key",
+        label: "OpenAI API key",
+        hint: "Direct OpenAI API key",
+        optionKey: "openaiApiKey",
+        flagName: "--openai-api-key",
+        envVar: "OPENAI_API_KEY",
+        promptMessage: "Enter OpenAI API key",
+        defaultModel: OPENAI_DEFAULT_MODEL,
+        expectedProviders: ["openai"],
+        applyConfig: (cfg) => applyOpenAIConfig(cfg),
+        wizard: {
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+          groupId: "openai",
+          groupLabel: "OpenAI",
+          groupHint: "Codex OAuth + API key",
+        },
+      }),
+    ],
     resolveDynamicModel: (ctx) => resolveOpenAIGpt54ForwardCompatModel(ctx),
     normalizeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
@@ -93,6 +126,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
     capabilities: {
       providerFamily: "openai",
     },
+    supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),
+    isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     buildMissingAuthMessage: (ctx) => {
       if (ctx.provider !== PROVIDER_ID || ctx.listProfileIds("openai-codex").length === 0) {
         return undefined;

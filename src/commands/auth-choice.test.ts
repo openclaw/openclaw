@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import anthropicPlugin from "../../extensions/anthropic/index.js";
+import huggingfacePlugin from "../../extensions/huggingface/index.js";
+import kimiCodingPlugin from "../../extensions/kimi-coding/index.js";
+import ollamaPlugin from "../../extensions/ollama/index.js";
+import openAIPlugin from "../../extensions/openai/index.js";
+import togetherPlugin from "../../extensions/together/index.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
@@ -34,7 +42,7 @@ vi.mock("./openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth,
 }));
 
-const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
+const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 vi.mock("../plugins/providers.js", () => ({
   resolvePluginProviders,
 }));
@@ -54,6 +62,21 @@ type StoredAuthProfile = {
   email?: string;
   metadata?: Record<string, string>;
 };
+
+function createDefaultProviderPlugins() {
+  const captured = createCapturedPluginRegistration();
+  for (const plugin of [
+    anthropicPlugin,
+    huggingfacePlugin,
+    kimiCodingPlugin,
+    ollamaPlugin,
+    openAIPlugin,
+    togetherPlugin,
+  ]) {
+    plugin.register(captured.api);
+  }
+  return captured.providers;
+}
 
 describe("applyAuthChoice", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -127,6 +150,7 @@ describe("applyAuthChoice", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     resolvePluginProviders.mockReset();
+    resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
     detectZaiEndpoint.mockReset();
     detectZaiEndpoint.mockResolvedValue(null);
     loginOpenAICodexOAuth.mockReset();
@@ -135,10 +159,33 @@ describe("applyAuthChoice", () => {
     activeStateDir = null;
   });
 
+  resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
+
   it("does not throw when openai-codex oauth fails", async () => {
     await setupTempState();
 
     loginOpenAICodexOAuth.mockRejectedValueOnce(new Error("oauth failed"));
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT OAuth",
+            kind: "oauth",
+            run: vi.fn(async () => {
+              try {
+                await loginOpenAICodexOAuth();
+              } catch {
+                return { profiles: [] };
+              }
+              return { profiles: [] };
+            }),
+          },
+        ],
+      },
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -163,6 +210,41 @@ describe("applyAuthChoice", () => {
       access: "access-token",
       expires: Date.now() + 60_000,
     });
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "openai-codex",
+        label: "OpenAI Codex",
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT OAuth",
+            kind: "oauth",
+            run: vi.fn(async () => {
+              const creds = await loginOpenAICodexOAuth();
+              if (!creds) {
+                return { profiles: [] };
+              }
+              return {
+                profiles: [
+                  {
+                    profileId: "openai-codex:user@example.com",
+                    credential: {
+                      type: "oauth",
+                      provider: "openai-codex",
+                      refresh: "refresh-token",
+                      access: "access-token",
+                      expires: creds.expires,
+                      email: "user@example.com",
+                    },
+                  },
+                ],
+                defaultModel: "openai-codex/gpt-5.4",
+              };
+            }),
+          },
+        ],
+      },
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();
@@ -911,6 +993,33 @@ describe("applyAuthChoice", () => {
 
   it("sets default model when selecting github-copilot", async () => {
     await setupTempState();
+
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        auth: [
+          {
+            id: "device",
+            label: "GitHub device login",
+            kind: "device_code",
+            run: vi.fn(async () => ({
+              profiles: [
+                {
+                  profileId: "github-copilot:github",
+                  credential: {
+                    type: "token",
+                    provider: "github-copilot",
+                    token: "github-device-token",
+                  },
+                },
+              ],
+              defaultModel: "github-copilot/gpt-4o",
+            })),
+          },
+        ],
+      },
+    ] as never);
 
     const prompter = createPrompter({});
     const runtime = createExitThrowingRuntime();

@@ -2,9 +2,9 @@ import path from "node:path";
 import { loginWeb } from "../../../src/channel-web.js";
 import {
   normalizeAllowFromEntries,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import { setOnboardingChannelEnabled } from "../../../src/channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import { setSetupChannelEnabled } from "../../../src/channels/plugins/setup-wizard-helpers.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
@@ -96,7 +96,7 @@ async function applyWhatsAppOwnerAllowlist(params: {
 }
 
 function parseWhatsAppAllowFromEntries(raw: string): { entries: string[]; invalidEntry?: string } {
-  const parts = splitOnboardingEntries(raw);
+  const parts = splitSetupEntries(raw);
   if (parts.length === 0) {
     return { entries: [] };
   }
@@ -330,7 +330,7 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
     });
     return { cfg: next };
   },
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
   onAccountRecorded: (accountId, options) => {
     options?.onWhatsAppAccountId?.(accountId);
   },

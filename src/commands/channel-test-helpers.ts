@@ -1,4 +1,5 @@
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { feishuPlugin } from "../../extensions/feishu/src/channel.js";
 import { imessagePlugin } from "../../extensions/imessage/src/channel.js";
 import { signalPlugin } from "../../extensions/signal/src/channel.js";
 import { slackPlugin } from "../../extensions/slack/src/channel.js";
@@ -6,27 +7,28 @@ import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { getChannelOnboardingAdapter } from "./channel-setup/registry.js";
+import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
+import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import type { ChannelChoice } from "./onboard-types.js";
-import type { ChannelOnboardingAdapter } from "./onboarding/types.js";
 
-type ChannelOnboardingAdapterPatch = Partial<
+type ChannelSetupWizardAdapterPatch = Partial<
   Pick<
-    ChannelOnboardingAdapter,
+    ChannelSetupWizardAdapter,
     "configure" | "configureInteractive" | "configureWhenConfigured" | "getStatus"
   >
 >;
 
-type PatchedOnboardingAdapterFields = {
-  configure?: ChannelOnboardingAdapter["configure"];
-  configureInteractive?: ChannelOnboardingAdapter["configureInteractive"];
-  configureWhenConfigured?: ChannelOnboardingAdapter["configureWhenConfigured"];
-  getStatus?: ChannelOnboardingAdapter["getStatus"];
+type PatchedSetupAdapterFields = {
+  configure?: ChannelSetupWizardAdapter["configure"];
+  configureInteractive?: ChannelSetupWizardAdapter["configureInteractive"];
+  configureWhenConfigured?: ChannelSetupWizardAdapter["configureWhenConfigured"];
+  getStatus?: ChannelSetupWizardAdapter["getStatus"];
 };
 
 export function setDefaultChannelPluginRegistryForTests(): void {
   const channels = [
     { pluginId: "discord", plugin: discordPlugin, source: "test" },
+    { pluginId: "feishu", plugin: feishuPlugin, source: "test" },
     { pluginId: "slack", plugin: slackPlugin, source: "test" },
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
     { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
@@ -36,16 +38,16 @@ export function setDefaultChannelPluginRegistryForTests(): void {
   setActivePluginRegistry(createTestRegistry(channels));
 }
 
-export function patchChannelOnboardingAdapter(
+export function patchChannelSetupWizardAdapter(
   channel: ChannelChoice,
-  patch: ChannelOnboardingAdapterPatch,
+  patch: ChannelSetupWizardAdapterPatch,
 ): () => void {
-  const adapter = getChannelOnboardingAdapter(channel);
+  const adapter = getChannelSetupWizardAdapter(channel);
   if (!adapter) {
-    throw new Error(`missing onboarding adapter for ${channel}`);
+    throw new Error(`missing setup adapter for ${channel}`);
   }
 
-  const previous: PatchedOnboardingAdapterFields = {};
+  const previous: PatchedSetupAdapterFields = {};
 
   if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
     previous.getStatus = adapter.getStatus;

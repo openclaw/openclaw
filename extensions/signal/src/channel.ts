@@ -1,4 +1,5 @@
 import {
+  buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   createScopedAccountConfigAccessors,
   collectAllowlistProviderRestrictSendersWarnings,
@@ -26,7 +27,11 @@ import {
   type ChannelPlugin,
   type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk/signal";
+import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
+import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { markdownToSignalTextChunks } from "./format.js";
+import type { SignalProbe } from "./probe.js";
 import { getSignalRuntime } from "./runtime.js";
 import { createSignalSetupWizardProxy, signalSetupAdapter } from "./setup-core.js";
 
@@ -65,12 +70,8 @@ const signalConfigAccessors = createScopedAccountConfigAccessors({
 
 type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
 
-async function sendSignalOutbound(params: {
+function resolveSignalSendContext(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  to: string;
-  text: string;
-  mediaUrl?: string;
-  mediaLocalRoots?: readonly string[];
   accountId?: string;
   deps?: { [channelId: string]: unknown };
 }) {
@@ -83,6 +84,19 @@ async function sendSignalOutbound(params: {
       cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
     accountId: params.accountId,
   });
+  return { send, maxBytes };
+}
+
+async function sendSignalOutbound(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
+  accountId?: string;
+  deps?: { [channelId: string]: unknown };
+}) {
+  const { send, maxBytes } = resolveSignalSendContext(params);
   return await send(params.to, params.text, {
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
@@ -90,6 +104,120 @@ async function sendSignalOutbound(params: {
     maxBytes,
     accountId: params.accountId ?? undefined,
   });
+}
+
+function inferSignalTargetChatType(rawTo: string) {
+  let to = rawTo.trim();
+  if (!to) {
+    return undefined;
+  }
+  if (/^signal:/i.test(to)) {
+    to = to.replace(/^signal:/i, "").trim();
+  }
+  if (!to) {
+    return undefined;
+  }
+  const lower = to.toLowerCase();
+  if (lower.startsWith("group:")) {
+    return "group" as const;
+  }
+  if (lower.startsWith("username:") || lower.startsWith("u:")) {
+    return "direct" as const;
+  }
+  return "direct" as const;
+}
+
+function parseSignalExplicitTarget(raw: string) {
+  const normalized = normalizeSignalMessagingTarget(raw);
+  if (!normalized) {
+    return null;
+  }
+  return {
+    to: normalized,
+    chatType: inferSignalTargetChatType(normalized),
+  };
+}
+
+async function sendFormattedSignalText(ctx: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  accountId?: string | null;
+  deps?: { [channelId: string]: unknown };
+  abortSignal?: AbortSignal;
+}) {
+  const { send, maxBytes } = resolveSignalSendContext({
+    cfg: ctx.cfg,
+    accountId: ctx.accountId ?? undefined,
+    deps: ctx.deps,
+  });
+  const limit = resolveTextChunkLimit(ctx.cfg, "signal", ctx.accountId ?? undefined, {
+    fallbackLimit: 4000,
+  });
+  const tableMode = resolveMarkdownTableMode({
+    cfg: ctx.cfg,
+    channel: "signal",
+    accountId: ctx.accountId ?? undefined,
+  });
+  let chunks =
+    limit === undefined
+      ? markdownToSignalTextChunks(ctx.text, Number.POSITIVE_INFINITY, { tableMode })
+      : markdownToSignalTextChunks(ctx.text, limit, { tableMode });
+  if (chunks.length === 0 && ctx.text) {
+    chunks = [{ text: ctx.text, styles: [] }];
+  }
+  const results = [];
+  for (const chunk of chunks) {
+    ctx.abortSignal?.throwIfAborted();
+    const result = await send(ctx.to, chunk.text, {
+      cfg: ctx.cfg,
+      maxBytes,
+      accountId: ctx.accountId ?? undefined,
+      textMode: "plain",
+      textStyles: chunk.styles,
+    });
+    results.push({ channel: "signal" as const, ...result });
+  }
+  return results;
+}
+
+async function sendFormattedSignalMedia(ctx: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  to: string;
+  text: string;
+  mediaUrl: string;
+  mediaLocalRoots?: readonly string[];
+  accountId?: string | null;
+  deps?: { [channelId: string]: unknown };
+  abortSignal?: AbortSignal;
+}) {
+  ctx.abortSignal?.throwIfAborted();
+  const { send, maxBytes } = resolveSignalSendContext({
+    cfg: ctx.cfg,
+    accountId: ctx.accountId ?? undefined,
+    deps: ctx.deps,
+  });
+  const tableMode = resolveMarkdownTableMode({
+    cfg: ctx.cfg,
+    channel: "signal",
+    accountId: ctx.accountId ?? undefined,
+  });
+  const formatted = markdownToSignalTextChunks(ctx.text, Number.POSITIVE_INFINITY, {
+    tableMode,
+  })[0] ?? {
+    text: ctx.text,
+    styles: [],
+  };
+  const result = await send(ctx.to, formatted.text, {
+    cfg: ctx.cfg,
+    mediaUrl: ctx.mediaUrl,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    maxBytes,
+    accountId: ctx.accountId ?? undefined,
+    textMode: "plain",
+    textStyles: formatted.styles,
+  });
+  return { channel: "signal" as const, ...result };
 }
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
@@ -145,6 +273,27 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     }),
     ...signalConfigAccessors,
   },
+  allowlist: {
+    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
+    readConfig: ({ cfg, accountId }) => {
+      const account = resolveSignalAccount({ cfg, accountId });
+      return {
+        dmAllowFrom: (account.config.allowFrom ?? []).map(String),
+        groupAllowFrom: (account.config.groupAllowFrom ?? []).map(String),
+        dmPolicy: account.config.dmPolicy,
+        groupPolicy: account.config.groupPolicy,
+      };
+    },
+    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+      channelId: "signal",
+      normalize: ({ cfg, accountId, values }) =>
+        signalConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+      resolvePaths: (scope) => ({
+        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
+        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+      }),
+    }),
+  },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
       return buildAccountScopedDmSecurityPolicy({
@@ -173,6 +322,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeSignalMessagingTarget,
+    parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
+    inferTargetChatType: ({ to }) => inferSignalTargetChatType(to),
     targetResolver: {
       looksLikeId: looksLikeSignalTargetId,
       hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
@@ -184,6 +335,35 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>
+      await sendFormattedSignalText({
+        cfg,
+        to,
+        text,
+        accountId,
+        deps,
+        abortSignal,
+      }),
+    sendFormattedMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      abortSignal,
+    }) =>
+      await sendFormattedSignalMedia({
+        cfg,
+        to,
+        text,
+        mediaUrl,
+        mediaLocalRoots,
+        accountId,
+        deps,
+        abortSignal,
+      }),
     sendText: async ({ cfg, to, text, accountId, deps }) => {
       const result = await sendSignalOutbound({
         cfg,
@@ -220,6 +400,10 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       const baseUrl = account.baseUrl;
       return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
     },
+    formatCapabilitiesProbe: ({ probe }) =>
+      (probe as SignalProbe | undefined)?.version
+        ? [{ text: `Signal daemon: ${(probe as SignalProbe).version}` }]
+        : [],
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
       baseUrl: account.baseUrl,

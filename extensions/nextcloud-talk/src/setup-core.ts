@@ -1,14 +1,14 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
-import {
-  mergeAllowFromEntries,
-  resolveOnboardingAccountId,
-  setOnboardingChannelEnabled,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
 import {
   applyAccountNameToChannelSection,
   patchScopedAccountConfig,
 } from "../../../src/channels/plugins/setup-helpers.js";
+import {
+  mergeAllowFromEntries,
+  resolveSetupAccountId,
+  setSetupChannelEnabled,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { ChannelSetupInput } from "../../../src/channels/plugins/types.core.js";
@@ -163,7 +163,7 @@ async function promptNextcloudTalkAllowFromForAccount(params: {
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  const accountId = resolveOnboardingAccountId({
+  const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: resolveDefaultNextcloudTalkAccountId(params.cfg as CoreConfig),
   });
@@ -174,7 +174,7 @@ async function promptNextcloudTalkAllowFromForAccount(params: {
   });
 }
 
-const nextcloudTalkDmPolicy: ChannelOnboardingDmPolicy = {
+const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   label: "Nextcloud Talk",
   channel,
   policyKey: "channels.nextcloud-talk.dmPolicy",

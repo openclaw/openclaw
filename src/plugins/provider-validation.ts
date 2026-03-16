@@ -27,6 +27,80 @@ function normalizeTextList(values: string[] | undefined): string[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeProviderWizardSetup(params: {
+  providerId: string;
+  pluginId: string;
+  source: string;
+  auth: ProviderAuthMethod[];
+  setup: NonNullable<ProviderPlugin["wizard"]>["setup"];
+  pushDiagnostic: (diag: PluginDiagnostic) => void;
+}): NonNullable<ProviderPlugin["wizard"]>["setup"] {
+  const hasAuthMethods = params.auth.length > 0;
+  if (!params.setup) {
+    return undefined;
+  }
+  if (!hasAuthMethods) {
+    pushProviderDiagnostic({
+      level: "warn",
+      pluginId: params.pluginId,
+      source: params.source,
+      message: `provider "${params.providerId}" setup metadata ignored because it has no auth methods`,
+      pushDiagnostic: params.pushDiagnostic,
+    });
+    return undefined;
+  }
+  const methodId = normalizeText(params.setup.methodId);
+  if (methodId && !params.auth.some((method) => method.id === methodId)) {
+    pushProviderDiagnostic({
+      level: "warn",
+      pluginId: params.pluginId,
+      source: params.source,
+      message: `provider "${params.providerId}" setup method "${methodId}" not found; falling back to available methods`,
+      pushDiagnostic: params.pushDiagnostic,
+    });
+  }
+  return {
+    ...(normalizeText(params.setup.choiceId)
+      ? { choiceId: normalizeText(params.setup.choiceId) }
+      : {}),
+    ...(normalizeText(params.setup.choiceLabel)
+      ? { choiceLabel: normalizeText(params.setup.choiceLabel) }
+      : {}),
+    ...(normalizeText(params.setup.choiceHint)
+      ? { choiceHint: normalizeText(params.setup.choiceHint) }
+      : {}),
+    ...(normalizeText(params.setup.groupId)
+      ? { groupId: normalizeText(params.setup.groupId) }
+      : {}),
+    ...(normalizeText(params.setup.groupLabel)
+      ? { groupLabel: normalizeText(params.setup.groupLabel) }
+      : {}),
+    ...(normalizeText(params.setup.groupHint)
+      ? { groupHint: normalizeText(params.setup.groupHint) }
+      : {}),
+    ...(methodId && params.auth.some((method) => method.id === methodId) ? { methodId } : {}),
+    ...(params.setup.modelAllowlist
+      ? {
+          modelAllowlist: {
+            ...(normalizeTextList(params.setup.modelAllowlist.allowedKeys)
+              ? { allowedKeys: normalizeTextList(params.setup.modelAllowlist.allowedKeys) }
+              : {}),
+            ...(normalizeTextList(params.setup.modelAllowlist.initialSelections)
+              ? {
+                  initialSelections: normalizeTextList(
+                    params.setup.modelAllowlist.initialSelections,
+                  ),
+                }
+              : {}),
+            ...(normalizeText(params.setup.modelAllowlist.message)
+              ? { message: normalizeText(params.setup.modelAllowlist.message) }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 function normalizeProviderAuthMethods(params: {
   providerId: string;
   pluginId: string;
@@ -60,11 +134,20 @@ function normalizeProviderAuthMethods(params: {
       continue;
     }
     seenMethodIds.add(methodId);
+    const wizard = normalizeProviderWizardSetup({
+      providerId: params.providerId,
+      pluginId: params.pluginId,
+      source: params.source,
+      auth: [{ ...method, id: methodId }],
+      setup: method.wizard,
+      pushDiagnostic: params.pushDiagnostic,
+    });
     normalized.push({
       ...method,
       id: methodId,
       label: normalizeText(method.label) ?? methodId,
       ...(normalizeText(method.hint) ? { hint: normalizeText(method.hint) } : {}),
+      ...(wizard ? { wizard } : {}),
     });
   }
 
@@ -87,50 +170,19 @@ function normalizeProviderWizard(params: {
   const hasMethod = (methodId: string | undefined) =>
     Boolean(methodId && params.auth.some((method) => method.id === methodId));
 
-  const normalizeOnboarding = () => {
-    const onboarding = params.wizard?.onboarding;
-    if (!onboarding) {
+  const normalizeSetup = () => {
+    const setup = params.wizard?.setup;
+    if (!setup) {
       return undefined;
     }
-    if (!hasAuthMethods) {
-      pushProviderDiagnostic({
-        level: "warn",
-        pluginId: params.pluginId,
-        source: params.source,
-        message: `provider "${params.providerId}" onboarding metadata ignored because it has no auth methods`,
-        pushDiagnostic: params.pushDiagnostic,
-      });
-      return undefined;
-    }
-    const methodId = normalizeText(onboarding.methodId);
-    if (methodId && !hasMethod(methodId)) {
-      pushProviderDiagnostic({
-        level: "warn",
-        pluginId: params.pluginId,
-        source: params.source,
-        message: `provider "${params.providerId}" onboarding method "${methodId}" not found; falling back to available methods`,
-        pushDiagnostic: params.pushDiagnostic,
-      });
-    }
-    return {
-      ...(normalizeText(onboarding.choiceId)
-        ? { choiceId: normalizeText(onboarding.choiceId) }
-        : {}),
-      ...(normalizeText(onboarding.choiceLabel)
-        ? { choiceLabel: normalizeText(onboarding.choiceLabel) }
-        : {}),
-      ...(normalizeText(onboarding.choiceHint)
-        ? { choiceHint: normalizeText(onboarding.choiceHint) }
-        : {}),
-      ...(normalizeText(onboarding.groupId) ? { groupId: normalizeText(onboarding.groupId) } : {}),
-      ...(normalizeText(onboarding.groupLabel)
-        ? { groupLabel: normalizeText(onboarding.groupLabel) }
-        : {}),
-      ...(normalizeText(onboarding.groupHint)
-        ? { groupHint: normalizeText(onboarding.groupHint) }
-        : {}),
-      ...(methodId && hasMethod(methodId) ? { methodId } : {}),
-    };
+    return normalizeProviderWizardSetup({
+      providerId: params.providerId,
+      pluginId: params.pluginId,
+      source: params.source,
+      auth: params.auth,
+      setup,
+      pushDiagnostic: params.pushDiagnostic,
+    });
   };
 
   const normalizeModelPicker = () => {
@@ -165,13 +217,13 @@ function normalizeProviderWizard(params: {
     };
   };
 
-  const onboarding = normalizeOnboarding();
+  const setup = normalizeSetup();
   const modelPicker = normalizeModelPicker();
-  if (!onboarding && !modelPicker) {
+  if (!setup && !modelPicker) {
     return undefined;
   }
   return {
-    ...(onboarding ? { onboarding } : {}),
+    ...(setup ? { setup } : {}),
     ...(modelPicker ? { modelPicker } : {}),
   };
 }
@@ -203,6 +255,7 @@ export function normalizeRegisteredProvider(params: {
   });
   const docsPath = normalizeText(params.provider.docsPath);
   const aliases = normalizeTextList(params.provider.aliases);
+  const deprecatedProfileIds = normalizeTextList(params.provider.deprecatedProfileIds);
   const envVars = normalizeTextList(params.provider.envVars);
   const wizard = normalizeProviderWizard({
     providerId: id,
@@ -238,6 +291,7 @@ export function normalizeRegisteredProvider(params: {
     label: normalizeText(params.provider.label) ?? id,
     ...(docsPath ? { docsPath } : {}),
     ...(aliases ? { aliases } : {}),
+    ...(deprecatedProfileIds ? { deprecatedProfileIds } : {}),
     ...(envVars ? { envVars } : {}),
     auth,
     ...(catalog ? { catalog } : {}),

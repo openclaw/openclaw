@@ -12,7 +12,12 @@ import {
   buildMinimaxPortalProvider,
   buildMinimaxProvider,
 } from "../../src/agents/models-config.providers.static.js";
+import {
+  applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
+} from "../../src/commands/onboard-auth.config-minimax.js";
 import { fetchMinimaxUsage } from "../../src/infra/provider-usage.fetch.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import { loginMiniMaxPortalOAuth, type MiniMaxRegion } from "./oauth.js";
 
 const API_PROVIDER_ID = "minimax";
@@ -28,6 +33,10 @@ function getDefaultBaseUrl(region: MiniMaxRegion): string {
 
 function modelRef(modelId: string): string {
   return `${PORTAL_PROVIDER_ID}/${modelId}`;
+}
+
+function isModernMiniMaxModel(modelId: string): boolean {
+  return modelId.trim().toLowerCase().startsWith("minimax-m2.5");
 }
 
 function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string }) {
@@ -156,7 +165,54 @@ const minimaxPlugin = {
       label: PROVIDER_LABEL,
       docsPath: "/providers/minimax",
       envVars: ["MINIMAX_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: API_PROVIDER_ID,
+          methodId: "api-global",
+          label: "MiniMax API key (Global)",
+          hint: "Global endpoint - api.minimax.io",
+          optionKey: "minimaxApiKey",
+          flagName: "--minimax-api-key",
+          envVar: "MINIMAX_API_KEY",
+          promptMessage:
+            "Enter MiniMax API key (sk-api- or sk-cp-)\nhttps://platform.minimax.io/user-center/basic-information/interface-key",
+          profileId: "minimax:global",
+          defaultModel: modelRef(DEFAULT_MODEL),
+          expectedProviders: ["minimax"],
+          applyConfig: (cfg) => applyMinimaxApiConfig(cfg),
+          wizard: {
+            choiceId: "minimax-global-api",
+            choiceLabel: "MiniMax API key (Global)",
+            choiceHint: "Global endpoint - api.minimax.io",
+            groupId: "minimax",
+            groupLabel: "MiniMax",
+            groupHint: "M2.5 (recommended)",
+          },
+        }),
+        createProviderApiKeyAuthMethod({
+          providerId: API_PROVIDER_ID,
+          methodId: "api-cn",
+          label: "MiniMax API key (CN)",
+          hint: "CN endpoint - api.minimaxi.com",
+          optionKey: "minimaxApiKey",
+          flagName: "--minimax-api-key",
+          envVar: "MINIMAX_API_KEY",
+          promptMessage:
+            "Enter MiniMax CN API key (sk-api- or sk-cp-)\nhttps://platform.minimaxi.com/user-center/basic-information/interface-key",
+          profileId: "minimax:cn",
+          defaultModel: modelRef(DEFAULT_MODEL),
+          expectedProviders: ["minimax", "minimax-cn"],
+          applyConfig: (cfg) => applyMinimaxApiConfigCn(cfg),
+          wizard: {
+            choiceId: "minimax-cn-api",
+            choiceLabel: "MiniMax API key (CN)",
+            choiceHint: "CN endpoint - api.minimaxi.com",
+            groupId: "minimax",
+            groupLabel: "MiniMax",
+            groupHint: "M2.5 (recommended)",
+          },
+        }),
+      ],
       catalog: {
         order: "simple",
         run: async (ctx) => resolveApiCatalog(ctx),
@@ -167,6 +223,7 @@ const minimaxPlugin = {
         });
         return apiKey ? { token: apiKey } : null;
       },
+      isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
       fetchUsageSnapshot: async (ctx) =>
         await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
@@ -185,6 +242,14 @@ const minimaxPlugin = {
           label: "MiniMax OAuth (Global)",
           hint: "Global endpoint - api.minimax.io",
           kind: "device_code",
+          wizard: {
+            choiceId: "minimax-global-oauth",
+            choiceLabel: "MiniMax OAuth (Global)",
+            choiceHint: "Global endpoint - api.minimax.io",
+            groupId: "minimax",
+            groupLabel: "MiniMax",
+            groupHint: "M2.5 (recommended)",
+          },
           run: createOAuthHandler("global"),
         },
         {
@@ -192,9 +257,18 @@ const minimaxPlugin = {
           label: "MiniMax OAuth (CN)",
           hint: "CN endpoint - api.minimaxi.com",
           kind: "device_code",
+          wizard: {
+            choiceId: "minimax-cn-oauth",
+            choiceLabel: "MiniMax OAuth (CN)",
+            choiceHint: "CN endpoint - api.minimaxi.com",
+            groupId: "minimax",
+            groupLabel: "MiniMax",
+            groupHint: "M2.5 (recommended)",
+          },
           run: createOAuthHandler("cn"),
         },
       ],
+      isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
     });
   },
 };
