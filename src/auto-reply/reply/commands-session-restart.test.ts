@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const writeRestartSentinelMock = vi.fn().mockResolvedValue("/tmp/sentinel.json");
+const triggerOpenClawRestartMock = vi.fn(() => ({ ok: true, method: "launchctl" }));
 
 vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => {
   const orig = await importOriginal();
@@ -22,7 +23,7 @@ vi.mock("../../config/commands.js", () => ({
 
 vi.mock("../../infra/restart.js", () => ({
   scheduleGatewaySigusr1Restart: vi.fn(),
-  triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
+  triggerOpenClawRestart: triggerOpenClawRestartMock,
 }));
 
 vi.mock("../../infra/session-cost-usage.js", () => ({
@@ -63,6 +64,8 @@ function makeParams(overrides: Partial<HandleCommandsParams> = {}): HandleComman
 describe("handleRestartCommand sentinel", () => {
   beforeEach(() => {
     writeRestartSentinelMock.mockClear();
+    triggerOpenClawRestartMock.mockClear();
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
   });
 
   afterEach(() => {
@@ -99,6 +102,19 @@ describe("handleRestartCommand sentinel", () => {
 
     expect(result).not.toBeNull();
     expect(result?.reply?.text).toMatch(/Restarting/);
+  });
+
+  it("does not write sentinel when restart fails", async () => {
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: false,
+      method: "launchctl",
+      detail: "not found",
+    });
+
+    const result = await handleRestartCommand(makeParams(), true);
+
+    expect(result?.reply?.text).toMatch(/Restart failed/);
+    expect(writeRestartSentinelMock).not.toHaveBeenCalled();
   });
 
   it("skips sentinel when command is not /restart", async () => {

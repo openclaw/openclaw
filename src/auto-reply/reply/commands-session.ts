@@ -618,30 +618,34 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  // Write restart sentinel so the post-restart wake routine sends a confirmation
-  const dc = params.sessionEntry?.deliveryContext;
-  const deliveryContext = dc
-    ? { channel: dc.channel, to: dc.to, accountId: dc.accountId }
-    : undefined;
-  const { threadId } = parseSessionThreadInfo(params.sessionKey);
-  const sentinelPayload: RestartSentinelPayload = {
-    kind: "restart",
-    status: "ok",
-    ts: Date.now(),
-    sessionKey: params.sessionKey,
-    deliveryContext,
-    threadId,
-    doctorHint: formatDoctorNonInteractiveHint(),
-    stats: { mode: "slash-command" },
-  };
-  try {
-    await writeRestartSentinel(sentinelPayload);
-  } catch {
-    // best-effort: sentinel delivery is not critical
+  // Write restart sentinel only after confirming restart will proceed,
+  // so a failed restart doesn't leave a stale sentinel on disk.
+  async function writeSentinel() {
+    const dc = params.sessionEntry?.deliveryContext;
+    const deliveryContext = dc
+      ? { channel: dc.channel, to: dc.to, accountId: dc.accountId }
+      : undefined;
+    const { threadId } = parseSessionThreadInfo(params.sessionKey);
+    const sentinelPayload: RestartSentinelPayload = {
+      kind: "restart",
+      status: "ok",
+      ts: Date.now(),
+      sessionKey: params.sessionKey,
+      deliveryContext,
+      threadId,
+      doctorHint: formatDoctorNonInteractiveHint(),
+      stats: { mode: "slash-command" },
+    };
+    try {
+      await writeRestartSentinel(sentinelPayload);
+    } catch {
+      // best-effort: sentinel delivery is not critical
+    }
   }
 
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   if (hasSigusr1Listener) {
+    await writeSentinel();
     scheduleGatewaySigusr1Restart({ reason: "/restart" });
     return {
       shouldContinue: false,
@@ -660,6 +664,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  await writeSentinel();
   return {
     shouldContinue: false,
     reply: {
