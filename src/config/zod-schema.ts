@@ -687,11 +687,9 @@ export const OpenClawSchema = z
           .optional(),
         trustedProxies: z
           .array(
-            z
-              .string()
-              .refine(isValidIpOrCidrEntry, {
-                message: "Must be a valid IP address or CIDR block",
-              }),
+            z.string().refine(isValidIpOrCidrEntry, {
+              message: "Must be a valid IP address or CIDR block",
+            }),
           )
           .optional(),
         allowRealIpFallback: z.boolean().optional(),
