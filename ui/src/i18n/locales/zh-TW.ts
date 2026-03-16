@@ -172,5 +172,6 @@ export const zh_TW: TranslationMap = {
     ptBR: "Português (巴西葡萄牙語)",
     de: "Deutsch (德語)",
     es: "Español (西班牙語)",
+    ru: "Русский (俄語)",
   },
 };
