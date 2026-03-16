@@ -2,6 +2,7 @@ import path from "node:path";
 import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/core";
 
 export type OpenShellPluginConfig = {
+  mode?: string;
   command?: string;
   gateway?: string;
   gatewayEndpoint?: string;
@@ -16,6 +17,7 @@ export type OpenShellPluginConfig = {
 };
 
 export type ResolvedOpenShellPluginConfig = {
+  mode: "mirror" | "remote";
   command: string;
   gateway?: string;
   gatewayEndpoint?: string;
@@ -30,6 +32,7 @@ export type ResolvedOpenShellPluginConfig = {
 };
 
 const DEFAULT_COMMAND = "openshell";
+const DEFAULT_MODE = "mirror";
 const DEFAULT_SOURCE = "openclaw";
 const DEFAULT_REMOTE_WORKSPACE_DIR = "/sandbox";
 const DEFAULT_REMOTE_AGENT_WORKSPACE_DIR = "/agent";
@@ -99,6 +102,7 @@ export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema 
       };
     }
     const allowedKeys = new Set([
+      "mode",
       "command",
       "gateway",
       "gatewayEndpoint",
@@ -156,6 +160,7 @@ export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema 
     return {
       success: true,
       data: {
+        mode: trimString(value.mode),
         command: trimString(value.command),
         gateway: trimString(value.gateway),
         gatewayEndpoint: trimString(value.gatewayEndpoint),
@@ -178,6 +183,7 @@ export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema 
       additionalProperties: false,
       properties: {
         command: { type: "string" },
+        mode: { type: "string", enum: ["mirror", "remote"] },
         gateway: { type: "string" },
         gatewayEndpoint: { type: "string" },
         from: { type: "string" },
@@ -203,7 +209,12 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
   }
   const raw = parsed.data ?? {};
   const cfg = (raw ?? {}) as OpenShellPluginConfig;
+  const mode = cfg.mode ?? DEFAULT_MODE;
+  if (mode !== "mirror" && mode !== "remote") {
+    throw new Error(`Invalid openshell plugin config: mode must be one of mirror, remote`);
+  }
   return {
+    mode,
     command: cfg.command ?? DEFAULT_COMMAND,
     gateway: cfg.gateway,
     gatewayEndpoint: cfg.gatewayEndpoint,
