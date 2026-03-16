@@ -9,7 +9,7 @@ import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
   resolveThinkingDefaultForModel,
-} from "../../../../src/auto-reply/thinking.js";
+} from "../../../../src/auto-reply/thinking-shared.js";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
