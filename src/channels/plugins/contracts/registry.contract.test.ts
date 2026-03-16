@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   actionContractRegistry,
+  directoryContractRegistry,
   pluginContractRegistry,
   setupContractRegistry,
   statusContractRegistry,
   surfaceContractRegistry,
+  threadingContractRegistry,
   type ChannelPluginSurface,
 } from "./registry.js";
 
@@ -68,6 +70,28 @@ describe("channel contract registry", () => {
     );
     for (const entry of statusContractRegistry) {
       expect(statusSurfaceIds.has(entry.id)).toBe(true);
+    }
+  });
+
+  it("only installs deep threading coverage for plugins that declare threading", () => {
+    const threadingSurfaceIds = new Set(
+      surfaceContractRegistry
+        .filter((entry) => entry.surfaces.includes("threading"))
+        .map((entry) => entry.id),
+    );
+    for (const entry of threadingContractRegistry) {
+      expect(threadingSurfaceIds.has(entry.id)).toBe(true);
+    }
+  });
+
+  it("only installs deep directory coverage for plugins that declare directory", () => {
+    const directorySurfaceIds = new Set(
+      surfaceContractRegistry
+        .filter((entry) => entry.surfaces.includes("directory"))
+        .map((entry) => entry.id),
+    );
+    for (const entry of directoryContractRegistry) {
+      expect(directorySurfaceIds.has(entry.id)).toBe(true);
     }
   });
 });
