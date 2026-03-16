@@ -1,0 +1,27 @@
+[Unit]
+Description=Bodhi vault visualization server
+After=network-online.target openclaw.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bodhi
+WorkingDirectory=/home/bodhi/openbodhi
+ExecStart=/usr/bin/python3 -m bodhi_viz.serve --vault /home/bodhi/openbodhi/vault --port 8085
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bodhi-viz
+
+# Python path must include the vault package
+Environment=PYTHONPATH=/home/bodhi/openbodhi/packages/bodhi_vault/src:/home/bodhi/openbodhi/packages/bodhi_viz/src
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/bodhi/.openclaw /home/bodhi/openbodhi/vault
+
+[Install]
+WantedBy=multi-user.target

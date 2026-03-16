@@ -196,6 +196,27 @@
         "agent": "bo",
         "prompt": "Send the evening check-in ritual. Run /evening",
         "recurring": true
+      },
+      {
+        "id": "budget-reset-notify",
+        "schedule": "1 0 * * *",
+        "agent": "bodhi",
+        "prompt": "Budget has reset for the new day. Run /usage and send a brief one-line status: today's spend ($0.00) and daily limit. No extra commentary.",
+        "recurring": true
+      },
+      {
+        "id": "health-ping",
+        "schedule": "*/30 * * * *",
+        "agent": "bodhi",
+        "prompt": "Silent health check. Run: python3 -c \"import pathlib, json, os; p=pathlib.Path(os.path.expanduser('~/.openclaw/health.json')); import datetime; d={'ts': datetime.datetime.utcnow().isoformat(), 'ok': True}; p.write_text(json.dumps(d))\" — write timestamp to health.json. No Telegram message.",
+        "recurring": true
+      },
+      {
+        "id": "tailscale-check",
+        "schedule": "*/15 * * * *",
+        "agent": "bodhi",
+        "prompt": "Silent Tailscale check. Run: bash ~/openbodhi/docs/bodhi/scripts/tailscale-watchdog.sh — alert via Telegram only if Tailscale is down. No message if healthy.",
+        "recurring": true
       }
     ]
   },
