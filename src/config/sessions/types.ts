@@ -343,6 +343,11 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /**
+   * Runtime eligibility fingerprint used for cache invalidation when skill
+   * availability changes without a SKILL.md file watch event.
+   */
+  eligibilitySignature?: string;
   resolvedSkills?: Skill[];
   version?: number;
 };

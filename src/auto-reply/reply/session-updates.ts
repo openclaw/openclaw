@@ -4,7 +4,7 @@ import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { matchesSkillFilter } from "../../agents/skills/filter.js";
+import { matchesSkillFilter, normalizeSkillFilterForComparison } from "../../agents/skills/filter.js";
 import {
   ensureSkillsWatcher,
   getSkillsSnapshotVersion,
@@ -24,6 +24,35 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  return `{${entries
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`)
+    .join(",")}}`;
+}
+
+function resolveEligibilitySignature(params: {
+  cfg: OpenClawConfig;
+  skillFilter?: string[];
+  remoteEligibility: ReturnType<typeof getRemoteSkillEligibility>;
+}): string {
+  const payload = {
+    skills: params.cfg.skills ?? {},
+    skillFilter: normalizeSkillFilterForComparison(params.skillFilter),
+    path: process.env.PATH ?? "",
+    remote: params.remoteEligibility,
+  };
+  return crypto.createHash("sha256").update(stableStringify(payload)).digest("hex");
+}
 
 async function persistSessionEntryUpdate(params: {
   sessionStore?: Record<string, SessionEntry>;
@@ -141,20 +170,25 @@ export async function ensureSkillSnapshot(params: {
       agentId: sessionAgentId,
     }),
   });
+  const eligibilitySignature = resolveEligibilitySignature({ cfg, skillFilter, remoteEligibility });
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
     shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
-    !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
-  const buildSnapshot = () =>
-    buildWorkspaceSkillSnapshot(workspaceDir, {
+    !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter) ||
+    (existingSnapshot !== undefined &&
+      existingSnapshot.eligibilitySignature !== eligibilitySignature);
+  const buildSnapshot = () => ({
+    ...buildWorkspaceSkillSnapshot(workspaceDir, {
       config: cfg,
       agentId: sessionAgentId,
       skillFilter,
       eligibility: { remote: remoteEligibility },
       snapshotVersion,
-    });
+    }),
+    eligibilitySignature,
+  });
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
