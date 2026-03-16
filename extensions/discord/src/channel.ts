@@ -307,7 +307,11 @@ function resolveDiscordOutboundSessionRoute(params: {
 const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  formatAllowFrom: (allowFrom) =>
+    formatAllowFromLowercase({
+      allowFrom,
+      stripPrefixRe: /^(?:<@!?|discord:|user:|pk:)/i,
+    }),
   resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
 });
 

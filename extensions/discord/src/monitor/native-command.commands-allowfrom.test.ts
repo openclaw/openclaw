@@ -29,7 +29,7 @@ function createConfig(): OpenClawConfig {
   return {
     commands: {
       allowFrom: {
-        discord: ["user:123456789012345678"],
+        discord: ["123456789012345678"],
       },
     },
     channels: {
@@ -123,7 +123,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       mutateConfig: (cfg) => {
         cfg.commands = {
           allowFrom: {
-            "*": ["user:123456789012345678"],
+            "*": ["123456789012345678"],
           },
         };
       },

@@ -10,7 +10,16 @@ import {
   readFileWithinRoot,
   writeFileWithinRoot,
 } from "../infra/fs-safe.js";
-import { withWorkspaceLock } from "../infra/workspace-lock-manager.js";
+// Lazy-load workspace lock manager to avoid startup memory overhead.
+let _withWorkspaceLock:
+  | typeof import("../infra/workspace-lock-manager.js").withWorkspaceLock
+  | undefined;
+async function getWithWorkspaceLock() {
+  if (!_withWorkspaceLock) {
+    _withWorkspaceLock = (await import("../infra/workspace-lock-manager.js")).withWorkspaceLock;
+  }
+  return _withWorkspaceLock;
+}
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -390,7 +399,8 @@ export function wrapToolMutationLock(
 
       try {
         await waitForQueuedMutation(previous, signal);
-        return await withWorkspaceLock(
+        const lockFn = await getWithWorkspaceLock();
+        return await lockFn(
           lockKey,
           {
             kind: "file",
