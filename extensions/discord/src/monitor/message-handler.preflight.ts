@@ -79,15 +79,20 @@ const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
 // Cache for bot mention regexes to avoid recompilation on every message
 const botMentionRegexCache = new Map<string, RegExp>();
+const MAX_BOT_MENTION_REGEX_CACHE_KEYS = 512;
 
 /**
  * Returns a compiled regex that matches <@botId> and <@!botId> (nickname) mentions.
  * Results are cached per botId to avoid repeated regex compilation.
+ * Cache is bounded to prevent unbounded growth (mirrors mentions.ts pattern).
  */
 function getBotMentionRegex(botId: string): RegExp {
   let regex = botMentionRegexCache.get(botId);
   if (!regex) {
     regex = new RegExp(`<@!?${botId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`);
+    if (botMentionRegexCache.size >= MAX_BOT_MENTION_REGEX_CACHE_KEYS) {
+      botMentionRegexCache.clear();
+    }
     botMentionRegexCache.set(botId, regex);
   }
   return regex;
@@ -429,8 +434,13 @@ export async function preflightDiscordMessage(
   const explicitlyMentionedViaArray = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
   );
+  // Strip inline and fenced code blocks before text-based mention detection to
+  // avoid false positives from literal <@id> tokens in code snippets.
+  const textForMentionCheck = baseText
+    ? baseText.replace(/```[\s\S]*?```/g, "").replace(/`[^`]*`/g, "")
+    : undefined;
   const explicitlyMentionedViaText = Boolean(
-    botId && baseText && getBotMentionRegex(botId).test(baseText),
+    botId && textForMentionCheck && getBotMentionRegex(botId).test(textForMentionCheck),
   );
   const explicitlyMentioned = explicitlyMentionedViaArray || explicitlyMentionedViaText;
   if (explicitlyMentionedViaText && !explicitlyMentionedViaArray) {
