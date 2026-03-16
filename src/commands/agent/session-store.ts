@@ -65,9 +65,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: Date.now(),
     contextTokens,
   };
+  const isFromFallback =
+    !result.meta.agentMeta?.model && !!fallbackModel && modelUsed === fallbackModel;
   setSessionRuntimeModel(next, {
     provider: providerUsed,
     model: modelUsed,
+    isFromFallback,
   });
   if (isCliProvider(providerUsed, cfg)) {
     const cliSessionId = result.meta.agentMeta?.sessionId?.trim();

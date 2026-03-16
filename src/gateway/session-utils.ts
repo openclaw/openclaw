@@ -756,7 +756,10 @@ export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+    | Pick<
+        SessionEntry,
+        "model" | "modelProvider" | "modelOverride" | "providerOverride" | "modelIsFromFallback"
+      >,
   agentId?: string,
 ): { provider: string; model: string } {
   const resolved = agentId
@@ -772,8 +775,7 @@ export function resolveSessionModelRef(
   // not become sticky; the primary should be retried next time.
   let provider = resolved.provider;
   let model = resolved.model;
-  const isFromFallback =
-    (entry as Record<string, unknown> | undefined)?.modelIsFromFallback === true;
+  const isFromFallback = entry?.modelIsFromFallback === true;
   const runtimeModel = isFromFallback ? undefined : entry?.model?.trim();
   const runtimeProvider = isFromFallback ? undefined : entry?.modelProvider?.trim();
   if (runtimeModel) {
@@ -817,7 +819,10 @@ export function resolveSessionModelIdentityRef(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+    | Pick<
+        SessionEntry,
+        "model" | "modelProvider" | "modelOverride" | "providerOverride" | "modelIsFromFallback"
+      >,
   agentId?: string,
 ): { provider?: string; model: string } {
   const runtimeModel = entry?.model?.trim();
