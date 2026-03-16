@@ -127,12 +127,18 @@ export type {
   UsageWindow,
 } from "../infra/provider-usage.types.js";
 export type {
+  BindingTargetKind,
   ConversationRef,
+  SessionBindingAdapter,
   SessionBindingBindInput,
   SessionBindingCapabilities,
   SessionBindingRecord,
   SessionBindingService,
   SessionBindingUnbindInput,
+} from "../infra/outbound/session-binding-service.js";
+export {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 export type {
   GatewayRequestHandler,

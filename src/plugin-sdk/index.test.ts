@@ -96,6 +96,8 @@ describe("plugin-sdk exports", () => {
       "resolveChannelEntryMatchWithFallback",
       "normalizeChannelSlug",
       "buildChannelKeyCandidates",
+      "registerSessionBindingAdapter",
+      "unregisterSessionBindingAdapter",
     ];
 
     for (const key of requiredFunctions) {
