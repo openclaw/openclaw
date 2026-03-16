@@ -81,8 +81,9 @@ describe("provider-runtime", () => {
       displayName: "Demo",
       windows: [{ label: "Day", usedPercent: 25 }],
     }));
-    resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) => {
-      if (params?.onlyPluginIds?.includes("openai")) {
+    resolvePluginProvidersMock.mockImplementation((params: unknown) => {
+      const scopedParams = params as { onlyPluginIds?: string[] } | undefined;
+      if (scopedParams?.onlyPluginIds?.includes("openai")) {
         return [
           {
             id: "openai",
