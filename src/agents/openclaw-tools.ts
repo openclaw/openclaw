@@ -24,6 +24,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
+import { createBlinkSecretsTool } from "./tools/blink-secrets.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -110,6 +111,7 @@ export function createOpenClawTools(
         fsPolicy: options?.fsPolicy,
       })
     : null;
+  const blinkSecretsTool = createBlinkSecretsTool();
   const webSearchTool = createWebSearchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
@@ -210,8 +212,9 @@ export function createOpenClawTools(
       config: options?.config,
       sandboxed: options?.sandboxed,
     }),
-    ...(webSearchTool ? [webSearchTool] : []),
-    ...(webFetchTool ? [webFetchTool] : []),
+  ...(webSearchTool ? [webSearchTool] : []),
+  ...(webFetchTool ? [webFetchTool] : []),
+  ...(blinkSecretsTool ? [blinkSecretsTool] : []),
     ...(imageTool ? [imageTool] : []),
     ...(pdfTool ? [pdfTool] : []),
   ];
