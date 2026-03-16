@@ -180,8 +180,10 @@ export function createHandoffCapsule(params: CreateHandoffParams): HandoffCapsul
   };
 
   // ── 1. Capability proof ──────────────────────────────────────────────────
+  // expiresAt is bound into the MAC so an attacker cannot extend a capsule's
+  // validity by modifying header.expiresAt without breaking the proof.
   const capabilityInput = Buffer.from(
-    `${senderAgentId}:${receiverAgentId}:${taskHash}:${handoffNonce}:${issuedAt}`,
+    `${senderAgentId}:${receiverAgentId}:${taskHash}:${handoffNonce}:${issuedAt}:${expiresAt}`,
     "utf8",
   );
   const capabilityProof = createHmac("sha256", gatewayKey).update(capabilityInput).digest("hex");
@@ -208,10 +210,13 @@ export function createHandoffCapsule(params: CreateHandoffParams): HandoffCapsul
   const contextTag = tag.toString("base64url");
 
   // ── 4. Capsule integrity hash ────────────────────────────────────────────
+  // contextTag (AES-GCM auth tag) is included so all serialised capsule fields
+  // are covered and the hash is a complete pre-decryption integrity check.
   const handoffHash = createHash("sha256")
     .update(capabilityProof, "hex")
     .update(encryptedContext, "utf8")
     .update(contextIv, "utf8")
+    .update(contextTag, "utf8")
     .digest("hex");
 
   const capsule: HandoffCapsule = {
@@ -293,19 +298,20 @@ export function receiveHandoffCapsule(
     return fail("handoff capsule has expired");
   }
 
-  // 3. Capsule integrity hash
+  // 3. Capsule integrity hash (must match sealer: covers proof, ciphertext, iv, and tag)
   const expectedHash = createHash("sha256")
     .update(capsule.capabilityProof, "hex")
     .update(capsule.encryptedContext, "utf8")
     .update(capsule.contextIv, "utf8")
+    .update(capsule.contextTag, "utf8")
     .digest("hex");
   if (!timingSafeCompare(capsule.handoffHash, expectedHash)) {
     return fail("handoff capsule integrity check failed");
   }
 
-  // 4. Verify capability proof
+  // 4. Verify capability proof (expiresAt must be bound in to match the sealer)
   const capabilityInput = Buffer.from(
-    `${header.senderAgentId}:${header.receiverAgentId}:${header.taskHash}:${header.handoffNonce}:${header.issuedAt}`,
+    `${header.senderAgentId}:${header.receiverAgentId}:${header.taskHash}:${header.handoffNonce}:${header.issuedAt}:${header.expiresAt}`,
     "utf8",
   );
   const expectedProof = createHmac("sha256", gatewayKey).update(capabilityInput).digest("hex");

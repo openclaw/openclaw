@@ -124,7 +124,8 @@ describe("receiveHandoffCapsule — rejects", () => {
   it("rejects a capsule with tampered capability proof", () => {
     const capsule = createHandoffCapsule(BASE_PARAMS);
     const fakeProof = capsule.capabilityProof.slice(0, -4) + "0000";
-    // Recompute handoffHash to pass integrity check, but the MAC itself is wrong
+    // Recompute handoffHash to pass integrity check, but the MAC itself is wrong.
+    // Must include contextTag to match the updated hash construction.
     const rehashedCapsule = {
       ...capsule,
       capabilityProof: fakeProof,
@@ -132,6 +133,7 @@ describe("receiveHandoffCapsule — rejects", () => {
         .update(fakeProof, "hex")
         .update(capsule.encryptedContext, "utf8")
         .update(capsule.contextIv, "utf8")
+        .update(capsule.contextTag, "utf8")
         .digest("hex"),
     };
     const result = receiveHandoffCapsule(rehashedCapsule, RECEIVER_ID, GATEWAY_KEY);

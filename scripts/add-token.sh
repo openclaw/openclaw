@@ -158,9 +158,10 @@ run_in_container mkdir -p /home/node/.openclaw/agents/main/agent
 
 EXISTING="$(run_in_container sh -c "cat $AUTH_PATH 2>/dev/null || echo '{}'")"
 
-# Merge the new profile using python3 (available in the container)
-UPDATED="$(echo "$EXISTING" | docker exec -i "$CONTAINER" python3 -c "
-import json, sys
+# Merge the new profile using python3 (available in the container).
+# API_KEY is passed via -e so it never gets interpolated into Python source code.
+UPDATED="$(echo "$EXISTING" | docker exec -i -e "OPENCLAW_NEW_API_KEY=$API_KEY" "$CONTAINER" python3 -c "
+import json, sys, os
 
 data = json.load(sys.stdin)
 if 'version' not in data:
@@ -171,7 +172,7 @@ if 'profiles' not in data or not isinstance(data.get('profiles'), dict):
 data['profiles']['$PROFILE_ID'] = {
     'type': 'api_key',
     'provider': '$PROVIDER',
-    'key': '$API_KEY'
+    'key': os.environ['OPENCLAW_NEW_API_KEY']
 }
 
 print(json.dumps(data, indent=2))

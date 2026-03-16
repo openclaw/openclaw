@@ -39,10 +39,12 @@ const [
   { installProcessWarningFilter },
   { getActivePluginRegistry, setActivePluginRegistry },
   { createTestRegistry },
+  { formatAllowFromLowercase },
 ] = await Promise.all([
   import("../src/infra/warning-filter.js"),
   import("../src/plugins/runtime.js"),
   import("../src/test-utils/channel-plugins.js"),
+  import("../src/plugin-sdk/allow-from.js"),
 ]);
 
 installProcessWarningFilter();
@@ -131,7 +133,21 @@ const createDefaultRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",
-      plugin: createStubPlugin({ id: "discord", label: "Discord" }),
+      plugin: {
+        ...createStubPlugin({ id: "discord", label: "Discord" }),
+        config: {
+          ...createStubPlugin({ id: "discord", label: "Discord" }).config,
+          // Strip discord-specific prefixes (user:, discord:, @, <@!?>) so that
+          // commands.allowFrom.discord entries like "user:ID" match bare sender IDs.
+          formatAllowFrom: ({
+            allowFrom,
+          }: {
+            cfg: OpenClawConfig;
+            accountId?: string | null;
+            allowFrom: Array<string | number>;
+          }) => formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(user:|discord:|@|<@!?)/i }),
+        },
+      },
       source: "test",
     },
     {

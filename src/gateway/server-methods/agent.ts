@@ -368,25 +368,34 @@ export const agentHandlers: GatewayRequestHandlers = {
       // Verify ZK handoff capsule when present — covers both subagent spawns
       // (parent → child) and peer-to-peer A2A steps (sibling → sibling).
       if (request.zkHandoffCapsule) {
+        let zkCapsule: Record<string, unknown> | undefined;
         try {
-          const capsule = JSON.parse(request.zkHandoffCapsule) as Record<string, unknown>;
-          const header = capsule?.header as Record<string, unknown> | undefined;
+          zkCapsule = JSON.parse(request.zkHandoffCapsule) as Record<string, unknown>;
+        } catch {
+          // Malformed JSON — skip ZK checks, allow dispatch.
+        }
+        if (zkCapsule) {
+          const header = zkCapsule?.header as Record<string, unknown> | undefined;
           if (header?.handoffNonce && typeof header.expiresAt === "number") {
-            _zkNonceRegistry.checkAndRegister(
+            const isReplay = _zkNonceRegistry.checkAndRegister(
               typeof header.handoffNonce === "string"
                 ? header.handoffNonce
                 : JSON.stringify(header.handoffNonce),
               header.expiresAt,
               canonicalKey,
             );
+            if (isReplay) {
+              throw new Error("ZK handoff replay detected — request rejected");
+            }
           }
-          receiveHandoffCapsule(
-            capsule as unknown as HandoffCapsule,
+          const verifyResult = receiveHandoffCapsule(
+            zkCapsule as unknown as HandoffCapsule,
             sessionAgent ?? canonicalKey,
             resolveZkSpawnKey(),
           );
-        } catch {
-          // Verification failure must never block agent dispatch.
+          if (!verifyResult.valid) {
+            throw new Error(`ZK handoff verification failed: ${verifyResult.reason}`);
+          }
         }
       }
       let inheritedGroup:
