@@ -401,7 +401,7 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+compdef _${rootCmd}_root_completion ${rootCmd} 2>/dev/null || true
 `;
   return script;
 }
@@ -442,19 +442,17 @@ function generateZshSubcmdList(cmd: Command): string {
 }
 
 function generateZshSubcommands(program: Command, prefix: string): string {
-  const segments: string[] = [];
+  let script = "";
+  for (const cmd of program.commands) {
+    const cmdName = cmd.name();
+    const funcName = `_${prefix}_${cmdName.replace(/-/g, "_")}`;
 
-  const visit = (current: Command, currentPrefix: string) => {
-    for (const cmd of current.commands) {
-      const cmdName = cmd.name();
-      const nextPrefix = `${currentPrefix}_${cmdName.replace(/-/g, "_")}`;
-      const funcName = `_${nextPrefix}`;
+    // Recurse first
+    script += generateZshSubcommands(cmd, `${prefix}_${cmdName.replace(/-/g, "_")}`);
 
-      visit(cmd, nextPrefix);
-
-      const subCommands = cmd.commands;
-      if (subCommands.length > 0) {
-        segments.push(`
+    const subCommands = cmd.commands;
+    if (subCommands.length > 0) {
+      script += `
 ${funcName}() {
   local -a commands
   local -a options
@@ -472,21 +470,17 @@ ${funcName}() {
       ;;
   esac
 }
-`);
-        continue;
-      }
-
-      segments.push(`
+`;
+    } else {
+      script += `
 ${funcName}() {
   _arguments -C \\
     ${generateZshArgs(cmd)}
 }
-`);
+`;
     }
-  };
-
-  visit(program, prefix);
-  return segments.join("");
+  }
+  return script;
 }
 
 function generateBashCompletion(program: Command): string {
@@ -534,10 +528,11 @@ function generateBashSubcommand(cmd: Command): string {
 
 function generatePowerShellCompletion(program: Command): string {
   const rootCmd = program.name();
-  const segments: string[] = [];
 
-  const visit = (cmd: Command, pathSegments: string[]) => {
+  const visit = (cmd: Command, pathSegments: string[]): string => {
     const fullPath = pathSegments.join(" ");
+
+    let script = "";
 
     // Command completion for this level
     const subCommands = cmd.commands.map((c) => c.name());
@@ -545,23 +540,25 @@ function generatePowerShellCompletion(program: Command): string {
     const allCompletions = [...subCommands, ...options].map((s) => `'${s}'`).join(",");
 
     if (fullPath.length > 0 && allCompletions.length > 0) {
-      segments.push(`
+      script += `
             if ($commandPath -eq '${fullPath}') {
                 $completions = @(${allCompletions})
                 $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                     [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
                 }
             }
-`);
+`;
     }
 
+    // Recurse
     for (const sub of cmd.commands) {
-      visit(sub, [...pathSegments, sub.name()]);
+      script += visit(sub, [...pathSegments, sub.name()]);
     }
+
+    return script;
   };
 
-  visit(program, []);
-  const rootBody = segments.join("");
+  const rootBody = visit(program, []);
 
   return `
 Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
@@ -595,57 +592,61 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
 
 function generateFishCompletion(program: Command): string {
   const rootCmd = program.name();
-  const segments: string[] = [];
+  let script = "";
 
   const visit = (cmd: Command, parents: string[]) => {
     const cmdName = cmd.name();
+
+    // Fish uses 'seen_subcommand_from' to determine context.
+    // For root: complete -c openclaw -n "__fish_use_subcommand" -a "subcmd" -d "desc"
 
     // Root logic
     if (parents.length === 0) {
       // Subcommands of root
       for (const sub of cmd.commands) {
-        segments.push(
-          buildFishSubcommandCompletionLine({
-            rootCmd,
-            condition: "__fish_use_subcommand",
-            name: sub.name(),
-            description: sub.description(),
-          }),
-        );
+        script += buildFishSubcommandCompletionLine({
+          rootCmd,
+          condition: "__fish_use_subcommand",
+          name: sub.name(),
+          description: sub.description(),
+        });
       }
       // Options of root
       for (const opt of cmd.options) {
-        segments.push(
-          buildFishOptionCompletionLine({
-            rootCmd,
-            condition: "__fish_use_subcommand",
-            flags: opt.flags,
-            description: opt.description,
-          }),
-        );
+        script += buildFishOptionCompletionLine({
+          rootCmd,
+          condition: "__fish_use_subcommand",
+          flags: opt.flags,
+          description: opt.description,
+        });
       }
     } else {
+      // Nested commands
+      // Logic: if seen subcommand matches parents...
+      // But fish completion logic is simpler if we just say "if we haven't seen THIS command yet but seen parent"
+      // Actually, a robust fish completion often requires defining a function to check current line.
+      // For simplicity, we'll assume standard fish helper __fish_seen_subcommand_from.
+
+      // To properly scope to 'openclaw gateway' and not 'openclaw other gateway', we need to check the sequence.
+      // A simplified approach:
+
       // Subcommands
       for (const sub of cmd.commands) {
-        segments.push(
-          buildFishSubcommandCompletionLine({
-            rootCmd,
-            condition: `__fish_seen_subcommand_from ${cmdName}`,
-            name: sub.name(),
-            description: sub.description(),
-          }),
-        );
+        script += buildFishSubcommandCompletionLine({
+          rootCmd,
+          condition: `__fish_seen_subcommand_from ${cmdName}`,
+          name: sub.name(),
+          description: sub.description(),
+        });
       }
       // Options
       for (const opt of cmd.options) {
-        segments.push(
-          buildFishOptionCompletionLine({
-            rootCmd,
-            condition: `__fish_seen_subcommand_from ${cmdName}`,
-            flags: opt.flags,
-            description: opt.description,
-          }),
-        );
+        script += buildFishOptionCompletionLine({
+          rootCmd,
+          condition: `__fish_seen_subcommand_from ${cmdName}`,
+          flags: opt.flags,
+          description: opt.description,
+        });
       }
     }
 
@@ -655,5 +656,5 @@ function generateFishCompletion(program: Command): string {
   };
 
   visit(program, []);
-  return segments.join("");
+  return script;
 }
