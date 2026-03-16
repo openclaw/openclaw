@@ -9,7 +9,6 @@ import {
   splitOnboardingEntries,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { DmPolicy } from "../../../src/config/types.js";
 import type { SecretInput } from "../../../src/config/types.secrets.js";
@@ -18,6 +17,7 @@ import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import { listFeishuAccountIds, resolveFeishuCredentials } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
+import { feishuSetupAdapter } from "./setup-core.js";
 import type { FeishuConfig } from "./types.js";
 
 const channel = "feishu" as const;
@@ -28,30 +28,6 @@ function normalizeString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
-}
-
-function setFeishuNamedAccountEnabled(
-  cfg: OpenClawConfig,
-  accountId: string,
-  enabled: boolean,
-): OpenClawConfig {
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      feishu: {
-        ...feishuCfg,
-        accounts: {
-          ...feishuCfg?.accounts,
-          [accountId]: {
-            ...feishuCfg?.accounts?.[accountId],
-            enabled,
-          },
-        },
-      },
-    },
-  };
 }
 
 function setFeishuDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
@@ -211,25 +187,7 @@ const feishuDmPolicy: ChannelOnboardingDmPolicy = {
   promptAllowFrom: promptFeishuAllowFrom,
 };
 
-export const feishuSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: () => DEFAULT_ACCOUNT_ID,
-  applyAccountConfig: ({ cfg, accountId }) => {
-    const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
-    if (isDefault) {
-      return {
-        ...cfg,
-        channels: {
-          ...cfg.channels,
-          feishu: {
-            ...cfg.channels?.feishu,
-            enabled: true,
-          },
-        },
-      };
-    }
-    return setFeishuNamedAccountEnabled(cfg, accountId, true);
-  },
-};
+export { feishuSetupAdapter } from "./setup-core.js";
 
 export const feishuSetupWizard: ChannelSetupWizard = {
   channel,

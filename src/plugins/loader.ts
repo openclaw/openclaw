@@ -5,6 +5,7 @@ import { createJiti } from "jiti";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { isChannelConfigured } from "../config/plugin-auto-enable.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -355,6 +356,20 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
     plugin: setup.plugin as ChannelPlugin,
     ...(setup.dock && typeof setup.dock === "object" ? { dock: setup.dock as ChannelDock } : {}),
   };
+}
+
+function shouldLoadChannelPluginInSetupRuntime(params: {
+  manifestChannels: string[];
+  setupSource?: string;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  if (!params.setupSource || params.manifestChannels.length === 0) {
+    return false;
+  }
+  return !params.manifestChannels.some((channelId) =>
+    isChannelConfigured(params.cfg, channelId, params.env),
+  );
 }
 
 function createPluginRecord(params: {
@@ -924,7 +939,15 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     };
 
     const registrationMode = enableState.enabled
-      ? "full"
+      ? !validateOnly &&
+        shouldLoadChannelPluginInSetupRuntime({
+          manifestChannels: manifestRecord.channels,
+          setupSource: manifestRecord.setupSource,
+          cfg,
+          env,
+        })
+        ? "setup-runtime"
+        : "full"
       : includeSetupOnlyChannelPlugins && !validateOnly && manifestRecord.channels.length > 0
         ? "setup-only"
         : null;
@@ -994,7 +1017,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
     const loadSource =
-      registrationMode === "setup-only" && manifestRecord.setupSource
+      (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
+      manifestRecord.setupSource
         ? manifestRecord.setupSource
         : candidate.source;
     const opened = openBoundaryFileSync({
@@ -1029,7 +1053,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
-    if (registrationMode === "setup-only" && manifestRecord.setupSource) {
+    if (
+      (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
+      manifestRecord.setupSource
+    ) {
       const setupRegistration = resolveSetupChannelRegistration(mod);
       if (setupRegistration.plugin) {
         if (setupRegistration.plugin.id && setupRegistration.plugin.id !== record.id) {

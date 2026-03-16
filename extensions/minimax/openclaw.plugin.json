@@ -1,6 +1,6 @@
 {
   "id": "minimax",
-  "providers": ["minimax"],
+  "providers": ["minimax", "minimax-portal"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
