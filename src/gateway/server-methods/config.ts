@@ -247,7 +247,7 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const pluginRegistry = loadOpenClawPlugins({
     config: cfg,
-    cache: true,
+    cache: false,
     workspaceDir,
     logger: {
       info: () => {},

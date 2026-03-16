@@ -144,6 +144,7 @@ export function resolvePluginProviders(params: {
     onlyPluginIds: params.onlyPluginIds,
     logger: createPluginLoaderLogger(log),
     activate: false,
+    cache: false,
   });
 
   return registry.providers.map((entry) => ({

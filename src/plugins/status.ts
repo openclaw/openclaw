@@ -30,6 +30,7 @@ export function buildPluginStatusReport(params?: {
     env: params?.env,
     logger: createPluginLoaderLogger(log),
     activate: false,
+    cache: false,
   });
 
   return {
