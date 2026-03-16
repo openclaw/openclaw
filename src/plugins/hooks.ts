@@ -30,6 +30,8 @@ import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookThinkingStartEvent,
+  PluginHookThinkingEndEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -100,6 +102,8 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookThinkingStartEvent,
+  PluginHookThinkingEndEvent,
 };
 
 export type HookRunnerLogger = {
@@ -901,6 +905,30 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("gateway_stop", event, ctx);
   }
 
+  /**
+   * Run thinking_start hook.
+   * Fires when the agent begins a thinking/reasoning phase.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runThinkingStart(
+    event: PluginHookThinkingStartEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("thinking_start", event, ctx);
+  }
+
+  /**
+   * Run thinking_end hook.
+   * Fires when the agent completes a thinking/reasoning phase.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runThinkingEnd(
+    event: PluginHookThinkingEndEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("thinking_end", event, ctx);
+  }
+
   // =========================================================================
   // Utility
   // =========================================================================
@@ -953,6 +981,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Thinking hooks
+    runThinkingStart,
+    runThinkingEnd,
     // Utility
     hasHooks,
     getHookCount,

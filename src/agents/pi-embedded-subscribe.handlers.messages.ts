@@ -2,6 +2,7 @@ import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -98,7 +99,20 @@ export function handleMessageUpdate(
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
-      ctx.state.reasoningStreamOpen = true;
+      if (!ctx.state.reasoningStreamOpen) {
+        ctx.state.reasoningStreamOpen = true;
+        // Emit thinking_start hook on first thinking event
+        const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
+        if (hookRunner?.hasHooks("thinking_start")) {
+          void hookRunner.runThinkingStart(
+            { runId: ctx.params.runId },
+            {
+              agentId: ctx.params.agentId,
+              sessionKey: ctx.params.sessionKey,
+            },
+          );
+        }
+      }
     }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
@@ -122,6 +136,21 @@ export function handleMessageUpdate(
         ctx.state.reasoningStreamOpen = true;
       }
       emitReasoningEnd(ctx);
+      // Emit thinking_end hook
+      const hookRunner = ctx.hookRunner ?? getGlobalHookRunner();
+      if (hookRunner?.hasHooks("thinking_end")) {
+        const fullThinking = extractAssistantThinking(msg);
+        void hookRunner.runThinkingEnd(
+          {
+            runId: ctx.params.runId,
+            text: fullThinking || thinkingContent || undefined,
+          },
+          {
+            agentId: ctx.params.agentId,
+            sessionKey: ctx.params.sessionKey,
+          },
+        );
+      }
     }
     return;
   }

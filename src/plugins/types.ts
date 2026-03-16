@@ -1265,6 +1265,8 @@ export type PluginHookName =
   | "subagent_delivery_target"
   | "subagent_spawned"
   | "subagent_ended"
+  | "thinking_start"
+  | "thinking_end"
   | "gateway_start"
   | "gateway_stop";
 
@@ -1292,6 +1294,8 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_delivery_target",
   "subagent_spawned",
   "subagent_ended",
+  "thinking_start",
+  "thinking_end",
   "gateway_start",
   "gateway_stop",
 ] as const satisfies readonly PluginHookName[];
@@ -1447,6 +1451,16 @@ export type PluginHookAgentEndEvent = {
   success: boolean;
   error?: string;
   durationMs?: number;
+  /** Token usage totals for this agent run. */
+  tokenUsage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+  /** Number of tool calls made during this agent run. */
+  toolCallCount?: number;
 };
 
 // Compaction hooks
@@ -1739,6 +1753,22 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// thinking_start hook
+export type PluginHookThinkingStartEvent = {
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+};
+
+// thinking_end hook
+export type PluginHookThinkingEndEvent = {
+  /** Stable run identifier for this agent invocation. */
+  runId?: string;
+  /** Full thinking/reasoning text. */
+  text?: string;
+  /** Duration of the thinking phase in milliseconds. */
+  durationMs?: number;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -1840,6 +1870,14 @@ export type PluginHookHandlerMap = {
   gateway_stop: (
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+  thinking_start: (
+    event: PluginHookThinkingStartEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  thinking_end: (
+    event: PluginHookThinkingEndEvent,
+    ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
 };
 
