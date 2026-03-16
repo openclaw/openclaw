@@ -638,6 +638,64 @@ describe("modelsAuthCleanCommand", () => {
     expect(mocks.ensureAuthProfileStore).not.toHaveBeenCalled();
   });
 
+  // ---- Fix: preserve store-fallback profiles (P2 #2928322204) ----
+
+  it("preserves store-only profiles whose provider has no explicitly-configured profile", async () => {
+    // "openai:default" is a store-fallback: it lives only in the store, the provider
+    // "openai" has NO entry in auth.profiles, auth.order, or tools.media.
+    // Meanwhile "anthropic:me.com" IS configured, so configuredProfiles.size > 0
+    // and the empty-config guard does not trigger.  Without the fix, openai:default
+    // would be wrongly added to toRemove.
+    const store = makeStore(["anthropic:me.com", "openai:default"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    // openai:default is a store-fallback: its provider has no configured profiles
+    // → should be preserved, nothing to clean
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
+  });
+
+  it("still removes stale profiles when the same provider has configured profiles", async () => {
+    // "anthropic:manual" is in the store but NOT configured. Its provider "anthropic"
+    // already has a configured profile ("anthropic:me.com"), so anthropic:manual is
+    // genuinely stale (not a store-fallback) and should be removed.
+    const store = makeStore(["anthropic:me.com", "anthropic:manual", "openai:default"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+    const capture = captureUpdater(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    // anthropic:manual removed (provider has configured profiles)
+    expect(capture.result.profiles).not.toHaveProperty("anthropic:manual");
+    // openai:default kept (provider has no configured profiles — store-fallback)
+    expect(capture.result.profiles).toHaveProperty("openai:default");
+    expect(capture.result.profiles).toHaveProperty("anthropic:me.com");
+  });
+
+  it("preserves multiple store-fallback profiles from different unconfigured providers", async () => {
+    // Both "openai:default" and "google:default" are store-fallback entries —
+    // their providers have no configured profiles.
+    const store = makeStore(["anthropic:me.com", "openai:default", "google:default"]);
+
+    mocks.loadModelsConfig.mockResolvedValue(makeCfg(["anthropic:me.com"]));
+    mocks.ensureAuthProfileStore.mockReturnValue(store);
+
+    const runtime = makeRuntime();
+    await modelsAuthCleanCommand({}, runtime);
+
+    // Both fallback profiles preserved — nothing to clean
+    expect(mocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(runtime.logs.join("\n")).toContain("Nothing to clean");
+  });
+
   // ---- Fix: sanitize ANSI escape codes in profile ID output (Aisle Low) ----
 
   it("strips ANSI escape sequences from profile IDs in --dry-run output", async () => {
