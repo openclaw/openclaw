@@ -51939,6 +51939,48 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.installs.*.marketplaceName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Marketplace Name",
+      "help": "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.marketplacePlugin",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Marketplace Plugin",
+      "help": "Plugin entry name inside the source marketplace, used for later updates.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.marketplaceSource",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Marketplace Source",
+      "help": "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.installs.*.resolvedAt",
       "kind": "core",
       "type": "string",
