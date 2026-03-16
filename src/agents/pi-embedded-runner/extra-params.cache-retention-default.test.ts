@@ -178,4 +178,53 @@ describe("cacheRetention default behavior", () => {
       }),
     );
   });
+
+  it("drops stale function toolChoice selections that are not in the allowed tool set", async () => {
+    const baseStreamFn = vi.fn(async () => undefined);
+    const agent: { streamFn?: StreamFn } = { streamFn: baseStreamFn as unknown as StreamFn };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4.1": {
+              params: {
+                toolChoice: {
+                  type: "function",
+                  function: {
+                    name: "bash",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(
+      agent,
+      cfg,
+      "openai",
+      "gpt-4.1",
+      undefined,
+      undefined,
+      undefined,
+      new Set(["emit_structured_result"]),
+    );
+
+    expect(agent.streamFn).toBeDefined();
+    await agent.streamFn?.(
+      { api: "openai-responses", provider: "openai", id: "gpt-4.1", compat: {} } as never,
+      {} as never,
+      {},
+    );
+
+    expect(baseStreamFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        toolChoice: "auto",
+      }),
+    );
+  });
 });

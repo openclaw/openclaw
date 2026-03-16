@@ -8,6 +8,7 @@ import {
   prepareProviderExtraParams,
   wrapProviderStreamFn,
 } from "../../plugins/provider-runtime.js";
+import { normalizeToolName } from "../tool-policy.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -81,9 +82,9 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   toolChoice?: NonNullable<AgentStreamParams["toolChoice"]>;
 };
 
-function isToolChoiceOverride(
-  value: unknown,
-): value is NonNullable<AgentStreamParams["toolChoice"]> {
+type ToolChoiceOverride = NonNullable<AgentStreamParams["toolChoice"]>;
+
+function isToolChoiceOverride(value: unknown): value is ToolChoiceOverride {
   if (value === "auto" || value === "none" || value === "required") {
     return true;
   }
@@ -98,6 +99,79 @@ function isToolChoiceOverride(
     typeof fn === "object" &&
     typeof (fn as Record<string, unknown>).name === "string"
   );
+}
+
+function resolveAllowedToolChoiceName(
+  rawName: string,
+  allowedToolNames?: Set<string>,
+): string | undefined {
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return undefined;
+  }
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (allowedToolNames.has(trimmed)) {
+    return trimmed;
+  }
+  const normalized = normalizeToolName(trimmed);
+  if (allowedToolNames.has(normalized)) {
+    return normalized;
+  }
+  const lowered = normalized.toLowerCase();
+  let caseInsensitiveMatch: string | undefined;
+  for (const candidate of allowedToolNames) {
+    if (candidate.toLowerCase() !== lowered) {
+      continue;
+    }
+    if (caseInsensitiveMatch && caseInsensitiveMatch !== candidate) {
+      return undefined;
+    }
+    caseInsensitiveMatch = candidate;
+  }
+  return caseInsensitiveMatch;
+}
+
+function sanitizeToolChoiceOverride(
+  extraParams: Record<string, unknown> | undefined,
+  allowedToolNames?: Set<string>,
+): Record<string, unknown> | undefined {
+  if (!extraParams || !isToolChoiceOverride(extraParams.toolChoice)) {
+    return extraParams;
+  }
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    if (extraParams.toolChoice === "none") {
+      return extraParams;
+    }
+    return {
+      ...extraParams,
+      toolChoice: "none",
+    };
+  }
+  const toolChoice = extraParams.toolChoice;
+  if (toolChoice === "auto" || toolChoice === "none" || toolChoice === "required") {
+    return extraParams;
+  }
+  const resolvedName = resolveAllowedToolChoiceName(toolChoice.function.name, allowedToolNames);
+  if (!resolvedName) {
+    return {
+      ...extraParams,
+      toolChoice: "auto",
+    };
+  }
+  if (resolvedName === toolChoice.function.name) {
+    return extraParams;
+  }
+  return {
+    ...extraParams,
+    toolChoice: {
+      type: "function",
+      function: {
+        name: resolvedName,
+      },
+    },
+  };
 }
 
 function createStreamFnWithExtraParams(
@@ -301,6 +375,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  allowedToolNames?: Set<string>,
 ): void {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -327,6 +402,7 @@ export function applyExtraParamsToAgent(
         thinkingLevel,
       },
     }) ?? merged;
+  const sanitizedExtraParams = sanitizeToolChoiceOverride(effectiveExtraParams, allowedToolNames);
 
   if (provider === "openai" || provider === "openai-codex") {
     if (provider === "openai") {
@@ -337,7 +413,7 @@ export function applyExtraParamsToAgent(
   }
   const wrappedStreamFn = createStreamFnWithExtraParams(
     agent.streamFn,
-    effectiveExtraParams,
+    sanitizedExtraParams,
     provider,
   );
 
@@ -346,7 +422,7 @@ export function applyExtraParamsToAgent(
     agent.streamFn = wrappedStreamFn;
   }
 
-  const anthropicBetas = resolveAnthropicBetas(effectiveExtraParams, provider, modelId);
+  const anthropicBetas = resolveAnthropicBetas(sanitizedExtraParams, provider, modelId);
   if (anthropicBetas?.length) {
     log.debug(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
@@ -370,7 +446,7 @@ export function applyExtraParamsToAgent(
       config: cfg,
       provider,
       modelId,
-      extraParams: effectiveExtraParams,
+      extraParams: sanitizedExtraParams,
       thinkingLevel,
       streamFn: providerStreamBase,
     },
@@ -384,7 +460,7 @@ export function applyExtraParamsToAgent(
     // actually handled the stream function. This covers tests/disabled plugins
     // and Ollama Cloud Kimi models until they gain a dedicated runtime hook.
     const thinkingType = resolveMoonshotThinkingType({
-      configuredThinking: effectiveExtraParams?.thinking,
+      configuredThinking: sanitizedExtraParams?.thinking,
       thinkingLevel,
     });
     agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
@@ -398,7 +474,7 @@ export function applyExtraParamsToAgent(
   // Enable Z.AI tool_stream for real-time tool call streaming.
   // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
   if (provider === "zai" || provider === "z-ai") {
-    const toolStreamEnabled = effectiveExtraParams?.tool_stream !== false;
+    const toolStreamEnabled = sanitizedExtraParams?.tool_stream !== false;
     if (toolStreamEnabled) {
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
@@ -409,19 +485,19 @@ export function applyExtraParamsToAgent(
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
-  const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
+  const anthropicFastMode = resolveAnthropicFastMode(sanitizedExtraParams);
   if (anthropicFastMode !== undefined) {
     log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
     agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
   }
 
-  const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);
+  const openAIFastMode = resolveOpenAIFastMode(sanitizedExtraParams);
   if (openAIFastMode) {
     log.debug(`applying OpenAI fast mode for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIFastModeWrapper(agent.streamFn);
   }
 
-  const openAIServiceTier = resolveOpenAIServiceTier(effectiveExtraParams);
+  const openAIServiceTier = resolveOpenAIServiceTier(sanitizedExtraParams);
   if (openAIServiceTier) {
     log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
     agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
@@ -432,7 +508,7 @@ export function applyExtraParamsToAgent(
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(
     agent.streamFn,
-    effectiveExtraParams,
+    sanitizedExtraParams,
   );
 
   const rawParallelToolCalls = resolveAliasedParamValue(
