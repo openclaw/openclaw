@@ -57,24 +57,28 @@ function resolveModelSelectionForCommand(params: {
   });
 }
 
+async function resolveModelInfoReply(
+  overrides: Partial<Parameters<typeof maybeHandleModelDirectiveInfo>[0]> = {},
+) {
+  return maybeHandleModelDirectiveInfo({
+    directives: parseInlineDirectives("/model"),
+    cfg: baseConfig(),
+    agentDir: "/tmp/agent",
+    activeAgentId: "main",
+    provider: "anthropic",
+    model: "claude-opus-4-5",
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-5",
+    aliasIndex: baseAliasIndex(),
+    allowedModelCatalog: [],
+    resetModelOverride: false,
+    ...overrides,
+  });
+}
+
 describe("/model chat UX", () => {
   it("shows summary for /model with no args", async () => {
-    const directives = parseInlineDirectives("/model");
-    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
-
-    const reply = await maybeHandleModelDirectiveInfo({
-      directives,
-      cfg,
-      agentDir: "/tmp/agent",
-      activeAgentId: "main",
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-      aliasIndex: baseAliasIndex(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
-    });
+    const reply = await resolveModelInfoReply();
 
     expect(reply?.text).toContain("Current:");
     expect(reply?.text).toContain("Browse: /models");
@@ -82,21 +86,11 @@ describe("/model chat UX", () => {
   });
 
   it("shows active runtime model when different from selected model", async () => {
-    const directives = parseInlineDirectives("/model");
-    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
-
-    const reply = await maybeHandleModelDirectiveInfo({
-      directives,
-      cfg,
-      agentDir: "/tmp/agent",
-      activeAgentId: "main",
+    const reply = await resolveModelInfoReply({
       provider: "fireworks",
       model: "fireworks/minimax-m2p5",
       defaultProvider: "fireworks",
       defaultModel: "fireworks/minimax-m2p5",
-      aliasIndex: baseAliasIndex(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
       sessionEntry: {
         modelProvider: "deepinfra",
         model: "moonshotai/Kimi-K2.5",
@@ -282,5 +276,117 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
+  });
+
+  it("stores future-thread default on parent Telegram chat when /model is set in a topic", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const threadSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const sessionEntry = createSessionEntry();
+    const parentEntry = createSessionEntry({ sessionId: "parent-1" });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to openai/gpt-4o");
+    expect(result?.text).toContain("New threads in this chat will default to openai/gpt-4o");
+    expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBe("openai");
+    expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBe("gpt-4o");
+  });
+
+  it("stores future-thread default on main parent for Telegram DM main-scoped thread keys", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const threadSessionKey = "agent:main:main:thread:123456789:42";
+    const parentSessionKey = "agent:main:main";
+    const sessionEntry = createSessionEntry({ channel: "telegram" });
+    const parentEntry = createSessionEntry({ sessionId: "parent-main-1" });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to openai/gpt-4o");
+    expect(result?.text).toContain("New threads in this chat will default to openai/gpt-4o");
+    expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBe("openai");
+    expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBe("gpt-4o");
+  });
+
+  it("stores future-thread default on explicit non-Telegram parent session", async () => {
+    const directives = parseInlineDirectives("/model openai/gpt-4o");
+    const threadSessionKey = "agent:main:discord:channel:thread-777";
+    const parentSessionKey = "agent:main:discord:channel:parent-123";
+    const sessionEntry = createSessionEntry({ channel: "discord" });
+    const parentEntry = createSessionEntry({ sessionId: "parent-discord-1" });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        parentSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to openai/gpt-4o");
+    expect(result?.text).toContain("New threads in this chat will default to openai/gpt-4o");
+    expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBe("openai");
+    expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBe("gpt-4o");
+  });
+
+  it("clears parent future-thread default when /model resets to configured default in a Telegram topic", async () => {
+    const directives = parseInlineDirectives("/model anthropic/claude-opus-4-5");
+    const threadSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    const parentSessionKey = "agent:main:telegram:group:-100123";
+    const sessionEntry = createSessionEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+    });
+    const parentEntry = createSessionEntry({
+      sessionId: "parent-2",
+      futureThreadProviderOverride: "openai",
+      futureThreadModelOverride: "gpt-4o",
+    });
+    const sessionStore = {
+      [threadSessionKey]: sessionEntry,
+      [parentSessionKey]: parentEntry,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionKey: threadSessionKey,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model reset to default");
+    expect(result?.text).toContain("New threads in this chat now follow the default model.");
+    expect(sessionStore[parentSessionKey]?.futureThreadProviderOverride).toBeUndefined();
+    expect(sessionStore[parentSessionKey]?.futureThreadModelOverride).toBeUndefined();
   });
 });

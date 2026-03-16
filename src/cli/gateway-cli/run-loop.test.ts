@@ -8,6 +8,15 @@ const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
+const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
+  ok: true,
+  pid: process.pid,
+  signal: "SIGUSR1" as const,
+  delayMs: 0,
+  mode: "emit" as const,
+  coalesced: false,
+  cooldownMsApplied: 0,
+}));
 const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
@@ -15,6 +24,11 @@ const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
 >(() => ({ mode: "disabled" }));
+const abortEmbeddedPiRun = vi.fn(
+  (_sessionId?: string, _opts?: { mode?: "all" | "compacting" }) => false,
+);
+const getActiveEmbeddedRunCount = vi.fn(() => 0);
+const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const gatewayLog = {
   info: vi.fn(),
@@ -30,6 +44,8 @@ vi.mock("../../infra/restart.js", () => ({
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
+  scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
+    scheduleGatewaySigusr1Restart(opts),
 }));
 
 vi.mock("../../infra/process-respawn.js", () => ({
@@ -43,8 +59,23 @@ vi.mock("../../process/command-queue.js", () => ({
   resetAllLanes: () => resetAllLanes(),
 }));
 
+vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
+  abortEmbeddedPiRun: (sessionId?: string, opts?: { mode?: "all" | "compacting" }) =>
+    abortEmbeddedPiRun(sessionId, opts),
+  getActiveEmbeddedRunCount: () => getActiveEmbeddedRunCount(),
+  waitForActiveEmbeddedRuns: (timeoutMs: number) => waitForActiveEmbeddedRuns(timeoutMs),
+}));
+
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => gatewayLog,
+  createSubsystemLogger: () => ({
+    ...gatewayLog,
+    child: () => ({
+      ...gatewayLog,
+      child: () => ({
+        ...gatewayLog,
+      }),
+    }),
+  }),
 }));
 
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
@@ -186,7 +217,9 @@ describe("runGatewayLoop", () => {
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
+      getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValueOnce(0);
       waitForActiveTasks.mockResolvedValueOnce({ drained: false });
+      waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
 
       type StartServer = () => Promise<{
         close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
@@ -243,7 +276,10 @@ describe("runGatewayLoop", () => {
       expect(start).toHaveBeenCalledTimes(2);
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(30_000);
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expect(closeFirst).toHaveBeenCalledWith({
@@ -272,6 +308,28 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("routes external SIGUSR1 through the restart scheduler before draining", async () => {
+    vi.clearAllMocks();
+    consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
+    isGatewaySigusr1RestartExternallyAllowed.mockReturnValueOnce(true);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+        delayMs: 0,
+        reason: "SIGUSR1",
+      });
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
     });
   });
 
@@ -370,6 +428,89 @@ describe("runGatewayLoop", () => {
         expect.stringContaining("failed to reacquire gateway lock for in-process restart"),
       );
     });
+  });
+
+  it("keeps process alive and logs phase-classified startup failures after restart", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const closeFirst = vi.fn(async () => {});
+      const start = vi.fn().mockResolvedValueOnce({ close: closeFirst }).mockRejectedValueOnce({
+        name: "GatewayStartupPreflightError",
+        phase: "config_validation",
+        message: "Invalid config at /tmp/openclaw.json",
+      });
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Gateway startup phase failed (config_validation): Invalid config at /tmp/openclaw.json.",
+        ),
+      );
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("keeps process alive and logs generic startup failures after restart", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const closeFirst = vi.fn(async () => {});
+      const start = vi
+        .fn()
+        .mockResolvedValueOnce({ close: closeFirst })
+        .mockRejectedValueOnce(new Error("boom"));
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining("gateway startup failed: boom. Process will stay alive"),
+      );
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("rethrows startup failures on first start", async () => {
+    vi.clearAllMocks();
+    const { runtime } = createRuntimeWithExitSignal();
+    const { runGatewayLoop } = await import("./run-loop.js");
+
+    await expect(
+      runGatewayLoop({
+        start: vi.fn(async () => {
+          throw new Error("init failed");
+        }),
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      }),
+    ).rejects.toThrow("init failed");
   });
 });
 

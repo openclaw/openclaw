@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const startGatewayServer = vi.fn(async (_port: number, _opts?: unknown) => ({
@@ -88,11 +86,15 @@ vi.mock("../../logging/console.js", () => ({
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
-    info: () => undefined,
-    warn: () => undefined,
-    error: () => undefined,
-  }),
+  createSubsystemLogger: () => {
+    const logger = {
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+      child: () => logger,
+    };
+    return logger;
+  },
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -195,16 +197,26 @@ describe("gateway run option collisions", () => {
     );
   });
 
-  it("accepts --auth none override", async () => {
-    await runGatewayCli(["gateway", "run", "--auth", "none", "--allow-unconfigured"]);
+  it("surfaces startup preflight phase classification on startup failure", async () => {
+    startGatewayServer.mockRejectedValueOnce({
+      name: "GatewayStartupPreflightError",
+      phase: "config_validation",
+      message: "Invalid config at /tmp/openclaw.json",
+    });
 
-    expectAuthOverrideMode("none");
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toContain(
+      "Gateway startup phase failed (config_validation): Invalid config at /tmp/openclaw.json",
+    );
   });
 
-  it("accepts --auth trusted-proxy override", async () => {
-    await runGatewayCli(["gateway", "run", "--auth", "trusted-proxy", "--allow-unconfigured"]);
+  it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
+    await runGatewayCli(["gateway", "run", "--auth", mode, "--allow-unconfigured"]);
 
-    expectAuthOverrideMode("trusted-proxy");
+    expectAuthOverrideMode(mode);
   });
 
   it("prints all supported modes on invalid --auth value", async () => {
@@ -244,36 +256,34 @@ describe("gateway run option collisions", () => {
   });
 
   it("reads gateway password from --password-file", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
-    try {
-      const passwordFile = path.join(tempDir, "gateway-password.txt");
-      await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
+    await withTempSecretFiles(
+      "openclaw-gateway-run-",
+      { password: "pw_from_file\n" },
+      async ({ passwordFile }) => {
+        await runGatewayCli([
+          "gateway",
+          "run",
+          "--auth",
+          "password",
+          "--password-file",
+          passwordFile ?? "",
+          "--allow-unconfigured",
+        ]);
+      },
+    );
 
-      await runGatewayCli([
-        "gateway",
-        "run",
-        "--auth",
-        "password",
-        "--password-file",
-        passwordFile,
-        "--allow-unconfigured",
-      ]);
-
-      expect(startGatewayServer).toHaveBeenCalledWith(
-        18789,
-        expect.objectContaining({
-          auth: expect.objectContaining({
-            mode: "password",
-            password: "pw_from_file", // pragma: allowlist secret
-          }),
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          mode: "password",
+          password: "pw_from_file", // pragma: allowlist secret
         }),
-      );
-      expect(runtimeErrors).not.toContain(
-        "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+      }),
+    );
+    expect(runtimeErrors).not.toContain(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+    );
   });
 
   it("warns when gateway password is passed inline", async () => {
@@ -293,26 +303,24 @@ describe("gateway run option collisions", () => {
   });
 
   it("rejects using both --password and --password-file", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-run-"));
-    try {
-      const passwordFile = path.join(tempDir, "gateway-password.txt");
-      await fs.writeFile(passwordFile, "pw_from_file\n", "utf8");
+    await withTempSecretFiles(
+      "openclaw-gateway-run-",
+      { password: "pw_from_file\n" },
+      async ({ passwordFile }) => {
+        await expect(
+          runGatewayCli([
+            "gateway",
+            "run",
+            "--password",
+            "pw_inline",
+            "--password-file",
+            passwordFile ?? "",
+            "--allow-unconfigured",
+          ]),
+        ).rejects.toThrow("__exit__:1");
+      },
+    );
 
-      await expect(
-        runGatewayCli([
-          "gateway",
-          "run",
-          "--password",
-          "pw_inline",
-          "--password-file",
-          passwordFile,
-          "--allow-unconfigured",
-        ]),
-      ).rejects.toThrow("__exit__:1");
-
-      expect(runtimeErrors).toContain("Use either --password or --password-file.");
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    expect(runtimeErrors).toContain("Use either --password or --password-file.");
   });
 });

@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
+import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
@@ -92,6 +94,7 @@ describe("embedding provider remote overrides", () => {
   it("uses remote baseUrl/apiKey and merges headers", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
     const cfg = {
@@ -141,6 +144,7 @@ describe("embedding provider remote overrides", () => {
   it("falls back to resolved api key when remote apiKey is blank", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
     const cfg = {
@@ -176,6 +180,7 @@ describe("embedding provider remote overrides", () => {
   it("builds Gemini embeddings requests with api key header", async () => {
     const fetchMock = createGeminiFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
     const cfg = {
@@ -227,6 +232,7 @@ describe("embedding provider remote overrides", () => {
   it("uses GEMINI_API_KEY env indirection for Gemini remote apiKey", async () => {
     const fetchMock = createGeminiFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     vi.stubEnv("GEMINI_API_KEY", "env-gemini-key");
 
     const result = await createEmbeddingProvider({
@@ -250,6 +256,7 @@ describe("embedding provider remote overrides", () => {
   it("builds Mistral embeddings requests with bearer auth", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
     const cfg = {
@@ -282,6 +289,45 @@ describe("embedding provider remote overrides", () => {
     const payload = JSON.parse((init?.body as string | undefined) ?? "{}") as { model?: string };
     expect(payload.model).toBe("mistral-embed");
   });
+
+  it("derives auth diagnostics from effective Authorization override headers", async () => {
+    const fetchMock = createFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
+    mockResolvedProviderKey("provider-key");
+
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              Authorization: "Bearer provider-header-key",
+            },
+          },
+        },
+      },
+    };
+
+    const result = await createEmbeddingProvider({
+      config: cfg as never,
+      provider: "openai",
+      remote: {
+        headers: {
+          Authorization: "Bearer remote-header-key",
+        },
+      },
+      model: "text-embedding-3-small",
+      fallback: "openai",
+    });
+
+    const provider = requireProvider(result);
+    await provider.embedQuery("hello");
+
+    expect(result.openAi?.authSource).toBe("agents.*.memorySearch.remote.headers.Authorization");
+    expect(result.openAi?.authFingerprint).toBe(
+      crypto.createHash("sha256").update("Bearer remote-header-key").digest("hex").slice(0, 12),
+    );
+  });
 });
 
 describe("embedding provider auto selection", () => {
@@ -300,6 +346,7 @@ describe("embedding provider auto selection", () => {
   it("uses gemini when openai is missing", async () => {
     const fetchMock = createGeminiFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
         throw new Error('No API key found for provider "openai".');
@@ -326,6 +373,7 @@ describe("embedding provider auto selection", () => {
       json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
     }));
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
         return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
@@ -354,6 +402,7 @@ describe("embedding provider auto selection", () => {
   it("uses mistral when openai/gemini/voyage are missing", async () => {
     const fetchMock = createFetchMock();
     vi.stubGlobal("fetch", fetchMock);
+    mockPublicPinnedHostname();
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "mistral") {
         return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" }; // pragma: allowlist secret

@@ -12,6 +12,7 @@ import {
 } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
+import { formatGatewayStartupPreflightFailure } from "../../gateway/server-startup-preflight.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -449,6 +450,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         // ignore diagnostics failures
       }
       await maybeExplainGatewayServiceStop();
+      defaultRuntime.exit(1);
+      return;
+    }
+    const startupPreflightFailure = formatGatewayStartupPreflightFailure(err);
+    if (startupPreflightFailure) {
+      defaultRuntime.error(startupPreflightFailure);
       defaultRuntime.exit(1);
       return;
     }

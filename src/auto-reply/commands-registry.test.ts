@@ -41,6 +41,7 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "skill")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "whoami")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
+    expect(specs.find((spec) => spec.name === "ping")).toBeTruthy();
   });
 
   it("filters commands based on config flags", () => {
@@ -196,6 +197,17 @@ describe("commands registry", () => {
       "install",
       "help",
     ]);
+  });
+
+  it("registers fast mode as a first-class options command", () => {
+    const fast = listChatCommands().find((command) => command.key === "fast");
+    expect(fast).toMatchObject({
+      nativeName: "fast",
+      textAliases: ["/fast"],
+      category: "options",
+    });
+    const modeArg = fast?.args?.find((arg) => arg.name === "mode");
+    expect(modeArg?.choices).toEqual(["status", "on", "off"]);
   });
 
   it("detects known text commands", () => {

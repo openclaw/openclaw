@@ -63,4 +63,27 @@ describe("gateway startup log", () => {
       `listening on ws://127.0.0.1:18789, ws://[::1]:18789 (PID ${process.pid})`,
     ]);
   });
+
+  it("logs the runtime identity fingerprint", () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    logGatewayStartup({
+      cfg: {},
+      bindHost: "127.0.0.1",
+      port: 18789,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    const runtimeIdentityLine = info.mock.calls
+      .map((call) => String(call[0]))
+      .find((message) => message.startsWith("runtime identity: "));
+    expect(runtimeIdentityLine).toBeTruthy();
+    expect(runtimeIdentityLine).toContain("branch=");
+    expect(runtimeIdentityLine).toContain("worktree=");
+    expect(runtimeIdentityLine).toContain("stateDir=");
+    expect(runtimeIdentityLine).toContain("configPath=");
+    expect(runtimeIdentityLine).toContain("serviceLabel=");
+  });
 });

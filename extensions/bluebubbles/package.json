@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/bluebubbles",
-  "version": "2026.3.8-beta.1",
+  "version": "2026.3.14",
   "description": "OpenClaw BlueBubbles channel plugin",
   "type": "module",
   "dependencies": {
@@ -10,6 +10,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "bluebubbles",
       "label": "BlueBubbles",

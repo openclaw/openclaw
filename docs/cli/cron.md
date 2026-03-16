@@ -30,6 +30,12 @@ Note: retention/pruning is controlled in config:
 - `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions.
 - `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl`.
 
+Upgrade note: if you have older cron jobs from before the current delivery/store format, run
+`openclaw doctor --fix`. Doctor now normalizes legacy cron fields (`jobId`, `schedule.cron`,
+top-level delivery fields, payload `provider` delivery aliases) and migrates simple
+`notify: true` webhook fallback jobs to explicit webhook delivery when `cron.webhook` is
+configured.
+
 ## Common edits
 
 Update delivery settings without changing the message:

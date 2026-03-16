@@ -5,7 +5,10 @@ import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-de
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import {
+  deliverOutboundPayloads,
+  type OutboundDeliveryResult,
+} from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
@@ -83,7 +86,7 @@ type DispatchCronDeliveryParams = {
   resolvedDelivery: DeliveryTargetResolution;
   deliveryRequested: boolean;
   skipHeartbeatDelivery: boolean;
-  skipMessagingToolDelivery: boolean;
+  skipMessagingToolDelivery?: boolean;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
@@ -131,6 +134,91 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
 ];
 
+type CompletedDirectCronDelivery = {
+  ts: number;
+  results: OutboundDeliveryResult[];
+};
+
+const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
+
+function cloneDeliveryResults(
+  results: readonly OutboundDeliveryResult[],
+): OutboundDeliveryResult[] {
+  return results.map((result) => ({
+    ...result,
+    ...(result.meta ? { meta: { ...result.meta } } : {}),
+  }));
+}
+
+function pruneCompletedDirectCronDeliveries(now: number) {
+  const ttlMs = process.env.OPENCLAW_TEST_FAST === "1" ? 60_000 : 24 * 60 * 60 * 1000;
+  for (const [key, entry] of COMPLETED_DIRECT_CRON_DELIVERIES) {
+    if (now - entry.ts >= ttlMs) {
+      COMPLETED_DIRECT_CRON_DELIVERIES.delete(key);
+    }
+  }
+  const maxEntries = 2000;
+  if (COMPLETED_DIRECT_CRON_DELIVERIES.size <= maxEntries) {
+    return;
+  }
+  const entries = [...COMPLETED_DIRECT_CRON_DELIVERIES.entries()].toSorted(
+    (a, b) => a[1].ts - b[1].ts,
+  );
+  const toDelete = COMPLETED_DIRECT_CRON_DELIVERIES.size - maxEntries;
+  for (let i = 0; i < toDelete; i += 1) {
+    const oldest = entries[i];
+    if (!oldest) {
+      break;
+    }
+    COMPLETED_DIRECT_CRON_DELIVERIES.delete(oldest[0]);
+  }
+}
+
+function rememberCompletedDirectCronDelivery(
+  idempotencyKey: string,
+  results: readonly OutboundDeliveryResult[],
+) {
+  const now = Date.now();
+  COMPLETED_DIRECT_CRON_DELIVERIES.set(idempotencyKey, {
+    ts: now,
+    results: cloneDeliveryResults(results),
+  });
+  pruneCompletedDirectCronDeliveries(now);
+}
+
+function getCompletedDirectCronDelivery(
+  idempotencyKey: string,
+): OutboundDeliveryResult[] | undefined {
+  const now = Date.now();
+  pruneCompletedDirectCronDeliveries(now);
+  const cached = COMPLETED_DIRECT_CRON_DELIVERIES.get(idempotencyKey);
+  if (!cached) {
+    return undefined;
+  }
+  return cloneDeliveryResults(cached.results);
+}
+
+function buildDirectCronDeliveryIdempotencyKey(params: {
+  runSessionId: string;
+  delivery: SuccessfulDeliveryTarget;
+}): string {
+  const threadId =
+    params.delivery.threadId == null || params.delivery.threadId === ""
+      ? ""
+      : String(params.delivery.threadId);
+  const accountId = params.delivery.accountId?.trim() ?? "";
+  const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
+  return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+}
+
+export function resetCompletedDirectCronDeliveriesForTests() {
+  COMPLETED_DIRECT_CRON_DELIVERIES.clear();
+}
+
+export function getCompletedDirectCronDeliveriesCountForTests(): number {
+  return COMPLETED_DIRECT_CRON_DELIVERIES.size;
+}
+
 function summarizeDirectCronDeliveryError(error: unknown): string {
   if (error instanceof Error) {
     return error.message || "error";
@@ -157,7 +245,9 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
 }
 
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
-  return process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
+  return process.env.NODE_ENV === "test" && process.env.OPENCLAW_TEST_FAST === "1"
+    ? [8, 16, 32]
+    : [5_000, 10_000, 20_000];
 }
 
 async function retryTransientDirectCronDelivery<T>(params: {
@@ -192,15 +282,17 @@ async function retryTransientDirectCronDelivery<T>(params: {
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
 ): Promise<DispatchCronDeliveryState> {
+  const skipMessagingToolDelivery = params.skipMessagingToolDelivery === true;
   let summary = params.summary;
   let outputText = params.outputText;
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
 
-  // `true` means we confirmed at least one outbound send reached the target.
-  // Keep this strict so timer fallback can safely decide whether to wake main.
-  let delivered = params.skipMessagingToolDelivery;
-  let deliveryAttempted = params.skipMessagingToolDelivery;
+  // Shared callers can treat a matching message-tool send as the completed
+  // delivery path. Cron-owned callers keep this false so direct cron delivery
+  // remains the only source of delivered state.
+  let delivered = skipMessagingToolDelivery;
+  let deliveryAttempted = skipMessagingToolDelivery;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -217,6 +309,10 @@ export async function dispatchCronDelivery(
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
+    const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
+      runSessionId: params.runSessionId,
+      delivery,
+    });
     try {
       const payloadsForDelivery =
         deliveryPayloads.length > 0
@@ -236,6 +332,12 @@ export async function dispatchCronDelivery(
         });
       }
       deliveryAttempted = true;
+      const cachedResults = getCompletedDirectCronDelivery(deliveryIdempotencyKey);
+      if (cachedResults) {
+        // Cached entries are only recorded after a successful non-empty delivery.
+        delivered = true;
+        return null;
+      }
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
@@ -254,6 +356,12 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
+          // Isolated cron direct delivery uses its own transient retry loop.
+          // Keep all attempts out of the write-ahead delivery queue so a
+          // late-successful first send cannot leave behind a failed queue
+          // entry that replays on the next restart.
+          // See: https://github.com/openclaw/openclaw/issues/40545
+          skipQueue: true,
         });
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
@@ -263,6 +371,9 @@ export async function dispatchCronDelivery(
           })
         : await runDelivery();
       delivered = deliveryResults.length > 0;
+      if (delivered) {
+        rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
+      }
       return null;
     } catch (err) {
       if (!params.deliveryBestEffort) {
@@ -404,11 +515,7 @@ export async function dispatchCronDelivery(
     }
   };
 
-  if (
-    params.deliveryRequested &&
-    !params.skipHeartbeatDelivery &&
-    !params.skipMessagingToolDelivery
-  ) {
+  if (params.deliveryRequested && !params.skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (!params.resolvedDelivery.ok) {
       if (!params.deliveryBestEffort) {
         return {

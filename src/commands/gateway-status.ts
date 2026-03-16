@@ -2,6 +2,10 @@ import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { probeGateway } from "../gateway/probe.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
+import {
+  formatRuntimeFingerprint,
+  resolveRuntimeFingerprint,
+} from "../infra/runtime-fingerprint.js";
 import { resolveSshConfig } from "../infra/ssh-config.js";
 import { parseSshTarget, startSshPortForward } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
@@ -10,6 +14,8 @@ import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
   buildNetworkHints,
   extractConfigSummary,
+  isProbeReachable,
+  isScopeLimitedProbeFailure,
   type GatewayStatusTarget,
   parseTimeoutMs,
   pickGatewaySelfPresence,
@@ -38,6 +44,7 @@ export async function gatewayStatusCommand(
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, 3000);
+  const runtimeFingerprint = resolveRuntimeFingerprint({ moduleUrl: import.meta.url });
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
@@ -193,8 +200,10 @@ export async function gatewayStatusCommand(
     },
   );
 
-  const reachable = probed.filter((p) => p.probe.ok);
+  const reachable = probed.filter((p) => isProbeReachable(p.probe));
   const ok = reachable.length > 0;
+  const degradedScopeLimited = probed.filter((p) => isScopeLimitedProbeFailure(p.probe));
+  const degraded = degradedScopeLimited.length > 0;
   const multipleGateways = reachable.length > 1;
   const primary =
     reachable.find((p) => p.target.kind === "explicit") ??
@@ -236,16 +245,26 @@ export async function gatewayStatusCommand(
       });
     }
   }
+  for (const result of degradedScopeLimited) {
+    warnings.push({
+      code: "probe_scope_limited",
+      message:
+        "Probe diagnostics are limited by gateway scopes (missing operator.read). Connection succeeded, but status details may be incomplete. Hint: pair device identity or use credentials with operator.read.",
+      targetIds: [result.target.id],
+    });
+  }
 
   if (opts.json) {
     runtime.log(
       JSON.stringify(
         {
           ok,
+          degraded,
           ts: Date.now(),
           durationMs: Date.now() - startedAt,
           timeoutMs: overallTimeoutMs,
           primaryTargetId: primary?.target.id ?? null,
+          runtimeFingerprint,
           warnings,
           network,
           discovery: {
@@ -274,7 +293,9 @@ export async function gatewayStatusCommand(
             active: p.target.active,
             tunnel: p.target.tunnel ?? null,
             connect: {
-              ok: p.probe.ok,
+              ok: isProbeReachable(p.probe),
+              rpcOk: p.probe.ok,
+              scopeLimited: isScopeLimitedProbeFailure(p.probe),
               latencyMs: p.probe.connectLatencyMs,
               error: p.probe.error,
               close: p.probe.close,
@@ -303,6 +324,9 @@ export async function gatewayStatusCommand(
       : `${colorize(rich, theme.error, "Reachable")}: no`,
   );
   runtime.log(colorize(rich, theme.muted, `Probe budget: ${overallTimeoutMs}ms`));
+  runtime.log(
+    colorize(rich, theme.muted, `Local runtime: ${formatRuntimeFingerprint(runtimeFingerprint)}`),
+  );
 
   if (warnings.length > 0) {
     runtime.log("");

@@ -26,7 +26,7 @@ import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { isExtensionRelayCdpEndpoint, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -64,12 +64,6 @@ type TargetInfoResponse = {
   targetInfo?: {
     targetId?: string;
   };
-};
-
-type RelayListTarget = {
-  id: string;
-  url: string;
-  title?: string;
 };
 
 type ConnectedBrowser = {
@@ -124,23 +118,6 @@ const MAX_NETWORK_REQUESTS = 500;
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
-
-function pwSessionLog(
-  event: string,
-  data: Record<string, unknown>,
-  level: "info" | "warn" = "info",
-) {
-  const payload = {
-    ts: new Date().toISOString(),
-    event,
-    ...data,
-  };
-  if (level === "warn") {
-    console.warn("[browser-pw-session]", payload);
-    return;
-  }
-  console.info("[browser-pw-session]", payload);
-}
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -388,6 +365,11 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         return connected;
       } catch (err) {
         lastErr = err;
+        // Don't retry rate-limit errors; retrying worsens the 429.
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes("rate limit")) {
+          break;
+        }
         const delay = 250 + attempt * 250;
         await new Promise((r) => setTimeout(r, delay));
       }
@@ -426,7 +408,7 @@ async function pageTargetId(page: Page): Promise<string | null> {
 
 function matchPageByTargetList(
   pages: Page[],
-  targets: RelayListTarget[],
+  targets: Array<{ id: string; url: string; title?: string }>,
   targetId: string,
 ): Page | null {
   const target = targets.find((entry) => entry.id === targetId);
@@ -440,85 +422,14 @@ function matchPageByTargetList(
   }
   if (urlMatch.length > 1) {
     const sameUrlTargets = targets.filter((entry) => entry.url === target.url);
-    const idx = sameUrlTargets.findIndex((entry) => entry.id === targetId);
-    if (idx >= 0 && idx < urlMatch.length) {
-      return urlMatch[idx] ?? null;
-    }
-    if (sameUrlTargets.length > 0 && idx >= 0) {
-      // Auth redirect flows can leave Playwright's page set and /json/list with different
-      // counts for the same URL for a short time. Clamp the index instead of hard failing.
-      const clampedIdx = Math.min(idx, urlMatch.length - 1);
-      return urlMatch[clampedIdx] ?? null;
-    }
-  }
-  return null;
-}
-
-async function resolveExtensionRelayAliasTargetId(opts: {
-  cdpUrl: string;
-  targetId: string;
-}): Promise<string> {
-  const requested = opts.targetId.trim();
-  if (!requested) {
-    return requested;
-  }
-  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(opts.cdpUrl);
-  const resolveUrl = appendCdpPath(cdpHttpBase, `/json/resolve/${encodeURIComponent(requested)}`);
-  const payload = await fetchJson<{ targetId?: unknown }>(resolveUrl, 1200).catch(() => null);
-  const resolved = typeof payload?.targetId === "string" ? payload.targetId.trim() : "";
-  if (!resolved) {
-    return requested;
-  }
-  if (resolved !== requested) {
-    pwSessionLog("extension.target.alias-resolved", {
-      requested,
-      resolved,
-    });
-  }
-  return resolved;
-}
-
-async function fetchRelayTargets(cdpUrl: string): Promise<RelayListTarget[]> {
-  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
-  const targets = await fetchJson<Array<{ id: string; url: string; title?: string }>>(
-    appendCdpPath(cdpHttpBase, "/json/list"),
-    2000,
-  );
-  return targets;
-}
-
-async function findPageByRelayTargetList(opts: {
-  pages: Page[];
-  targets: RelayListTarget[];
-  targetId: string;
-}): Promise<Page | null> {
-  // Keep matching deterministic through one path; matchPageByTargetList already
-  // handles count skew and index clamping during redirect churn.
-  return matchPageByTargetList(opts.pages, opts.targets, opts.targetId);
-}
-
-async function findPageByTargetProbe(pages: Page[], targetId: string): Promise<Page | null> {
-  for (const page of pages) {
-    const probedTargetId = await pageTargetId(page).catch(() => null);
-    if (probedTargetId === targetId) {
-      return page;
-    }
-  }
-  return null;
-}
-
-async function findFocusedPage(pages: Page[]): Promise<Page | null> {
-  const focused: Page[] = [];
-  for (const page of pages) {
-    const hasFocus = await page.evaluate(() => document.hasFocus()).catch(() => false);
-    if (hasFocus) {
-      focused.push(page);
-      if (focused.length > 1) {
-        return null;
+    if (sameUrlTargets.length === urlMatch.length) {
+      const idx = sameUrlTargets.findIndex((entry) => entry.id === targetId);
+      if (idx >= 0 && idx < urlMatch.length) {
+        return urlMatch[idx] ?? null;
       }
     }
   }
-  return focused[0] ?? null;
+  return null;
 }
 
 async function findPageByTargetIdViaTargetList(
@@ -526,8 +437,15 @@ async function findPageByTargetIdViaTargetList(
   targetId: string,
   cdpUrl: string,
 ): Promise<Page | null> {
-  const targets = await fetchRelayTargets(cdpUrl);
-  return await findPageByRelayTargetList({ pages, targets, targetId });
+  const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
+  const targets = await fetchJson<
+    Array<{
+      id: string;
+      url: string;
+      title?: string;
+    }>
+  >(appendCdpPath(cdpHttpBase, "/json/list"), 2000);
+  return matchPageByTargetList(pages, targets, targetId);
 }
 
 async function findPageByTargetId(
@@ -536,120 +454,6 @@ async function findPageByTargetId(
   cdpUrl?: string,
 ): Promise<Page | null> {
   const pages = await getAllPages(browser);
-  const isExtensionRelay = cdpUrl
-    ? await isExtensionRelayCdpEndpoint(cdpUrl).catch(() => false)
-    : false;
-  if (cdpUrl && isExtensionRelay) {
-    const resolvedTargetId = await resolveExtensionRelayAliasTargetId({
-      cdpUrl,
-      targetId,
-    }).catch(() => targetId);
-
-    const relayTargets = await fetchRelayTargets(cdpUrl).catch(() => null);
-    if (relayTargets) {
-      const matched = await findPageByRelayTargetList({
-        pages,
-        targets: relayTargets,
-        targetId: resolvedTargetId,
-      });
-      if (matched) {
-        pwSessionLog("extension.target.match", {
-          requestedTargetId: targetId,
-          resolvedTargetId,
-          method: "target-list",
-          pages: pages.length,
-        });
-        return matched;
-      }
-    }
-
-    const targetProbeMatch = await findPageByTargetProbe(pages, resolvedTargetId).catch(() => null);
-    if (targetProbeMatch) {
-      pwSessionLog("extension.target.match", {
-        requestedTargetId: targetId,
-        resolvedTargetId,
-        method: "page-target-probe",
-        pages: pages.length,
-      });
-      return targetProbeMatch;
-    }
-
-    const targetListed = relayTargets?.some((target) => target.id === resolvedTargetId) ?? false;
-    if (targetListed) {
-      const focused = await findFocusedPage(pages).catch(() => null);
-      if (focused) {
-        pwSessionLog("extension.target.match-fallback", {
-          requestedTargetId: targetId,
-          resolvedTargetId,
-          method: "focused-page-fallback",
-          pages: pages.length,
-        });
-        return focused;
-      }
-      if (pages.length > 0) {
-        // Last-resort continuity: if relay still lists the target but Playwright cannot map it,
-        // keep the session alive by returning the first available page instead of hard failing.
-        pwSessionLog(
-          "extension.target.match-fallback",
-          {
-            requestedTargetId: targetId,
-            resolvedTargetId,
-            method: "first-page-when-listed",
-            pages: pages.length,
-            classification: "target-listed-but-playwright-mapping-missed",
-          },
-          "warn",
-        );
-        return pages[0] ?? null;
-      }
-    }
-
-    try {
-      const matched = await findPageByTargetIdViaTargetList(pages, resolvedTargetId, cdpUrl);
-      if (matched) {
-        pwSessionLog("extension.target.match", {
-          requestedTargetId: targetId,
-          resolvedTargetId,
-          method: "target-list-retry",
-          pages: pages.length,
-        });
-        return matched;
-      }
-    } catch {
-      // Ignore fetch errors and fall through to best-effort single-page fallback.
-      pwSessionLog(
-        "extension.target.match-fetch-failed",
-        {
-          requestedTargetId: targetId,
-          resolvedTargetId,
-          cdpUrl: normalizeCdpUrl(cdpUrl),
-          pages: pages.length,
-        },
-        "warn",
-      );
-    }
-    if (pages.length === 1) {
-      pwSessionLog("extension.target.match-fallback", {
-        requestedTargetId: targetId,
-        resolvedTargetId,
-        method: "single-page-fallback",
-      });
-      return pages[0] ?? null;
-    }
-    pwSessionLog(
-      "extension.target.match-failed",
-      {
-        requestedTargetId: targetId,
-        resolvedTargetId,
-        pages: pages.length,
-        pageUrls: pages.map((page) => page.url()).slice(0, 20),
-        classification: "target-listed-but-playwright-page-unresolved",
-      },
-      "warn",
-    );
-    return null;
-  }
-
   let resolvedViaCdp = false;
   for (const page of pages) {
     let tid: string | null = null;
@@ -703,9 +507,7 @@ export async function getPageForTargetId(opts: {
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
   if (!found) {
-    // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
-    // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
-    // only exposes a single Page, use it as a best-effort fallback.
+    // If Playwright only exposes a single Page, use it as a best-effort fallback.
     if (pages.length === 1) {
       return first;
     }

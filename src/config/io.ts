@@ -68,6 +68,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENROUTER_API_KEY",
   "AI_GATEWAY_API_KEY",
   "MINIMAX_API_KEY",
+  "MODELSTUDIO_API_KEY",
   "SYNTHETIC_API_KEY",
   "KILOCODE_API_KEY",
   "ELEVENLABS_API_KEY",
@@ -161,6 +162,32 @@ function hashConfigRaw(raw: string | null): string {
     .createHash("sha256")
     .update(raw ?? "")
     .digest("hex");
+}
+
+async function tightenStateDirPermissionsIfNeeded(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  fsModule: typeof fs;
+}): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  const stateDir = resolveStateDir(params.env, params.homedir);
+  const configDir = path.dirname(params.configPath);
+  if (path.resolve(configDir) !== path.resolve(stateDir)) {
+    return;
+  }
+  try {
+    const stat = await params.fsModule.promises.stat(configDir);
+    const mode = stat.mode & 0o777;
+    if ((mode & 0o077) === 0) {
+      return;
+    }
+    await params.fsModule.promises.chmod(configDir, 0o700);
+  } catch {
+    // Best-effort hardening only; callers still need the config write to proceed.
+  }
 }
 
 function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
@@ -337,6 +364,22 @@ function resolveGatewayMode(value: unknown): string | null {
   }
   const trimmed = gateway.mode.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function hasOwnerDisplaySecret(value: unknown): boolean {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  const commands = value.commands;
+  if (!isPlainObject(commands) || typeof commands.ownerDisplay !== "string") {
+    return false;
+  }
+  if (commands.ownerDisplay.trim() !== "hash") {
+    return false;
+  }
+  return (
+    typeof commands.ownerDisplaySecret === "string" && commands.ownerDisplaySecret.trim() !== ""
+  );
 }
 
 function cloneUnknown<T>(value: T): T {
@@ -650,6 +693,11 @@ type ConfigReadResolution = {
   envWarnings: EnvSubstitutionWarning[];
 };
 
+export type ConfigLoadMode = "runtime" | "read-only";
+export type ConfigLoadOptions = {
+  mode?: ConfigLoadMode;
+};
+
 function resolveConfigIncludesForRead(
   parsed: unknown,
   configPath: string,
@@ -671,21 +719,30 @@ function resolveConfigIncludesForRead(
 function resolveConfigForRead(
   resolvedIncludes: unknown,
   env: NodeJS.ProcessEnv,
+  options: {
+    mutateEnvForSubstitution?: boolean;
+  } = {},
 ): ConfigReadResolution {
-  // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars.
+  // In read-only mode we still resolve config.env-backed substitutions, but we do it
+  // against an isolated env copy to avoid mutating process.env as a side effect of reads.
+  const envForSubstitution = options.mutateEnvForSubstitution
+    ? env
+    : ({ ...env } as NodeJS.ProcessEnv);
+
+  // Apply config.env before substitution so ${VAR} can reference config-defined vars.
   if (resolvedIncludes && typeof resolvedIncludes === "object" && "env" in resolvedIncludes) {
-    applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env);
+    applyConfigEnvVars(resolvedIncludes as OpenClawConfig, envForSubstitution);
   }
 
   // Collect missing env var references as warnings instead of throwing,
   // so non-critical config sections with unset vars don't crash the gateway.
   const envWarnings: EnvSubstitutionWarning[] = [];
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, {
+    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, envForSubstitution, {
       onMissing: (w) => envWarnings.push(w),
     }),
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
-    envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
+    envSnapshotForRestore: { ...envForSubstitution } as Record<string, string | undefined>,
     envWarnings,
   };
 }
@@ -704,11 +761,17 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const configPath =
     candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
 
-  function loadConfig(): OpenClawConfig {
+  function loadConfig(options: ConfigLoadOptions = {}): OpenClawConfig {
+    const mode = options.mode ?? "runtime";
+    const isRuntimeMode = mode === "runtime";
     try {
       maybeLoadDotEnvForConfig(deps.env);
       if (!deps.fs.existsSync(configPath)) {
-        if (shouldEnableShellEnvFallback(deps.env) && !shouldDeferShellEnvFallback(deps.env)) {
+        if (
+          isRuntimeMode &&
+          shouldEnableShellEnvFallback(deps.env) &&
+          !shouldDeferShellEnvFallback(deps.env)
+        ) {
           loadShellEnvFallback({
             enabled: true,
             env: deps.env,
@@ -724,6 +787,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const readResolution = resolveConfigForRead(
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
+        { mutateEnvForSubstitution: isRuntimeMode },
       );
       const resolvedConfig = readResolution.resolvedConfigRaw;
       for (const w of readResolution.envWarnings) {
@@ -791,10 +855,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         throw new DuplicateAgentDirError(duplicates);
       }
 
-      applyConfigEnvVars(cfg, deps.env);
+      if (isRuntimeMode) {
+        applyConfigEnvVars(cfg, deps.env);
+      }
 
       const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
-      if (enabled && !shouldDeferShellEnvFallback(deps.env)) {
+      if (isRuntimeMode && enabled && !shouldDeferShellEnvFallback(deps.env)) {
         loadShellEnvFallback({
           enabled: true,
           env: deps.env,
@@ -815,28 +881,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           configPath,
           ownerDisplaySecretResolution.generatedSecret,
         );
-        if (!AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.has(configPath)) {
-          AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.add(configPath);
-          void writeConfigFile(cfgWithOwnerDisplaySecret, { expectedConfigPath: configPath })
-            .then(() => {
-              AUTO_OWNER_DISPLAY_SECRET_BY_PATH.delete(configPath);
-              AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
-            })
-            .catch((err) => {
-              if (!AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.has(configPath)) {
-                AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.add(configPath);
-                deps.logger.warn(
-                  `Failed to persist auto-generated commands.ownerDisplaySecret at ${configPath}: ${String(err)}`,
-                );
-              }
-            })
-            .finally(() => {
-              AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT.delete(configPath);
-            });
+        if (!AUTO_OWNER_DISPLAY_SECRET_PENDING_WARNED.has(configPath)) {
+          AUTO_OWNER_DISPLAY_SECRET_PENDING_WARNED.add(configPath);
+          deps.logger.warn(
+            `commands.ownerDisplaySecret is generated in memory for ${configPath}; run an explicit config write to persist it.`,
+          );
         }
       } else {
         AUTO_OWNER_DISPLAY_SECRET_BY_PATH.delete(configPath);
-        AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
+        AUTO_OWNER_DISPLAY_SECRET_PENDING_WARNED.delete(configPath);
       }
 
       return applyConfigOverrides(cfgWithOwnerDisplaySecret);
@@ -853,6 +906,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       deps.logger.error(`Failed to read config at ${configPath}`, err);
       throw err;
     }
+  }
+
+  function loadConfigReadOnly(): OpenClawConfig {
+    return loadConfig({ mode: "read-only" });
   }
 
   async function readConfigFileSnapshotInternal(): Promise<ReadConfigFileSnapshotInternalResult> {
@@ -937,7 +994,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      const readResolution = resolveConfigForRead(resolved, deps.env);
+      const readResolution = resolveConfigForRead(resolved, deps.env, {
+        mutateEnvForSubstitution: false,
+      });
 
       // Convert missing env var references to config warnings instead of fatal errors.
       // This allows the gateway to start in degraded mode when non-critical config
@@ -1135,6 +1194,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+    await tightenStateDirPermissionsIfNeeded({
+      configPath,
+      env: deps.env,
+      homedir: deps.homedir,
+      fsModule: deps.fs,
+    });
     const outputConfigBase =
       envRefMap && changedPaths
         ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
@@ -1163,6 +1228,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const nextBytes = Buffer.byteLength(json, "utf-8");
     const hasMetaBefore = hasConfigMeta(snapshot.parsed);
     const hasMetaAfter = hasConfigMeta(stampedOutputConfig);
+    const persistedOwnerDisplaySecret = hasOwnerDisplaySecret(stampedOutputConfig);
     const gatewayModeBefore = resolveGatewayMode(snapshot.resolved);
     const gatewayModeAfter = resolveGatewayMode(stampedOutputConfig);
     const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
@@ -1283,6 +1349,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           logConfigOverwrite();
           logConfigWriteAnomalies();
           await appendWriteAudit("copy-fallback");
+          if (persistedOwnerDisplaySecret) {
+            AUTO_OWNER_DISPLAY_SECRET_BY_PATH.delete(configPath);
+            AUTO_OWNER_DISPLAY_SECRET_PENDING_WARNED.delete(configPath);
+          }
           return;
         }
         await deps.fs.promises.unlink(tmp).catch(() => {
@@ -1293,6 +1363,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       logConfigOverwrite();
       logConfigWriteAnomalies();
       await appendWriteAudit("rename");
+      if (persistedOwnerDisplaySecret) {
+        AUTO_OWNER_DISPLAY_SECRET_BY_PATH.delete(configPath);
+        AUTO_OWNER_DISPLAY_SECRET_PENDING_WARNED.delete(configPath);
+      }
     } catch (err) {
       await appendWriteAudit("failed", err);
       throw err;
@@ -1302,6 +1376,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   return {
     configPath,
     loadConfig,
+    loadConfigReadOnly,
     readConfigFileSnapshot,
     readConfigFileSnapshotForWrite,
     writeConfigFile,
@@ -1313,8 +1388,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 // when set after the module has been imported (tests, one-off scripts, etc.).
 const DEFAULT_CONFIG_CACHE_MS = 200;
 const AUTO_OWNER_DISPLAY_SECRET_BY_PATH = new Map<string, string>();
-const AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT = new Set<string>();
-const AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED = new Set<string>();
+const AUTO_OWNER_DISPLAY_SECRET_PENDING_WARNED = new Set<string>();
 let configCache: {
   configPath: string;
   expiresAt: number;
@@ -1373,6 +1447,58 @@ export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
   return runtimeConfigSourceSnapshot;
 }
 
+function isCompatibleTopLevelRuntimeProjectionShape(params: {
+  runtimeSnapshot: OpenClawConfig;
+  candidate: OpenClawConfig;
+}): boolean {
+  const runtime = params.runtimeSnapshot as Record<string, unknown>;
+  const candidate = params.candidate as Record<string, unknown>;
+  for (const key of Object.keys(runtime)) {
+    if (!Object.hasOwn(candidate, key)) {
+      return false;
+    }
+    const runtimeValue = runtime[key];
+    const candidateValue = candidate[key];
+    const runtimeType = Array.isArray(runtimeValue)
+      ? "array"
+      : runtimeValue === null
+        ? "null"
+        : typeof runtimeValue;
+    const candidateType = Array.isArray(candidateValue)
+      ? "array"
+      : candidateValue === null
+        ? "null"
+        : typeof candidateValue;
+    if (runtimeType !== candidateType) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
+  if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
+    return config;
+  }
+  if (config === runtimeConfigSnapshot) {
+    return runtimeConfigSourceSnapshot;
+  }
+  // This projection expects callers to pass config objects derived from the
+  // active runtime snapshot (for example shallow/deep clones with targeted edits).
+  // For structurally unrelated configs, skip projection to avoid accidental
+  // merge-patch deletions or reintroducing resolved values into source refs.
+  if (
+    !isCompatibleTopLevelRuntimeProjectionShape({
+      runtimeSnapshot: runtimeConfigSnapshot,
+      candidate: config,
+    })
+  ) {
+    return config;
+  }
+  const runtimePatch = createMergePatch(runtimeConfigSnapshot, config);
+  return coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
+}
+
 export function setRuntimeConfigSnapshotRefreshHandler(
   refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
 ): void {
@@ -1406,9 +1532,17 @@ export function loadConfig(): OpenClawConfig {
   return config;
 }
 
+export function loadConfigReadOnly(): OpenClawConfig {
+  if (runtimeConfigSnapshot) {
+    return runtimeConfigSnapshot;
+  }
+  const io = createConfigIO();
+  return io.loadConfigReadOnly();
+}
+
 export async function readBestEffortConfig(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
-  return snapshot.valid ? loadConfig() : snapshot.config;
+  return snapshot.valid ? loadConfigReadOnly() : snapshot.config;
 }
 
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
