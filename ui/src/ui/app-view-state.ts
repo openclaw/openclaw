@@ -32,6 +32,7 @@ import type {
   StatusSummary,
   ToolsCatalogResult,
 } from "./types.ts";
+import type { CreateThreadInput } from "./app-chat.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
@@ -358,6 +359,7 @@ export type AppViewState = {
     setSessionKey: (next: string) => void;
     setChatMessage: (next: string) => void;
     handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+    handleCreateThread: (input: CreateThreadInput) => Promise<string | null>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     handleChatScroll: (event: Event) => void;

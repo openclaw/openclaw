@@ -94,6 +94,11 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
+  onCreateThread?: (input: {
+    agentId: string;
+    label?: string | null;
+    firstMessage: string;
+  }) => Promise<string | null> | string | null;
   onClearHistory?: () => void;
   agentsList: {
     agents: Array<{ id: string; name?: string; identity?: { name?: string; avatarUrl?: string } }>;
@@ -150,6 +155,12 @@ interface ChatEphemeralState {
   searchOpen: boolean;
   searchQuery: string;
   pinnedExpanded: boolean;
+  newThreadOpen: boolean;
+  newThreadAgentId: string;
+  newThreadLabel: string;
+  newThreadMessage: string;
+  newThreadCreating: boolean;
+  newThreadError: string;
 }
 
 function createChatEphemeralState(): ChatEphemeralState {
@@ -165,6 +176,12 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchOpen: false,
     searchQuery: "",
     pinnedExpanded: false,
+    newThreadOpen: false,
+    newThreadAgentId: "main",
+    newThreadLabel: "",
+    newThreadMessage: "",
+    newThreadCreating: false,
+    newThreadError: "",
   };
 }
 
@@ -798,6 +815,156 @@ function renderSlashMenu(
   `;
 }
 
+function openNewThreadDialog(props: ChatProps, requestUpdate: () => void) {
+  vs.newThreadOpen = true;
+  vs.newThreadCreating = false;
+  vs.newThreadError = "";
+  vs.newThreadAgentId = props.currentAgentId || props.agentsList?.defaultId || "main";
+  vs.newThreadLabel = "";
+  vs.newThreadMessage = (props.getDraft?.() ?? "").trim();
+  requestUpdate();
+}
+
+function closeNewThreadDialog(requestUpdate: () => void) {
+  vs.newThreadOpen = false;
+  vs.newThreadCreating = false;
+  vs.newThreadError = "";
+  requestUpdate();
+}
+
+async function submitNewThread(props: ChatProps, requestUpdate: () => void) {
+  if (!props.onCreateThread || vs.newThreadCreating) {
+    return;
+  }
+  const firstMessage = vs.newThreadMessage.trim();
+  if (!firstMessage) {
+    vs.newThreadError = "First message is required.";
+    requestUpdate();
+    return;
+  }
+
+  vs.newThreadCreating = true;
+  vs.newThreadError = "";
+  requestUpdate();
+  try {
+    const created = await props.onCreateThread({
+      agentId: vs.newThreadAgentId.trim() || props.currentAgentId || "main",
+      label: vs.newThreadLabel.trim() || null,
+      firstMessage,
+    });
+    if (!created) {
+      throw new Error("Failed to create thread.");
+    }
+    closeNewThreadDialog(requestUpdate);
+  } catch (err) {
+    vs.newThreadCreating = false;
+    vs.newThreadError = err instanceof Error ? err.message : String(err);
+    requestUpdate();
+  }
+}
+
+function renderNewThreadDialog(
+  props: ChatProps,
+  requestUpdate: () => void,
+): TemplateResult | typeof nothing {
+  if (!vs.newThreadOpen) {
+    return nothing;
+  }
+  const agents = props.agentsList?.agents ?? [];
+  return html`
+    <div class="chat-thread-modal-overlay" @click=${() => closeNewThreadDialog(requestUpdate)}>
+      <div class="chat-thread-modal" @click=${(event: Event) => event.stopPropagation()}>
+        <div class="chat-thread-modal__header">
+          <div>
+            <div class="chat-thread-modal__title">Create new thread</div>
+            <div class="chat-thread-modal__sub">
+              Start a parallel conversation without resetting the current session.
+            </div>
+          </div>
+          <button
+            class="btn-ghost chat-thread-modal__close"
+            type="button"
+            @click=${() => closeNewThreadDialog(requestUpdate)}
+            aria-label="Close"
+            title="Close"
+          >
+            ${icons.x}
+          </button>
+        </div>
+
+        <form
+          class="chat-thread-modal__form"
+          @submit=${(event: Event) => {
+            event.preventDefault();
+            void submitNewThread(props, requestUpdate);
+          }}
+        >
+          <label class="field">
+            <span>Agent</span>
+            <select
+              .value=${vs.newThreadAgentId}
+              @change=${(event: Event) => {
+                vs.newThreadAgentId = (event.target as HTMLSelectElement).value;
+                requestUpdate();
+              }}
+            >
+              ${agents.length > 0
+                ? agents.map(
+                    (agent) => html`
+                      <option value=${agent.id}>${agent.identity?.name || agent.name || agent.id}</option>
+                    `,
+                  )
+                : html`<option value=${props.currentAgentId}>${props.currentAgentId}</option>`}
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Thread label (optional)</span>
+            <input
+              .value=${vs.newThreadLabel}
+              @input=${(event: Event) => {
+                vs.newThreadLabel = (event.target as HTMLInputElement).value;
+                requestUpdate();
+              }}
+              placeholder="Design review / bug hunt / follow-up"
+            />
+          </label>
+
+          <label class="field">
+            <span>First message</span>
+            <textarea
+              .value=${vs.newThreadMessage}
+              @input=${(event: Event) => {
+                vs.newThreadMessage = (event.target as HTMLTextAreaElement).value;
+                requestUpdate();
+              }}
+              placeholder="What should this new thread work on?"
+              rows="4"
+            ></textarea>
+          </label>
+
+          ${vs.newThreadError
+            ? html`<div class="chat-thread-modal__error">${vs.newThreadError}</div>`
+            : nothing}
+
+          <div class="chat-thread-modal__actions">
+            <button class="btn" type="button" @click=${() => closeNewThreadDialog(requestUpdate)}>
+              Cancel
+            </button>
+            <button
+              class="btn primary"
+              type="submit"
+              ?disabled=${vs.newThreadCreating || !vs.newThreadMessage.trim()}
+            >
+              ${vs.newThreadCreating ? "Creating…" : "Create thread"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -1278,6 +1445,15 @@ export function renderChat(props: ChatProps) {
 
           <div class="agent-chat__toolbar-right">
             ${nothing /* search hidden for now */}
+            <button
+              class="btn-ghost"
+              @click=${() => openNewThreadDialog(props, requestUpdate)}
+              title="New thread"
+              aria-label="New thread"
+              ?disabled=${!props.connected || isBusy || !props.onCreateThread}
+            >
+              ${icons.messageSquare}
+            </button>
             ${
               canAbort
                 ? nothing
@@ -1322,6 +1498,7 @@ export function renderChat(props: ChatProps) {
           </div>
         </div>
       </div>
+      ${renderNewThreadDialog(props, requestUpdate)}
     </section>
   `;
 }

@@ -1,6 +1,6 @@
 import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { scheduleChatScroll } from "./app-scroll.ts";
-import { setLastActiveSessionKey } from "./app-settings.ts";
+import { applySettings, setLastActiveSessionKey } from "./app-settings.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
@@ -72,6 +72,162 @@ function isChatResetCommand(text: string) {
     return true;
   }
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
+}
+
+export type CreateThreadInput = {
+  agentId: string;
+  label?: string | null;
+  firstMessage: string;
+};
+
+function normalizeThreadLabel(raw?: string | null): string | null {
+  const trimmed = raw?.trim() ?? "";
+  return trimmed ? trimmed : null;
+}
+
+function buildThreadSessionKey(agentId: string, now = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(
+    now.getHours(),
+  )}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const suffix = Math.random().toString(36).slice(2, 6);
+  return `agent:${agentId}:thread-${stamp}-${suffix}`;
+}
+
+function buildOptimisticUserMessage(text: string, timestamp: number) {
+  return {
+    role: "user",
+    content: [{ type: "text", text }],
+    timestamp,
+  };
+}
+
+async function waitForSessionToAppear(
+  client: GatewayBrowserClient,
+  key: string,
+  attempts = 5,
+): Promise<boolean> {
+  for (let index = 0; index < attempts; index++) {
+    try {
+      const res = await client.request<{ sessions?: Array<{ key?: string | null }> }>(
+        "sessions.list",
+        {
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+      );
+      if (Array.isArray(res.sessions) && res.sessions.some((session) => session?.key === key)) {
+        return true;
+      }
+    } catch {
+      // Ignore transient session-list failures; thread creation already succeeded.
+    }
+    if (index < attempts - 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 250));
+    }
+  }
+  return false;
+}
+
+export async function handleCreateThread(
+  host: OpenClawApp,
+  input: CreateThreadInput,
+): Promise<string | null> {
+  if (!host.client || !host.connected || isChatBusy(host)) {
+    return null;
+  }
+
+  const agentId = input.agentId.trim() || "main";
+  const label = normalizeThreadLabel(input.label);
+  const firstMessage = input.firstMessage.trim();
+  if (!firstMessage) {
+    host.lastError = "First message is required to create a new thread.";
+    return null;
+  }
+
+  const previousSessionKey = host.sessionKey;
+  const previousLastActiveSessionKey = host.settings.lastActiveSessionKey;
+  const previousDraft = host.chatMessage;
+  const previousAttachments = host.chatAttachments.map((attachment) => ({ ...attachment }));
+  const nextSessionKey = buildThreadSessionKey(agentId);
+  const now = Date.now();
+  const runId = generateUUID();
+
+  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  host.sessionKey = nextSessionKey;
+  host.chatMessage = "";
+  host.chatAttachments = [];
+  host.chatMessages = [buildOptimisticUserMessage(firstMessage, now)];
+  host.chatToolMessages = [];
+  host.chatStreamSegments = [];
+  host.chatStream = "";
+  host.chatStreamStartedAt = now;
+  host.chatRunId = runId;
+  host.chatSending = true;
+  host.chatLoading = false;
+  host.lastError = null;
+  host.chatQueue = [];
+  applySettings(host, {
+    ...host.settings,
+    sessionKey: nextSessionKey,
+    lastActiveSessionKey: nextSessionKey,
+  });
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
+  void host.loadAssistantIdentity();
+  void refreshChatAvatar(host);
+
+  try {
+    await host.client.request("chat.send", {
+      sessionKey: nextSessionKey,
+      message: firstMessage,
+      deliver: false,
+      idempotencyKey: runId,
+    });
+    host.chatSending = false;
+  } catch (err) {
+    host.sessionKey = previousSessionKey;
+    host.chatMessage = previousDraft;
+    host.chatAttachments = previousAttachments;
+    host.chatMessages = [];
+    host.chatToolMessages = [];
+    host.chatStreamSegments = [];
+    host.chatStream = null;
+    host.chatStreamStartedAt = null;
+    host.chatRunId = null;
+    host.chatSending = false;
+    applySettings(host, {
+      ...host.settings,
+      sessionKey: previousSessionKey,
+      lastActiveSessionKey: previousLastActiveSessionKey,
+    });
+    host.lastError = `Failed to create thread: ${String(err)}`;
+    await loadChatHistory(host);
+    void host.loadAssistantIdentity();
+    void refreshChatAvatar(host);
+    return null;
+  }
+
+  host.refreshSessionsAfterChat.add(runId);
+
+  if (label) {
+    try {
+      const appeared = await waitForSessionToAppear(host.client, nextSessionKey);
+      if (!appeared) {
+        host.lastError = "Thread created, but the session row did not appear in time to apply its label.";
+      } else {
+        await host.client.request("sessions.patch", { key: nextSessionKey, label });
+      }
+    } catch (err) {
+      host.lastError = `Thread created, but failed to set label: ${String(err)}`;
+    }
+  }
+
+  void loadSessions(host, {
+    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+    includeGlobal: true,
+    includeUnknown: true,
+  });
+  return nextSessionKey;
 }
 
 export async function handleAbortChat(host: ChatHost) {
