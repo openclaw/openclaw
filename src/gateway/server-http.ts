@@ -54,6 +54,7 @@ import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common
 import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { handleRestApiRequest } from "./server-rest-api.js";
 import {
   authorizeCanvasRequest,
   enforcePluginRouteGatewayAuth,
@@ -753,6 +754,16 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
+
+      requestStages.push({
+        name: "rest-api",
+        run: () =>
+          handleRestApiRequest(req, res, {
+            resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+          }),
+      });
 
       requestStages.push({
         name: "gateway-probes",
