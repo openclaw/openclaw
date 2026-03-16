@@ -22,7 +22,7 @@ function resolveRunDedupeIdentity(
   run: FollowupRun,
 ): { kind: "reply-root" | "message-id"; value: string } | undefined {
   const replyRootId = run.replyRootId?.trim();
-  if (replyRootId) {
+  if (replyRootId && run.replyRootSource !== "thread-root") {
     return { kind: "reply-root", value: replyRootId };
   }
   const messageId = run.messageId?.trim();

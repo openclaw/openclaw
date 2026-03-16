@@ -265,12 +265,18 @@ describe("deliverOutboundPayloads lifecycle", () => {
       hookMetadata: {
         replyRootId: "root-1",
         replyRootKey: "dedupe-key-1",
+        channel: "override",
+        accountId: "override",
+        mediaUrls: ["https://override.invalid/file.txt"],
       },
     });
 
     expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
       expect.objectContaining({
         metadata: expect.objectContaining({
+          channel: "whatsapp",
+          accountId: undefined,
+          mediaUrls: [],
           replyRootId: "root-1",
           replyRootKey: "dedupe-key-1",
         }),

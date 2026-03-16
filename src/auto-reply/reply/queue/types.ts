@@ -19,12 +19,16 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
+export type ReplyRootSource = "reply-to" | "thread-root" | "message-id";
+
 export type FollowupRun = {
   prompt: string;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   /** Stable reply/root target used to deduplicate retries across thread turns. */
   replyRootId?: string;
+  /** How the reply/root target was derived. */
+  replyRootSource?: ReplyRootSource;
   summaryLine?: string;
   enqueuedAt: number;
   /**

@@ -18,14 +18,12 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import type { ReplyRootSource } from "./queue/types.js";
 import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
 } from "./reply-payloads.js";
-import {
-  buildRecentSentReplyRootKey,
-  markRecentSentReplyRoot,
-} from "./reply-root-dedupe.js";
+import { buildRecentSentReplyRootKey, markRecentSentReplyRoot } from "./reply-root-dedupe.js";
 
 let deliverRuntimePromise: Promise<
   typeof import("../../infra/outbound/deliver-runtime.js")
@@ -61,6 +59,8 @@ export type RouteReplyParams = {
   groupId?: string;
   /** Stable inbound reply/root target for duplicate suppression. */
   replyRootId?: string;
+  /** How the reply/root target was derived. */
+  replyRootSource?: ReplyRootSource;
   /** Optional override for the reply-root dedupe scope key. */
   replyRootScopeKey?: string;
   /** Optional override for the reply-root dedupe agent identity. */
@@ -178,6 +178,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     accountId: accountId ?? undefined,
     threadId: threadId ?? null,
     replyRootId: params.replyRootId,
+    replyRootSource: params.replyRootSource,
   });
 
   try {
@@ -204,6 +205,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         replyRootScopeKey: params.replyRootScopeKey ?? params.sessionKey,
         agentId: params.replyRootAgentId ?? resolvedAgentId,
         replyRootId: params.replyRootId,
+        replyRootSource: params.replyRootSource,
         replyRootKey: recentReplyRootKey,
         replyToId: resolvedReplyToId,
         threadId: threadId ?? null,

@@ -28,10 +28,7 @@ import {
   filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
-import {
-  buildRecentSentReplyRootKeyForRun,
-  hasRecentSentReplyRoot,
-} from "./reply-root-dedupe.js";
+import { buildRecentSentReplyRootKeyForRun, hasRecentSentReplyRoot } from "./reply-root-dedupe.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -109,6 +106,7 @@ export function createFollowupRunner(params: {
           accountId: queued.originatingAccountId,
           threadId: queued.originatingThreadId,
           replyRootId: queued.replyRootId,
+          replyRootSource: queued.replyRootSource,
           cfg: queued.run.config,
         });
         if (!result.ok) {

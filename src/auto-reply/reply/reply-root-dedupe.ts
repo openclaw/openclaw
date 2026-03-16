@@ -1,7 +1,8 @@
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { FinalizedMsgContext, MsgContext, TemplateContext } from "../templating.js";
-import type { FollowupRun } from "./queue/types.js";
+import type { FollowupRun, ReplyRootSource } from "./queue/types.js";
 
 const RECENT_SENT_REPLY_ROOTS_KEY = Symbol.for("openclaw.recentSentReplyRoots");
 const RECENT_SENT_REPLY_ROOTS = resolveGlobalSingleton(RECENT_SENT_REPLY_ROOTS_KEY, () =>
@@ -27,6 +28,12 @@ type ReplyRootRouteKeyParams = {
   accountId?: string;
   threadId?: string | number | null;
   replyRootId?: string;
+  replyRootSource?: ReplyRootSource;
+};
+
+export type ResolvedReplyRoot = {
+  id: string;
+  source: ReplyRootSource;
 };
 
 function clean(value: string | undefined | null): string | undefined {
@@ -34,23 +41,41 @@ function clean(value: string | undefined | null): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-export function resolveReplyRootId(params: ReplyRootIdentityParams): string | undefined {
-  return (
-    clean(params.replyToIdFull) ??
-    clean(params.replyToId) ??
-    clean(params.rootMessageId) ??
-    clean(params.messageIdFull) ??
-    clean(params.messageId)
-  );
+function normalizeReplyRootChannel(value: string | undefined | null): string | undefined {
+  const cleaned = clean(value);
+  if (!cleaned) {
+    return undefined;
+  }
+  return normalizeChannelId(cleaned) ?? cleaned.toLowerCase();
 }
 
-export function resolveReplyRootIdFromContext(
+export function resolveReplyRoot(params: ReplyRootIdentityParams): ResolvedReplyRoot | undefined {
+  const replyToId = clean(params.replyToIdFull) ?? clean(params.replyToId);
+  if (replyToId) {
+    return { id: replyToId, source: "reply-to" };
+  }
+  const rootMessageId = clean(params.rootMessageId);
+  if (rootMessageId) {
+    return { id: rootMessageId, source: "thread-root" };
+  }
+  const messageId = clean(params.messageIdFull) ?? clean(params.messageId);
+  if (messageId) {
+    return { id: messageId, source: "message-id" };
+  }
+  return undefined;
+}
+
+export function resolveReplyRootId(params: ReplyRootIdentityParams): string | undefined {
+  return resolveReplyRoot(params)?.id;
+}
+
+export function resolveReplyRootFromContext(
   ctx: Pick<
     MsgContext | TemplateContext | FinalizedMsgContext,
     "RootMessageId" | "ReplyToId" | "ReplyToIdFull" | "MessageSid" | "MessageSidFull"
   >,
-): string | undefined {
-  return resolveReplyRootId({
+): ResolvedReplyRoot | undefined {
+  return resolveReplyRoot({
     rootMessageId: ctx.RootMessageId,
     replyToId: ctx.ReplyToId,
     replyToIdFull: ctx.ReplyToIdFull,
@@ -59,16 +84,25 @@ export function resolveReplyRootIdFromContext(
   });
 }
 
+export function resolveReplyRootIdFromContext(
+  ctx: Pick<
+    MsgContext | TemplateContext | FinalizedMsgContext,
+    "RootMessageId" | "ReplyToId" | "ReplyToIdFull" | "MessageSid" | "MessageSidFull"
+  >,
+): string | undefined {
+  return resolveReplyRootFromContext(ctx)?.id;
+}
+
 export function buildRecentSentReplyRootKey(params: ReplyRootRouteKeyParams): string | undefined {
   const replyRootId = clean(params.replyRootId);
-  if (!replyRootId) {
+  if (!replyRootId || params.replyRootSource === "thread-root") {
     return undefined;
   }
   return JSON.stringify([
     "sent-reply-root",
     params.scopeKey ?? "",
     params.agentId ?? "",
-    params.channel ?? "",
+    normalizeReplyRootChannel(params.channel) ?? "",
     params.to ?? "",
     params.accountId ?? "",
     params.threadId == null ? "" : String(params.threadId),
@@ -84,6 +118,7 @@ export function buildRecentSentReplyRootKeyForRun(
     | "originatingAccountId"
     | "originatingThreadId"
     | "replyRootId"
+    | "replyRootSource"
     | "run"
   >,
 ): string | undefined {
@@ -95,6 +130,7 @@ export function buildRecentSentReplyRootKeyForRun(
     accountId: run.originatingAccountId,
     threadId: run.originatingThreadId,
     replyRootId: run.replyRootId,
+    replyRootSource: run.replyRootSource,
   });
 }
 

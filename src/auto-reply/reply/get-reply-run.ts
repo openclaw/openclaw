@@ -43,8 +43,8 @@ import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./i
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
+import { resolveReplyRootFromContext } from "./reply-root-dedupe.js";
 import { routeReply } from "./route-reply.js";
-import { resolveReplyRootIdFromContext } from "./reply-root-dedupe.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents, ensureSkillSnapshot } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -470,10 +470,12 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+  const replyRoot = resolveReplyRootFromContext(sessionCtx);
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-    replyRootId: resolveReplyRootIdFromContext(sessionCtx),
+    replyRootId: replyRoot?.id,
+    replyRootSource: replyRoot?.source,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
     // Originating channel for reply routing.

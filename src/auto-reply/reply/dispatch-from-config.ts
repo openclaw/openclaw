@@ -35,7 +35,7 @@ import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispat
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
-import { resolveReplyRootIdFromContext } from "./reply-root-dedupe.js";
+import { resolveReplyRootFromContext } from "./reply-root-dedupe.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -242,7 +242,9 @@ export async function dispatchReplyFromConfig(params: {
   const shouldSuppressTyping =
     shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
-  const replyRootId = resolveReplyRootIdFromContext(ctx);
+  const replyRoot = resolveReplyRootFromContext(ctx);
+  const replyRootId = replyRoot?.id;
+  const replyRootSource = replyRoot?.source;
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -272,6 +274,7 @@ export async function dispatchReplyFromConfig(params: {
       accountId: ctx.AccountId,
       threadId: routeThreadId,
       replyRootId,
+      replyRootSource,
       cfg,
       abortSignal,
       mirror,
@@ -303,6 +306,7 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: routeThreadId,
           replyRootId,
+          replyRootSource,
           cfg,
           isGroup,
           groupId,
@@ -535,6 +539,7 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: routeThreadId,
           replyRootId,
+          replyRootSource,
           cfg,
           isGroup,
           groupId,
@@ -589,6 +594,7 @@ export async function dispatchReplyFromConfig(params: {
               accountId: ctx.AccountId,
               threadId: routeThreadId,
               replyRootId,
+              replyRootSource,
               cfg,
               isGroup,
               groupId,

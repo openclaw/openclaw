@@ -434,10 +434,10 @@ async function applyMessageSendingHook(params: {
         to: params.to,
         content: params.payloadSummary.text,
         metadata: {
+          ...params.hookMetadata,
           channel: params.channel,
           accountId: params.accountId,
           mediaUrls: params.payloadSummary.mediaUrls,
-          ...params.hookMetadata,
         },
       },
       {

@@ -898,6 +898,7 @@ function createRun(params: {
   prompt: string;
   messageId?: string;
   replyRootId?: string;
+  replyRootSource?: FollowupRun["replyRootSource"];
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
   originatingAccountId?: string;
@@ -907,6 +908,7 @@ function createRun(params: {
     prompt: params.prompt,
     messageId: params.messageId,
     replyRootId: params.replyRootId,
+    replyRootSource: params.replyRootSource,
     enqueuedAt: Date.now(),
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
@@ -1074,6 +1076,44 @@ describe("followup queue deduplication", () => {
       settings,
     );
     expect(second).toBe(false);
+  });
+
+  it("falls back to message ids when the reply root only came from a thread root", async () => {
+    const key = `test-dedup-thread-root-fallback-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "m1",
+        replyRootId: "thread-root",
+        replyRootSource: "thread-root",
+        originatingChannel: "discord",
+        originatingTo: "channel:123",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        messageId: "m2",
+        replyRootId: "thread-root",
+        replyRootSource: "thread-root",
+        originatingChannel: "discord",
+        originatingTo: "channel:123",
+      }),
+      settings,
+    );
+    expect(second).toBe(true);
   });
 
   it("deduplicates same message_id across distinct enqueue module instances", async () => {
