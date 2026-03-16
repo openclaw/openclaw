@@ -54,15 +54,16 @@ describe("SESSION_STORE_SERIALIZATION_REPLACER", () => {
     expect(parsed.skillsSnapshot).toBeUndefined();
   });
 
-  it("strips systemPromptReport from serialized output", () => {
-    const obj = { foo: "bar", systemPromptReport: { tokens: 5000, sections: [] } };
+  it("preserves systemPromptReport (carries warning dedupe state)", () => {
+    const report = { tokens: 5000, bootstrapTruncation: { warningSignaturesSeen: ["sig1"] } };
+    const obj = { foo: "bar", systemPromptReport: report };
     const json = JSON.stringify(obj, SESSION_STORE_SERIALIZATION_REPLACER, 2);
     const parsed = JSON.parse(json);
     expect(parsed.foo).toBe("bar");
-    expect(parsed.systemPromptReport).toBeUndefined();
+    expect(parsed.systemPromptReport).toEqual(report);
   });
 
-  it("strips nested occurrences inside session entries", () => {
+  it("strips skillsSnapshot but keeps systemPromptReport inside session entries", () => {
     const store = {
       "session-1": {
         sessionId: "abc",
@@ -76,7 +77,7 @@ describe("SESSION_STORE_SERIALIZATION_REPLACER", () => {
     expect(parsed["session-1"].sessionId).toBe("abc");
     expect(parsed["session-1"].updatedAt).toBe(1000);
     expect(parsed["session-1"].skillsSnapshot).toBeUndefined();
-    expect(parsed["session-1"].systemPromptReport).toBeUndefined();
+    expect(parsed["session-1"].systemPromptReport).toBeDefined();
   });
 
   it("preserves all other fields unchanged", () => {
@@ -101,15 +102,14 @@ describe("saveSessionStore excludes transient fields from disk", () => {
     storePath = path.join(testDir, "sessions.json");
   });
 
-  it("does not write skillsSnapshot or systemPromptReport to disk", async () => {
+  it("strips skillsSnapshot but preserves systemPromptReport on disk", async () => {
     const store: Record<string, SessionEntry> = {
       "test-session": makeEntry({
         skillsSnapshot: {
           skills: [{ name: "big-skill", definition: "x".repeat(1000) }],
         } as unknown as SessionEntry["skillsSnapshot"],
         systemPromptReport: {
-          tokens: 5000,
-          sections: [],
+          bootstrapTruncation: { warningSignaturesSeen: ["sig-abc"] },
         } as unknown as SessionEntry["systemPromptReport"],
       }),
     };
@@ -121,10 +121,9 @@ describe("saveSessionStore excludes transient fields from disk", () => {
     expect(written["test-session"].sessionId).toBeDefined();
     expect(written["test-session"].updatedAt).toBeDefined();
     expect(written["test-session"].skillsSnapshot).toBeUndefined();
-    expect(written["test-session"].systemPromptReport).toBeUndefined();
-    // Verify the raw JSON string doesn't contain the field names at all
+    expect(written["test-session"].systemPromptReport).toBeDefined();
     expect(raw).not.toContain("skillsSnapshot");
-    expect(raw).not.toContain("systemPromptReport");
+    expect(raw).toContain("systemPromptReport");
   });
 
   it("round-trips all non-transient fields correctly", async () => {
