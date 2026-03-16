@@ -53,4 +53,16 @@ describe("bundled plugin runtime dependencies", () => {
   it("keeps bundled proxy-agent deps plugin-local instead of mirroring them into the root package", () => {
     expectPluginOwnsRuntimeDep("extensions/discord/package.json", "https-proxy-agent");
   });
+
+  it("keeps bundled diagnostics-otel runtime deps available from the published root package", () => {
+    const rootManifest = readJson<PackageManifest>("package.json");
+    const otelManifest = readJson<PackageManifest>("extensions/diagnostics-otel/package.json");
+    const otelDeps = otelManifest.dependencies ?? {};
+
+    for (const [pkg, spec] of Object.entries(otelDeps)) {
+      const rootSpec = rootManifest.dependencies?.[pkg];
+      expect(rootSpec, `${pkg} missing from root dependencies`).toBeTruthy();
+      expect(rootSpec, `${pkg} version mismatch`).toBe(spec);
+    }
+  });
 });
