@@ -10,12 +10,21 @@ async function prepareRoutedCommand(params: {
   commandPath: string[];
   loadPlugins?: boolean | ((argv: string[]) => boolean);
 }) {
+  const shouldLoadPlugins =
+    typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
   await prepareCliExecution({
     argv: params.argv,
     commandPath: params.commandPath,
     runtime: defaultRuntime,
     bannerVersion: VERSION,
-    loadPlugins: params.loadPlugins,
+    loadPlugins: shouldLoadPlugins,
+    pluginScope:
+      shouldLoadPlugins &&
+      (params.commandPath[0] === "status" || params.commandPath[0] === "health")
+        ? "channels"
+        : shouldLoadPlugins
+          ? "all"
+          : undefined,
     suppressDoctorStdout: hasFlag(params.argv, "--json"),
   });
 }

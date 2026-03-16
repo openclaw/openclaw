@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../../src/config/config.js";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const { defaultRouteConfig } = vi.hoisted(() => ({
   defaultRouteConfig: {
@@ -19,6 +18,9 @@ vi.mock("../../../src/config/config.js", async (importOriginal) => {
     loadConfig: vi.fn(() => defaultRouteConfig),
   };
 });
+
+const { buildTelegramMessageContextForTest } =
+  await import("./bot-message-context.test-harness.js");
 
 describe("buildTelegramMessageContext per-topic agentId routing", () => {
   function buildForumMessage(threadId = 3) {
@@ -98,7 +100,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:main:");
   });
 
-  it("falls back to default agent when topic agentId does not exist", async () => {
+  it("preserves an unknown topic agentId in the session key", async () => {
     vi.mocked(loadConfig).mockReturnValue({
       agents: {
         list: [{ id: "main", default: true }, { id: "zu" }],
@@ -110,7 +112,7 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
     const ctx = await buildForumContext({ topicConfig: { agentId: "ghost" } });
 
     expect(ctx).not.toBeNull();
-    expect(ctx?.ctxPayload?.SessionKey).toContain("agent:main:");
+    expect(ctx?.ctxPayload?.SessionKey).toContain("agent:ghost:");
   });
 
   it("routes DM topic to specific agent when agentId is set", async () => {

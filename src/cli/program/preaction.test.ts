@@ -81,6 +81,8 @@ describe("registerPreActionHooks", () => {
     program.command("agents").action(() => {});
     program.command("configure").action(() => {});
     program.command("onboard").action(() => {});
+    const channels = program.command("channels");
+    channels.command("add").action(() => {});
     program
       .command("update")
       .command("status")
@@ -141,6 +143,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["status"],
       loadPlugins: true,
+      pluginScope: "channels",
       suppressDoctorStdout: false,
     });
     expect(process.title).toBe("openclaw-status");
@@ -160,6 +163,42 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["message", "send"],
       loadPlugins: true,
+      pluginScope: "all",
+      suppressDoctorStdout: false,
+    });
+  });
+
+  it("keeps setup alias and channels add manifest-first", async () => {
+    await runPreAction({
+      parseArgv: ["onboard"],
+      processArgv: ["node", "openclaw", "onboard"],
+    });
+
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "onboard"],
+      bannerVersion: "9.9.9-test",
+      hideBanner: false,
+      runtime: runtimeMock,
+      commandPath: ["onboard"],
+      loadPlugins: false,
+      pluginScope: undefined,
+      suppressDoctorStdout: false,
+    });
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["channels", "add"],
+      processArgv: ["node", "openclaw", "channels", "add"],
+    });
+
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "channels", "add"],
+      bannerVersion: "9.9.9-test",
+      hideBanner: false,
+      runtime: runtimeMock,
+      commandPath: ["channels", "add"],
+      loadPlugins: false,
+      pluginScope: undefined,
       suppressDoctorStdout: false,
     });
   });
@@ -188,11 +227,29 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["status"],
       loadPlugins: true,
+      pluginScope: "channels",
       suppressDoctorStdout: false,
     });
   });
 
   it("applies --json stdout suppression only for explicit JSON output commands", async () => {
+    await runPreAction({
+      parseArgv: ["status"],
+      processArgv: ["node", "openclaw", "status", "--json"],
+    });
+
+    expect(prepareCliExecutionMock).toHaveBeenCalledWith({
+      argv: ["node", "openclaw", "status", "--json"],
+      bannerVersion: "9.9.9-test",
+      hideBanner: false,
+      runtime: runtimeMock,
+      commandPath: ["status"],
+      loadPlugins: false,
+      pluginScope: undefined,
+      suppressDoctorStdout: true,
+    });
+
+    vi.clearAllMocks();
     await runPreAction({
       parseArgv: ["update", "status", "--json"],
       processArgv: ["node", "openclaw", "update", "status", "--json"],
@@ -205,6 +262,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["update", "status"],
       loadPlugins: false,
+      pluginScope: undefined,
       suppressDoctorStdout: true,
     });
 
@@ -221,6 +279,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["config", "set"],
       loadPlugins: false,
+      pluginScope: undefined,
       suppressDoctorStdout: false,
     });
   });

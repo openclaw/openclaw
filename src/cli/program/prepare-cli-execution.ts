@@ -1,6 +1,6 @@
 import type { RuntimeEnv } from "../../runtime.js";
 import { emitCliBanner } from "../banner.js";
-import { ensurePluginRegistryLoaded } from "../plugin-registry.js";
+import { ensurePluginRegistryLoaded, type PluginRegistryScope } from "../plugin-registry.js";
 import { ensureConfigReady } from "./config-guard.js";
 
 export type CliPluginLoadPolicy = boolean | ((argv: string[]) => boolean) | undefined;
@@ -12,6 +12,7 @@ export type PrepareCliExecutionParams = {
   bannerVersion?: string;
   hideBanner?: boolean;
   loadPlugins?: CliPluginLoadPolicy;
+  pluginScope?: PluginRegistryScope;
   suppressDoctorStdout?: boolean;
 };
 
@@ -38,6 +39,6 @@ export async function prepareCliExecution(params: PrepareCliExecutionParams): Pr
   });
 
   if (shouldLoadPlugins(params.loadPlugins, params.argv)) {
-    ensurePluginRegistryLoaded();
+    ensurePluginRegistryLoaded({ scope: params.pluginScope ?? "all" });
   }
 }

@@ -1,4 +1,4 @@
-import { listChannelDocks } from "../channels/dock.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
@@ -46,14 +46,14 @@ function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefiniti
   };
 }
 
-type ChannelDock = ReturnType<typeof listChannelDocks>[number];
+type ChannelPlugin = ReturnType<typeof listChannelPlugins>[number];
 
-function defineDockCommand(dock: ChannelDock): ChatCommandDefinition {
+function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
   return defineChatCommand({
-    key: `dock:${dock.id}`,
-    nativeName: `dock_${dock.id}`,
-    description: `Switch to ${dock.id} for replies.`,
-    textAliases: [`/dock-${dock.id}`, `/dock_${dock.id}`],
+    key: `dock:${plugin.id}`,
+    nativeName: `dock_${plugin.id}`,
+    description: `Switch to ${plugin.id} for replies.`,
+    textAliases: [`/dock-${plugin.id}`, `/dock_${plugin.id}`],
     category: "docks",
   });
 }
@@ -202,6 +202,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       textAlias: "/context",
       acceptsArgs: true,
       category: "status",
+    }),
+    defineChatCommand({
+      key: "btw",
+      nativeName: "btw",
+      description: "Ask a side question without changing future session context.",
+      textAlias: "/btw",
+      acceptsArgs: true,
+      category: "tools",
     }),
     defineChatCommand({
       key: "export-session",
@@ -757,9 +765,9 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
     }),
-    ...listChannelDocks()
-      .filter((dock) => dock.capabilities.nativeCommands)
-      .map((dock) => defineDockCommand(dock)),
+    ...listChannelPlugins()
+      .filter((plugin) => plugin.capabilities.nativeCommands)
+      .map((plugin) => defineDockCommand(plugin)),
   ];
 
   registerAlias(commands, "whoami", "/id");
@@ -791,9 +799,9 @@ export function getNativeCommandSurfaces(): Set<string> {
     return cachedNativeCommandSurfaces;
   }
   cachedNativeCommandSurfaces = new Set(
-    listChannelDocks()
-      .filter((dock) => dock.capabilities.nativeCommands)
-      .map((dock) => dock.id),
+    listChannelPlugins()
+      .filter((plugin) => plugin.capabilities.nativeCommands)
+      .map((plugin) => plugin.id),
   );
   cachedNativeRegistry = registry;
   return cachedNativeCommandSurfaces;

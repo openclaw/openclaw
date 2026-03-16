@@ -86,17 +86,12 @@ function shouldAttachDeviceIdentityForGatewayCall(params: {
   token?: string;
   password?: string;
 }): boolean {
-  try {
-    const parsed = new URL(params.url);
-    // Local loopback calls should always carry device identity so operator-scoped
-    // RPC methods can succeed even when a shared gateway token/password is present.
-    if (["127.0.0.1", "::1", "localhost"].includes(parsed.hostname)) {
-      return true;
-    }
-  } catch {
-    return !(params.token || params.password);
-  }
-  return !(params.token || params.password);
+  void params;
+  // Shared-auth local calls used to skip device identity as an optimization, but
+  // device-less operator connects now have their self-declared scopes stripped.
+  // Keep identity enabled so local authenticated calls stay device-bound and
+  // retain their least-privilege scopes.
+  return true;
 }
 
 export type ExplicitGatewayAuth = {
@@ -332,11 +327,8 @@ async function resolveGatewaySecretInputString(params: {
     value: params.value,
     env: params.env,
     normalize: trimToUndefined,
-    onResolveRefError: (error) => {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`${params.path} secret reference could not be resolved: ${detail}`, {
-        cause: error,
-      });
+    onResolveRefError: () => {
+      throw new GatewaySecretRefUnavailableError(params.path);
     },
   });
   if (!value) {

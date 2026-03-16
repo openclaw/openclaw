@@ -7,9 +7,6 @@ import {
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { resolveSignalReactionLevel } from "../../../extensions/signal/src/reaction-level.js";
-import { resolveTelegramInlineButtonsScope } from "../../../extensions/telegram/src/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../../extensions/telegram/src/reaction-level.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
@@ -22,7 +19,13 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getMemorySearchManager } from "../../memory/index.js";
+import { resolveSignalReactionLevel } from "../../plugin-sdk-internal/signal.js";
+import {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramReactionLevel,
+} from "../../plugin-sdk-internal/telegram.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -76,7 +79,7 @@ import {
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import {
   compactWithSafetyTimeout,
-  EMBEDDED_COMPACTION_TIMEOUT_MS,
+  resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import {
@@ -87,7 +90,7 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { buildModelAliasLines, resolveModel } from "./model.js";
+import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
@@ -143,6 +146,7 @@ export type CompactEmbeddedPiSessionParams = {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  abortSignal?: AbortSignal;
 };
 
 type CompactionMessageMetrics = {
@@ -423,7 +427,7 @@ export async function compactEmbeddedPiSessionDirect(
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
   await ensureOpenClawModelsJson(params.config, agentDir);
-  const { model, error, authStorage, modelRegistry } = resolveModel(
+  const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
     provider,
     modelId,
     agentDir,
@@ -433,10 +437,11 @@ export async function compactEmbeddedPiSessionDirect(
     const reason = error ?? `Unknown model: ${provider}/${modelId}`;
     return fail(reason);
   }
+  let runtimeModel = model;
   let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null = null;
   try {
     apiKeyInfo = await getApiKeyForModel({
-      model,
+      model: runtimeModel,
       cfg: params.config,
       profileId: authProfileId,
       agentDir,
@@ -445,17 +450,36 @@ export async function compactEmbeddedPiSessionDirect(
     if (!apiKeyInfo.apiKey) {
       if (apiKeyInfo.mode !== "aws-sdk") {
         throw new Error(
-          `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
+          `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
         );
       }
-    } else if (model.provider === "github-copilot") {
-      const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
-      const copilotToken = await resolveCopilotApiToken({
-        githubToken: apiKeyInfo.apiKey,
-      });
-      authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
     } else {
-      authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+      const preparedAuth = await prepareProviderRuntimeAuth({
+        provider: runtimeModel.provider,
+        config: params.config,
+        workspaceDir: resolvedWorkspace,
+        env: process.env,
+        context: {
+          config: params.config,
+          agentDir,
+          workspaceDir: resolvedWorkspace,
+          env: process.env,
+          provider: runtimeModel.provider,
+          modelId,
+          model: runtimeModel,
+          apiKey: apiKeyInfo.apiKey,
+          authMode: apiKeyInfo.mode,
+          profileId: apiKeyInfo.profileId,
+        },
+      });
+      if (preparedAuth?.baseUrl) {
+        runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
+      }
+      const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
+      if (!runtimeApiKey) {
+        throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
+      }
+      authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
     }
   } catch (err) {
     const reason = describeUnknownError(err);
@@ -520,13 +544,13 @@ export async function compactEmbeddedPiSessionDirect(
       cfg: params.config,
       provider,
       modelId,
-      modelContextWindow: model.contextWindow,
+      modelContextWindow: runtimeModel.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     const effectiveModel = applyLocalNoAuthHeaderOverride(
-      ctxInfo.tokens < (model.contextWindow ?? Infinity)
-        ? { ...model, contextWindow: ctxInfo.tokens }
-        : model,
+      ctxInfo.tokens < (runtimeModel.contextWindow ?? Infinity)
+        ? { ...runtimeModel, contextWindow: ctxInfo.tokens }
+        : runtimeModel,
       apiKeyInfo,
     );
 
@@ -556,7 +580,7 @@ export async function compactEmbeddedPiSessionDirect(
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const tools = sanitizeToolsForGoogle({
-      tools: supportsModelTools(model) ? toolsRaw : [],
+      tools: supportsModelTools(runtimeModel) ? toolsRaw : [],
       provider,
     });
     const allowedToolNames = collectAllowedToolNames({ tools });
@@ -687,10 +711,11 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
+    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: EMBEDDED_COMPACTION_TIMEOUT_MS,
+        timeoutMs: compactionTimeoutMs,
       }),
     });
     try {
@@ -915,8 +940,15 @@ export async function compactEmbeddedPiSessionDirect(
           // If token estimation throws on a malformed message, fall back to 0 so
           // the sanity check below becomes a no-op instead of crashing compaction.
         }
-        const result = await compactWithSafetyTimeout(() =>
-          session.compact(params.customInstructions),
+        const result = await compactWithSafetyTimeout(
+          () => session.compact(params.customInstructions),
+          compactionTimeoutMs,
+          {
+            abortSignal: params.abortSignal,
+            onCancel: () => {
+              session.abortCompaction();
+            },
+          },
         );
         await runPostCompactionSideEffects({
           config: params.config,
@@ -1064,7 +1096,12 @@ export async function compactEmbeddedPiSession(
         const ceProvider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
         const ceModelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
         const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-        const { model: ceModel } = resolveModel(ceProvider, ceModelId, agentDir, params.config);
+        const { model: ceModel } = await resolveModelAsync(
+          ceProvider,
+          ceModelId,
+          agentDir,
+          params.config,
+        );
         const ceCtxInfo = resolveContextWindowInfo({
           cfg: params.config,
           provider: ceProvider,

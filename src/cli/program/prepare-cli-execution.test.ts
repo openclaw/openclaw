@@ -41,7 +41,7 @@ describe("prepareCliExecution", () => {
       runtime: expect.any(Object),
       commandPath: ["status"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
   it("respects hideBanner, suppressDoctorStdout, and function plugin policy", async () => {
@@ -53,6 +53,7 @@ describe("prepareCliExecution", () => {
       hideBanner: true,
       suppressDoctorStdout: true,
       loadPlugins: (argv) => argv.includes("--json"),
+      pluginScope: "channels",
     });
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
@@ -61,7 +62,7 @@ describe("prepareCliExecution", () => {
       commandPath: ["status"],
       suppressDoctorStdout: true,
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
   });
 
   it("skips plugin loading when policy resolves false", async () => {

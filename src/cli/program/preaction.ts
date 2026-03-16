@@ -32,7 +32,6 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
   "directory",
   "agents",
   "configure",
-  "onboard",
   "status",
   "health",
 ]);
@@ -86,6 +85,25 @@ function isJsonOutputMode(commandPath: string[], argv: string[]): boolean {
   return true;
 }
 
+function resolvePluginRegistryScope(commandPath: string[]): "channels" | "all" {
+  return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
+}
+
+function shouldLoadPluginsForCommand(commandPath: string[], argv: string[]): boolean {
+  const [primary, secondary] = commandPath;
+  if (!primary || !PLUGIN_REQUIRED_COMMANDS.has(primary)) {
+    return false;
+  }
+  if ((primary === "status" || primary === "health") && hasFlag(argv, "--json")) {
+    return false;
+  }
+  // Setup alias and channels add should stay manifest-first and load selected plugins on demand.
+  if (primary === "onboard" || (primary === "channels" && secondary === "add")) {
+    return false;
+  }
+  return true;
+}
+
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
@@ -111,6 +129,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (shouldBypassConfigGuard(commandPath)) {
       return;
     }
+    const shouldLoadPlugins = shouldLoadPluginsForCommand(commandPath, argv);
     await prepareCliExecution({
       argv,
       commandPath,
@@ -118,7 +137,8 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       bannerVersion: programVersion,
       hideBanner,
       suppressDoctorStdout: isJsonOutputMode(commandPath, argv),
-      loadPlugins: PLUGIN_REQUIRED_COMMANDS.has(commandPath[0] ?? ""),
+      loadPlugins: shouldLoadPlugins,
+      pluginScope: shouldLoadPlugins ? resolvePluginRegistryScope(commandPath) : undefined,
     });
   });
 }

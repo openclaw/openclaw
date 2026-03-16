@@ -27,7 +27,7 @@ describe("tryRouteCli", () => {
     vi.resetModules();
     ({ tryRouteCli } = await import("./route.js"));
     findRoutedCommandMock.mockReturnValue({
-      loadPlugins: false,
+      loadPlugins: (argv: string[]) => !argv.includes("--json"),
       run: runRouteMock,
     });
   });
@@ -47,6 +47,8 @@ describe("tryRouteCli", () => {
       expect.objectContaining({
         argv: ["node", "openclaw", "status", "--json"],
         commandPath: ["status"],
+        loadPlugins: false,
+        pluginScope: undefined,
         suppressDoctorStdout: true,
       }),
     );
@@ -60,7 +62,8 @@ describe("tryRouteCli", () => {
       commandPath: ["status"],
       runtime: expect.any(Object),
       bannerVersion: expect.any(String),
-      loadPlugins: false,
+      loadPlugins: true,
+      pluginScope: "channels",
       suppressDoctorStdout: false,
     });
   });
@@ -76,7 +79,8 @@ describe("tryRouteCli", () => {
       commandPath: ["status"],
       runtime: expect.any(Object),
       bannerVersion: expect.any(String),
-      loadPlugins: false,
+      loadPlugins: true,
+      pluginScope: "channels",
       suppressDoctorStdout: false,
     });
   });

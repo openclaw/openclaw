@@ -291,11 +291,7 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
     return false;
   }
   const capabilities = getBrowserProfileCapabilities(profile);
-  return capabilities.requiresRelay || capabilities.usesChromeMcp;
-}
-
-function isHostOnlyProfileName(profileName: string | undefined) {
-  return profileName === "user" || profileName === "chrome-relay";
+  return capabilities.usesChromeMcp;
 }
 
 export function createBrowserTool(opts?: {
@@ -312,11 +308,8 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser on the local host, prefer profile="user". Use it only when existing logins/cookies matter and the user is present to click/approve any browser attach prompt.',
-      'Use profile="chrome-relay" only for the Chrome extension / Browser Relay / toolbar-button attach-tab flow, or when the user explicitly asks for the extension relay.',
-      'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS prefer profile="chrome-relay". Otherwise prefer profile="user" over the extension relay for user-browser work.',
+      'For the logged-in user browser on the local host, use profile="user". Chrome (v144+) must be running. Use only when existing logins/cookies matter and the user is present.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      'User-browser flows need user interaction: profile="user" may require approving a browser attach prompt; profile="chrome-relay" needs the user to click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If user presence is unclear, ask first.',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
@@ -334,7 +327,9 @@ export function createBrowserTool(opts?: {
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      if (isHostOnlyProfileName(profile)) {
+      // User-browser profiles (existing-session) are host-only.
+      const isUserBrowserProfile = shouldPreferHostForProfile(profile);
+      if (isUserBrowserProfile) {
         if (requestedNode || target === "node") {
           throw new Error(`profile="${profile}" only supports the local host browser.`);
         }
@@ -343,10 +338,9 @@ export function createBrowserTool(opts?: {
             `profile="${profile}" cannot use the sandbox browser; use target="host" or omit target.`,
           );
         }
-      }
-      if (!target && !requestedNode && shouldPreferHostForProfile(profile)) {
-        // Local host user-browser profiles should not silently bind to sandbox/node browsers.
-        target = "host";
+        if (!target && !requestedNode) {
+          target = "host";
+        }
       }
 
       const nodeTarget = await resolveBrowserNodeTarget({

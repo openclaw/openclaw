@@ -14,7 +14,7 @@ import {
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
+import { CDP_PORT_RANGE_START } from "./profiles.js";
 
 export type ResolvedBrowserConfig = {
   enabled: boolean;
@@ -36,7 +36,6 @@ export type ResolvedBrowserConfig = {
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
-  relayBindHost?: string;
 };
 
 export type ResolvedBrowserProfile = {
@@ -46,7 +45,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
-  driver: "openclaw" | "extension" | "existing-session";
+  driver: "openclaw" | "existing-session";
   attachOnly: boolean;
 };
 
@@ -197,36 +196,6 @@ function ensureDefaultUserBrowserProfile(
   return result;
 }
 
-/**
- * Ensure a built-in "chrome-relay" profile exists for the Chrome extension relay.
- *
- * Note: this is an OpenClaw browser profile (routing config), not a Chrome user profile.
- * It points at the local relay CDP endpoint (controlPort + 1).
- */
-function ensureDefaultChromeRelayProfile(
-  profiles: Record<string, BrowserProfileConfig>,
-  controlPort: number,
-): Record<string, BrowserProfileConfig> {
-  const result = { ...profiles };
-  if (result["chrome-relay"]) {
-    return result;
-  }
-  const relayPort = controlPort + 1;
-  if (!Number.isFinite(relayPort) || relayPort <= 0 || relayPort > 65535) {
-    return result;
-  }
-  // Avoid adding the built-in profile if the derived relay port is already used by another profile
-  // (legacy single-profile configs may use controlPort+1 for openclaw/openclaw CDP).
-  if (getUsedPorts(result).has(relayPort)) {
-    return result;
-  }
-  result["chrome-relay"] = {
-    driver: "extension",
-    cdpUrl: `http://127.0.0.1:${relayPort}`,
-    color: "#00AA00",
-  };
-  return result;
-}
 export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
@@ -286,17 +255,14 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  const profiles = ensureDefaultChromeRelayProfile(
-    ensureDefaultUserBrowserProfile(
-      ensureDefaultProfile(
-        cfg?.profiles,
-        defaultColor,
-        legacyCdpPort,
-        cdpPortRangeStart,
-        legacyCdpUrl,
-      ),
+  const profiles = ensureDefaultUserBrowserProfile(
+    ensureDefaultProfile(
+      cfg?.profiles,
+      defaultColor,
+      legacyCdpPort,
+      cdpPortRangeStart,
+      legacyCdpUrl,
     ),
-    controlPort,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 
@@ -312,8 +278,6 @@ export function resolveBrowserConfig(
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
-  const relayBindHost = cfg?.relayBindHost?.trim() || undefined;
-
   return {
     enabled,
     evaluateEnabled,
@@ -334,7 +298,6 @@ export function resolveBrowserConfig(
     profiles,
     ssrfPolicy,
     extraArgs,
-    relayBindHost,
   };
 }
 
@@ -355,12 +318,7 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
-  const driver =
-    profile.driver === "extension"
-      ? "extension"
-      : profile.driver === "existing-session"
-        ? "existing-session"
-        : "openclaw";
+  const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
 
   if (driver === "existing-session") {
     // existing-session uses Chrome MCP auto-connect; no CDP port/URL needed
