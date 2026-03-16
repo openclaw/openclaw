@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/synology-chat";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/synology-chat";
-import { createSynologyChatPlugin } from "./src/channel.js";
+import { synologyChatPlugin } from "./src/channel.js";
 import { setSynologyRuntime } from "./src/runtime.js";
 
 const plugin = {
@@ -10,7 +10,7 @@ const plugin = {
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     setSynologyRuntime(api.runtime);
-    api.registerChannel({ plugin: createSynologyChatPlugin() });
+    api.registerChannel({ plugin: synologyChatPlugin });
   },
 };
 

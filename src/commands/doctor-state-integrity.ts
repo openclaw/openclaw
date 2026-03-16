@@ -10,6 +10,7 @@ import {
   isPrimarySessionTranscriptFileName,
   loadSessionStore,
   resolveMainSessionKey,
+  resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
   resolveSessionTranscriptPathInDir,
   resolveStorePath,
@@ -39,6 +40,14 @@ function existsFile(filePath: string): boolean {
     return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
   } catch {
     return false;
+  }
+}
+
+function canonicalFilePath(filePath: string): string {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
   }
 }
 
@@ -711,7 +720,7 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+      const transcriptPath = resolveSessionFilePath(sessionId, entry, { sessionsDir, agentId });
       return !existsFile(transcriptPath);
     });
     if (missing.length > 0) {
@@ -728,7 +737,10 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionTranscriptPathInDir(mainEntry.sessionId, sessionsDir);
+      const transcriptPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, {
+        sessionsDir,
+        agentId,
+      });
       if (!existsFile(transcriptPath)) {
         warnings.push(
           `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
@@ -752,7 +764,7 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDir)),
+          canonicalFilePath(resolveSessionFilePath(entry.sessionId, entry, { sessionsDir, agentId })),
         );
       } catch {
         // ignore invalid legacy paths
@@ -761,7 +773,7 @@ export async function noteStateIntegrity(
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
+      .map((entry) => canonicalFilePath(path.join(sessionsDir, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
     if (orphanTranscriptPaths.length > 0) {
       warnings.push(

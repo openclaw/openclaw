@@ -551,17 +551,17 @@ function parseMediaKeys(
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
     switch (messageType) {
       case "image":
-        return { imageKey };
+        return { imageKey, fileName: parsed.file_name };
       case "file":
         return { fileKey, fileName: parsed.file_name };
       case "audio":
-        return { fileKey };
+        return { fileKey, fileName: parsed.file_name };
       case "video":
       case "media":
         // Video/media has both file_key (video) and image_key (thumbnail)
-        return { fileKey, imageKey };
+        return { fileKey, imageKey, fileName: parsed.file_name };
       case "sticker":
-        return { fileKey };
+        return { fileKey, fileName: parsed.file_name };
       default:
         return {};
     }

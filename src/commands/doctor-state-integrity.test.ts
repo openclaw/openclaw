@@ -184,6 +184,36 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(filesBefore.toSorted()).toEqual(filesAfter.toSorted());
   });
 
+  it("uses persisted sessionFile paths for transcript integrity checks", async () => {
+    clearSessionStoreCacheForTest();
+    const sessionsDir = path.join(tempHome, ".openclaw", "agents", "main", "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const sessionFile = "topic-session-topic-thread-42.jsonl";
+    const sessions = {
+      "agent:main:main": {
+        sessionId: "topic-session",
+        sessionFile,
+        updatedAt: Date.now(),
+      } as { sessionId: string; sessionFile?: string; updatedAt: number },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
+    fs.writeFileSync(path.join(sessionsDir, sessionFile), '{"type":"message"}\n');
+    const confirmSkipInNonInteractive = vi.fn(async () => false);
+
+    await noteStateIntegrity({}, { confirmSkipInNonInteractive });
+
+    const text = stateIntegrityText();
+    expect(text).not.toContain("missing transcripts");
+    expect(text).not.toContain("Main session transcript missing");
+    expect(text).not.toContain("orphan transcript file");
+    expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("orphan transcript file"),
+      }),
+    );
+  });
+
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
     const cfg: OpenClawConfig = {};
     writeSessionStore(cfg, {

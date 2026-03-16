@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
+import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
 
 const baseRequest = {
@@ -25,7 +26,12 @@ const emptyRegistry = createTestRegistry([]);
 const defaultRegistry = createTestRegistry([
   {
     pluginId: "telegram",
-    plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+    plugin: telegramPlugin,
+    source: "test",
+  },
+  {
+    pluginId: "discord",
+    plugin: discordPlugin,
     source: "test",
   },
 ]);

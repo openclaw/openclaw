@@ -2,6 +2,7 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { loginAnthropic } from "@mariozechner/pi-ai";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 
 export async function loginAnthropicOAuth(params: {
   prompter: WizardPrompter;
@@ -22,44 +23,30 @@ export async function loginAnthropicOAuth(params: {
       : [
           "Browser will open for Anthropic authentication.",
           "If the callback doesn't auto-complete, paste the redirect URL.",
-          "Anthropic OAuth uses localhost:3456 for the callback.",
+          "Anthropic OAuth uses a localhost callback.",
         ].join("\n"),
     "Anthropic OAuth",
   );
 
   const spin = prompter.progress("Starting OAuth flow…");
   try {
-    let manualCodePromise: Promise<string> | undefined;
+    const { onAuth, onPrompt } = createVpsAwareOAuthHandlers({
+      isRemote,
+      prompter,
+      runtime,
+      spin,
+      openUrl,
+      localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
+    });
 
-    const creds = await loginAnthropic(
-      (url: string) => {
-        if (isRemote) {
-          spin.stop("OAuth URL ready");
-          runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
-          manualCodePromise = prompter
-            .text({
-              message: "Paste the redirect URL",
-              validate: (value) => (value.trim().length > 0 ? undefined : "Required"),
-            })
-            .then((value) => String(value));
-          return;
-        }
-
-        spin.update(localBrowserMessage ?? "Complete sign-in in browser…");
-        openUrl(url).catch((err) => runtime.error(String(err)));
-        runtime.log(`Open: ${url}`);
+    const creds = await loginAnthropic({
+      onAuth: ({ url }) => {
+        void onAuth({ url });
       },
-      async () => {
-        if (manualCodePromise) {
-          return manualCodePromise;
-        }
-        const code = await prompter.text({
-          message: "Paste the redirect URL (or authorization code)",
-          validate: (value) => (value.trim().length > 0 ? undefined : "Required"),
-        });
-        return String(code);
-      },
-    );
+      onPrompt,
+      onProgress: (message) => spin.update(message),
+      ...(isRemote ? { onManualCodeInput: () => onPrompt({ message: "Paste the redirect URL" }) } : {}),
+    });
     spin.stop("Anthropic OAuth complete");
     return creds ?? null;
   } catch (err) {

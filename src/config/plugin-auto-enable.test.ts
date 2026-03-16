@@ -62,6 +62,7 @@ function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): Plugi
       channels: p.channels,
       providers: [],
       skills: [],
+      hooks: [],
       origin: "config" as const,
       rootDir: `/fake/${p.id}`,
       source: `/fake/${p.id}/index.js`,
@@ -204,6 +205,19 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes).toEqual([]);
   });
 
+  it("does not auto-enable plugin channels when only enabled=false is set", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { matrix: { enabled: false } },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([{ id: "matrix", channels: ["matrix"] }]),
+    });
+
+    expect(result.config.plugins?.entries?.matrix).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
   it("auto-enables irc when configured via env", () => {
     const result = applyPluginAutoEnable({
       config: {},
@@ -275,8 +289,8 @@ describe("applyPluginAutoEnable", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: {
-          "env-primary": { enabled: true },
-          "env-secondary": { enabled: true },
+          "env-primary": { token: "primary" },
+          "env-secondary": { token: "secondary" },
         },
       },
       env: {
@@ -306,7 +320,26 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+  });
+
+  it("auto-enables minimax when minimax-portal profiles exist", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax-portal:default": {
+              provider: "minimax-portal",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {
