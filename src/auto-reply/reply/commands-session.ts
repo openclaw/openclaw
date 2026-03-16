@@ -618,38 +618,8 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
-  if (hasSigusr1Listener) {
-    // Write restart sentinel for post-restart notification
-    const { deliveryContext, threadId } = extractDeliveryInfo(params.sessionKey);
-    const payload: RestartSentinelPayload = {
-      kind: "restart",
-      status: "ok",
-      ts: Date.now(),
-      sessionKey: params.sessionKey,
-      deliveryContext,
-      threadId,
-      message: "/restart slash command",
-      doctorHint: formatDoctorNonInteractiveHint(),
-      stats: {
-        mode: "gateway.restart",
-        reason: "/restart",
-      },
-    };
-    await writeRestartSentinel(payload).catch(() => {
-      // ignore: sentinel is best-effort
-    });
-    scheduleGatewaySigusr1Restart({ reason: "/restart" });
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
-      },
-    };
-  }
-  // Write restart sentinel for post-restart notification
   const { deliveryContext, threadId } = extractDeliveryInfo(params.sessionKey);
-  const payload: RestartSentinelPayload = {
+  const sentinelPayload: RestartSentinelPayload = {
     kind: "restart",
     status: "ok",
     ts: Date.now(),
@@ -663,9 +633,21 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       reason: "/restart",
     },
   };
-  await writeRestartSentinel(payload).catch(() => {
-    // ignore: sentinel is best-effort
-  });
+  const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+  if (hasSigusr1Listener) {
+    // SIGUSR1 is reliable — write sentinel before triggering restart
+    await writeRestartSentinel(sentinelPayload).catch(() => {
+      // ignore: sentinel is best-effort
+    });
+    scheduleGatewaySigusr1Restart({ reason: "/restart" });
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
+      },
+    };
+  }
+  // Fallback path: only write sentinel after confirming restart will proceed
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
@@ -676,6 +658,10 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  // Restart confirmed — write sentinel now
+  await writeRestartSentinel(sentinelPayload).catch(() => {
+    // ignore: sentinel is best-effort
+  });
   return {
     shouldContinue: false,
     reply: {
