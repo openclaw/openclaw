@@ -36,12 +36,14 @@ const {
       info: { ownsCompaction: true },
       compact: contextEngineCompactMock,
     })),
-    resolveModelMock: vi.fn(() => ({
-      model: { provider: "openai", api: "responses", id: "fake", input: [] },
-      error: null,
-      authStorage: { setRuntimeApiKey: vi.fn() },
-      modelRegistry: {},
-    })),
+    resolveModelMock: vi.fn(
+      (_provider?: string, _modelId?: string, _agentDir?: string, _cfg?: unknown) => ({
+        model: { provider: "openai", api: "responses", id: "fake", input: [] },
+        error: null,
+        authStorage: { setRuntimeApiKey: vi.fn() },
+        modelRegistry: {},
+      }),
+    ),
     sessionCompactImpl: vi.fn(async () => ({
       summary: "summary",
       firstKeptEntryId: "entry-1",
@@ -307,7 +309,10 @@ vi.mock("./sandbox-info.js", () => ({
 vi.mock("./model.js", () => ({
   buildModelAliasLines: vi.fn(() => []),
   resolveModel: resolveModelMock,
-  resolveModelAsync: vi.fn(async (...args: unknown[]) => resolveModelMock(...args)),
+  resolveModelAsync: vi.fn(
+    async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
+      resolveModelMock(provider, modelId, agentDir, cfg),
+  ),
 }));
 
 vi.mock("./session-manager-cache.js", () => ({
