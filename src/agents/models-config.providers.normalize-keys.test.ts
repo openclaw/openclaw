@@ -269,4 +269,23 @@ describe("normalizeProviders", () => {
     expect((enforced as Record<string, unknown>).openai).toBeNull();
     expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
   });
+
+  it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        lmstudio: {
+          baseUrl: "http://localhost:1234/api/v1/",
+          api: "openai-completions",
+          apiKey: "LM_API_TOKEN",
+          models: [],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      expect(normalized?.lmstudio?.baseUrl).toBe("http://localhost:1234/v1");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
 });

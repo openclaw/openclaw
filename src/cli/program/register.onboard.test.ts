@@ -153,6 +153,16 @@ describe("registerOnboardCommand", () => {
     );
   });
 
+  it("parses and forwards --custom-context-window", async () => {
+    await runCli(["onboard", "--custom-context-window", "32768"]);
+    expect(setupWizardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customContextWindow: 32768,
+      }),
+      runtime,
+    );
+  });
+
   it("reports errors via runtime on setup wizard command failures", async () => {
     setupWizardCommandMock.mockRejectedValueOnce(new Error("setup failed"));
 

@@ -9,6 +9,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
 import type {
   ProviderAuthMethod,
+  ProviderExplicitModelSelectedContext,
   ProviderPlugin,
   ProviderPluginWizardModelPicker,
   ProviderPluginWizardSetup,
@@ -310,4 +311,42 @@ export async function runProviderModelSelectedHook(params: {
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
   });
+}
+
+export async function runProviderExplicitModelSelectedHook(
+  params: ProviderExplicitModelSelectedContext & {
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<OpenClawConfig> {
+  const rawModel = params.model.trim();
+  if (!rawModel) {
+    return params.config;
+  }
+  const slashIndex = rawModel.indexOf("/");
+  const selectedProviderId =
+    slashIndex === -1
+      ? DEFAULT_PROVIDER
+      : normalizeProviderId(rawModel.slice(0, slashIndex).trim());
+  if (!selectedProviderId || (slashIndex !== -1 && !rawModel.slice(slashIndex + 1).trim())) {
+    return params.config;
+  }
+
+  const providers = resolveProviderWizardProviders({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const provider = providers.find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
+  if (!provider?.onExplicitModelSelected) {
+    return params.config;
+  }
+
+  const result = await provider.onExplicitModelSelected({
+    config: params.config,
+    model: params.model,
+    prompter: params.prompter,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+  });
+  return result ?? params.config;
 }

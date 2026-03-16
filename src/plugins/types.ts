@@ -1022,6 +1022,36 @@ export type ProviderModelSelectedContext = {
   workspaceDir?: string;
 };
 
+export type ProviderExplicitModelSelectedContext = ProviderModelSelectedContext;
+
+export type ProviderResolveSyntheticAuthContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  providerConfig?: ModelProviderConfig;
+};
+
+export type ProviderSyntheticAuthResult = {
+  apiKey: string;
+  source: string;
+  mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
+};
+
+export type ProviderResolveExternalOAuthProfilesContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  store: AuthProfileStore;
+};
+export type ProviderResolveExternalAuthProfilesContext =
+  ProviderResolveExternalOAuthProfilesContext;
+
+export type ProviderExternalOAuthProfile = {
+  profileId: string;
+  credential: OAuthCredential;
+  persistence?: "runtime-only" | "persisted";
+};
+export type ProviderExternalAuthProfile = ProviderExternalOAuthProfile;
 export type ProviderDeferSyntheticProfileAuthContext = {
   config?: OpenClawConfig;
   provider: string;
@@ -1563,6 +1593,15 @@ export type ProviderPlugin = {
   shouldDeferSyntheticProfileAuth?: (
     ctx: ProviderDeferSyntheticProfileAuthContext,
   ) => boolean | undefined;
+  /**
+   * Called during interactive setup after the user explicitly selects a default
+   * model. Unlike `onModelSelected` (which runs for any model resolution),
+   * this fires only on explicit user selection and may return a modified config
+   * (e.g. to prompt for context window or model-specific settings).
+   */
+  onExplicitModelSelected?: (
+    ctx: ProviderExplicitModelSelectedContext,
+  ) => Promise<OpenClawConfig | null | undefined> | OpenClawConfig | null | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
@@ -1710,7 +1749,9 @@ export type OpenClawPluginCommandDefinition = {
    * `default` applies to all native providers unless a provider-specific
    * override exists.
    */
-  nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
+  nativeProgressMessages?: Partial<Record<string, string>> & {
+    default?: string;
+  };
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */

@@ -315,6 +315,23 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
+    if (resolved.provider === "lmstudio") {
+      const gatewayProbeWarning = buildGatewayProbeWarning(opts?.gatewayMemoryProbe);
+      if (!gatewayProbeWarning) {
+        return;
+      }
+      note(
+        [
+          'Memory search provider "lmstudio" is configured, but the gateway reports embeddings are not ready.',
+          gatewayProbeWarning,
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        "Memory search",
+      );
+      return;
+    }
     // Remote provider — check for API key
     if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
       return;

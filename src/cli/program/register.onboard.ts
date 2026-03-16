@@ -109,6 +109,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
+    .option("--custom-context-window <tokens>", "Custom provider context window in tokens")
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
     .option(
       "--custom-compatibility <mode>",
@@ -146,6 +147,10 @@ export function registerOnboardCommand(program: Command) {
       });
       const gatewayPort =
         typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
+      const customContextWindow =
+        typeof opts.customContextWindow === "string"
+          ? Number.parseInt(opts.customContextWindow, 10)
+          : undefined;
       const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
         opts as Record<string, unknown>,
       );
@@ -168,6 +173,7 @@ export function registerOnboardCommand(program: Command) {
           customBaseUrl: opts.customBaseUrl as string | undefined,
           customApiKey: opts.customApiKey as string | undefined,
           customModelId: opts.customModelId as string | undefined,
+          customContextWindow,
           customProviderId: opts.customProviderId as string | undefined,
           customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
           gatewayPort:

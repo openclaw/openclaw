@@ -54,6 +54,14 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.customContextWindow !== undefined) {
+    const contextWindow = normalizedOpts.customContextWindow;
+    if (!Number.isFinite(contextWindow) || !Number.isInteger(contextWindow) || contextWindow <= 0) {
+      runtime.error("Invalid --custom-context-window. Use a positive integer token count.");
+      runtime.exit(1);
+      return;
+    }
+  }
 
   if (normalizedOpts.resetScope && !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)) {
     runtime.error('Invalid --reset-scope. Use "config", "config+creds+sessions", or "full".');
