@@ -5,6 +5,7 @@ import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js
 import type { TemplateContext } from "../templating.js";
 
 function hashId(value: string): string {
+  // Keep 12-char truncation aligned with formatOwnerDisplayId.
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
