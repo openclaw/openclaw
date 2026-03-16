@@ -33,10 +33,59 @@ import {
 } from "./accounts.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { whatsappSetupAdapter, whatsappSetupWizard } from "./setup-surface.js";
+import { whatsappSetupAdapter } from "./setup-core.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const meta = getChatChannelMeta("whatsapp");
+
+async function loadWhatsAppChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
+const whatsappSetupWizardProxy = {
+  channel: "whatsapp",
+  status: {
+    configuredLabel: "linked",
+    unconfiguredLabel: "not linked",
+    configuredHint: "linked",
+    unconfiguredHint: "not linked",
+    configuredScore: 5,
+    unconfiguredScore: 4,
+    resolveConfigured: async ({ cfg }) =>
+      await (
+        await loadWhatsAppChannelRuntime()
+      ).whatsappSetupWizard.status.resolveConfigured({
+        cfg,
+      }),
+    resolveStatusLines: async ({ cfg, configured }) =>
+      await (
+        await loadWhatsAppChannelRuntime()
+      ).whatsappSetupWizard.status.resolveStatusLines?.({
+        cfg,
+        configured,
+      }),
+  },
+  resolveShouldPromptAccountIds: (params) =>
+    (params.shouldPromptAccountIds || params.options?.promptWhatsAppAccountId) ?? false,
+  credentials: [],
+  finalize: async (params) =>
+    await (
+      await loadWhatsAppChannelRuntime()
+    ).whatsappSetupWizard.finalize!(params),
+  disable: (cfg) => ({
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      whatsapp: {
+        ...cfg.channels?.whatsapp,
+        enabled: false,
+      },
+    },
+  }),
+  onAccountRecorded: (accountId, options) => {
+    options?.onWhatsAppAccountId?.(accountId);
+  },
+} satisfies NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   id: "whatsapp",
@@ -47,7 +96,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     forceAccountBinding: true,
     preferSessionLookupForAnnounceTarget: true,
   },
-  setupWizard: whatsappSetupWizard,
+  setupWizard: whatsappSetupWizardProxy,
   agentTools: () => [getWhatsAppRuntime().channel.whatsapp.createLoginTool()],
   pairing: {
     idLabel: "whatsappSenderId",
