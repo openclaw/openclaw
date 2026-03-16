@@ -142,6 +142,8 @@ export type SessionEntry = {
   cacheWrite?: number;
   modelProvider?: string;
   model?: string;
+  /** True when model/modelProvider came from a fallback chain, not the configured primary. */
+  modelIsFromFallback?: boolean;
   /**
    * Last selected/runtime model pair for which a fallback notice was emitted.
    * Used to avoid repeating the same fallback notice every turn.
@@ -220,7 +222,7 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
 
 export function setSessionRuntimeModel(
   entry: SessionEntry,
-  runtime: { provider: string; model: string },
+  runtime: { provider: string; model: string; isFromFallback?: boolean },
 ): boolean {
   const provider = runtime.provider.trim();
   const model = runtime.model.trim();
@@ -229,6 +231,7 @@ export function setSessionRuntimeModel(
   }
   entry.modelProvider = provider;
   entry.model = model;
+  entry.modelIsFromFallback = runtime.isFromFallback ?? false;
   return true;
 }
 

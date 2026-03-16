@@ -479,6 +479,23 @@ describe("resolveSessionModelRef", () => {
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
+
+  test("ignores session runtime model when it came from a fallback chain", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-fallback",
+      updatedAt: Date.now(),
+      modelProvider: "openai",
+      model: "gpt-4o",
+      modelIsFromFallback: true,
+    });
+
+    // Should use configured primary, NOT the fallback model stored in session
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+  });
 });
 
 describe("resolveSessionModelIdentityRef", () => {
