@@ -5,12 +5,15 @@
 
 import type { ModelCatalogEntry } from "../../../../src/agents/model-catalog.js";
 import {
+<<<<<<< HEAD
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   resolveThinkingDefaultForModel,
 } from "../../../../src/auto-reply/thinking.shared.js";
 import {
+=======
+>>>>>>> 52fd848f2 (fix(ui): keep slash command thinking helpers browser-safe)
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
@@ -26,6 +29,12 @@ import type {
   SessionsPatchResult,
 } from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
+import {
+  formatThinkingLevels,
+  normalizeThinkLevel,
+  normalizeVerboseLevel,
+  resolveThinkingDefaultForModel,
+} from "./thinking-utils.ts";
 
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
