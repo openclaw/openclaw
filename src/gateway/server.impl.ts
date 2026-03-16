@@ -16,7 +16,6 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
@@ -94,7 +93,10 @@ import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
-import { runGatewayStartupConfigPreflight } from "./server-startup-preflight.js";
+import {
+  runGatewayStartupConfigPreflight,
+  runGatewayStartupSecretsPrecheck,
+} from "./server-startup-preflight.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -362,27 +364,20 @@ export async function startGatewayServer(
 
   // Fail fast before startup if required refs are unresolved.
   let cfgAtStart: OpenClawConfig;
-  {
-    const freshSnapshot = await readConfigFileSnapshot();
-    if (!freshSnapshot.valid) {
-      const issues =
-        freshSnapshot.issues.length > 0
-          ? formatConfigIssueLines(freshSnapshot.issues, "", { normalizeRoot: true }).join("\n")
-          : "Unknown validation issue.";
-      throw new Error(`Invalid config at ${freshSnapshot.path}.\n${issues}`);
-    }
-    const startupPreflightConfig = applyGatewayAuthOverridesForStartupPreflight(
-      freshSnapshot.config,
-      {
+  await runGatewayStartupSecretsPrecheck({
+    readSnapshot: readConfigFileSnapshot,
+    prepareConfig: (config) =>
+      applyGatewayAuthOverridesForStartupPreflight(config, {
         auth: opts.auth,
         tailscale: opts.tailscale,
-      },
-    );
-    await activateRuntimeSecrets(startupPreflightConfig, {
-      reason: "startup",
-      activate: false,
-    });
-  }
+      }),
+    activateRuntimeSecrets: async (config) => {
+      await activateRuntimeSecrets(config, {
+        reason: "startup",
+        activate: false,
+      });
+    },
+  });
 
   cfgAtStart = loadConfig();
   const authBootstrap = await ensureGatewayStartupAuth({

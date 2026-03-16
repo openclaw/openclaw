@@ -49,6 +49,14 @@ function buildInvalidConfigMessage(snapshot: ConfigFileSnapshot): string {
   return `Invalid config at ${snapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`;
 }
 
+function buildInvalidConfigMessageForStartupSecretPrecheck(snapshot: ConfigFileSnapshot): string {
+  const issues =
+    snapshot.issues.length > 0
+      ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+      : "Unknown validation issue.";
+  return `Invalid config at ${snapshot.path}.\n${issues}`;
+}
+
 /**
  * Startup phase: normalize and validate config before runtime boot.
  * This keeps startup-side writes explicit and phase-scoped.
@@ -113,4 +121,27 @@ export async function runGatewayStartupConfigPreflight(
     deps.log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
     return configSnapshot;
   }
+}
+
+type GatewayStartupSecretsPrecheckDeps = {
+  readSnapshot: () => Promise<ConfigFileSnapshot>;
+  prepareConfig: (config: OpenClawConfig) => OpenClawConfig;
+  activateRuntimeSecrets: (config: OpenClawConfig) => Promise<void>;
+};
+
+/**
+ * Startup phase: fail-fast secrets precheck before runtime boot.
+ */
+export async function runGatewayStartupSecretsPrecheck(
+  deps: GatewayStartupSecretsPrecheckDeps,
+): Promise<void> {
+  const freshSnapshot = await deps.readSnapshot();
+  if (!freshSnapshot.valid) {
+    throw new GatewayStartupPreflightError(
+      "config_validation",
+      buildInvalidConfigMessageForStartupSecretPrecheck(freshSnapshot),
+    );
+  }
+  const startupPreflightConfig = deps.prepareConfig(freshSnapshot.config);
+  await deps.activateRuntimeSecrets(startupPreflightConfig);
 }

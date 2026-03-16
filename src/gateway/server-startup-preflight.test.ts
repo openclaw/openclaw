@@ -3,6 +3,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import {
   GatewayStartupPreflightError,
   runGatewayStartupConfigPreflight,
+  runGatewayStartupSecretsPrecheck,
 } from "./server-startup-preflight.js";
 
 function createSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
@@ -100,5 +101,56 @@ describe("runGatewayStartupConfigPreflight", () => {
     expect(writeConfig).toHaveBeenCalledWith(phaseThree.config);
     expect(info).toHaveBeenCalledWith(expect.stringContaining("auto-enabled plugins"));
     expect(result).toBe(phaseThree);
+  });
+});
+
+describe("runGatewayStartupSecretsPrecheck", () => {
+  it("classifies invalid config errors before secrets activation", async () => {
+    const invalid = createSnapshot({
+      valid: false,
+      issues: [{ path: "auth.profile", message: "Missing profile" }],
+    });
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(invalid);
+    const prepareConfig = vi.fn<(config: OpenClawConfig) => OpenClawConfig>();
+    const activateRuntimeSecrets = vi.fn<(config: OpenClawConfig) => Promise<void>>();
+
+    await expect(
+      runGatewayStartupSecretsPrecheck({
+        readSnapshot,
+        prepareConfig,
+        activateRuntimeSecrets,
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "config_validation",
+        message: expect.stringContaining("Invalid config at /tmp/openclaw.json"),
+      }),
+    );
+
+    expect(prepareConfig).not.toHaveBeenCalled();
+    expect(activateRuntimeSecrets).not.toHaveBeenCalled();
+  });
+
+  it("prepares config and runs secrets precheck for valid snapshots", async () => {
+    const snapshot = createSnapshot({
+      config: { auth: { profile: "default" } },
+    });
+    const preparedConfig: OpenClawConfig = { auth: { profile: "gateway" } };
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
+    const prepareConfig = vi
+      .fn<(config: OpenClawConfig) => OpenClawConfig>()
+      .mockReturnValue(preparedConfig);
+    const activateRuntimeSecrets = vi
+      .fn<(config: OpenClawConfig) => Promise<void>>()
+      .mockResolvedValue();
+
+    await runGatewayStartupSecretsPrecheck({
+      readSnapshot,
+      prepareConfig,
+      activateRuntimeSecrets,
+    });
+
+    expect(prepareConfig).toHaveBeenCalledWith(snapshot.config);
+    expect(activateRuntimeSecrets).toHaveBeenCalledWith(preparedConfig);
   });
 });
