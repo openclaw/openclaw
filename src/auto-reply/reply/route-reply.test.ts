@@ -88,6 +88,7 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
     enabled: true,
   })),
   providers: [],
+  webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
