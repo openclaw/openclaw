@@ -159,12 +159,16 @@ async function writeCachedCommandHash(
   const filePath = resolveCommandHashPath(accountId, botIdentity);
   try {
     const dirPath = path.dirname(filePath);
-    // Guard against invalid paths. On Windows, when the state directory resolves to
-    // an incomplete extended-length prefix (e.g. "\\?"), path.dirname() may return
-    // "\?" (single backslash) or "\\?" (double backslash) depending on the Node.js
-    // version and OS. Both are invalid mkdir targets. Fixes #44199.
-    const isAbsolute = path.isAbsolute(dirPath) || path.win32.isAbsolute(dirPath);
-    if (!dirPath || dirPath === "." || /^\\?\\[?][/\\]?$/.test(dirPath) || !isAbsolute) {
+    // Reject invalid/incomplete directory paths before calling mkdir.
+    // Covers: empty, ".", and bare Windows extended-length prefix remnants
+    // like "\?" or "\\?" that path.dirname() may produce from malformed state dirs.
+    // Note: path.win32.isAbsolute() returns true for these bare prefixes, so we
+    // cannot rely on it to reject them. The regex handles that case instead.
+    if (
+      !dirPath ||
+      dirPath === "." ||
+      /^\\{1,2}\?[/\\]?$/.test(dirPath) // bare \? or \\? with optional trailing slash
+    ) {
       throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
     }
     await fs.mkdir(dirPath, { recursive: true });
