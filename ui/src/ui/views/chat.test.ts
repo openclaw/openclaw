@@ -612,6 +612,7 @@ describe("chat view", () => {
     });
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
+    expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
     vi.unstubAllGlobals();
   });
 
