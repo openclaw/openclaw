@@ -811,14 +811,12 @@ export function resolveSessionOptionGroups(
     seenKeys.add(key);
     const row = byKey.get(key);
     const parsed = parseAgentSessionKey(key);
+    const agentGroupLabel = parsed ? resolveAgentGroupLabel(state, parsed.agentId) : undefined;
     const group = parsed
-      ? ensureGroup(
-          `agent:${parsed.agentId.toLowerCase()}`,
-          resolveAgentGroupLabel(state, parsed.agentId),
-        )
+      ? ensureGroup(`agent:${parsed.agentId.toLowerCase()}`, agentGroupLabel ?? parsed.agentId)
       : ensureGroup("other", "Other Sessions");
     const scopeLabel = parsed?.rest?.trim() || key;
-    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest, agentGroupLabel);
     group.options.push({
       key,
       label,
@@ -875,10 +873,11 @@ function resolveSessionScopedOptionLabel(
   key: string,
   row?: SessionsListResult["sessions"][number],
   rest?: string,
+  agentGroupLabel?: string,
 ) {
   const base = rest?.trim() || key;
   if (!row) {
-    return base;
+    return agentGroupLabel ? `${agentGroupLabel} / ${base}` : base;
   }
 
   const label = row.label?.trim() || "";
@@ -887,7 +886,7 @@ function resolveSessionScopedOptionLabel(
     return resolveSessionDisplayName(key, row);
   }
 
-  return base;
+  return agentGroupLabel ? `${agentGroupLabel} / ${base}` : base;
 }
 
 type ThemeOption = { id: ThemeName; label: string; icon: string };
