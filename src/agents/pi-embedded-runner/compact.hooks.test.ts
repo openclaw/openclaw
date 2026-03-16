@@ -15,6 +15,7 @@ const {
   resolveSessionAgentIdMock,
   estimateTokensMock,
   sessionAbortCompactionMock,
+  createOpenClawCodingToolsMock,
 } = vi.hoisted(() => {
   const contextEngineCompactMock = vi.fn(async () => ({
     ok: true as boolean,
@@ -69,6 +70,7 @@ const {
     resolveSessionAgentIdMock: vi.fn(() => "main"),
     estimateTokensMock: vi.fn((_message?: unknown) => 10),
     sessionAbortCompactionMock: vi.fn(),
+    createOpenClawCodingToolsMock: vi.fn(() => []),
   };
 });
 
@@ -207,7 +209,7 @@ vi.mock("../channel-tools.js", () => ({
 }));
 
 vi.mock("../pi-tools.js", () => ({
-  createOpenClawCodingTools: vi.fn(() => []),
+  createOpenClawCodingTools: createOpenClawCodingToolsMock,
 }));
 
 vi.mock("./google.js", () => ({
@@ -468,6 +470,11 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+      }),
+    );
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {
