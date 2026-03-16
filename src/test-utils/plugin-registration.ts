@@ -1,4 +1,5 @@
 import type {
+  AnyAgentTool,
   OpenClawPluginApi,
   ProviderPlugin,
   WebSearchProviderPlugin,
@@ -8,21 +9,27 @@ export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
+  tools: AnyAgentTool[];
 };
 
 export function createCapturedPluginRegistration(): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
+  const tools: AnyAgentTool[] = [];
 
   return {
     providers,
     webSearchProviders,
+    tools,
     api: {
       registerProvider(provider: ProviderPlugin) {
         providers.push(provider);
       },
       registerWebSearchProvider(provider: WebSearchProviderPlugin) {
         webSearchProviders.push(provider);
+      },
+      registerTool(tool: AnyAgentTool) {
+        tools.push(tool);
       },
     } as OpenClawPluginApi,
   };
