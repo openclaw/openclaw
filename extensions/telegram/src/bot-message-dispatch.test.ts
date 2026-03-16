@@ -335,6 +335,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("keeps fallback replies silent after an error reply is skipped", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.(
+        { text: "oops", isError: true },
+        { kind: "final", reason: "empty" },
+      );
+      return { queuedFinal: false };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { silentErrorReplies: true },
+    });
+
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [expect.objectContaining({ text: expect.any(String) })],
+      }),
+    );
+  });
+
   it("keeps block streaming enabled when session reasoning level is on", async () => {
     loadSessionStore.mockReturnValue({
       s1: { reasoningLevel: "on" },

@@ -515,6 +515,7 @@ export const dispatchTelegramMessage = async ({
   });
 
   let queuedFinal = false;
+  let hadErrorReplyFailureOrSkip = false;
 
   if (statusReactionController) {
     void statusReactionController.setThinking();
@@ -541,6 +542,9 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         deliver: async (payload, info) => {
+          if (payload.isError === true) {
+            hadErrorReplyFailureOrSkip = true;
+          }
           if (info.kind === "final") {
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
@@ -654,7 +658,10 @@ export const dispatchTelegramMessage = async ({
             await flushBufferedFinalAnswer();
           }
         },
-        onSkip: (_payload, info) => {
+        onSkip: (payload, info) => {
+          if (payload.isError === true) {
+            hadErrorReplyFailureOrSkip = true;
+          }
           if (info.reason !== "silent") {
             deliveryState.markNonSilentSkip();
           }
@@ -811,7 +818,7 @@ export const dispatchTelegramMessage = async ({
     const result = await deliverReplies({
       replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
-      silent: silentErrorReplies && dispatchError != null,
+      silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
     });
     sentFallback = result.delivered;
   }
