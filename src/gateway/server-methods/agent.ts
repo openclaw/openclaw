@@ -194,6 +194,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       inputProvenance?: InputProvenance;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
+    const providerOverride = senderIsOwner ? request.provider : undefined;
+    const modelOverride = senderIsOwner ? request.model : undefined;
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
@@ -586,8 +588,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       ingressOpts: {
         message,
         images,
-        provider: request.provider,
-        model: request.model,
+        provider: providerOverride,
+        model: modelOverride,
         to: resolvedTo,
         sessionId: resolvedSessionId,
         sessionKey: resolvedSessionKey,
