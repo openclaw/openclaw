@@ -12,14 +12,22 @@ function hashSenderId(value: string): string {
   return `user_${hashId(value)}`;
 }
 
-/** E.164 phone number or WhatsApp JID pattern: requires + prefix for bare numbers, or digits followed by @ for JIDs */
-const E164_PATTERN = /^(?:\+\d{7,15}|\d{7,15}@.+)$/;
+/**
+ * Sender-label redaction pattern:
+ * - +15551234567
+ * - 15551234567
+ * - 15551234567@s.whatsapp.net
+ *
+ * Applied only to label-like metadata fields (history/reply/forward sender labels),
+ * not to SenderId/chat_id, to avoid broadening numeric-ID false positives.
+ */
+const SENDER_LABEL_PHONE_PATTERN = /^(?:\+\d{7,15}|\d{7,15}|\d{7,15}@.+)$/;
 
 function redactSenderLabel(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
   }
-  return E164_PATTERN.test(value) ? hashSenderId(value) : value;
+  return SENDER_LABEL_PHONE_PATTERN.test(value) ? hashSenderId(value) : value;
 }
 
 function hashChatId(value: string): string {

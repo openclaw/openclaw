@@ -487,6 +487,21 @@ describe("buildInboundUserContextPrefix", () => {
       expect(text).toMatch(/user_[a-f0-9]{12}/);
     });
 
+    it("redacts bare phone-number ReplyToSender without plus prefix", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ReplyToBody: "some message",
+          ReplyToSender: "15559876543",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("15559876543");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
     it("redacts phone-like ForwardedFrom", () => {
       const text = buildInboundUserContextPrefix(
         {
