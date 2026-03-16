@@ -44996,6 +44996,75 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.amazon-bedrock",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/amazon-bedrock-provider",
+      "help": "OpenClaw Amazon Bedrock provider plugin (plugin: amazon-bedrock)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/amazon-bedrock-provider Config",
+      "help": "Plugin-defined config payload for amazon-bedrock.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/amazon-bedrock-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.amazon-bedrock.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.anthropic",
       "kind": "plugin",
       "type": "object",
@@ -51867,6 +51936,48 @@
       ],
       "label": "Plugin Resolved Integrity",
       "help": "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.marketplaceName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Marketplace Name",
+      "help": "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.marketplacePlugin",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Marketplace Plugin",
+      "help": "Plugin entry name inside the source marketplace, used for later updates.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.installs.*.marketplaceSource",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Marketplace Source",
+      "help": "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
       "hasChildren": false
     },
     {
