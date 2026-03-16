@@ -66,6 +66,7 @@ Do not edit these files under this plan:
 - [x] Keep compatibility adapters for existing globals
 - [x] Add tests for container lifecycle and order
 - [x] Move fallback gateway context ownership into `RuntimeStateContainer` and clear it during shutdown
+- [x] Clear remote skills cache/registry state and health broadcast callback during gateway shutdown
 
 ### Stage 3A: gateway startup decomposition
 
