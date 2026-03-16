@@ -98,9 +98,17 @@ if ! command -v timeout &> /dev/null; then
     exit 1
 fi
 
-if [[ "$AGENT" == "codex" ]] && ! command -v script &> /dev/null; then
-    echo "Error: 'script' (from util-linux) is required for Codex PTY support" >&2
-    exit 1
+if [[ "$AGENT" == "codex" ]]; then
+    if ! command -v script &> /dev/null; then
+        echo "Error: 'script' (from util-linux) is required for Codex PTY support" >&2
+        exit 1
+    fi
+    # BSD script (macOS) does not support -c flag
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "Error: Codex delegation via delegate.sh requires Linux (GNU script)." >&2
+        echo "On macOS, use tmux-session.sh or run Codex directly with a PTY." >&2
+        exit 1
+    fi
 fi
 
 if [[ ! -d "$WORKDIR" ]]; then
@@ -158,8 +166,10 @@ run_delegation() {
             $(build_claude_cmd) "$PROMPT" > "$LOG_FILE" 2>&1 || exit_code=$?
             ;;
         codex)
-            # Codex requires a PTY — use script(1) to provide one
-            script -q -c "$(build_codex_cmd) $(printf '%q' "$PROMPT")" "$LOG_FILE" || exit_code=$?
+            # Codex requires a PTY — use script(1) to provide one.
+            # Run through bash -c so printf '%q' quoting is interpreted correctly
+            # (script passes commands to /bin/sh which may be dash, not bash).
+            script -q -c "bash -c $(printf '%q' "$(build_codex_cmd) $(printf '%q' "$PROMPT")")" "$LOG_FILE" || exit_code=$?
             ;;
     esac
 
