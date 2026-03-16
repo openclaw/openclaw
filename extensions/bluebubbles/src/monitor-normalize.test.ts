@@ -64,6 +64,26 @@ describe("normalizeWebhookMessage", () => {
     expect(result?.isGroup).toBe(true);
   });
 
+  it("drops blank chatGuid and falls back to chatIdentifier for degraded groups", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-blank-chat-guid",
+        text: "hello group",
+        isGroup: true,
+        isFromMe: false,
+        handle: null,
+        chatGuid: "   ",
+        chatIdentifier: "group-fallback-id",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.chatGuid).toBeUndefined();
+    expect(result?.chatIdentifier).toBe("group-fallback-id");
+    expect(result?.senderId).toBe("");
+  });
+
   it("drops group messages with missing sender and no chat identity", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",

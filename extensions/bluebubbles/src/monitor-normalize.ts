@@ -39,6 +39,11 @@ function readNumberLike(record: Record<string, unknown> | null, key: string): nu
   return parseFiniteNumber(record[key]);
 }
 
+function trimOrUndefined(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function extractAttachments(message: Record<string, unknown>): BlueBubblesAttachment[] {
   const raw = message["attachments"];
   if (!Array.isArray(raw)) {
@@ -230,23 +235,23 @@ function extractChatContext(message: Record<string, unknown>): {
   const chat = asRecord(message.chat) ?? asRecord(message.conversation) ?? null;
   const chatFromList = readFirstChatRecord(message);
   const chatGuid =
-    readString(message, "chatGuid") ??
-    readString(message, "chat_guid") ??
-    readString(chat, "chatGuid") ??
-    readString(chat, "chat_guid") ??
-    readString(chat, "guid") ??
-    readString(chatFromList, "chatGuid") ??
-    readString(chatFromList, "chat_guid") ??
-    readString(chatFromList, "guid");
+    trimOrUndefined(readString(message, "chatGuid")) ??
+    trimOrUndefined(readString(message, "chat_guid")) ??
+    trimOrUndefined(readString(chat, "chatGuid")) ??
+    trimOrUndefined(readString(chat, "chat_guid")) ??
+    trimOrUndefined(readString(chat, "guid")) ??
+    trimOrUndefined(readString(chatFromList, "chatGuid")) ??
+    trimOrUndefined(readString(chatFromList, "chat_guid")) ??
+    trimOrUndefined(readString(chatFromList, "guid"));
   const chatIdentifier =
-    readString(message, "chatIdentifier") ??
-    readString(message, "chat_identifier") ??
-    readString(chat, "chatIdentifier") ??
-    readString(chat, "chat_identifier") ??
-    readString(chat, "identifier") ??
-    readString(chatFromList, "chatIdentifier") ??
-    readString(chatFromList, "chat_identifier") ??
-    readString(chatFromList, "identifier") ??
+    trimOrUndefined(readString(message, "chatIdentifier")) ??
+    trimOrUndefined(readString(message, "chat_identifier")) ??
+    trimOrUndefined(readString(chat, "chatIdentifier")) ??
+    trimOrUndefined(readString(chat, "chat_identifier")) ??
+    trimOrUndefined(readString(chat, "identifier")) ??
+    trimOrUndefined(readString(chatFromList, "chatIdentifier")) ??
+    trimOrUndefined(readString(chatFromList, "chat_identifier")) ??
+    trimOrUndefined(readString(chatFromList, "identifier")) ??
     extractChatIdentifierFromChatGuid(chatGuid);
   const chatId =
     readNumberLike(message, "chatId") ??
