@@ -14,7 +14,6 @@ import {
 import { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "../agents/sandbox/constants.js";
 import { execDockerRaw, type ExecDockerRawResult } from "../agents/sandbox/docker.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
-import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -55,7 +54,6 @@ type ExecDockerRawFn = (
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
 const MAX_WORKSPACE_SKILL_SCAN_FILES_PER_WORKSPACE = 2_000;
 const MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS = 12;
-
 let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
 
@@ -1261,6 +1259,7 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
+  const { loadWorkspaceSkillEntries } = await loadSkillsModule();
 
   for (const workspaceDir of workspaceDirs) {
     const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
