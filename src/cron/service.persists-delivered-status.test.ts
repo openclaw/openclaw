@@ -142,7 +142,10 @@ async function runIsolatedJobAndReadState(params: {
 describe("CronService persists delivered status", () => {
   it("persists lastDelivered=true when isolated job reports delivered", async () => {
     const updated = await runIsolatedJobAndReadState({
-      job: buildIsolatedAgentTurnJob("delivered-true"),
+      job: {
+        ...buildIsolatedAgentTurnJob("delivered-true"),
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      },
       delivered: true,
     });
     expectSuccessfulCronRun(updated);
@@ -153,7 +156,10 @@ describe("CronService persists delivered status", () => {
 
   it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
     const updated = await runIsolatedJobAndReadState({
-      job: buildIsolatedAgentTurnJob("delivered-false"),
+      job: {
+        ...buildIsolatedAgentTurnJob("delivered-false"),
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      },
       delivered: false,
     });
     expectSuccessfulCronRun(updated);
@@ -165,6 +171,14 @@ describe("CronService persists delivered status", () => {
   it("persists not-requested delivery state when delivery is not configured", async () => {
     const updated = await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("no-delivery"),
+    });
+    expectDeliveryNotRequested(updated);
+  });
+
+  it("persists not-requested when mode=none even if runner reports delivered", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildIsolatedAgentTurnJob("none-delivered"),
+      delivered: true,
     });
     expectDeliveryNotRequested(updated);
   });
