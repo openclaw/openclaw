@@ -294,6 +294,7 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as OpenClawApp, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+        syncChatSnapshot: true,
       });
     }
   }

@@ -117,6 +117,73 @@ describe("loadSessions", () => {
 
     expect(state.sessionKey).toBe("agent:main:discord:channel:123");
   });
+
+  it("does not overwrite the chat snapshot for filtered refreshes by default", async () => {
+    const filtered = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "main", kind: "direct", updatedAt: null }],
+    };
+    const existingChatSnapshot = {
+      ts: 1,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [
+        { key: "main", kind: "direct", updatedAt: null },
+        { key: "agent:main:discord:channel:123", kind: "direct", updatedAt: null },
+      ],
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return filtered;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      chatSessionsResult: existingChatSnapshot,
+    });
+
+    await loadSessions(state, { activeMinutes: 120 });
+
+    expect(state.sessionsResult).toEqual(filtered);
+    expect(state.chatSessionsResult).toEqual(existingChatSnapshot);
+  });
+
+  it("updates the chat snapshot when a chat-driven refresh asks for it", async () => {
+    const filtered = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "main", kind: "direct", updatedAt: null }],
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return filtered;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      chatSessionsResult: {
+        ts: 1,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "main", kind: "direct", updatedAt: null },
+          { key: "agent:main:discord:channel:123", kind: "direct", updatedAt: null },
+        ],
+      },
+    });
+
+    await loadSessions(state, { activeMinutes: 120, syncChatSnapshot: true });
+
+    expect(state.sessionsResult).toEqual(filtered);
+    expect(state.chatSessionsResult).toEqual(filtered);
+  });
 });
 
 describe("deleteSession", () => {

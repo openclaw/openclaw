@@ -5,6 +5,7 @@ import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts"
 import type { GatewayHelloOk } from "./gateway.ts";
 
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
 
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
@@ -92,6 +93,14 @@ vi.mock("./controllers/chat.ts", async (importOriginal) => {
   };
 });
 
+vi.mock("./controllers/sessions.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/sessions.ts")>();
+  return {
+    ...actual,
+    loadSessions: loadSessionsMock,
+  };
+});
+
 function createHost() {
   return {
     settings: {
@@ -148,6 +157,7 @@ describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
+    loadSessionsMock.mockClear();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -520,6 +530,36 @@ describe("connectGateway", () => {
     });
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("syncs the chat snapshot when a tracked chat run finishes", () => {
+    const host = createHost();
+    host.refreshSessionsAfterChat.add("engine-run-1");
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "engine-run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(
+      host,
+      expect.objectContaining({
+        activeMinutes: 120,
+        syncChatSnapshot: true,
+      }),
+    );
   });
 });
 

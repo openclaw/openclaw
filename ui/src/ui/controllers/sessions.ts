@@ -22,6 +22,7 @@ export async function loadSessions(
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
+    syncChatSnapshot?: boolean;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -37,6 +38,9 @@ export async function loadSessions(
     const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
     const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    const syncChatSnapshot =
+      overrides?.syncChatSnapshot ??
+      (includeGlobal && includeUnknown && activeMinutes <= 0 && limit <= 0);
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
@@ -50,7 +54,7 @@ export async function loadSessions(
     const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = res;
-      if (includeGlobal && includeUnknown && activeMinutes <= 0 && limit <= 0) {
+      if (syncChatSnapshot) {
         state.chatSessionsResult = res;
       }
     }
