@@ -128,7 +128,13 @@ export class MuxReceiver {
         this.runtime?.log?.(
           `slack mux initial connect failed (attempt ${attempt}), retrying in ${delay}ms: ${(err as Error).message}`,
         );
-        await new Promise((r) => setTimeout(r, delay));
+        try {
+          await sleepWithAbort(delay, this.abortSignal);
+        } catch {
+          // Abort signal fired (stop() was called) — exit immediately.
+          return;
+        }
+        if (this.stopped) return;
         // Re-resolve token before retry in case it was expired/invalid
         await this.refreshToken();
       }
