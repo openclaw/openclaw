@@ -164,7 +164,11 @@ export function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
 ) {
-  return !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
+  return (
+    !entry.endedAt ||
+    (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason) ||
+    pendingDescendantCount(entry.childSessionKey) > 0
+  );
 }
 
 function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
@@ -175,6 +179,10 @@ function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendan
   }
   if (!entry.endedAt) {
     return "running";
+  }
+  // Run ended but cleanup (announce/descendant settle) is still in progress.
+  if (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason) {
+    return "completing";
   }
   const status = entry.outcome?.status ?? "done";
   if (status === "ok") {

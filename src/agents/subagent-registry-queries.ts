@@ -145,6 +145,14 @@ export function countActiveRunsForSessionFromRuns(
       count += 1;
       continue;
     }
+    if (
+      typeof entry.cleanupCompletedAt !== "number" &&
+      !entry.cleanupHandled &&
+      !entry.suppressAnnounceReason
+    ) {
+      count += 1;
+      continue;
+    }
     if (pendingDescendantCount(entry.childSessionKey) > 0) {
       count += 1;
     }
