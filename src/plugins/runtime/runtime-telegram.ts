@@ -15,6 +15,10 @@ import {
   sendTypingTelegram,
   unpinMessageTelegram,
 } from "../../../extensions/telegram/src/send.js";
+import {
+  setTelegramThreadBindingIdleTimeoutBySessionKey,
+  setTelegramThreadBindingMaxAgeBySessionKey,
+} from "../../../extensions/telegram/src/thread-bindings.js";
 import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
 import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { createTelegramTypingLease } from "./runtime-telegram-typing.js";
@@ -30,6 +34,10 @@ export function createRuntimeTelegram(): PluginRuntimeChannel["telegram"] {
     sendPollTelegram,
     monitorTelegramProvider,
     messageActions: telegramMessageActions,
+    threadBindings: {
+      setIdleTimeoutBySessionKey: setTelegramThreadBindingIdleTimeoutBySessionKey,
+      setMaxAgeBySessionKey: setTelegramThreadBindingMaxAgeBySessionKey,
+    },
     typing: {
       pulse: sendTypingTelegram,
       start: async ({ to, accountId, cfg, intervalMs, messageThreadId }) =>
