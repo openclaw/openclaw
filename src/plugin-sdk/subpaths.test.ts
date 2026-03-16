@@ -11,8 +11,10 @@ import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lineSdk from "openclaw/plugin-sdk/line";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
 import * as nostrSdk from "openclaw/plugin-sdk/nostr";
+import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
 import * as providerSetupSdk from "openclaw/plugin-sdk/provider-setup";
 import * as sandboxSdk from "openclaw/plugin-sdk/sandbox";
+import * as selfHostedProviderSetupSdk from "openclaw/plugin-sdk/self-hosted-provider-setup";
 import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
@@ -60,6 +62,23 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof providerSetupSdk.promptAndConfigureOpenAICompatibleSelfHostedProviderAuth).toBe(
       "function",
     );
+  });
+
+  it("exports narrow self-hosted provider setup helpers", () => {
+    expect(typeof selfHostedProviderSetupSdk.buildVllmProvider).toBe("function");
+    expect(typeof selfHostedProviderSetupSdk.buildSglangProvider).toBe("function");
+    expect(typeof selfHostedProviderSetupSdk.discoverOpenAICompatibleSelfHostedProvider).toBe(
+      "function",
+    );
+    expect(
+      typeof selfHostedProviderSetupSdk.configureOpenAICompatibleSelfHostedProviderNonInteractive,
+    ).toBe("function");
+  });
+
+  it("exports narrow Ollama setup helpers", () => {
+    expect(typeof ollamaSetupSdk.buildOllamaProvider).toBe("function");
+    expect(typeof ollamaSetupSdk.configureOllamaNonInteractive).toBe("function");
+    expect(typeof ollamaSetupSdk.ensureOllamaModelPulled).toBe("function");
   });
 
   it("exports sandbox helpers from the dedicated subpath", () => {
