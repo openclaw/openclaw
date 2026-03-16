@@ -11,11 +11,16 @@
  * resolves only after two consecutive on-time callbacks, guaranteeing that any
  * deferred module-evaluation work has completed.  On systems without the
  * blocking issue this adds only ~40 ms of overhead.
+ *
+ * @param maxWaitMs Upper bound on how long to wait.  If the event loop is
+ *   still starved after this deadline the function resolves anyway so that
+ *   callers' own timeout logic can take over rather than hanging indefinitely.
  */
-export function waitForEventLoopReady(): Promise<void> {
+export function waitForEventLoopReady(maxWaitMs = 10_000): Promise<void> {
   return new Promise<void>((resolve) => {
     let consecutiveOk = 0;
     let prev = Date.now();
+    const deadline = prev + maxWaitMs;
     const check = () => {
       const now = Date.now();
       const drift = now - prev;
@@ -26,7 +31,7 @@ export function waitForEventLoopReady(): Promise<void> {
       } else {
         consecutiveOk++;
       }
-      if (consecutiveOk >= 2) {
+      if (consecutiveOk >= 2 || Date.now() >= deadline) {
         resolve();
       } else {
         setTimeout(check, 20);
