@@ -182,6 +182,21 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   if (lastRunResult) {
     info.lastRunResult = lastRunResult;
   }
+
+  // Fallback: scan all entries for result-code-shaped values when the
+  // English key was not found (localized schtasks output, e.g. German).
+  if (!info.lastRunResult) {
+    for (const [key, value] of Object.entries(entries)) {
+      if (key === "status" || key === "last run time") {
+        continue;
+      }
+      const trimmed = value.trim();
+      if (/^0x[0-9a-fA-F]+$/.test(trimmed) || /^\d+$/.test(trimmed)) {
+        info.lastRunResult = trimmed;
+        break;
+      }
+    }
+  }
   return info;
 }
 
