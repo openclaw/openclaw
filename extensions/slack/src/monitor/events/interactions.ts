@@ -1,6 +1,7 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
+import { dispatchPluginInteractiveHandler } from "../../../../../src/plugins/interactive.js";
 import { truncateSlackText } from "../../truncate.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -417,6 +418,41 @@ function formatInteractionConfirmationText(params: {
   return `:white_check_mark: *${escapeSlackMrkdwn(params.selectedLabel)}* selected${actor}`;
 }
 
+function buildSlackPluginInteractionData(params: {
+  actionId: string;
+  summary: Omit<InteractionSummary, "actionId" | "blockId">;
+}): string | null {
+  const actionId = params.actionId.trim();
+  if (!actionId) {
+    return null;
+  }
+  const payload =
+    params.summary.value?.trim() ||
+    params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
+    "";
+  return payload ? `${actionId}:${payload}` : actionId;
+}
+
+function buildSlackPluginInteractionId(params: {
+  userId?: string;
+  channelId?: string;
+  messageTs?: string;
+  actionId: string;
+  summary: Omit<InteractionSummary, "actionId" | "blockId">;
+}): string {
+  const primaryValue =
+    params.summary.value?.trim() ||
+    params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
+    "";
+  return [
+    params.userId?.trim() || "",
+    params.channelId?.trim() || "",
+    params.messageTs?.trim() || "",
+    params.actionId.trim(),
+    primaryValue,
+  ].join(":");
+}
+
 function summarizeViewState(values: unknown): ModalInputSummary[] {
   if (!values || typeof values !== "object") {
     return [];
@@ -518,6 +554,82 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
         return;
       }
       const actionSummary = summarizeAction(typedAction);
+      const pluginInteractionData = buildSlackPluginInteractionData({
+        actionId,
+        summary: actionSummary,
+      });
+      if (pluginInteractionData) {
+        const pluginResult = await dispatchPluginInteractiveHandler({
+          channel: "slack",
+          data: pluginInteractionData,
+          interactionId: buildSlackPluginInteractionId({
+            userId,
+            channelId,
+            messageTs,
+            actionId,
+            summary: actionSummary,
+          }),
+          ctx: {
+            accountId: ctx.accountId,
+            interactionId: pluginInteractionData,
+            conversationId: channelId ?? "",
+            parentConversationId: undefined,
+            threadId: threadTs,
+            senderId: userId,
+            senderUsername: undefined,
+            auth: {
+              isAuthorizedSender: auth.allowed,
+            },
+            interaction: {
+              kind: actionSummary.actionType === "button" ? "button" : "select",
+              actionId,
+              blockId,
+              messageTs,
+              threadTs,
+              value: actionSummary.value,
+              selectedValues: actionSummary.selectedValues,
+              selectedLabels: actionSummary.selectedLabels,
+              triggerId: typedBody.trigger_id,
+              responseUrl: typedBody.response_url,
+            },
+          },
+          respond: {
+            acknowledge: async () => {},
+            reply: async ({ text, responseType }) => {
+              if (!respond) {
+                return;
+              }
+              await respond({
+                text,
+                response_type: responseType ?? "ephemeral",
+              });
+            },
+            followUp: async ({ text, responseType }) => {
+              if (!respond) {
+                return;
+              }
+              await respond({
+                text,
+                response_type: responseType ?? "ephemeral",
+              });
+            },
+            editMessage: async ({ text, blocks }) => {
+              if (!channelId || !messageTs) {
+                return;
+              }
+              await ctx.app.client.chat.update({
+                channel: channelId,
+                ts: messageTs,
+                text: text ?? typedBody.message?.text ?? "",
+                ...(Array.isArray(blocks) ? { blocks: blocks as (Block | KnownBlock)[] } : {}),
+              });
+            },
+          },
+        });
+        if (pluginResult.matched && pluginResult.handled) {
+          return;
+        }
+      }
       const eventPayload: InteractionSummary = {
         interactionType: "block_action",
         actionId,
