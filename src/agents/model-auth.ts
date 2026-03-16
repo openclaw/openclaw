@@ -6,6 +6,7 @@ import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { buildProviderMissingAuthMessageWithPlugin } from "../plugins/provider-runtime.js";
 import {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -358,13 +359,19 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  if (provider === "openai") {
-    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
-    if (hasCodex) {
-      throw new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
-      );
-    }
+  const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      agentDir: params.agentDir,
+      env: process.env,
+      provider,
+      listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
+    },
+  });
+  if (pluginMissingAuthMessage) {
+    throw new Error(pluginMissingAuthMessage);
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);

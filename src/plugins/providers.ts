@@ -22,7 +22,6 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "nvidia",
   "ollama",
   "openai",
-  "openai-codex",
   "opencode",
   "opencode-go",
   "openrouter",
@@ -38,6 +37,32 @@ const BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "xiaomi",
   "zai",
 ] as const;
+
+function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
+  const plugins = config?.plugins;
+  if (!plugins) {
+    return false;
+  }
+  if (typeof plugins.enabled === "boolean") {
+    return true;
+  }
+  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
+    return true;
+  }
+  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
+    return true;
+  }
+  if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
+    return true;
+  }
+  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
+    return true;
+  }
+  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
+    return true;
+  }
+  return false;
+}
 
 function withBundledProviderAllowlistCompat(
   config: PluginLoadOptions["config"],
@@ -71,20 +96,52 @@ function withBundledProviderAllowlistCompat(
   };
 }
 
+function withBundledProviderVitestCompat(params: {
+  config: PluginLoadOptions["config"];
+  env?: PluginLoadOptions["env"];
+}): PluginLoadOptions["config"] {
+  const env = params.env ?? process.env;
+  if (!env.VITEST || hasExplicitPluginConfig(params.config)) {
+    return params.config;
+  }
+
+  return {
+    ...params.config,
+    plugins: {
+      ...params.config?.plugins,
+      enabled: true,
+      allow: [...BUNDLED_PROVIDER_ALLOWLIST_COMPAT_PLUGIN_IDS],
+      slots: {
+        ...params.config?.plugins?.slots,
+        memory: "none",
+      },
+    },
+  };
+}
+
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: PluginLoadOptions["env"];
   bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+  onlyPluginIds?: string[];
 }): ProviderPlugin[] {
-  const config = params.bundledProviderAllowlistCompat
+  const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
     ? withBundledProviderAllowlistCompat(params.config)
     : params.config;
+  const config = params.bundledProviderVitestCompat
+    ? withBundledProviderVitestCompat({
+        config: maybeAllowlistCompat,
+        env: params.env,
+      })
+    : maybeAllowlistCompat;
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    onlyPluginIds: params.onlyPluginIds,
     logger: createPluginLoaderLogger(log),
   });
 
