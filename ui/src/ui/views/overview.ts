@@ -190,7 +190,7 @@ export function renderOverview(props: OverviewProps) {
     `;
   })();
 
-  const currentLocale = i18n.getLocale();
+  const currentLocale = props.settings.locale || i18n.getLocale();
 
   return html`
     <section class="grid">
