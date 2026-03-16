@@ -48,7 +48,8 @@ export function shouldSkipControlUiPairing(
   // network has already vouched for the user.  Requiring a separate device
   // pairing round-trip adds no security benefit and is confusing to operators
   // who set allowTailscale: true expecting seamless Control UI access.
-  if (tailscaleAuthOk) {
+  // Scope to Control UI operator role for consistency with other bypass paths.
+  if (tailscaleAuthOk && policy.isControlUi && role === "operator") {
     return true;
   }
   // When auth is completely disabled (mode=none), there is no shared secret
