@@ -150,6 +150,15 @@ export function registerPluginInteractiveHandler(
       pluginName: opts?.pluginName,
       pluginRoot: opts?.pluginRoot,
     });
+  } else if (registration.channel === "slack") {
+    interactiveHandlers.set(key, {
+      ...registration,
+      namespace,
+      channel: "slack",
+      pluginId,
+      pluginName: opts?.pluginName,
+      pluginRoot: opts?.pluginRoot,
+    });
   } else {
     interactiveHandlers.set(key, {
       ...registration,
