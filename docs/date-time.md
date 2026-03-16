@@ -98,6 +98,8 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 - `userTimezone` sets the **user-local timezone** for prompt context.
+If not set, OpenClaw falls back to the host system timezone.
+
 - `timeFormat` controls **12h/24h display** in the prompt. `auto` follows OS prefs.
 
 ## Time format detection (auto)
@@ -120,8 +122,6 @@ Raw provider fields are preserved so nothing is lost.
 - Telegram/WhatsApp: provider-specific numeric/ISO timestamps
 
 If you need local time, convert it downstream using the known timezone.
-- `userTimezone` sets the **user-local timezone** for prompt context. If not set, OpenClaw falls back to the host system timezone.
-- `timeFormat` controls **12h/24h display** in the prompt. `auto` follows OS prefs.
 
 ## Related docs
 
