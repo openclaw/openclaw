@@ -11,6 +11,10 @@ title: "browser"
 
 Manage OpenClaw’s browser control server and run browser actions (tabs, snapshots, screenshots, navigation, clicks, typing).
 
+For structured UI/browser verification, prefer the `browser-qa` workflow so the
+CLI commands produce a consistent evidence report alongside any Playwright smoke
+checks.
+
 Related:
 
 - Browser tool + API: [Browser tool](/tools/browser)

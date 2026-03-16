@@ -31,6 +31,10 @@ Beginner view:
 This browser is **not** your daily driver. It is a safe, isolated surface for
 agent automation and verification.
 
+> Workflow note: for structured UI verification during VERIFY, use the bundled
+> `browser-qa` skill. It wraps `openclaw browser` snapshots/screenshots with the
+> smallest relevant Playwright smoke run and an evidence report.
+
 ## Quick start
 
 ```bash
