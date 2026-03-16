@@ -120,6 +120,8 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         sessionKey: params.sessionKey,
         message: params.message,
         deliver: params.deliver ?? false,
+        ...(params.provider && { provider: params.provider }),
+        ...(params.model && { model: params.model }),
         ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
         ...(params.lane && { lane: params.lane }),
         ...(params.idempotencyKey && { idempotencyKey: params.idempotencyKey }),
