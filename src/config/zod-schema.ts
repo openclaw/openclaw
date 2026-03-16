@@ -728,6 +728,7 @@ export const OpenClawSchema = z
               ])
               .optional(),
             debounceMs: z.number().int().min(0).optional(),
+            deferralTimeoutMs: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),

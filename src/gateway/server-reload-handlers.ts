@@ -219,6 +219,7 @@ export function createGatewayReloadHandlers(params: {
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
+        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs,
         hooks: {
           onReady: () => {
             restartPending = false;

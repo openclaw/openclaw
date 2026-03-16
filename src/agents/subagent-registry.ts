@@ -30,6 +30,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import { scheduleOrphanRecovery } from "./subagent-orphan-recovery.js";
 import {
   resolveCleanupCompletionReason,
   resolveDeferredCleanupDecision,
@@ -684,6 +685,13 @@ function restoreSubagentRunsOnce() {
     for (const runId of subagentRuns.keys()) {
       resumeSubagentRun(runId);
     }
+
+    // Schedule orphan recovery for subagent sessions that were aborted
+    // by a SIGUSR1 reload. This runs after a short delay to let the
+    // gateway fully bootstrap first. (#47711)
+    scheduleOrphanRecovery({
+      getActiveRuns: () => subagentRuns,
+    });
   } catch {
     // ignore restore failures
   }
