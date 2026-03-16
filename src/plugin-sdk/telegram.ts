@@ -53,8 +53,25 @@ export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "../../extensions/telegram/src/outbound-params.js";
+export {
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "../../extensions/telegram/src/allow-from.js";
+export { fetchTelegramChatId } from "../../extensions/telegram/src/api-fetch.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
 export { sendTelegramPayloadMessages } from "../../extensions/telegram/src/outbound-adapter.js";
+export {
+  buildBrowseProvidersButton,
+  buildModelsKeyboard,
+  buildProviderKeyboard,
+  calculateTotalPages,
+  getModelsPageSize,
+  type ProviderInfo,
+} from "../../extensions/telegram/src/model-buttons.js";
+export {
+  isTelegramExecApprovalApprover,
+  isTelegramExecApprovalClientEnabled,
+} from "../../extensions/telegram/src/exec-approvals.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
