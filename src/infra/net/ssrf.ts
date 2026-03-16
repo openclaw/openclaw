@@ -364,6 +364,7 @@ export function createPinnedDispatcher(
 
   if (policy.mode === "env-proxy") {
     return new EnvHttpProxyAgent({
+      keepAlive: false,
       connect: withPinnedLookup(pinned.lookup, policy.connect),
       ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
     });
@@ -371,10 +372,14 @@ export function createPinnedDispatcher(
 
   const proxyUrl = policy.proxyUrl.trim();
   if (!policy.proxyTls) {
-    return new ProxyAgent(proxyUrl);
+    return new ProxyAgent({
+      uri: proxyUrl,
+      connect: { keepAlive: false },
+    });
   }
   return new ProxyAgent({
     uri: proxyUrl,
+    connect: { keepAlive: false },
     proxyTls: { ...policy.proxyTls },
   });
 }
