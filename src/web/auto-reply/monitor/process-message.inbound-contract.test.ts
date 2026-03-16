@@ -61,6 +61,16 @@ function makeProcessMessageArgs(params: {
   } as any;
 }
 
+vi.mock("../../../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../agents/agent-scope.js")>();
+  return {
+    ...actual,
+    resolveAgentConfig: vi.fn((cfg, agentId) =>
+      actual.resolveAgentConfig ? actual.resolveAgentConfig(cfg, agentId) : undefined,
+    ),
+  };
+});
+
 vi.mock("../../../auto-reply/reply/provider-dispatcher.js", () => ({
   // oxlint-disable-next-line typescript/no-explicit-any
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
