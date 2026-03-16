@@ -198,4 +198,128 @@ import Testing
             #expect(cmd[1] == "daemon")
         }
     }
+
+    // MARK: - readEtcPaths tests
+
+    @Test func `reads etc paths file`() throws {
+        let tmp = try makeTempDirForTests()
+        let etcPaths = tmp.appendingPathComponent("paths")
+        let etcPathsD = tmp.appendingPathComponent("paths.d")
+        try FileManager().createDirectory(at: etcPathsD, withIntermediateDirectories: true)
+
+        try "/usr/local/bin\n/usr/bin\n/bin\n/usr/sbin\n/sbin\n"
+            .write(to: etcPaths, atomically: true, encoding: .utf8)
+
+        let result = CommandResolver.readEtcPaths(
+            etcPaths: etcPaths.path,
+            etcPathsD: etcPathsD.path)
+        #expect(result == ["/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+    }
+
+    @Test func `reads etc paths d files`() throws {
+        let tmp = try makeTempDirForTests()
+        let etcPaths = tmp.appendingPathComponent("paths")
+        let etcPathsD = tmp.appendingPathComponent("paths.d")
+        try FileManager().createDirectory(at: etcPathsD, withIntermediateDirectories: true)
+
+        try "/usr/bin\n/bin\n".write(to: etcPaths, atomically: true, encoding: .utf8)
+        try "/opt/homebrew/bin\n/opt/homebrew/sbin\n"
+            .write(to: etcPathsD.appendingPathComponent("Homebrew"), atomically: true, encoding: .utf8)
+        try "/Library/TeX/texbin\n"
+            .write(to: etcPathsD.appendingPathComponent("TeX"), atomically: true, encoding: .utf8)
+
+        let result = CommandResolver.readEtcPaths(
+            etcPaths: etcPaths.path,
+            etcPathsD: etcPathsD.path)
+        #expect(result == [
+            "/usr/bin", "/bin",
+            "/opt/homebrew/bin", "/opt/homebrew/sbin",
+            "/Library/TeX/texbin",
+        ])
+    }
+
+    @Test func `deduplicates etc paths entries`() throws {
+        let tmp = try makeTempDirForTests()
+        let etcPaths = tmp.appendingPathComponent("paths")
+        let etcPathsD = tmp.appendingPathComponent("paths.d")
+        try FileManager().createDirectory(at: etcPathsD, withIntermediateDirectories: true)
+
+        try "/usr/local/bin\n/usr/bin\n".write(to: etcPaths, atomically: true, encoding: .utf8)
+        try "/opt/homebrew/bin\n/usr/local/bin\n"
+            .write(to: etcPathsD.appendingPathComponent("Homebrew"), atomically: true, encoding: .utf8)
+
+        let result = CommandResolver.readEtcPaths(
+            etcPaths: etcPaths.path,
+            etcPathsD: etcPathsD.path)
+        #expect(result == ["/usr/local/bin", "/usr/bin", "/opt/homebrew/bin"])
+    }
+
+    @Test func `skips blank and comment lines in etc paths`() throws {
+        let tmp = try makeTempDirForTests()
+        let etcPaths = tmp.appendingPathComponent("paths")
+        let etcPathsD = tmp.appendingPathComponent("paths.d")
+        try FileManager().createDirectory(at: etcPathsD, withIntermediateDirectories: true)
+
+        try "# system paths\n/usr/bin\n\n  \n/bin\n# trailing\n"
+            .write(to: etcPaths, atomically: true, encoding: .utf8)
+
+        let result = CommandResolver.readEtcPaths(
+            etcPaths: etcPaths.path,
+            etcPathsD: etcPathsD.path)
+        #expect(result == ["/usr/bin", "/bin"])
+    }
+
+    @Test func `handles missing etc paths gracefully`() throws {
+        let tmp = try makeTempDirForTests()
+        let etcPaths = tmp.appendingPathComponent("nonexistent-paths")
+        let etcPathsD = tmp.appendingPathComponent("paths.d")
+        try FileManager().createDirectory(at: etcPathsD, withIntermediateDirectories: true)
+
+        try "/opt/custom/bin\n"
+            .write(to: etcPathsD.appendingPathComponent("custom"), atomically: true, encoding: .utf8)
+
+        let result = CommandResolver.readEtcPaths(
+            etcPaths: etcPaths.path,
+            etcPathsD: etcPathsD.path)
+        #expect(result == ["/opt/custom/bin"])
+    }
+
+    @Test func `handles missing etc paths d gracefully`() throws {
+        let tmp = try makeTempDirForTests()
+        let etcPaths = tmp.appendingPathComponent("paths")
+        let etcPathsD = tmp.appendingPathComponent("nonexistent-paths-d")
+
+        try "/usr/bin\n".write(to: etcPaths, atomically: true, encoding: .utf8)
+
+        let result = CommandResolver.readEtcPaths(
+            etcPaths: etcPaths.path,
+            etcPathsD: etcPathsD.path)
+        #expect(result == ["/usr/bin"])
+    }
+
+    @Test func `handles both etc paths and etc paths d missing`() throws {
+        let tmp = try makeTempDirForTests()
+        let result = CommandResolver.readEtcPaths(
+            etcPaths: tmp.appendingPathComponent("nope").path,
+            etcPathsD: tmp.appendingPathComponent("also-nope").path)
+        #expect(result.isEmpty)
+    }
+
+    @Test func `etc paths d entries read in sorted order`() throws {
+        let tmp = try makeTempDirForTests()
+        let etcPaths = tmp.appendingPathComponent("paths")
+        let etcPathsD = tmp.appendingPathComponent("paths.d")
+        try FileManager().createDirectory(at: etcPathsD, withIntermediateDirectories: true)
+
+        try "".write(to: etcPaths, atomically: true, encoding: .utf8)
+        try "/opt/zebra/bin\n"
+            .write(to: etcPathsD.appendingPathComponent("zebra"), atomically: true, encoding: .utf8)
+        try "/opt/alpha/bin\n"
+            .write(to: etcPathsD.appendingPathComponent("alpha"), atomically: true, encoding: .utf8)
+
+        let result = CommandResolver.readEtcPaths(
+            etcPaths: etcPaths.path,
+            etcPathsD: etcPathsD.path)
+        #expect(result == ["/opt/alpha/bin", "/opt/zebra/bin"])
+    }
 }

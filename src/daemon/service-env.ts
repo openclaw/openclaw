@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { readEtcPaths } from "../infra/path-env.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -100,7 +101,13 @@ function addCommonEnvConfiguredBinDirs(
 
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
-    return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+    // Ingest /etc/paths and /etc/paths.d/* so launchd services see the same
+    // directories that path_helper(8) would provide in a login shell.
+    const etcDirs = readEtcPaths(platform);
+    const hardcoded = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+    // Deduplicate: hardcoded first, then any extras from /etc/paths{,.d/*}.
+    const seen = new Set(hardcoded);
+    return [...hardcoded, ...etcDirs.filter((d) => !seen.has(d))];
   }
   if (platform === "linux") {
     return ["/usr/local/bin", "/usr/bin", "/bin"];

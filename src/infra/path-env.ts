@@ -30,6 +30,62 @@ function isDirectory(dirPath: string): boolean {
   }
 }
 
+/**
+ * Read directories listed in /etc/paths and /etc/paths.d/* on macOS.
+ * These files are what path_helper(8) reads for login shells, but launchd
+ * services and GUI apps never invoke path_helper — so we read them directly.
+ */
+export function readEtcPaths(platform?: NodeJS.Platform): string[] {
+  if ((platform ?? process.platform) !== "darwin") {
+    return [];
+  }
+
+  const dirs: string[] = [];
+
+  // /etc/paths: one directory per line.
+  try {
+    const content = fs.readFileSync("/etc/paths", "utf-8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith("#")) {
+        dirs.push(trimmed);
+      }
+    }
+  } catch {
+    // File may not exist or be unreadable; not fatal.
+  }
+
+  // /etc/paths.d/*: each file contains one directory per line.
+  try {
+    const entries = fs.readdirSync("/etc/paths.d");
+    for (const entry of entries.toSorted()) {
+      try {
+        const content = fs.readFileSync(path.join("/etc/paths.d", entry), "utf-8");
+        for (const line of content.split("\n")) {
+          const trimmed = line.trim();
+          if (trimmed && !trimmed.startsWith("#")) {
+            dirs.push(trimmed);
+          }
+        }
+      } catch {
+        // Skip unreadable files.
+      }
+    }
+  } catch {
+    // /etc/paths.d may not exist.
+  }
+
+  // Deduplicate while preserving order.
+  const seen = new Set<string>();
+  return dirs.filter((d) => {
+    if (seen.has(d)) {
+      return false;
+    }
+    seen.add(d);
+    return true;
+  });
+}
+
 function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
   const partsExisting = params.existing
     .split(path.delimiter)
@@ -101,6 +157,10 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   prepend.push(path.join(homeDir, ".bun", "bin"));
   prepend.push(path.join(homeDir, ".yarn", "bin"));
   prepend.push("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin");
+
+  // Ingest /etc/paths and /etc/paths.d/* so launchd/GUI environments see the same
+  // directories that path_helper(8) would provide in a login shell.
+  prepend.push(...readEtcPaths(platform));
 
   return { prepend: prepend.filter(isDirectory), append: append.filter(isDirectory) };
 }

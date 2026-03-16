@@ -94,9 +94,54 @@ enum CommandResolver {
             extras.insert(contentsOf: openclawPaths, at: 1)
         }
         extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1 + openclawPaths.count)
+
+        // Ingest /etc/paths and /etc/paths.d/* so GUI apps see the same directories
+        // that path_helper(8) would provide in a login shell.
+        extras.append(contentsOf: self.readEtcPaths())
+
         var seen = Set<String>()
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
         return (extras + current).filter { seen.insert($0).inserted }
+    }
+
+    /// Read directories listed in /etc/paths and /etc/paths.d/* — the same files
+    /// that path_helper(8) reads for login shells. GUI apps and launchd services
+    /// never invoke path_helper, so we read them directly.
+    static func readEtcPaths(
+        etcPaths: String = "/etc/paths",
+        etcPathsD: String = "/etc/paths.d"
+    ) -> [String] {
+        var dirs: [String] = []
+
+        // /etc/paths: one directory per line.
+        if let content = try? String(contentsOfFile: etcPaths, encoding: .utf8) {
+            for line in content.split(separator: "\n", omittingEmptySubsequences: false) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty, !trimmed.hasPrefix("#") {
+                    dirs.append(trimmed)
+                }
+            }
+        }
+
+        // /etc/paths.d/*: each file contains one directory per line.
+        if let entries = try? FileManager().contentsOfDirectory(atPath: etcPathsD) {
+            for entry in entries.sorted() {
+                let filePath = (etcPathsD as NSString).appendingPathComponent(entry)
+                guard let content = try? String(contentsOfFile: filePath, encoding: .utf8) else {
+                    continue
+                }
+                for line in content.split(separator: "\n", omittingEmptySubsequences: false) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if !trimmed.isEmpty, !trimmed.hasPrefix("#") {
+                        dirs.append(trimmed)
+                    }
+                }
+            }
+        }
+
+        // Deduplicate while preserving order.
+        var seen = Set<String>()
+        return dirs.filter { seen.insert($0).inserted }
     }
 
     private static func openclawManagedPaths(home: URL) -> [String] {
