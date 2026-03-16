@@ -1,3 +1,5 @@
+import type { Style } from "./zca-client.js";
+
 export type ZcaFriend = {
   userId: string;
   displayName: string;
@@ -35,6 +37,7 @@ export type ZaloInboundMessage = {
   senderName?: string;
   groupName?: string;
   content: string;
+  commandContent?: string;
   timestampMs: number;
   msgId?: string;
   cliMsgId?: string;
@@ -58,6 +61,10 @@ export type ZaloSendOptions = {
   caption?: string;
   isGroup?: boolean;
   mediaLocalRoots?: readonly string[];
+  textMode?: "markdown" | "plain";
+  textChunkMode?: "length" | "newline";
+  textChunkLimit?: number;
+  textStyles?: Style[];
 };
 
 export type ZaloSendResult = {
@@ -90,8 +97,11 @@ type ZalouserSharedConfig = {
   enabled?: boolean;
   name?: string;
   profile?: string;
+  dangerouslyAllowNameMatching?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
+  historyLimit?: number;
+  groupAllowFrom?: Array<string | number>;
   groupPolicy?: "open" | "allowlist" | "disabled";
   groups?: Record<string, ZalouserGroupConfig>;
   messagePrefix?: string;

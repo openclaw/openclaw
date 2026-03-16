@@ -7,9 +7,10 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
-export type { InspectedTelegramAccount } from "../telegram/account-inspect.js";
-export type { ResolvedTelegramAccount } from "../telegram/accounts.js";
-export type { TelegramProbe } from "../telegram/probe.js";
+export type { TelegramAccountConfig, TelegramActionConfig } from "../config/types.js";
+export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
+export type { ResolvedTelegramAccount } from "../../extensions/telegram/src/accounts.js";
+export type { TelegramProbe } from "../../extensions/telegram/src/probe.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 
@@ -22,6 +23,7 @@ export {
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
   deleteAccountFromConfigSection,
+  clearAccountEntryFields,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
@@ -33,8 +35,8 @@ export {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
-} from "../telegram/accounts.js";
-export { inspectTelegramAccount } from "../telegram/account-inspect.js";
+} from "../../extensions/telegram/src/accounts.js";
+export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
@@ -50,8 +52,9 @@ export {
 export {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
-} from "../telegram/outbound-params.js";
+} from "../../extensions/telegram/src/outbound-params.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export { sendTelegramPayloadMessages } from "../channels/plugins/outbound/telegram.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -61,7 +64,8 @@ export {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
-export { telegramOnboardingAdapter } from "../channels/plugins/onboarding/telegram.js";
+export { telegramSetupWizard } from "../../extensions/telegram/src/setup-surface.js";
+export { telegramSetupAdapter } from "../../extensions/telegram/src/setup-core.js";
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";

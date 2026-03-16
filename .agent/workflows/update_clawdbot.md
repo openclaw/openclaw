@@ -1,8 +1,8 @@
 ---
-description: Update Clawdbot from upstream when branch has diverged (ahead/behind)
+description: Update OpenClaw from upstream when branch has diverged (ahead/behind)
 ---
 
-# Clawdbot Upstream Sync Workflow
+# OpenClaw Upstream Sync Workflow
 
 Use this workflow when your fork has diverged from upstream (e.g., "18 commits ahead, 29 commits behind").
 
@@ -132,16 +132,16 @@ pnpm mac:package
 
 ```bash
 # Kill running app
-pkill -x "Clawdbot" || true
+pkill -x "OpenClaw" || true
 
 # Move old version
-mv /Applications/Clawdbot.app /tmp/Clawdbot-backup.app
+mv /Applications/OpenClaw.app /tmp/OpenClaw-backup.app
 
 # Install new build
-cp -R dist/Clawdbot.app /Applications/
+cp -R dist/OpenClaw.app /Applications/
 
 # Launch
-open /Applications/Clawdbot.app
+open /Applications/OpenClaw.app
 ```
 
 ---
@@ -235,7 +235,7 @@ If upstream introduced new model configurations:
 # Check for OpenRouter API key requirements
 grep -r "openrouter\|OPENROUTER" src/ --include="*.ts" --include="*.js"
 
-# Update clawdbot.json with fallback chains
+# Update openclaw.json with fallback chains
 # Add model fallback configurations as needed
 ```
 

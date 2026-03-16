@@ -30,6 +30,14 @@ Trust model note:
 - Gateway-authenticated callers are trusted operators for that Gateway.
 - Paired nodes extend that trusted operator capability onto the node host.
 - Exec approvals reduce accidental execution risk, but are not a per-user auth boundary.
+- Approved node-host runs bind canonical execution context: canonical cwd, exact argv, env
+  binding when present, and pinned executable path when applicable.
+- For shell scripts and direct interpreter/runtime file invocations, OpenClaw also tries to bind
+  one concrete local file operand. If that bound file changes after approval but before execution,
+  the run is denied instead of executing drifted content.
+- This file binding is intentionally best-effort, not a complete semantic model of every
+  interpreter/runtime loader path. If approval mode cannot identify exactly one concrete local
+  file to bind, it refuses to mint an approval-backed run instead of pretending full coverage.
 
 macOS split:
 
@@ -152,13 +160,14 @@ Long options are validated fail-closed in safe-bin mode: unknown flags and ambig
 abbreviations are rejected.
 Denied flags by safe-bin profile:
 
-<!-- SAFE_BIN_DENIED_FLAGS:START -->
+[//]: # "SAFE_BIN_DENIED_FLAGS:START"
 
 - `grep`: `--dereference-recursive`, `--directories`, `--exclude-from`, `--file`, `--recursive`, `-R`, `-d`, `-f`, `-r`
 - `jq`: `--argfile`, `--from-file`, `--library-path`, `--rawfile`, `--slurpfile`, `-L`, `-f`
 - `sort`: `--compress-program`, `--files0-from`, `--output`, `--random-source`, `--temporary-directory`, `-T`, `-o`
 - `wc`: `--files0-from`
-<!-- SAFE_BIN_DENIED_FLAGS:END -->
+
+[//]: # "SAFE_BIN_DENIED_FLAGS:END"
 
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
 and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
@@ -256,6 +265,22 @@ For `host=node`, approval requests include a canonical `systemRunPlan` payload. 
 that plan as the authoritative command/cwd/session context when forwarding approved `system.run`
 requests.
 
+## Interpreter/runtime commands
+
+Approval-backed interpreter/runtime runs are intentionally conservative:
+
+- Exact argv/cwd/env context is always bound.
+- Direct shell script and direct runtime file forms are best-effort bound to one concrete local
+  file snapshot.
+- Common package-manager wrapper forms that still resolve to one direct local file (for example
+  `pnpm exec`, `pnpm node`, `npm exec`, `npx`) are unwrapped before binding.
+- If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command
+  (for example package scripts, eval forms, runtime-specific loader chains, or ambiguous multi-file
+  forms), approval-backed execution is denied instead of claiming semantic coverage it does not
+  have.
+- For those workflows, prefer sandboxing, a separate host boundary, or an explicit trusted
+  allowlist/full workflow where the operator accepts the broader runtime semantics.
+
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
 timeout, the request is treated as an approval timeout and surfaced as a denial reason.
@@ -305,6 +330,32 @@ Reply in chat:
 /approve <id> allow-always
 /approve <id> deny
 ```
+
+### Built-in chat approval clients
+
+Discord and Telegram can also act as explicit exec approval clients with channel-specific config.
+
+- Discord: `channels.discord.execApprovals.*`
+- Telegram: `channels.telegram.execApprovals.*`
+
+These clients are opt-in. If a channel does not have exec approvals enabled, OpenClaw does not treat
+that channel as an approval surface just because the conversation happened there.
+
+Shared behavior:
+
+- only configured approvers can approve or deny
+- the requester does not need to be an approver
+- when channel delivery is enabled, approval prompts include the command text
+- if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
+
+Telegram defaults to approver DMs (`target: "dm"`). You can switch to `channel` or `both` when you
+want approval prompts to appear in the originating Telegram chat/topic as well. For Telegram forum
+topics, OpenClaw preserves the topic for the approval prompt and the post-approval follow-up.
+
+See:
+
+- [Discord](/channels/discord#exec-approvals-in-discord)
+- [Telegram](/channels/telegram#exec-approvals-in-telegram)
 
 ### macOS IPC flow
 

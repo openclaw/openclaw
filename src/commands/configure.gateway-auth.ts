@@ -1,4 +1,5 @@
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -86,6 +87,7 @@ export async function promptAuthConfig(
       allowKeychainPrompt: false,
     }),
     includeSkip: true,
+    config: cfg,
   });
 
   let next = cfg;
@@ -107,7 +109,13 @@ export async function promptAuthConfig(
       prompter,
       allowKeep: true,
       ignoreAllowlist: true,
-      preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+      includeProviderPluginSetups: true,
+      preferredProvider: await resolvePreferredProviderForAuthChoice({
+        choice: authChoice,
+        config: next,
+      }),
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      runtime,
     });
     if (modelSelection.config) {
       next = modelSelection.config;

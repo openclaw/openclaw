@@ -4,6 +4,11 @@ import { describe, expect, it } from "vitest";
 type BackgroundUtilsModule = {
   buildRelayWsUrl: (port: number, gatewayToken: string) => Promise<string>;
   deriveRelayToken: (gatewayToken: string, port: number) => Promise<string>;
+  isLastRemainingTab: (
+    allTabs: Array<{ id?: number | undefined } | null | undefined>,
+    tabIdToClose: number,
+  ) => boolean;
+  isMissingTabError: (err: unknown) => boolean;
   isRetryableReconnectError: (err: unknown) => boolean;
   reconnectDelayMs: (
     attempt: number,
@@ -26,8 +31,14 @@ async function loadBackgroundUtils(): Promise<BackgroundUtilsModule> {
   }
 }
 
-const { buildRelayWsUrl, deriveRelayToken, isRetryableReconnectError, reconnectDelayMs } =
-  await loadBackgroundUtils();
+const {
+  buildRelayWsUrl,
+  deriveRelayToken,
+  isLastRemainingTab,
+  isMissingTabError,
+  isRetryableReconnectError,
+  reconnectDelayMs,
+} = await loadBackgroundUtils();
 
 describe("chrome extension background utils", () => {
   it("derives relay token as HMAC-SHA256 of gateway token and port", async () => {
@@ -106,5 +117,17 @@ describe("chrome extension background utils", () => {
   it("keeps transient network errors retryable", () => {
     expect(isRetryableReconnectError(new Error("WebSocket connect timeout"))).toBe(true);
     expect(isRetryableReconnectError(new Error("Relay server not reachable"))).toBe(true);
+  });
+
+  it("recognizes missing-tab debugger errors", () => {
+    expect(isMissingTabError(new Error("No tab with given id"))).toBe(true);
+    expect(isMissingTabError(new Error("tab not found"))).toBe(true);
+    expect(isMissingTabError(new Error("Cannot access a chrome:// URL"))).toBe(false);
+  });
+
+  it("blocks closing the final remaining tab only", () => {
+    expect(isLastRemainingTab([{ id: 7 }], 7)).toBe(true);
+    expect(isLastRemainingTab([{ id: 7 }, { id: 8 }], 7)).toBe(false);
+    expect(isLastRemainingTab([{ id: 7 }, { id: 8 }], 8)).toBe(false);
   });
 });

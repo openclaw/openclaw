@@ -1,6 +1,6 @@
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
-import { isValidSecretProviderAlias } from "./ref-contract.js";
+import { isValidExecSecretRefId, isValidSecretProviderAlias } from "./ref-contract.js";
 import { parseDotPath, toDotPath } from "./shared.js";
 import {
   isKnownSecretTargetType,
@@ -140,7 +140,8 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       typeof ref.provider !== "string" ||
       ref.provider.trim().length === 0 ||
       typeof ref.id !== "string" ||
-      ref.id.trim().length === 0
+      ref.id.trim().length === 0 ||
+      (ref.source === "exec" && !isValidExecSecretRefId(ref.id))
     ) {
       return false;
     }

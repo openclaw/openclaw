@@ -1,3 +1,6 @@
+import { parseDiscordTarget } from "../../../../extensions/discord/src/targets.js";
+import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
+import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
 import {
   countPendingDescendantRuns,
   type SubagentRunRecord,
@@ -14,10 +17,11 @@ import type {
   loadSessionStore as loadSessionStoreFn,
   resolveStorePath as resolveStorePathFn,
 } from "../../../config/sessions.js";
-import { parseDiscordTarget } from "../../../discord/targets.js";
 import { callGateway } from "../../../gateway/call.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import {
   formatDurationCompact,
@@ -74,8 +78,6 @@ export const ACTIONS = new Set([
 export const RECENT_WINDOW_MINUTES = 30;
 const SUBAGENT_TASK_PREVIEW_MAX = 110;
 export const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
-
-const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function compactLine(value: string) {
   return value.replace(/\s+/g, " ").trim();
@@ -248,6 +250,29 @@ export function resolveRequesterSessionKey(
   return resolveInternalSessionKey({ key: raw, alias, mainKey });
 }
 
+export function resolveCommandSubagentController(
+  params: SubagentsCommandParams,
+  requesterKey: string,
+): ResolvedSubagentController {
+  if (!isSubagentSessionKey(requesterKey)) {
+    return {
+      controllerSessionKey: requesterKey,
+      callerSessionKey: requesterKey,
+      callerIsSubagent: false,
+      controlScope: "children",
+    };
+  }
+  const capabilities = resolveStoredSubagentCapabilities(requesterKey, {
+    cfg: params.cfg,
+  });
+  return {
+    controllerSessionKey: requesterKey,
+    callerSessionKey: requesterKey,
+    callerIsSubagent: true,
+    controlScope: capabilities.controlScope,
+  };
+}
+
 export function resolveHandledPrefix(normalized: string): string | null {
   return normalized.startsWith(COMMAND)
     ? COMMAND
@@ -345,7 +370,7 @@ export async function resolveFocusTargetSession(params: {
 
   const attempts: Array<Record<string, string>> = [];
   attempts.push({ key: token });
-  if (SESSION_ID_RE.test(token)) {
+  if (looksLikeSessionId(token)) {
     attempts.push({ sessionId: token });
   }
   attempts.push({ label: token });

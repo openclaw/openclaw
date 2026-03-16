@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -88,8 +89,12 @@ import { spawn as mockedSpawn } from "node:child_process";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import { QmdMemoryManager } from "./qmd-manager.js";
+import { requireNodeSqlite } from "./sqlite.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
+const originalPath = process.env.PATH;
+const originalPathExt = process.env.PATHEXT;
+const originalWindowsPath = (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
 
 describe("QmdMemoryManager", () => {
   let fixtureRoot: string;
@@ -138,6 +143,9 @@ describe("QmdMemoryManager", () => {
     // created lazily by manager code when needed.
     await fs.mkdir(workspaceDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    // Keep the default Windows path unresolved for most tests so spawn mocks can
+    // match the logical package command. Tests that verify wrapper resolution
+    // install explicit shim fixtures inline.
     cfg = {
       agents: {
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
@@ -156,6 +164,21 @@ describe("QmdMemoryManager", () => {
   afterEach(() => {
     vi.useRealTimers();
     delete process.env.OPENCLAW_STATE_DIR;
+    if (originalPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = originalPath;
+    }
+    if (originalPathExt === undefined) {
+      delete process.env.PATHEXT;
+    } else {
+      process.env.PATHEXT = originalPathExt;
+    }
+    if (originalWindowsPath === undefined) {
+      delete (process.env as NodeJS.ProcessEnv & { Path?: string }).Path;
+    } else {
+      (process.env as NodeJS.ProcessEnv & { Path?: string }).Path = originalWindowsPath;
+    }
     delete (globalThis as Record<string, unknown>).__openclawMcporterDaemonStart;
     delete (globalThis as Record<string, unknown>).__openclawMcporterColdStartWarned;
   });
@@ -1076,7 +1099,23 @@ describe("QmdMemoryManager", () => {
 
   it("resolves bare qmd command to a Windows-compatible spawn invocation", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousPath = process.env.PATH;
     try {
+      const nodeModulesDir = path.join(tmpRoot, "node_modules");
+      const shimDir = path.join(nodeModulesDir, ".bin");
+      const packageDir = path.join(nodeModulesDir, "qmd");
+      const scriptPath = path.join(packageDir, "dist", "cli.js");
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.mkdir(shimDir, { recursive: true });
+      await fs.writeFile(path.join(shimDir, "qmd.cmd"), "@echo off\r\n", "utf8");
+      await fs.writeFile(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({ name: "qmd", version: "0.0.0", bin: { qmd: "dist/cli.js" } }),
+        "utf8",
+      );
+      await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+      process.env.PATH = `${shimDir};${previousPath ?? ""}`;
+
       const { manager } = await createManager({ mode: "status" });
       await manager.sync({ reason: "manual" });
 
@@ -1091,19 +1130,14 @@ describe("QmdMemoryManager", () => {
       for (const call of qmdCalls) {
         const command = String(call[0]);
         const options = call[2] as { shell?: boolean } | undefined;
-        if (/(^|[\\/])qmd(?:\.cmd)?$/i.test(command)) {
-          // Wrapper unresolved: keep `.cmd` and use shell for PATHEXT lookup.
-          expect(command.toLowerCase().endsWith("qmd.cmd")).toBe(true);
-          expect(options?.shell).toBe(true);
-        } else {
-          // Wrapper resolved to node/exe entrypoint: shell fallback should not be used.
-          expect(options?.shell).not.toBe(true);
-        }
+        expect(command).not.toMatch(/(^|[\\/])qmd\.cmd$/i);
+        expect(options?.shell).not.toBe(true);
       }
 
       await manager.close();
     } finally {
       platformSpy.mockRestore();
+      process.env.PATH = previousPath;
     }
   });
 
@@ -1574,9 +1608,25 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("uses mcporter.cmd on Windows when mcporter bridge is enabled", async () => {
+  it("resolves mcporter to a direct Windows entrypoint without enabling shell mode", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousPath = process.env.PATH;
     try {
+      const nodeModulesDir = path.join(tmpRoot, "node_modules");
+      const shimDir = path.join(nodeModulesDir, ".bin");
+      const packageDir = path.join(nodeModulesDir, "mcporter");
+      const scriptPath = path.join(packageDir, "dist", "cli.js");
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.mkdir(shimDir, { recursive: true });
+      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\r\n", "utf8");
+      await fs.writeFile(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({ name: "mcporter", version: "0.0.0", bin: { mcporter: "dist/cli.js" } }),
+        "utf8",
+      );
+      await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+      process.env.PATH = `${shimDir};${previousPath ?? ""}`;
+
       cfg = {
         ...cfg,
         memory: {
@@ -1610,23 +1660,24 @@ describe("QmdMemoryManager", () => {
       const callCommand = mcporterCall?.[0];
       expect(typeof callCommand).toBe("string");
       const options = mcporterCall?.[2] as { shell?: boolean } | undefined;
-      if (isMcporterCommand(callCommand)) {
-        expect(callCommand).toBe("mcporter.cmd");
-        expect(options?.shell).toBe(true);
-      } else {
-        // If wrapper entrypoint resolution succeeded, spawn may invoke node/exe directly.
-        expect(options?.shell).not.toBe(true);
-      }
+      expect(callCommand).not.toBe("mcporter.cmd");
+      expect(options?.shell).not.toBe(true);
 
       await manager.close();
     } finally {
       platformSpy.mockRestore();
+      process.env.PATH = previousPath;
     }
   });
 
-  it("retries mcporter search with bare command on Windows EINVAL cmd-shim failures", async () => {
+  it("fails closed on Windows EINVAL cmd-shim failures instead of retrying through the shell", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousPath = process.env.PATH;
     try {
+      const shimDir = await fs.mkdtemp(path.join(tmpRoot, "mcporter-shim-"));
+      await fs.writeFile(path.join(shimDir, "mcporter.cmd"), "@echo off\n");
+      process.env.PATH = `${shimDir};${previousPath ?? ""}`;
+
       cfg = {
         ...cfg,
         memory: {
@@ -1640,20 +1691,17 @@ describe("QmdMemoryManager", () => {
         },
       } as OpenClawConfig;
 
-      let sawRetry = false;
+      let firstCallCommand: string | null = null;
       spawnMock.mockImplementation((cmd: string, args: string[]) => {
+        if (args[0] === "call" && firstCallCommand === null) {
+          firstCallCommand = cmd;
+        }
         if (args[0] === "call" && typeof cmd === "string" && cmd.toLowerCase().endsWith(".cmd")) {
           const child = createMockChild({ autoClose: false });
           queueMicrotask(() => {
             const err = Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
             child.emit("error", err);
           });
-          return child;
-        }
-        if (args[0] === "call" && cmd === "mcporter") {
-          sawRetry = true;
-          const child = createMockChild({ autoClose: false });
-          emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
           return child;
         }
         const child = createMockChild({ autoClose: false });
@@ -1664,14 +1712,21 @@ describe("QmdMemoryManager", () => {
       const { manager } = await createManager();
       await expect(
         manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
-      ).resolves.toEqual([]);
-      expect(sawRetry).toBe(true);
-      expect(logWarnMock).toHaveBeenCalledWith(
-        expect.stringContaining("retrying with bare mcporter"),
-      );
+      ).rejects.toThrow(/without shell execution|EINVAL/);
+      const attemptedCmdShim = (firstCallCommand ?? "").toLowerCase().endsWith(".cmd");
+      if (attemptedCmdShim) {
+        expect(
+          spawnMock.mock.calls.some(
+            (call: unknown[]) =>
+              call[0] === "mcporter" &&
+              (call[2] as { shell?: boolean } | undefined)?.shell === true,
+          ),
+        ).toBe(false);
+      }
       await manager.close();
     } finally {
       platformSpy.mockRestore();
+      process.env.PATH = previousPath;
     }
   });
 
@@ -2628,6 +2683,24 @@ describe("QmdMemoryManager", () => {
     ).rejects.toThrow(/qmd query returned invalid JSON/);
     await manager.close();
   });
+
+  it("sets busy_timeout on qmd sqlite connections", async () => {
+    const { manager } = await createManager();
+    const indexPath = (manager as unknown as { indexPath: string }).indexPath;
+    await fs.mkdir(path.dirname(indexPath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const seedDb = new DatabaseSync(indexPath);
+    seedDb.close();
+
+    const db = (manager as unknown as { ensureDb: () => DatabaseSync }).ensureDb();
+    const row = db.prepare("PRAGMA busy_timeout").get() as
+      | { busy_timeout?: number; timeout?: number }
+      | undefined;
+    const busyTimeout = row?.busy_timeout ?? row?.timeout;
+    expect(busyTimeout).toBe(1000);
+    await manager.close();
+  });
+
   describe("model cache symlink", () => {
     let defaultModelsDir: string;
     let customModelsDir: string;

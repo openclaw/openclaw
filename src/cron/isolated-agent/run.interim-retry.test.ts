@@ -7,6 +7,7 @@ import {
   countActiveDescendantRunsMock,
   listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
+  mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
@@ -16,6 +17,14 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 describe("runCronIsolatedAgentTurn — interim ack retry", () => {
   setupRunCronIsolatedAgentTurnSuite();
+
+  const runTurnAndExpectOk = async (expectedFallbackCalls: number, expectedAgentCalls: number) => {
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(expectedFallbackCalls);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(expectedAgentCalls);
+    return result;
+  };
 
   const usePayloadTextExtraction = () => {
     pickLastNonEmptyTextFromPayloadsMock.mockImplementation(
@@ -47,16 +56,8 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
         meta: { agentMeta: { usage: { input: 10, output: 20 } } },
       });
 
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      const result = await run(provider, model);
-      return { result, provider, model, attempts: [] };
-    });
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
-
-    expect(result.status).toBe("ok");
-    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    mockRunCronFallbackPassthrough();
+    await runTurnAndExpectOk(2, 2);
     expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]?.prompt).toContain(
       "previous response was only an acknowledgement",
     );
@@ -69,16 +70,8 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
 
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      const result = await run(provider, model);
-      return { result, provider, model, attempts: [] };
-    });
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
-
-    expect(result.status).toBe("ok");
-    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    mockRunCronFallbackPassthrough();
+    await runTurnAndExpectOk(1, 1);
   });
 
   it("does not retry when descendants were spawned in this run even if they already settled", async () => {
@@ -94,15 +87,7 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     ]);
     countActiveDescendantRunsMock.mockReturnValue(0);
 
-    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-      const result = await run(provider, model);
-      return { result, provider, model, attempts: [] };
-    });
-
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
-
-    expect(result.status).toBe("ok");
-    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    mockRunCronFallbackPassthrough();
+    await runTurnAndExpectOk(1, 1);
   });
 });

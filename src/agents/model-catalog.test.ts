@@ -114,6 +114,55 @@ describe("loadModelCatalog", () => {
     expect(spark?.reasoning).toBe(true);
   });
 
+  it("filters stale openai gpt-5.3-codex-spark built-ins from the catalog", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "openai",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "azure-openai-responses",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).not.toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+    expect(result).not.toContainEqual(
+      expect.objectContaining({
+        provider: "azure-openai-responses",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+  });
+
   it("adds gpt-5.4 forward-compat catalog entries when template models exist", async () => {
     mockPiDiscoveryModels([
       {
@@ -238,9 +287,9 @@ describe("loadModelCatalog", () => {
   it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
     mockPiDiscoveryModels([
       {
-        id: "anthropic/claude-opus-4.6",
+        id: "kilo/auto",
         provider: "kilocode",
-        name: "Claude Opus 4.6",
+        name: "Kilo Auto",
       },
     ]);
 
@@ -253,8 +302,8 @@ describe("loadModelCatalog", () => {
               api: "openai-completions",
               models: [
                 {
-                  id: "anthropic/claude-opus-4.6",
-                  name: "Configured Claude Opus 4.6",
+                  id: "kilo/auto",
+                  name: "Configured Kilo Auto",
                   reasoning: true,
                   input: ["text", "image"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -269,9 +318,9 @@ describe("loadModelCatalog", () => {
     });
 
     const matches = result.filter(
-      (entry) => entry.provider === "kilocode" && entry.id === "anthropic/claude-opus-4.6",
+      (entry) => entry.provider === "kilocode" && entry.id === "kilo/auto",
     );
     expect(matches).toHaveLength(1);
-    expect(matches[0]?.name).toBe("Claude Opus 4.6");
+    expect(matches[0]?.name).toBe("Kilo Auto");
   });
 });
