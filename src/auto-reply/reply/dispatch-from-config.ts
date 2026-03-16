@@ -1,5 +1,5 @@
-import { shouldSuppressLocalDiscordExecApprovalPrompt } from "../../../extensions/discord/src/exec-approvals.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -506,8 +506,8 @@ export async function dispatchReplyFromConfig(params: {
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
-        normalizeMessageChannel(ctx.Surface ?? ctx.Provider) === "discord" &&
-        shouldSuppressLocalDiscordExecApprovalPrompt({
+        shouldSuppressLocalExecApprovalPrompt({
+          channel: normalizeMessageChannel(ctx.Surface ?? ctx.Provider),
           cfg,
           accountId: ctx.AccountId,
           payload,

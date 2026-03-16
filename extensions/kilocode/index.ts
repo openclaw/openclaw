@@ -4,6 +4,11 @@ import {
   createKilocodeWrapper,
   isProxyReasoningUnsupported,
 } from "../../src/agents/pi-embedded-runner/proxy-stream-wrappers.js";
+import {
+  applyKilocodeConfig,
+  KILOCODE_DEFAULT_MODEL_REF,
+} from "../../src/commands/onboard-auth.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 
 const PROVIDER_ID = "kilocode";
 
@@ -18,7 +23,28 @@ const kilocodePlugin = {
       label: "Kilo Gateway",
       docsPath: "/providers/kilocode",
       envVars: ["KILOCODE_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "Kilo Gateway API key",
+          hint: "API key (OpenRouter-compatible)",
+          optionKey: "kilocodeApiKey",
+          flagName: "--kilocode-api-key",
+          envVar: "KILOCODE_API_KEY",
+          promptMessage: "Enter Kilo Gateway API key",
+          defaultModel: KILOCODE_DEFAULT_MODEL_REF,
+          expectedProviders: ["kilocode"],
+          applyConfig: (cfg) => applyKilocodeConfig(cfg),
+          wizard: {
+            choiceId: "kilocode-api-key",
+            choiceLabel: "Kilo Gateway API key",
+            groupId: "kilocode",
+            groupLabel: "Kilo Gateway",
+            groupHint: "API key (OpenRouter-compatible)",
+          },
+        }),
+      ],
       catalog: {
         order: "simple",
         run: async (ctx) => {

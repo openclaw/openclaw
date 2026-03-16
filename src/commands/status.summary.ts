@@ -1,4 +1,3 @@
-import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
@@ -11,12 +10,8 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import {
-  classifySessionKey,
-  listAgentsForGateway,
-  resolveSessionModelRef,
-} from "../gateway/session-utils.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
+import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -24,6 +19,9 @@ import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.typ
 
 let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
+let statusSummaryRuntimeModulePromise:
+  | Promise<typeof import("./status.summary.runtime.js")>
+  | undefined;
 
 function loadChannelSummaryModule() {
   channelSummaryModulePromise ??= import("../infra/channel-summary.js");
@@ -33,6 +31,11 @@ function loadChannelSummaryModule() {
 function loadLinkChannelModule() {
   linkChannelModulePromise ??= import("./status.link-channel.js");
   return linkChannelModulePromise;
+}
+
+function loadStatusSummaryRuntimeModule() {
+  statusSummaryRuntimeModulePromise ??= import("./status.summary.runtime.js");
+  return statusSummaryRuntimeModulePromise;
 }
 
 const buildFlags = (entry?: SessionEntry): string[] => {
@@ -100,6 +103,8 @@ export async function getStatusSummary(
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
+  const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
+    await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? loadConfig();
   const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
   const linkContext = needsChannelPlugins
@@ -107,7 +112,7 @@ export async function getStatusSummary(
         resolveLinkChannelContext(cfg),
       )
     : null;
-  const agentList = listAgentsForGateway(cfg);
+  const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
     return {
