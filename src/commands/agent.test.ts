@@ -859,6 +859,53 @@ describe("agentCommand", () => {
     });
   });
 
+  it("reuses cached skills snapshots when version is missing and the normalized filter is unchanged", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:ops:main";
+      const cachedSnapshot = {
+        prompt: "<available_skills><skill>weather</skill></available_skills>",
+        skills: [{ name: "weather" }],
+        skillFilter: ["weather"],
+      };
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-ops",
+          updatedAt: Date.now(),
+          skillsSnapshot: cachedSnapshot,
+        },
+      });
+
+      configSpy.mockReturnValue({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: { "anthropic/claude-opus-4-5": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+          list: [{ id: "ops", default: true, skills: [" weather "] }],
+        },
+        session: { store, mainKey: "main" },
+      } as unknown as OpenClawConfig);
+
+      vi.mocked(getSkillsSnapshotVersion).mockReturnValueOnce(0);
+
+      await agentCommand({ message: "hi", sessionKey }, runtime);
+
+      expect(buildWorkspaceSkillSnapshot).not.toHaveBeenCalled();
+
+      const saved = readSessionStore<{
+        skillsSnapshot?: {
+          prompt?: string;
+          skillFilter?: string[];
+          skills?: Array<{ name: string }>;
+          version?: number;
+        };
+      }>(store);
+      expect(saved[sessionKey]?.skillsSnapshot).toEqual(cachedSnapshot);
+    });
+  });
+
   it("rejects unknown agent overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

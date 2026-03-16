@@ -880,7 +880,8 @@ async function agentCommandInternal(
     const needsSkillsSnapshot =
       isNewSession ||
       !existingSkillsSnapshot ||
-      existingSkillsSnapshot.version !== skillsSnapshotVersion ||
+      (skillsSnapshotVersion > 0 &&
+        (existingSkillsSnapshot.version ?? 0) < skillsSnapshotVersion) ||
       !matchesSkillFilter(existingSkillsSnapshot.skillFilter, skillFilter);
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
