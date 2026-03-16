@@ -5,16 +5,16 @@ import {
   splitOnboardingEntries,
 } from "../../../src/channels/plugins/onboarding/helpers.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import {
-  listLineAccountIds,
-  normalizeAccountId,
-  resolveLineAccount,
-} from "../../../src/line/accounts.js";
-import type { LineConfig } from "../../../src/line/types.js";
+import { resolveLineAccount } from "../../../src/line/accounts.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
+import {
+  isLineConfigured,
+  lineSetupAdapter,
+  listLineAccountIds,
+  parseLineAllowFromId,
+  patchLineAccountConfig,
+} from "./setup-core.js";
 
 const channel = "line" as const;
 
@@ -36,75 +36,6 @@ const LINE_ALLOW_FROM_HELP_LINES = [
   `Docs: ${formatDocsLink("/channels/line", "channels/line")}`,
 ];
 
-function patchLineAccountConfig(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  patch: Record<string, unknown>;
-  clearFields?: string[];
-  enabled?: boolean;
-}): OpenClawConfig {
-  const accountId = normalizeAccountId(params.accountId);
-  const lineConfig = ((params.cfg.channels?.line ?? {}) as LineConfig) ?? {};
-  const clearFields = params.clearFields ?? [];
-
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    const nextLine = { ...lineConfig } as Record<string, unknown>;
-    for (const field of clearFields) {
-      delete nextLine[field];
-    }
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        line: {
-          ...nextLine,
-          ...(params.enabled ? { enabled: true } : {}),
-          ...params.patch,
-        },
-      },
-    };
-  }
-
-  const nextAccount = {
-    ...(lineConfig.accounts?.[accountId] ?? {}),
-  } as Record<string, unknown>;
-  for (const field of clearFields) {
-    delete nextAccount[field];
-  }
-
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      line: {
-        ...lineConfig,
-        ...(params.enabled ? { enabled: true } : {}),
-        accounts: {
-          ...lineConfig.accounts,
-          [accountId]: {
-            ...nextAccount,
-            ...(params.enabled ? { enabled: true } : {}),
-            ...params.patch,
-          },
-        },
-      },
-    },
-  };
-}
-
-function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolean {
-  const resolved = resolveLineAccount({ cfg, accountId });
-  return Boolean(resolved.channelAccessToken.trim() && resolved.channelSecret.trim());
-}
-
-function parseLineAllowFromId(raw: string): string | null {
-  const trimmed = raw.trim().replace(/^line:(?:user:)?/i, "");
-  if (!/^U[a-f0-9]{32}$/i.test(trimmed)) {
-    return null;
-  }
-  return trimmed;
-}
-
 const lineDmPolicy: ChannelOnboardingDmPolicy = {
   label: "LINE",
   channel,
@@ -119,85 +50,7 @@ const lineDmPolicy: ChannelOnboardingDmPolicy = {
     }),
 };
 
-export const lineSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    patchLineAccountConfig({
-      cfg,
-      accountId,
-      patch: name?.trim() ? { name: name.trim() } : {},
-    }),
-  validateInput: ({ accountId, input }) => {
-    const typedInput = input as {
-      useEnv?: boolean;
-      channelAccessToken?: string;
-      channelSecret?: string;
-      tokenFile?: string;
-      secretFile?: string;
-    };
-    if (typedInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "LINE_CHANNEL_ACCESS_TOKEN can only be used for the default account.";
-    }
-    if (!typedInput.useEnv && !typedInput.channelAccessToken && !typedInput.tokenFile) {
-      return "LINE requires channelAccessToken or --token-file (or --use-env).";
-    }
-    if (!typedInput.useEnv && !typedInput.channelSecret && !typedInput.secretFile) {
-      return "LINE requires channelSecret or --secret-file (or --use-env).";
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const typedInput = input as {
-      useEnv?: boolean;
-      channelAccessToken?: string;
-      channelSecret?: string;
-      tokenFile?: string;
-      secretFile?: string;
-    };
-    const normalizedAccountId = normalizeAccountId(accountId);
-    if (normalizedAccountId === DEFAULT_ACCOUNT_ID) {
-      return patchLineAccountConfig({
-        cfg,
-        accountId: normalizedAccountId,
-        enabled: true,
-        clearFields: typedInput.useEnv
-          ? ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"]
-          : undefined,
-        patch: typedInput.useEnv
-          ? {}
-          : {
-              ...(typedInput.tokenFile
-                ? { tokenFile: typedInput.tokenFile }
-                : typedInput.channelAccessToken
-                  ? { channelAccessToken: typedInput.channelAccessToken }
-                  : {}),
-              ...(typedInput.secretFile
-                ? { secretFile: typedInput.secretFile }
-                : typedInput.channelSecret
-                  ? { channelSecret: typedInput.channelSecret }
-                  : {}),
-            },
-      });
-    }
-    return patchLineAccountConfig({
-      cfg,
-      accountId: normalizedAccountId,
-      enabled: true,
-      patch: {
-        ...(typedInput.tokenFile
-          ? { tokenFile: typedInput.tokenFile }
-          : typedInput.channelAccessToken
-            ? { channelAccessToken: typedInput.channelAccessToken }
-            : {}),
-        ...(typedInput.secretFile
-          ? { secretFile: typedInput.secretFile }
-          : typedInput.channelSecret
-            ? { channelSecret: typedInput.channelSecret }
-            : {}),
-      },
-    });
-  },
-};
+export { lineSetupAdapter } from "./setup-core.js";
 
 export const lineSetupWizard: ChannelSetupWizard = {
   channel,
