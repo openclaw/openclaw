@@ -886,6 +886,12 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    privacy: z
+      .object({
+        redactPII: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     plugins: z
       .object({
         enabled: z.boolean().optional(),

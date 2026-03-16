@@ -81,7 +81,10 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   ].join("\n");
 }
 
-export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
+export function buildInboundUserContextPrefix(
+  ctx: TemplateContext,
+  options?: { redactPII?: boolean },
+): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -103,7 +106,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: shouldIncludeConversationInfo
       ? (safeTrim(ctx.SenderName) ??
-        safeTrim(ctx.SenderE164) ??
+        (options?.redactPII ? undefined : safeTrim(ctx.SenderE164)) ??
         safeTrim(ctx.SenderId) ??
         safeTrim(ctx.SenderUsername))
       : undefined,
@@ -135,19 +138,20 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
     );
   }
 
+  const senderE164 = options?.redactPII ? undefined : safeTrim(ctx.SenderE164);
   const senderInfo = {
     label: resolveSenderLabel({
       name: safeTrim(ctx.SenderName),
       username: safeTrim(ctx.SenderUsername),
       tag: safeTrim(ctx.SenderTag),
-      e164: safeTrim(ctx.SenderE164),
+      e164: senderE164,
       id: safeTrim(ctx.SenderId),
     }),
     id: safeTrim(ctx.SenderId),
     name: safeTrim(ctx.SenderName),
     username: safeTrim(ctx.SenderUsername),
     tag: safeTrim(ctx.SenderTag),
-    e164: safeTrim(ctx.SenderE164),
+    e164: senderE164,
   };
   if (senderInfo?.label) {
     blocks.push(

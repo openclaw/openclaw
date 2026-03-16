@@ -265,6 +265,7 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  const redactPIIOpts = cfg.privacy?.redactPII ? { redactPII: true } : undefined;
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
@@ -301,6 +302,7 @@ export async function runPreparedReply(
             : {}),
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
+    redactPIIOpts,
   );
   const baseBodyForPrompt = isBareSessionReset
     ? baseBodyFinal
