@@ -117,6 +117,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       ? [externalPayload.mediaUrl]
       : [];
   const replyToId = externalPayload.replyToId;
+  const hasInteractive = (externalPayload.interactive?.blocks.length ?? 0) > 0;
   let hasSlackBlocks = false;
   if (
     channel === "slack" &&
@@ -135,7 +136,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   }
 
   // Skip empty replies.
-  if (!text.trim() && mediaUrls.length === 0 && !hasSlackBlocks) {
+  if (!text.trim() && mediaUrls.length === 0 && !hasInteractive && !hasSlackBlocks) {
     return { ok: true };
   }
 
