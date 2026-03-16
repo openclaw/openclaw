@@ -131,6 +131,7 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
     vi.clearAllMocks();
     _resetBaileysMocks();
     _resetLoadConfigMock();
+    resetInboundDedupe();
     if (opts?.pinDns) {
       resolvePinnedHostnameSpy = vi
         .spyOn(ssrf, "resolvePinnedHostname")
