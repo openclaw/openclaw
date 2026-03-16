@@ -39,7 +39,9 @@ function isFeishuMessageChannel(messageChannel?: string): boolean {
 export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
+  /** @deprecated Prefer `resolveFeishuToolAccountFromContext({ toolContext })`. */
   defaultAccountId?: string;
+  /** @deprecated Prefer `resolveFeishuToolAccountFromContext({ toolContext })`. */
   messageChannel?: string;
 }): ResolvedFeishuAccount {
   if (!params.api.config) {
@@ -54,7 +56,12 @@ export function resolveFeishuToolAccount(params: {
       isKnownFeishuAccountId(params.api.config, params.defaultAccountId)
         ? normalizeOptionalAccountId(params.defaultAccountId)
         : undefined) ??
-      readConfiguredDefaultAccountId(params.api.config),
+      readConfiguredDefaultAccountId(params.api.config) ??
+      // Preserve legacy behavior for callers that still pass defaultAccountId
+      // without messageChannel/context wiring.
+      (params.messageChannel == null
+        ? normalizeOptionalAccountId(params.defaultAccountId)
+        : undefined),
   });
 }
 
@@ -74,7 +81,9 @@ export function resolveFeishuToolAccountFromContext(params: {
 export function createFeishuToolClient(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
+  /** @deprecated Prefer `createFeishuToolClientFromContext({ toolContext })`. */
   defaultAccountId?: string;
+  /** @deprecated Prefer `createFeishuToolClientFromContext({ toolContext })`. */
   messageChannel?: string;
 }): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
