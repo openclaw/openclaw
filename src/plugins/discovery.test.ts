@@ -156,14 +156,15 @@ describe("discoverOpenClawPlugins", () => {
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, "index.ts"), "export default function () {}", "utf-8");
 
-    // Place ignored directories as DIRECT siblings of the real skill inside globalExt.
-    // Without the fix, discoverInDirectory would scan into these and find fake-plugin.
-    // With the fix, shouldIgnoreScannedDirectory returns true and skips them.
+    // Place ignored directories as DIRECT children of globalExt with valid plugin structure.
+    // Without the fix, discoverInDirectory would try to process these as plugins.
+    // With the fix, shouldIgnoreScannedDirectory returns true and skips them entirely.
     const ignoredDirs = ["node_modules", ".git", "dist", ".venv", "browser_data", ".cache"];
     for (const dirName of ignoredDirs) {
-      const nestedDir = path.join(globalExt, dirName, "fake-plugin");
-      fs.mkdirSync(nestedDir, { recursive: true });
-      fs.writeFileSync(path.join(nestedDir, "index.ts"), "export default function () {}", "utf-8");
+      // Put index.ts directly inside the ignored directory (valid plugin structure)
+      const ignoredDir = path.join(globalExt, dirName);
+      fs.mkdirSync(ignoredDir, { recursive: true });
+      fs.writeFileSync(path.join(ignoredDir, "index.ts"), "export default function () {}", "utf-8");
     }
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
@@ -171,8 +172,10 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((candidate) => candidate.idHint);
     // Should find the real skill
     expect(ids).toContain("memory-lancedb-pro");
-    // Should NOT find any fake plugins inside ignored directories
-    expect(ids).not.toContain("fake-plugin");
+    // Should NOT find any of the ignored directories as plugins
+    for (const dirName of ignoredDirs) {
+      expect(ids).not.toContain(dirName);
+    }
   });
 
   it("loads package extension packs", async () => {
