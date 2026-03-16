@@ -41,6 +41,8 @@ export type PluginManifestRecord = {
   kind?: PluginKind;
   channels: string[];
   providers: string[];
+  providerAuthEnvVars?: Record<string, string[]>;
+  providerAuthChoices?: PluginManifest["providerAuthChoices"];
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -49,6 +51,7 @@ export type PluginManifestRecord = {
   rootDir: string;
   source: string;
   setupSource?: string;
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   manifestPath: string;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
@@ -131,7 +134,11 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   if (normalizedHint === manifestId) {
     return true;
   }
-  return normalizedHint === `${manifestId}-provider` || normalizedHint === `${manifestId}-plugin`;
+  return (
+    normalizedHint === `${manifestId}-provider` ||
+    normalizedHint === `${manifestId}-plugin` ||
+    normalizedHint === `${manifestId}-sandbox`
+  );
 }
 
 function buildRecord(params: {
@@ -152,6 +159,8 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
+    providerAuthEnvVars: params.manifest.providerAuthEnvVars,
+    providerAuthChoices: params.manifest.providerAuthChoices,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
     hooks: [],
@@ -160,6 +169,9 @@ function buildRecord(params: {
     rootDir: params.candidate.rootDir,
     source: params.candidate.source,
     setupSource: params.candidate.setupSource,
+    startupDeferConfiguredChannelFullLoadUntilAfterListen:
+      params.candidate.packageManifest?.startup?.deferConfiguredChannelFullLoadUntilAfterListen ===
+      true,
     manifestPath: params.manifestPath,
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,

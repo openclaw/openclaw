@@ -112,34 +112,34 @@ function listBundledPluginBuildEntries(): Record<string, string> {
 
 const bundledPluginBuildEntries = listBundledPluginBuildEntries();
 
+function buildCoreDistEntries(): Record<string, string> {
+  return {
+    index: "src/index.ts",
+    entry: "src/entry.ts",
+    // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
+    "cli/daemon-cli": "src/cli/daemon-cli.ts",
+    "infra/warning-filter": "src/infra/warning-filter.ts",
+    // Keep sync lazy-runtime channel modules as concrete dist files.
+    "channels/plugins/agent-tools/whatsapp-login":
+      "src/channels/plugins/agent-tools/whatsapp-login.ts",
+    "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
+    "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
+    "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
+    "telegram/audit": "extensions/telegram/src/audit.ts",
+    "telegram/token": "extensions/telegram/src/token.ts",
+    "line/accounts": "src/line/accounts.ts",
+    "line/send": "src/line/send.ts",
+    "line/template-messages": "src/line/template-messages.ts",
+  };
+}
+
+const coreDistEntries = buildCoreDistEntries();
+
 export default defineConfig([
   nodeBuildConfig({
-    entry: "src/index.ts",
-  }),
-  nodeBuildConfig({
-    entry: "src/entry.ts",
-  }),
-  nodeBuildConfig({
-    // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
-    entry: "src/cli/daemon-cli.ts",
-  }),
-  nodeBuildConfig({
-    entry: "src/infra/warning-filter.ts",
-  }),
-  nodeBuildConfig({
-    // Keep sync lazy-runtime channel modules as concrete dist files.
-    entry: {
-      "channels/plugins/agent-tools/whatsapp-login":
-        "src/channels/plugins/agent-tools/whatsapp-login.ts",
-      "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
-      "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
-      "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
-      "telegram/audit": "extensions/telegram/src/audit.ts",
-      "telegram/token": "extensions/telegram/src/token.ts",
-      "line/accounts": "src/line/accounts.ts",
-      "line/send": "src/line/send.ts",
-      "line/template-messages": "src/line/template-messages.ts",
-    },
+    // Build the root dist entrypoints together so they can share hashed chunks
+    // instead of emitting near-identical copies across separate builds.
+    entry: coreDistEntries,
   }),
   nodeBuildConfig({
     // Bundle all plugin-sdk entries in a single build so the bundler can share
@@ -152,9 +152,9 @@ export default defineConfig([
     // directly from dist/extensions instead of transpiling extensions/*.ts via Jiti.
     entry: bundledPluginBuildEntries,
     outDir: "dist",
-  }),
-  nodeBuildConfig({
-    entry: "src/extensionAPI.ts",
+    deps: {
+      neverBundle: ["@lancedb/lancedb"],
+    },
   }),
   nodeBuildConfig({
     entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],

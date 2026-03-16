@@ -1,8 +1,8 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   mergeAllowFromEntries,
-  resolveOnboardingAccountId,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  resolveSetupAccountId,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { DmPolicy } from "../../../src/config/types.js";
@@ -55,7 +55,7 @@ async function promptBlueBubblesAllowFrom(params: {
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  const accountId = resolveOnboardingAccountId({
+  const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: resolveDefaultBlueBubblesAccountId(params.cfg),
   });
@@ -148,7 +148,7 @@ function validateBlueBubblesWebhookPath(value: string): string | undefined {
   return undefined;
 }
 
-const dmPolicy: ChannelOnboardingDmPolicy = {
+const dmPolicy: ChannelSetupDmPolicy = {
   label: "BlueBubbles",
   channel,
   policyKey: "channels.bluebubbles.dmPolicy",

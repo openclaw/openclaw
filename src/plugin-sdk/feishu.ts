@@ -21,8 +21,8 @@ export {
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
   setTopLevelChannelGroupPolicy,
-  splitOnboardingEntries,
-} from "../channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
   BaseProbeResult,
@@ -76,6 +76,10 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { withTempDownloadPath } from "./temp-path.js";
+export {
+  buildFeishuConversationId,
+  parseFeishuConversationId,
+} from "../../extensions/feishu/src/conversation-id.js";
 export {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,

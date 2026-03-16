@@ -19,12 +19,19 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
+- Provider manifests can declare `providerAuthEnvVars` so generic env-based
+  auth probes do not need to load plugin runtime. The remaining core env-var
+  map is now just for non-plugin/core providers and a few generic-precedence
+  cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
   `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
-  `capabilities`, `prepareExtraParams`, `wrapStreamFn`,
+  `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`,
+  `refreshOAuth`, `buildAuthDoctorHint`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`,
-  `suppressBuiltInModel`, `augmentModelCatalog`, `prepareRuntimeAuth`,
-  `resolveUsageAuth`, and `fetchUsageSnapshot`.
+  `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`,
+  `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
+  `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, and
+  `fetchUsageSnapshot`.
 
 ## Plugin-owned provider behavior
 
@@ -33,6 +40,10 @@ the generic inference loop.
 
 Typical split:
 
+- `auth[].run` / `auth[].runNonInteractive`: provider owns onboarding/login
+  flows for `openclaw onboard`, `openclaw models auth`, and headless setup
+- `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
+  legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
@@ -42,6 +53,12 @@ Typical split:
 - `capabilities`: provider publishes transcript/tooling/provider-family quirks
 - `prepareExtraParams`: provider defaults or normalizes per-model request params
 - `wrapStreamFn`: provider applies request headers/body/model compat wrappers
+- `formatApiKey`: provider formats stored auth profiles into the runtime
+  `apiKey` string expected by the transport
+- `refreshOAuth`: provider owns OAuth refresh when the shared `pi-ai`
+  refreshers are not enough
+- `buildAuthDoctorHint`: provider appends repair guidance when OAuth refresh
+  fails
 - `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
 - `buildMissingAuthMessage`: provider replaces the generic auth-store error
   with a provider-specific recovery hint
@@ -49,6 +66,11 @@ Typical split:
   vendor-owned error for direct resolution failures
 - `augmentModelCatalog`: provider appends synthetic/final catalog rows after
   discovery and config merging
+- `isBinaryThinking`: provider owns binary on/off thinking UX
+- `supportsXHighThinking`: provider opts selected models into `xhigh`
+- `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
+  model family
+- `isModernModelRef`: provider owns live/smoke preferred-model matching
 - `prepareRuntimeAuth`: provider turns a configured credential into a short
   lived runtime token
 - `resolveUsageAuth`: provider resolves usage/quota credentials for `/usage`
@@ -58,27 +80,31 @@ Typical split:
 
 Current bundled examples:
 
-- `anthropic`: Claude 4.6 forward-compat fallback, usage endpoint fetching,
-  and cache-TTL/provider-family metadata
+- `anthropic`: Claude 4.6 forward-compat fallback, auth repair hints, usage
+  endpoint fetching, and cache-TTL/provider-family metadata
 - `openrouter`: pass-through model ids, request wrappers, provider capability
   hints, and cache-TTL policy
-- `github-copilot`: forward-compat model fallback, Claude-thinking transcript
-  hints, runtime token exchange, and usage endpoint fetching
+- `github-copilot`: onboarding/device login, forward-compat model fallback,
+  Claude-thinking transcript hints, runtime token exchange, and usage endpoint
+  fetching
 - `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
   normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
-  OpenAI/Codex catalog rows, and provider-family metadata
-- `google-gemini-cli`: Gemini 3.1 forward-compat fallback plus usage-token
-  parsing and quota endpoint fetching for usage surfaces
+  OpenAI/Codex catalog rows, thinking/live-model policy, and
+  provider-family metadata
+- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback and
+  modern-model matching; Gemini CLI OAuth also owns auth-profile token
+  formatting, usage-token parsing, and quota endpoint fetching for usage
+  surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
   normalization, Gemini transcript hints, and cache-TTL policy
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
-  policy, and usage auth + quota fetching
+  policy, binary-thinking/live-model policy, and usage auth + quota fetching
 - `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
-  `minimax-portal`, `modelstudio`, `nvidia`, `qianfan`, `qwen-portal`,
-  `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine`:
-  plugin-owned catalogs only
+  `modelstudio`, `nvidia`, `qianfan`, `synthetic`, `together`, `venice`,
+  `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
+- `qwen-portal`: plugin-owned catalog, OAuth login, and OAuth refresh
 - `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and

@@ -467,7 +467,7 @@ describe("applyZaiConfig", () => {
   it("adds zai provider with correct settings", () => {
     const cfg = applyZaiConfig({});
     expect(cfg.models?.providers?.zai).toMatchObject({
-      // Default: general (non-coding) endpoint. Coding Plan endpoint is detected during onboarding.
+      // Default: general (non-coding) endpoint. Coding Plan endpoint is detected during setup.
       baseUrl: ZAI_GLOBAL_BASE_URL,
       api: "openai-completions",
     });

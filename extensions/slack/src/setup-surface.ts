@@ -1,15 +1,15 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
-  resolveOnboardingAccountId,
+  resolveSetupAccountId,
   setAccountGroupPolicyForChannel,
   setLegacyChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
@@ -166,7 +166,7 @@ async function promptSlackAllowFrom(params: {
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  const accountId = resolveOnboardingAccountId({
+  const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSlackAccountId(params.cfg),
   });
@@ -210,7 +210,7 @@ async function promptSlackAllowFrom(params: {
   });
 }
 
-const slackDmPolicy: ChannelOnboardingDmPolicy = {
+const slackDmPolicy: ChannelSetupDmPolicy = {
   label: "Slack",
   channel,
   policyKey: "channels.slack.dmPolicy",
@@ -424,5 +424,5 @@ export const slackSetupWizard: ChannelSetupWizard = {
     applyAllowlist: ({ cfg, accountId, resolved }) =>
       setSlackChannelAllowlist(cfg, accountId, resolved as string[]),
   },
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

@@ -4,9 +4,11 @@ const mocks = vi.hoisted(() => ({
   readBestEffortConfig: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
   buildChannelsTable: vi.fn(),
+  callGateway: vi.fn(),
   getUpdateCheckResult: vi.fn(),
   getAgentLocalStatuses: vi.fn(),
   getStatusSummary: vi.fn(),
+  getMemorySearchManager: vi.fn(),
   buildGatewayConnectionDetails: vi.fn(),
   probeGateway: vi.fn(),
   resolveGatewayProbeAuthResolution: vi.fn(),
@@ -29,6 +31,11 @@ vi.mock("./status-all/channels.js", () => ({
   buildChannelsTable: mocks.buildChannelsTable,
 }));
 
+vi.mock("./status.scan.runtime.js", () => ({
+  buildChannelsTable: mocks.buildChannelsTable,
+  collectChannelStatusIssues: vi.fn(() => []),
+}));
+
 vi.mock("./status.update.js", () => ({
   getUpdateCheckResult: mocks.getUpdateCheckResult,
 }));
@@ -45,13 +52,14 @@ vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: vi.fn(() => ({ label: "test-os" })),
 }));
 
-vi.mock("../infra/tailscale.js", () => ({
+vi.mock("./status.scan.deps.runtime.js", () => ({
   getTailnetHostname: vi.fn(),
+  getMemorySearchManager: mocks.getMemorySearchManager,
 }));
 
 vi.mock("../gateway/call.js", () => ({
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
-  callGateway: vi.fn(),
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../gateway/probe.js", () => ({
@@ -61,10 +69,6 @@ vi.mock("../gateway/probe.js", () => ({
 vi.mock("./status.gateway-probe.js", () => ({
   pickGatewaySelfPresence: vi.fn(() => null),
   resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
-}));
-
-vi.mock("../memory/index.js", () => ({
-  getMemorySearchManager: vi.fn(),
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -193,7 +197,142 @@ describe("scanStatus", () => {
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
   });
 
-  it("preloads channel plugins for status --json when channel config exists", async () => {
+  it("skips memory backend inspection for default memory-core with no existing store", async () => {
+    mocks.readBestEffortConfig.mockResolvedValue({
+      session: {},
+      gateway: {},
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: {
+        session: {},
+        gateway: {},
+      },
+      diagnostics: [],
+    });
+    mocks.getUpdateCheckResult.mockResolvedValue({
+      installKind: "git",
+      git: null,
+      registry: null,
+    });
+    mocks.getAgentLocalStatuses.mockResolvedValue({
+      defaultId: "main",
+      agents: [],
+    });
+    mocks.getStatusSummary.mockResolvedValue({
+      linkChannel: undefined,
+      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
+    });
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "default",
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+      auth: {},
+      warning: undefined,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    await scanStatus({ json: true }, {} as never);
+
+    expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it("inspects memory backend when memory search is explicitly configured", async () => {
+    mocks.readBestEffortConfig.mockResolvedValue({
+      session: {},
+      gateway: {},
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: { modelPath: "/tmp/model.gguf" },
+            fallback: "none",
+          },
+        },
+      },
+    });
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: {
+        session: {},
+        gateway: {},
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "local",
+              local: { modelPath: "/tmp/model.gguf" },
+              fallback: "none",
+            },
+          },
+        },
+      },
+      diagnostics: [],
+    });
+    mocks.getUpdateCheckResult.mockResolvedValue({
+      installKind: "git",
+      git: null,
+      registry: null,
+    });
+    mocks.getAgentLocalStatuses.mockResolvedValue({
+      defaultId: "main",
+      agents: [],
+    });
+    mocks.getStatusSummary.mockResolvedValue({
+      linkChannel: undefined,
+      sessions: { count: 0, paths: [], defaults: {}, recent: [] },
+    });
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "default",
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockReturnValue({
+      auth: {},
+      warning: undefined,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+    mocks.getMemorySearchManager.mockResolvedValue({
+      manager: {
+        probeVectorAvailability: vi.fn(async () => true),
+        status: vi.fn(() => ({ files: 0, chunks: 0, dirty: false })),
+        close: vi.fn(async () => {}),
+      },
+    });
+
+    await scanStatus({ json: true }, {} as never);
+
+    expect(mocks.getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            memorySearch: expect.any(Object),
+          }),
+        }),
+      }),
+      agentId: "main",
+      purpose: "status",
+    });
+  });
+
+  it("preloads configured channel plugins for status --json when channel config exists", async () => {
     mocks.readBestEffortConfig.mockResolvedValue({
       session: {},
       plugins: { enabled: false },
@@ -244,10 +383,18 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: true }, {} as never);
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({ scope: "channels" });
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+    });
+    expect(mocks.probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ detailLevel: "presence" }),
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "channels.status" }),
+    );
   });
 
-  it("preloads channel plugins for status --json when channel auth is env-only", async () => {
+  it("preloads configured channel plugins for status --json when channel auth is env-only", async () => {
     const prevMatrixToken = process.env.MATRIX_ACCESS_TOKEN;
     process.env.MATRIX_ACCESS_TOKEN = "token";
     mocks.readBestEffortConfig.mockResolvedValue({
@@ -306,6 +453,8 @@ describe("scanStatus", () => {
       }
     }
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({ scope: "channels" });
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+    });
   });
 });

@@ -23,6 +23,7 @@ import {
   listEnabledTelegramAccounts,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
+import { resolveTelegramInlineButtons } from "./button-types.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 
 const providerId = "telegram";
@@ -30,12 +31,19 @@ const providerId = "telegram";
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
+  const buttons = resolveTelegramInlineButtons({
+    buttons: params.buttons as ReturnType<typeof resolveTelegramInlineButtons>,
+    interactive: params.interactive,
+  });
+  const hasButtons = Array.isArray(buttons) && buttons.length > 0;
+  const message = readStringParam(params, "message", {
+    required: !mediaUrl && !hasButtons,
+    allowEmpty: true,
+  });
   const caption = readStringParam(params, "caption", { allowEmpty: true });
   const content = message || caption || "";
   const replyTo = readStringParam(params, "replyTo");
   const threadId = readStringParam(params, "threadId");
-  const buttons = params.buttons;
   const asVoice = readBooleanParam(params, "asVoice");
   const silent = readBooleanParam(params, "silent");
   const forceDocument = readBooleanParam(params, "forceDocument");
@@ -120,14 +128,15 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     return Array.from(actions);
   },
-  supportsButtons: ({ cfg }) => {
+  getCapabilities: ({ cfg }) => {
     const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
     if (accounts.length === 0) {
-      return false;
+      return [];
     }
-    return accounts.some((account) =>
+    const buttonsEnabled = accounts.some((account) =>
       isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
     );
+    return buttonsEnabled ? (["interactive", "buttons"] as const) : [];
   },
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");

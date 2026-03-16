@@ -1,10 +1,10 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
-  parseOnboardingEntriesAllowingWildcard,
+  parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import { detectBinary } from "../../../src/commands/onboard-helpers.js";
@@ -56,7 +56,7 @@ async function promptSignalAllowFrom(params: {
   });
 }
 
-const signalDmPolicy: ChannelOnboardingDmPolicy = {
+const signalDmPolicy: ChannelSetupDmPolicy = {
   label: "Signal",
   channel,
   policyKey: "channels.signal.dmPolicy",
@@ -179,7 +179,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
     ],
   },
   dmPolicy: signalDmPolicy,
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
 export { normalizeSignalAccountInput, parseSignalAllowFromEntries, signalSetupAdapter };

@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   __testing,
   clearPluginCommands,
@@ -7,6 +9,13 @@ import {
   listPluginCommands,
   registerPluginCommand,
 } from "./commands.js";
+import { setActivePluginRegistry } from "./runtime.js";
+
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+  );
+});
 
 afterEach(() => {
   clearPluginCommands();
@@ -124,6 +133,22 @@ describe("registerPluginCommand", () => {
       channel: "discord",
       accountId: "default",
       conversationId: "channel:1480554272859881494",
+    });
+  });
+
+  it("resolves Telegram topic command bindings without a Telegram registry entry", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "telegram",
+        from: "telegram:group:-100123",
+        to: "telegram:group:-100123:topic:77",
+        accountId: "default",
+      }),
+    ).toEqual({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-100123",
+      threadId: 77,
     });
   });
 

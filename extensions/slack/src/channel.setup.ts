@@ -6,14 +6,17 @@ import {
 import {
   buildChannelConfigSchema,
   getChatChannelMeta,
-  inspectSlackAccount,
+  SlackConfigSchema,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/slack";
+import { inspectSlackAccount } from "./account-inspect.js";
+import {
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
-  SlackConfigSchema,
-  type ChannelPlugin,
   type ResolvedSlackAccount,
-} from "openclaw/plugin-sdk/slack";
+} from "./accounts.js";
+import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { createSlackSetupWizardProxy, slackSetupAdapter } from "./setup-core.js";
 
 async function loadSlackChannelRuntime() {
@@ -68,8 +71,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   agentPrompt: {
     messageToolHints: ({ cfg, accountId }) =>
-      cfg.channels?.slack?.accounts?.[accountId ?? "default"]?.capabilities?.interactiveReplies ===
-        true || cfg.channels?.slack?.capabilities?.interactiveReplies === true
+      isSlackInteractiveRepliesEnabled({ cfg, accountId })
         ? [
             "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
             "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",

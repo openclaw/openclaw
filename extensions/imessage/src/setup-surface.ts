@@ -1,10 +1,10 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
-  parseOnboardingEntriesAllowingWildcard,
+  parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { detectBinary } from "../../../src/commands/onboard-helpers.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
@@ -50,7 +50,7 @@ async function promptIMessageAllowFrom(params: {
   });
 }
 
-const imessageDmPolicy: ChannelOnboardingDmPolicy = {
+const imessageDmPolicy: ChannelSetupDmPolicy = {
   label: "iMessage",
   channel,
   policyKey: "channels.imessage.dmPolicy",
@@ -129,7 +129,7 @@ export const imessageSetupWizard: ChannelSetupWizard = {
     ],
   },
   dmPolicy: imessageDmPolicy,
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
 export { imessageSetupAdapter, parseIMessageAllowFromEntries };

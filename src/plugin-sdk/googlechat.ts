@@ -8,7 +8,6 @@ export {
   readReactionParams,
   readStringParam,
 } from "../agents/tools/common.js";
-export type { ChannelDock } from "../channels/dock.js";
 export { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 export {
   deleteAccountFromConfigSection,
@@ -27,10 +26,9 @@ export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,
-  promptAccountId,
-  splitOnboardingEntries,
+  splitSetupEntries,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../channels/plugins/onboarding/helpers.js";
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export {
   applyAccountNameToChannelSection,

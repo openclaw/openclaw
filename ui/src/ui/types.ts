@@ -321,6 +321,8 @@ export type GatewaySessionsDefaults = {
   contextTokens: number | null;
 };
 
+export type ChatModelOverride = import("./chat-model-ref.ts").ChatModelOverride;
+
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
 export type AgentsListResult = {
@@ -402,7 +404,12 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-}>;
+}> & {
+  resolved?: {
+    modelProvider?: string;
+    model?: string;
+  };
+};
 
 export type {
   CostUsageDailyEntry,

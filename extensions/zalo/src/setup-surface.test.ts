@@ -1,6 +1,6 @@
 import type { OpenClawConfig, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/zalo";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { zaloPlugin } from "./channel.js";
 
@@ -18,7 +18,7 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   };
 }
 
-const zaloConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+const zaloConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: zaloPlugin,
   wizard: zaloPlugin.setupWizard!,
 });

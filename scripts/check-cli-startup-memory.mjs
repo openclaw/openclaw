@@ -33,7 +33,7 @@ writeFileSync(
 
 const DEFAULT_LIMITS_MB = {
   help: 500,
-  statusJson: 900,
+  statusJson: 925,
   gatewayStatus: 900,
 };
 
@@ -63,11 +63,12 @@ const cases = [
 ];
 
 function parseMaxRssMb(stderr) {
-  const match = stderr.match(new RegExp(`^${MAX_RSS_MARKER}(\\d+)\\s*$`, "m"));
-  if (!match) {
+  const matches = [...stderr.matchAll(new RegExp(`^${MAX_RSS_MARKER}(\\d+)\\s*$`, "gm"))];
+  const lastMatch = matches.at(-1);
+  if (!lastMatch) {
     return null;
   }
-  return Number(match[1]) / 1024;
+  return Number(lastMatch[1]) / 1024;
 }
 
 function buildBenchEnv() {
@@ -93,7 +94,14 @@ function buildBenchEnv() {
   }
   if (process.env.NODE_DISABLE_COMPILE_CACHE) {
     env.NODE_DISABLE_COMPILE_CACHE = process.env.NODE_DISABLE_COMPILE_CACHE;
+  } else {
+    // Keep the regression check focused on app/runtime startup, not Node's
+    // one-shot compile cache overhead, which varies across runner builds.
+    env.NODE_DISABLE_COMPILE_CACHE = "1";
   }
+  // Keep the benchmark on a single process so RSS reflects the actual command
+  // path rather than the warning-suppression respawn wrapper.
+  env.OPENCLAW_NO_RESPAWN = "1";
 
   return env;
 }

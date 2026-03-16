@@ -24,11 +24,13 @@ export type NormalizedPluginsConfig = {
 };
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
+  "amazon-bedrock",
   "anthropic",
   "byteplus",
   "cloudflare-ai-gateway",
   "device-pair",
   "github-copilot",
+  "google",
   "huggingface",
   "kilocode",
   "kimi-coding",
@@ -53,6 +55,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "vercel-ai-gateway",
   "vllm",
   "volcengine",
+  "xai",
   "xiaomi",
   "zai",
 ]);

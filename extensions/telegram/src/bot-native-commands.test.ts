@@ -290,4 +290,56 @@ describe("registerTelegramNativeCommands", () => {
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
+
+  it("sends plugin command error replies silently when silentErrorReplies is enabled", async () => {
+    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "plug",
+        description: "Plugin command",
+      },
+    ] as never);
+    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+      command: { key: "plug", requireAuth: false },
+      args: undefined,
+    } as never);
+    pluginCommandMocks.executePluginCommand.mockResolvedValue({
+      text: "plugin failed",
+      isError: true,
+    } as never);
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot: {
+        api: {
+          setMyCommands: vi.fn().mockResolvedValue(undefined),
+          sendMessage: vi.fn().mockResolvedValue(undefined),
+        },
+        command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+          commandHandlers.set(name, cb);
+        }),
+      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      telegramCfg: { silentErrorReplies: true } as TelegramAccountConfig,
+    });
+
+    const handler = commandHandlers.get("plug");
+    expect(handler).toBeTruthy();
+    await handler?.({
+      match: "",
+      message: {
+        message_id: 1,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "alice" },
+      },
+    });
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silent: true,
+        replies: [expect.objectContaining({ isError: true })],
+      }),
+    );
+  });
 });

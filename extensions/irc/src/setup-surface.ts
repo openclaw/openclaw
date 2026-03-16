@@ -1,8 +1,8 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
-  resolveOnboardingAccountId,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  resolveSetupAccountId,
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { DmPolicy } from "../../../src/config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
@@ -165,7 +165,7 @@ async function promptIrcNickServConfig(params: {
   });
 }
 
-const ircDmPolicy: ChannelOnboardingDmPolicy = {
+const ircDmPolicy: ChannelSetupDmPolicy = {
   label: "IRC",
   channel,
   policyKey: "channels.irc.dmPolicy",
@@ -176,7 +176,7 @@ const ircDmPolicy: ChannelOnboardingDmPolicy = {
     await promptIrcAllowFrom({
       cfg: cfg as CoreConfig,
       prompter,
-      accountId: resolveOnboardingAccountId({
+      accountId: resolveSetupAccountId({
         accountId,
         defaultAccountId: resolveDefaultIrcAccountId(cfg as CoreConfig),
       }),
@@ -458,7 +458,7 @@ export const ircSetupWizard: ChannelSetupWizard = {
     ],
   },
   dmPolicy: ircDmPolicy,
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
 export { ircSetupAdapter };

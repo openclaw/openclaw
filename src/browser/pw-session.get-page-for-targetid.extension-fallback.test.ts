@@ -52,7 +52,7 @@ function createExtensionFallbackBrowserHarness(options?: {
 }
 
 describe("pw-session getPageForTargetId", () => {
-  it("falls back to the only page when CDP session attachment is blocked (extension relays)", async () => {
+  it("falls back to the only page when Playwright cannot resolve target ids", async () => {
     const { browserClose, pages } = createExtensionFallbackBrowserHarness();
     const [page] = pages;
 
@@ -94,26 +94,20 @@ describe("pw-session getPageForTargetId", () => {
     }
   });
 
-  it("resolves extension-relay pages from /json/list without probing page CDP sessions first", async () => {
+  it("resolves pages from /json/list when page CDP probing fails", async () => {
     const { newCDPSession, pages } = createExtensionFallbackBrowserHarness({
       urls: ["https://alpha.example", "https://beta.example"],
       newCDPSessionError: "Target.attachToBrowserTarget: Not allowed",
     });
     const [, pageB] = pages;
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    fetchSpy
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ Browser: "OpenClaw/extension-relay" }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => [
-          { id: "TARGET_A", url: "https://alpha.example" },
-          { id: "TARGET_B", url: "https://beta.example" },
-        ],
-      } as Response);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => [
+        { id: "TARGET_A", url: "https://alpha.example" },
+        { id: "TARGET_B", url: "https://beta.example" },
+      ],
+    } as Response);
 
     try {
       const resolved = await getPageForTargetId({
@@ -121,7 +115,7 @@ describe("pw-session getPageForTargetId", () => {
         targetId: "TARGET_B",
       });
       expect(resolved).toBe(pageB);
-      expect(newCDPSession).not.toHaveBeenCalled();
+      expect(newCDPSession).toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
     }

@@ -1,6 +1,24 @@
 {
   "id": "kimi-coding",
   "providers": ["kimi-coding"],
+  "providerAuthEnvVars": {
+    "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "kimi-coding",
+      "method": "api-key",
+      "choiceId": "kimi-code-api-key",
+      "choiceLabel": "Kimi Code API key (subscription)",
+      "groupId": "moonshot",
+      "groupLabel": "Moonshot AI (Kimi K2.5)",
+      "groupHint": "Kimi K2.5 + Kimi Coding",
+      "optionKey": "kimiCodeApiKey",
+      "cliFlag": "--kimi-code-api-key",
+      "cliOption": "--kimi-code-api-key <key>",
+      "cliDescription": "Kimi Coding API key"
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

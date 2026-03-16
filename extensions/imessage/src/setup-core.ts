@@ -1,14 +1,14 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
-import {
-  parseOnboardingEntriesAllowingWildcard,
-  promptParsedAllowFromForScopedChannel,
-  setChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
 import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "../../../src/channels/plugins/setup-helpers.js";
+import {
+  parseSetupEntriesAllowingWildcard,
+  promptParsedAllowFromForScopedChannel,
+  setChannelDmPolicyWithAllowFrom,
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
 import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
@@ -25,7 +25,7 @@ import { normalizeIMessageHandle } from "./targets.js";
 const channel = "imessage" as const;
 
 export function parseIMessageAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return parseOnboardingEntriesAllowingWildcard(raw, (entry) => {
+  return parseSetupEntriesAllowingWildcard(raw, (entry) => {
     const lower = entry.toLowerCase();
     if (lower.startsWith("chat_id:")) {
       const id = entry.slice("chat_id:".length).trim();
@@ -157,7 +157,7 @@ export const imessageSetupAdapter: ChannelSetupAdapter = {
 export function createIMessageSetupWizardProxy(
   loadWizard: () => Promise<{ imessageSetupWizard: ChannelSetupWizard }>,
 ) {
-  const imessageDmPolicy: ChannelOnboardingDmPolicy = {
+  const imessageDmPolicy: ChannelSetupDmPolicy = {
     label: "iMessage",
     channel,
     policyKey: "channels.imessage.dmPolicy",
@@ -231,6 +231,6 @@ export function createIMessageSetupWizardProxy(
       ],
     },
     dmPolicy: imessageDmPolicy,
-    disable: (cfg: OpenClawConfig) => setOnboardingChannelEnabled(cfg, channel, false),
+    disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
 }
