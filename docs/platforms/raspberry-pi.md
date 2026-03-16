@@ -271,6 +271,10 @@ Additional resource-tuning env vars:
 | `OPENCLAW_MEDIA_MAX_BUFFER`      | 4MB (low) / 10MB      | FFmpeg child process buffer limit  |
 | `OPENCLAW_EMBEDDING_CONCURRENCY` | 1 (low) / 4           | Parallel embedding index workers   |
 
+When the resource profile is `low`, the generated systemd service file automatically
+includes `MemoryHigh=80%` and `MemoryMax=90%` cgroup limits. This throttles the
+gateway before it can OOM-kill the entire system on 1-2 GB Pi boards.
+
 ### Reduce Memory Usage
 
 ```bash
@@ -309,6 +313,12 @@ Most OpenClaw features work on ARM64, but some external binaries may need ARM bu
 | Telegram           | ✅           | Pure JS, no issues                  |
 | gog (Gmail CLI)    | ⚠️           | Check for ARM release               |
 | Chromium (browser) | ✅           | `sudo apt install chromium-browser` |
+
+**Chromium / Playwright note:** Chromium adds ~300 MB of disk and memory overhead.
+On Pi models with 1-2 GB RAM, avoid installing it unless you specifically need the
+browser tool. Playwright installs Chromium on demand at first use, so you can skip
+the `OPENCLAW_INSTALL_BROWSER` flag in Docker or simply never invoke browser-dependent
+skills to keep resource usage low.
 
 If a skill fails, check if its binary has an ARM build. Many Go/Rust tools do; some don't.
 
