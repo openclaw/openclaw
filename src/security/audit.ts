@@ -5,6 +5,7 @@ import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
+import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
@@ -1226,7 +1227,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     }
   }
 
-  if (context.includeChannelSecurity) {
+  if (context.includeChannelSecurity && hasPotentialConfiguredChannels(cfg, env)) {
     const plugins = context.plugins ?? listChannelPlugins();
     findings.push(
       ...(await collectChannelSecurityFindings({
