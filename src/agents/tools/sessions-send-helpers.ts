@@ -24,7 +24,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     return null;
   }
   const [channelRaw, kind, ...rest] = parts;
-  if (kind !== "group" && kind !== "channel") {
+  if (kind !== "group" && kind !== "channel" && kind !== "thread") {
     return null;
   }
 
@@ -38,10 +38,16 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
 
   if (match) {
     threadId = match[1]; // Keep as string to match AgentCommandOpts.threadId
+  } else if (kind === "thread" && rest.length >= 2) {
+    threadId = rest[rest.length - 1];
   }
 
   // Remove :topic:N or :thread:N suffix from ID for target
-  const id = match ? restJoined.replace(/:(topic|thread):\d+$/, "") : restJoined.trim();
+  const id = match
+    ? restJoined.replace(/:(topic|thread):\d+$/, "")
+    : kind === "thread" && rest.length >= 2
+      ? rest.slice(0, -1).join(":")
+      : restJoined.trim();
 
   if (!id) {
     return null;

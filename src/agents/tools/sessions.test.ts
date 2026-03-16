@@ -254,6 +254,46 @@ describe("resolveAnnounceTarget", () => {
     expect(first).toBeDefined();
     expect(first?.method).toBe("sessions.list");
   });
+
+  it("extracts threadId from kind:thread keys (fixes #47971)", async () => {
+    // This tests resolveAnnounceTargetFromKey via resolveAnnounceTarget fallback
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:cody:discord:thread:12345:67890",
+      displayKey: "agent:cody:discord:thread:12345:67890",
+    });
+    expect(target).toEqual({
+      channel: "discord",
+      to: "channel:12345",
+      threadId: "67890",
+    });
+  });
+
+  it("propagates threadId from session store (fixes #47971)", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:whatsapp:group:123@g.us",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
+            accountId: "work",
+            threadId: "456",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
+      displayKey: "agent:main:whatsapp:group:123@g.us",
+    });
+    expect(target).toEqual({
+      channel: "whatsapp",
+      to: "123@g.us",
+      accountId: "work",
+      threadId: "456",
+    });
+  });
 });
 
 describe("sessions_list gating", () => {
