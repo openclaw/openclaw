@@ -1,3 +1,5 @@
+import { randomUUID, getRandomValues } from "crypto";
+
 const SLUG_ADJECTIVES = [
   "amber",
   "briny",
@@ -101,7 +103,18 @@ const SLUG_NOUNS = [
 ];
 
 function randomChoice(values: string[], fallback: string) {
-  return values[Math.floor(Math.random() * values.length)] ?? fallback;
+  // Use cryptographically secure random with rejection sampling to avoid modulo bias
+  const maxUnbiased = Math.floor(0xffffffff / values.length) * values.length;
+  let randomValue;
+
+  do {
+    const array = new Uint32Array(1);
+    getRandomValues(array);
+    randomValue = array[0];
+  } while (randomValue >= maxUnbiased);
+
+  const randomIndex = randomValue % values.length;
+  return values[randomIndex] ?? fallback;
 }
 
 function createSlugBase(words = 2) {
@@ -141,6 +154,7 @@ export function createSessionSlug(isTaken?: (id: string) => boolean): string {
   if (threeWord) {
     return threeWord;
   }
-  const fallback = `${createSlugBase(3)}-${Math.random().toString(36).slice(2, 5)}`;
-  return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36)}` : fallback;
+  // Use cryptographically secure random for fallback slug with 3-character suffix to maintain format compatibility
+  const fallback = `${createSlugBase(3)}-${randomUUID().replace(/-/g, "").slice(0, 3)}`;
+  return isIdTaken(fallback) ? `${fallback}-${Date.now().toString(36).slice(0, 3)}` : fallback;
 }
