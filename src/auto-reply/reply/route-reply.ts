@@ -12,6 +12,7 @@ import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { hasReplyContent } from "../../interactive/payload.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -119,13 +120,19 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       ? [externalPayload.mediaUrl]
       : [];
   const replyToId = externalPayload.replyToId;
-  const hasInteractive = (externalPayload.interactive?.blocks.length ?? 0) > 0;
   const hasChannelData = plugin?.messaging?.hasStructuredReplyPayload?.({
     payload: externalPayload,
   });
 
   // Skip empty replies.
-  if (!text.trim() && mediaUrls.length === 0 && !hasInteractive && !hasChannelData) {
+  if (
+    !hasReplyContent({
+      text,
+      mediaUrls,
+      interactive: externalPayload.interactive,
+      hasChannelData,
+    })
+  ) {
     return { ok: true };
   }
 

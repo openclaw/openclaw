@@ -5,7 +5,12 @@ import {
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { InteractiveReply } from "../../interactive/payload.js";
+import {
+  hasInteractiveReplyBlocks,
+  hasReplyChannelData,
+  hasReplyContent,
+  type InteractiveReply,
+} from "../../interactive/payload.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -94,10 +99,17 @@ export function normalizeOutboundPayloads(
     const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const interactive = payload.interactive;
     const channelData = payload.channelData;
-    const hasChannelData = Boolean(channelData && Object.keys(channelData).length > 0);
-    const hasInteractive = Boolean(interactive?.blocks.length);
+    const hasChannelData = hasReplyChannelData(channelData);
+    const hasInteractive = hasInteractiveReplyBlocks(interactive);
     const text = payload.text ?? "";
-    if (!text && mediaUrls.length === 0 && !hasInteractive && !hasChannelData) {
+    if (
+      !hasReplyContent({
+        text,
+        mediaUrls,
+        interactive,
+        hasChannelData,
+      })
+    ) {
       continue;
     }
     normalizedPayloads.push({

@@ -30,6 +30,7 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
+import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -238,30 +239,24 @@ type MessageSentEvent = {
   messageId?: string;
 };
 
-function hasMediaPayload(payload: ReplyPayload): boolean {
-  return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-}
-
-function hasChannelDataPayload(payload: ReplyPayload): boolean {
-  return Boolean(payload.channelData && Object.keys(payload.channelData).length > 0);
-}
-
-function hasInteractivePayload(payload: ReplyPayload): boolean {
-  return (payload.interactive?.blocks.length ?? 0) > 0;
-}
-
 function normalizePayloadForChannelDelivery(
   payload: ReplyPayload,
   channelId: string,
 ): ReplyPayload | null {
-  const hasMedia = hasMediaPayload(payload);
-  const hasChannelData = hasChannelDataPayload(payload);
-  const hasInteractive = hasInteractivePayload(payload);
+  const hasChannelData = hasReplyChannelData(payload.channelData);
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const normalizedText =
     channelId === "whatsapp" ? rawText.replace(/^(?:[ \t]*\r?\n)+/, "") : rawText;
   if (!normalizedText.trim()) {
-    if (!hasMedia && !hasInteractive && !hasChannelData) {
+    if (
+      !hasReplyContent({
+        text: normalizedText,
+        mediaUrl: payload.mediaUrl,
+        mediaUrls: payload.mediaUrls,
+        interactive: payload.interactive,
+        hasChannelData,
+      })
+    ) {
       return null;
     }
     return {
@@ -713,7 +708,10 @@ async function deliverOutboundPayloadsCore(
       };
       if (
         handler.sendPayload &&
-        (effectivePayload.channelData || hasInteractivePayload(effectivePayload))
+        (effectivePayload.channelData ||
+          hasReplyContent({
+            interactive: effectivePayload.interactive,
+          }))
       ) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
