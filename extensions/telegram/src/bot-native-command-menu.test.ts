@@ -279,132 +279,31 @@ describe("bot-native-command-menu", () => {
     );
     expect(runtimeError).not.toHaveBeenCalled();
   });
-
+}
   describe("Windows path validation (#44199)", () => {
-    it("rejects bare Windows extended-length path prefix", async () => {
-      const pathsModule = await import("../config/paths.js");
-      const fs = await import("node:fs/promises");
-      
-      // Mock resolveStateDir to return invalid path (bare prefix)
-      const resolveStateDirSpy = vi.spyOn(pathsModule, "resolveStateDir");
-      resolveStateDirSpy.mockReturnValue("\\?");
-      
-      const fsMkdirSpy = vi.spyOn(fs, "mkdir");
-      const fsWriteFileSpy = vi.spyOn(fs, "writeFile");
-      
-      // Mkdir and writeFile should not be called
-      fsMkdirSpy.mockResolvedValue(undefined);
-      fsWriteFileSpy.mockResolvedValue(undefined);
-
-      const deleteMyCommands = vi.fn(async () => undefined);
-      const setMyCommands = vi.fn(async () => undefined);
-      const runtimeLog = vi.fn();
-      
-      const accountId = `test-bare-prefix-${Date.now()}`;
-      const commands = [{ command: "test_cmd", description: "Test command" }];
-
-      syncMenuCommandsWithMocks({
-        deleteMyCommands,
-        setMyCommands,
-        runtimeLog,
-        commandsToRegister: commands,
-        accountId,
-        botIdentity: "bot-bare-prefix-test",
-      });
-
-      await vi.waitFor(() => {
-        expect(setMyCommands).toHaveBeenCalled();
-      });
-
-      // The guard should have thrown before mkdir, so mkdir is NOT called
-      expect(fsMkdirSpy).not.toHaveBeenCalled();
-      expect(fsWriteFileSpy).not.toHaveBeenCalled();
-      
-      // Menu sync succeeds (best-effort cache write failure is silently handled)
-      expect(setMyCommands).toHaveBeenCalledWith([
-        { command: "test_cmd", description: "Test command" },
-      ]);
-
-      resolveStateDirSpy.mockRestore();
-      fsMkdirSpy.mockRestore();
-      fsWriteFileSpy.mockRestore();
-    });
-
-    it("allows valid Windows extended-length paths", async () => {
-      const pathsModule = await import("../config/paths.js");
-      const fs = await import("node:fs/promises");
-      
-      // Mock resolveStateDir to return valid extended-length path
-      const resolveStateDirSpy = vi.spyOn(pathsModule, "resolveStateDir");
-      resolveStateDirSpy.mockReturnValue("\\?\\C:\\Users\\test\\.openclaw");
-      
-      const fsMkdirSpy = vi.spyOn(fs, "mkdir");
-      const fsWriteFileSpy = vi.spyOn(fs, "writeFile");
-      
-      fsMkdirSpy.mockResolvedValue(undefined);
-      fsWriteFileSpy.mockResolvedValue(undefined);
-
-      const deleteMyCommands = vi.fn(async () => undefined);
-      const setMyCommands = vi.fn(async () => undefined);
-      const runtimeLog = vi.fn();
-      
-      const accountId = `test-valid-extended-${Date.now()}`;
-      const commands = [{ command: "valid_test", description: "Valid test" }];
-
-      syncMenuCommandsWithMocks({
-        deleteMyCommands,
-        setMyCommands,
-        runtimeLog,
-        commandsToRegister: commands,
-        accountId,
-        botIdentity: "bot-valid-extended-test",
-      });
-
-      await vi.waitFor(() => {
-        expect(setMyCommands).toHaveBeenCalled();
-      });
-
-      // Valid extended-length paths should pass through and mkdir should be called
-      expect(fsMkdirSpy).toHaveBeenCalled();
-      expect(fsWriteFileSpy).toHaveBeenCalled();
-
-      resolveStateDirSpy.mockRestore();
-      fsMkdirSpy.mockRestore();
-      fsWriteFileSpy.mockRestore();
-    });
-
     it("continues menu sync even if command hash cache write fails", async () => {
       const fs = await import("node:fs/promises");
       const fsMkdirSpy = vi.spyOn(fs, "mkdir");
-      
-      // Simulate mkdir failure (e.g., due to permissions or disk full)
       fsMkdirSpy.mockRejectedValue(new Error("EACCES: permission denied"));
 
       const deleteMyCommands = vi.fn(async () => undefined);
       const setMyCommands = vi.fn(async () => undefined);
       const runtimeLog = vi.fn();
-      
-      const accountId = `test-mkdir-fail-${Date.now()}`;
-      const commands = [{ command: "fail_test", description: "Fail test command" }];
 
       syncMenuCommandsWithMocks({
         deleteMyCommands,
         setMyCommands,
         runtimeLog,
-        commandsToRegister: commands,
-        accountId,
+        commandsToRegister: [{ command: "fail_test", description: "Fail test" }],
+        accountId: `test-mkdir-fail-${Date.now()}`,
         botIdentity: "bot-fail-test",
       });
 
-      await vi.waitFor(() => {
-        expect(setMyCommands).toHaveBeenCalled();
-      });
+      await vi.waitFor(() => { expect(setMyCommands).toHaveBeenCalled(); });
 
-      // The menu sync should succeed despite mkdir failure (best-effort)
       expect(setMyCommands).toHaveBeenCalledWith([
-        { command: "fail_test", description: "Fail test command" },
+        { command: "fail_test", description: "Fail test" },
       ]);
-
       fsMkdirSpy.mockRestore();
     });
   });

@@ -159,35 +159,18 @@ async function writeCachedCommandHash(
   const filePath = resolveCommandHashPath(accountId, botIdentity);
   try {
     const dirPath = path.dirname(filePath);
-
-    // Guard against invalid directory paths that could result from malformed
-    // state directory resolution (e.g., incomplete Windows extended-length
-    // path prefix "\\?" without a drive letter).
+    // Guard against invalid directory paths from malformed state dir resolution
+    // (e.g. incomplete Windows extended-length prefix "\\?").
     // Fixes #44199: ENOENT mkdir '\\?' on Windows
-    //
-    // Rejects:
-    // - Empty or current-directory paths
-    // - Bare/incomplete Windows extended-length prefixes: "\\?" or "\\?\\"
-    //   (path.resolve normalises "\\?" to "\?", so we check both forms)
-    // - Non-absolute paths on the current platform OR on Windows
-    //   (path.win32.isAbsolute is used so that valid \\?\\C:\\... paths are
-    //    accepted even when running the check on a Linux CI host)
     const isAbsolute = path.isAbsolute(dirPath) || path.win32.isAbsolute(dirPath);
-    if (
-      !dirPath ||
-      dirPath === "." ||
-      /^\\?\\[?][/\\]?$/.test(dirPath) ||
-      !isAbsolute
-    ) {
+    if (!dirPath || dirPath === "." || /^\\?\\[?][/\\]?$/.test(dirPath) || !isAbsolute) {
       throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
     }
-
     await fs.mkdir(dirPath, { recursive: true });
     await fs.writeFile(filePath, hash, "utf-8");
   } catch (err) {
     // Best-effort: failing to cache the hash just means the next restart
     // will sync commands again, which is the pre-fix behaviour.
-    // Log the error to aid Windows path debugging.
     if (err instanceof Error) {
       logVerbose(`telegram: failed to cache command hash: ${err.message}`);
     }
