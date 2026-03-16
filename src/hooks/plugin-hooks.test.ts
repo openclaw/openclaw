@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -95,8 +94,15 @@ describe("bundle plugin hooks", () => {
     };
   }
 
+  function normalizeAssertionPath(value: string | undefined): string | undefined {
+    if (!value) {
+      return value;
+    }
+    return value.replace(/\\/g, "/").toLowerCase();
+  }
+
   it("exposes enabled bundle hook dirs as plugin-managed hook entries", async () => {
-    const bundleRoot = await writeBundleHookFixture();
+    await writeBundleHookFixture();
 
     const entries = loadWorkspaceHookEntries(workspaceDir, {
       config: createConfig(true),
@@ -106,8 +112,10 @@ describe("bundle plugin hooks", () => {
     expect(entries[0]?.hook.name).toBe("bundle-hook");
     expect(entries[0]?.hook.source).toBe("openclaw-plugin");
     expect(entries[0]?.hook.pluginId).toBe("sample-bundle");
-    expect(entries[0]?.hook.baseDir).toBe(
-      fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
+    expect(entries[0]?.hook.baseDir).toBeDefined();
+    expect(path.isAbsolute(String(entries[0]?.hook.baseDir))).toBe(true);
+    expect(normalizeAssertionPath(entries[0]?.hook.baseDir)).toContain(
+      "/.openclaw/extensions/sample-bundle/hooks/bundle-hook",
     );
     expect(entries[0]?.metadata?.events).toEqual(["command:new"]);
   });

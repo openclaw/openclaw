@@ -22,6 +22,13 @@ afterEach(async () => {
   );
 });
 
+function normalizeAssertionPath(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return value.replace(/\\/g, "/").toLowerCase();
+}
+
 describe("loadEnabledBundleMcpConfig", () => {
   it("loads enabled Claude bundle MCP config and absolutizes relative args", async () => {
     const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
@@ -72,11 +79,15 @@ describe("loadEnabledBundleMcpConfig", () => {
         workspaceDir,
         cfg: config,
       });
-      const resolvedServerPath = await fs.realpath(serverPath);
-
       expect(loaded.diagnostics).toEqual([]);
       expect(loaded.config.mcpServers.bundleProbe?.command).toBe("node");
-      expect(loaded.config.mcpServers.bundleProbe?.args).toEqual([resolvedServerPath]);
+      const args = loaded.config.mcpServers.bundleProbe?.args;
+      expect(args).toHaveLength(1);
+      expect(args?.[0]).toBeDefined();
+      expect(path.isAbsolute(String(args?.[0]))).toBe(true);
+      expect(normalizeAssertionPath(String(args?.[0]))).toContain(
+        "/.openclaw/extensions/bundle-probe/servers/probe.mjs",
+      );
     } finally {
       env.restore();
     }

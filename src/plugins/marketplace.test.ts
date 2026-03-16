@@ -19,6 +19,13 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
+function normalizeAssertionPath(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return value.replace(/\\/g, "/").toLowerCase();
+}
+
 describe("marketplace plugins", () => {
   afterEach(() => {
     installPluginFromPathMock.mockReset();
@@ -45,21 +52,21 @@ describe("marketplace plugins", () => {
 
       const { listMarketplacePlugins } = await import("./marketplace.js");
       const result = await listMarketplacePlugins({ marketplace: rootDir });
-      expect(result).toEqual({
-        ok: true,
-        sourceLabel: expect.stringContaining(".claude-plugin/marketplace.json"),
-        manifest: {
-          name: "Example Marketplace",
-          version: "1.0.0",
-          plugins: [
-            {
-              name: "frontend-design",
-              version: "0.1.0",
-              description: "Design system bundle",
-              source: { kind: "path", path: "./plugins/frontend-design" },
-            },
-          ],
-        },
+      expect(result.ok).toBe(true);
+      expect(normalizeAssertionPath(result.sourceLabel)).toContain(
+        ".claude-plugin/marketplace.json",
+      );
+      expect(result.manifest).toEqual({
+        name: "Example Marketplace",
+        version: "1.0.0",
+        plugins: [
+          {
+            name: "frontend-design",
+            version: "0.1.0",
+            description: "Design system bundle",
+            source: { kind: "path", path: "./plugins/frontend-design" },
+          },
+        ],
       });
     });
   });
@@ -103,8 +110,10 @@ describe("marketplace plugins", () => {
         ok: true,
         pluginId: "frontend-design",
         marketplacePlugin: "frontend-design",
-        marketplaceSource: path.join(rootDir, ".claude-plugin", "marketplace.json"),
       });
+      expect(normalizeAssertionPath(result.marketplaceSource)).toBe(
+        normalizeAssertionPath(path.join(rootDir, ".claude-plugin", "marketplace.json")),
+      );
     });
   });
 
