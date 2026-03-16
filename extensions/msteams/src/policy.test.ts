@@ -141,14 +141,14 @@ describe("msteams policy", () => {
       expect(policy).toEqual({ requireMention: true, replyStyle: "thread" });
     });
 
-    it("defaults replyStyle to top-level when requireMention=false", () => {
+    it("keeps default replyStyle=thread when requireMention=false", () => {
       const policy = resolveMSTeamsReplyPolicy({
         isDirectMessage: false,
         globalConfig: { requireMention: false },
       });
       expect(policy).toEqual({
         requireMention: false,
-        replyStyle: "top-level",
+        replyStyle: "thread",
       });
     });
 
@@ -160,10 +160,10 @@ describe("msteams policy", () => {
         channelConfig: { requireMention: false },
       });
 
-      // requireMention from channel -> false, and replyStyle defaults from requireMention -> top-level
+      // requireMention from channel -> false, replyStyle keeps default thread unless explicitly configured
       expect(policy).toEqual({
         requireMention: false,
-        replyStyle: "top-level",
+        replyStyle: "thread",
       });
     });
 
@@ -175,7 +175,7 @@ describe("msteams policy", () => {
       });
       expect(policy).toEqual({
         requireMention: false,
-        replyStyle: "top-level",
+        replyStyle: "thread",
       });
     });
 

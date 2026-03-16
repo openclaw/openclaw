@@ -247,8 +247,9 @@ export function resolveMSTeamsReplyPolicy(params: {
     params.teamConfig?.replyStyle ??
     params.globalConfig?.replyStyle;
 
-  const replyStyle: MSTeamsReplyStyle =
-    explicitReplyStyle ?? (requireMention ? "thread" : "top-level");
+  // Keep channel/group defaults stable: only use top-level when explicitly configured.
+  // This avoids unintentionally starting a new post when requireMention is disabled.
+  const replyStyle: MSTeamsReplyStyle = explicitReplyStyle ?? "thread";
 
   return { requireMention, replyStyle };
 }
