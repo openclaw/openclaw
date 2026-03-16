@@ -1,4 +1,9 @@
 import { Separator, TextDisplay } from "@buape/carbon";
+import {
+  buildAgentSessionKey,
+  resolveThreadSessionKeys,
+  type RoutePeer,
+} from "openclaw/plugin-sdk";
 import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedAllowlistConfigEditor,
@@ -196,6 +201,102 @@ function parseDiscordExplicitTarget(raw: string) {
   }
 }
 
+function normalizeOutboundThreadId(value?: string | number | null): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return undefined;
+    }
+    return String(Math.trunc(value));
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function buildDiscordBaseSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  accountId?: string | null;
+  peer: RoutePeer;
+}) {
+  return buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: "discord",
+    accountId: params.accountId,
+    peer: params.peer,
+    dmScope: params.cfg.session?.dmScope ?? "main",
+    identityLinks: params.cfg.session?.identityLinks,
+  });
+}
+
+function resolveDiscordOutboundTargetKindHint(params: {
+  target: string;
+  resolvedTarget?: { kind: string };
+}): "user" | "channel" | undefined {
+  const resolvedKind = params.resolvedTarget?.kind;
+  if (resolvedKind === "user") {
+    return "user";
+  }
+  if (resolvedKind === "group" || resolvedKind === "channel") {
+    return "channel";
+  }
+
+  const target = params.target.trim();
+  if (/^channel:/i.test(target)) {
+    return "channel";
+  }
+  if (/^(user:|discord:|@|<@!?)/i.test(target)) {
+    return "user";
+  }
+  return undefined;
+}
+
+function resolveDiscordOutboundSessionRoute(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  accountId?: string | null;
+  target: string;
+  resolvedTarget?: { kind: string };
+  replyToId?: string | null;
+  threadId?: string | number | null;
+}) {
+  const parsed = parseDiscordTarget(params.target, {
+    defaultKind: resolveDiscordOutboundTargetKindHint(params),
+  });
+  if (!parsed) {
+    return null;
+  }
+  const isDm = parsed.kind === "user";
+  const peer: RoutePeer = {
+    kind: isDm ? "direct" : "channel",
+    id: parsed.id,
+  };
+  const baseSessionKey = buildDiscordBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    accountId: params.accountId,
+    peer,
+  });
+  const explicitThreadId = normalizeOutboundThreadId(params.threadId);
+  const threadCandidate = explicitThreadId ?? normalizeOutboundThreadId(params.replyToId);
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey,
+    threadId: threadCandidate,
+    useSuffix: false,
+  });
+  return {
+    sessionKey: threadKeys.sessionKey,
+    baseSessionKey,
+    peer,
+    chatType: isDm ? ("direct" as const) : ("channel" as const),
+    from: isDm ? `discord:${parsed.id}` : `discord:channel:${parsed.id}`,
+    to: isDm ? `user:${parsed.id}` : `channel:${parsed.id}`,
+    threadId: explicitThreadId ?? undefined,
+  };
+}
+
 const discordConfigAccessors = createScopedAccountConfigAccessors({
   resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
@@ -341,6 +442,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     parseExplicitTarget: ({ raw }) => parseDiscordExplicitTarget(raw),
     inferTargetChatType: ({ to }) => parseDiscordExplicitTarget(to)?.chatType,
     buildCrossContextComponents: buildDiscordCrossContextComponents,
+    resolveOutboundSessionRoute: (params) => resolveDiscordOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeDiscordTargetId,
       hint: "<channelId|user:ID|channel:ID>",
