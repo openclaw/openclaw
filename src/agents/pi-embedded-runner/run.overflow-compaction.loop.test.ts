@@ -326,6 +326,22 @@ describe("overflow compaction in run loop", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
+  it("returns an explicit timeout payload when the run times out during compaction before producing any reply", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: true,
+        assistantTexts: [],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out while compacting session context");
+  });
+
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
