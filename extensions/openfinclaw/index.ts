@@ -294,21 +294,83 @@ const openfinclawPlugin = {
                 backtestCompleted?: boolean;
                 backtestReportInDb?: boolean;
                 backtestReport?: {
+                  alpha?: number | null;
                   task_id?: string;
-                  performance?: {
-                    totalReturn?: number;
-                    sharpe?: number;
-                    maxDrawdown?: number;
-                    winRate?: number;
-                    profitFactor?: number | null;
-                    totalTrades?: number;
-                    finalEquity?: number;
-                    monthlyReturns?: Record<string, number>;
+                  metadata?: {
+                    id?: string;
+                    name?: string;
+                    tags?: string[];
+                    type?: string;
+                    style?: string;
+                    author?: { name?: string };
+                    market?: string;
+                    license?: string;
+                    summary?: string;
+                    version?: string;
+                    archetype?: string;
+                    frequency?: string;
+                    riskLevel?: string;
+                    visibility?: string;
+                    description?: string;
+                    assetClasses?: string[];
+                    parameters?: Array<{
+                      name: string;
+                      type: string;
+                      label?: string;
+                      default?: unknown;
+                      range?: { min?: number; max?: number; step?: number };
+                    }>;
                   };
-                  integrity?: unknown;
+                  integrity?: {
+                    fepHash?: string;
+                    codeHash?: string;
+                    contentCID?: string;
+                    contentHash?: string;
+                    publishedAt?: string;
+                    timestampProof?: string;
+                  };
+                  performance?: {
+                    hints?: string[];
+                    calmar?: number;
+                    sharpe?: number;
+                    sortino?: number;
+                    winRate?: number;
+                    finalEquity?: number;
+                    maxDrawdown?: number;
+                    totalReturn?: number;
+                    totalTrades?: number;
+                    profitFactor?: number | null;
+                    maxDrawdownStart?: string;
+                    maxDrawdownEnd?: string;
+                    monthlyReturns?: Record<string, number>;
+                    annualizedReturn?: number;
+                    recentValidation?: {
+                      decay?: {
+                        sharpeDecay30d?: number;
+                        sharpeDecay90d?: number;
+                        warning?: string;
+                      };
+                      recent?: Array<{
+                        period?: string;
+                        window?: string;
+                        sharpe?: number;
+                        finalEquity?: number;
+                        maxDrawdown?: number;
+                        totalReturn?: number;
+                        totalTrades?: number;
+                      }>;
+                      historical?: {
+                        period?: string;
+                        sharpe?: number;
+                        finalEquity?: number;
+                        maxDrawdown?: number;
+                        totalReturn?: number;
+                        totalTrades?: number;
+                      };
+                    };
+                  };
                   equity_curve?: unknown;
                   trade_journal?: unknown;
-                  alpha?: unknown;
                 };
               };
 
@@ -331,8 +393,17 @@ const openfinclawPlugin = {
                 if (typeof perf.totalReturn === "number") {
                   lines.push(`- 总收益率: ${(perf.totalReturn * 100).toFixed(2)}%`);
                 }
+                if (typeof perf.annualizedReturn === "number") {
+                  lines.push(`- 年化收益: ${(perf.annualizedReturn * 100).toFixed(2)}%`);
+                }
                 if (typeof perf.sharpe === "number") {
                   lines.push(`- 夏普比率: ${perf.sharpe.toFixed(3)}`);
+                }
+                if (typeof perf.sortino === "number") {
+                  lines.push(`- 索提诺比率: ${perf.sortino.toFixed(3)}`);
+                }
+                if (typeof perf.calmar === "number") {
+                  lines.push(`- 卡玛比率: ${perf.calmar.toFixed(3)}`);
                 }
                 if (typeof perf.maxDrawdown === "number") {
                   lines.push(`- 最大回撤: ${(perf.maxDrawdown * 100).toFixed(2)}%`);
@@ -348,6 +419,17 @@ const openfinclawPlugin = {
                 }
                 if (typeof perf.finalEquity === "number") {
                   lines.push(`- 期末权益: ${perf.finalEquity.toFixed(2)}`);
+                }
+                if (perf.hints && perf.hints.length > 0) {
+                  lines.push("");
+                  lines.push("提示:");
+                  for (const hint of perf.hints) {
+                    lines.push(`- ${hint}`);
+                  }
+                }
+                if (perf.recentValidation?.decay?.warning) {
+                  lines.push("");
+                  lines.push(`⚠️ 衰减警告: ${perf.recentValidation.decay.warning}`);
                 }
               } else if (resp.backtestStatus === "failed" || resp.backtestStatus === "rejected") {
                 lines.push("");
@@ -394,7 +476,7 @@ const openfinclawPlugin = {
         name: "skill_validate",
         label: "Validate strategy package",
         description:
-          "Validate a strategy package directory (fep v1.2) before zipping and publishing. Checks: fep.yaml with identity/technical/backtest, scripts/strategy.py with compute(data), and no forbidden imports. Only publish after validation passes.",
+          "Validate a strategy package directory (fep v1.2) before zipping and publishing. Checks: fep.yaml with identity (id, name, type, version, style, visibility, summary, license, author, changelog), classification, technical, backtest; scripts/strategy.py with compute(data) and no forbidden imports. Only publish after validation passes.",
         parameters: Type.Object({
           dirPath: Type.String({
             description:
