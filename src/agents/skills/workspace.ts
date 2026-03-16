@@ -488,24 +488,37 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, Skill>();
+  // Coerce skill.name to string to handle YAML bare numbers (e.g., `name: 12306`)
+  const coerceName = (skill: Skill): Skill => {
+    if (typeof skill.name !== "string") {
+      return { ...skill, name: String(skill.name) };
+    }
+    return skill;
+  };
   // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
   for (const skill of extraSkills) {
-    merged.set(skill.name, skill);
+    const s = coerceName(skill);
+    merged.set(s.name, s);
   }
   for (const skill of bundledSkills) {
-    merged.set(skill.name, skill);
+    const s = coerceName(skill);
+    merged.set(s.name, s);
   }
   for (const skill of managedSkills) {
-    merged.set(skill.name, skill);
+    const s = coerceName(skill);
+    merged.set(s.name, s);
   }
   for (const skill of personalAgentsSkills) {
-    merged.set(skill.name, skill);
+    const s = coerceName(skill);
+    merged.set(s.name, s);
   }
   for (const skill of projectAgentsSkills) {
-    merged.set(skill.name, skill);
+    const s = coerceName(skill);
+    merged.set(s.name, s);
   }
   for (const skill of workspaceSkills) {
-    merged.set(skill.name, skill);
+    const s = coerceName(skill);
+    merged.set(s.name, s);
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
