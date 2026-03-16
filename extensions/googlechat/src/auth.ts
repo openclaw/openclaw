@@ -79,7 +79,17 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   if (cachedCerts && now - cachedCerts.fetchedAt < 10 * 60 * 1000) {
     return cachedCerts.certs;
   }
-  const res = await fetch(CHAT_CERTS_URL);
+  let res: Response;
+  try {
+    res = await fetch(CHAT_CERTS_URL, {
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Google Chat cert fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
   if (!res.ok) {
     throw new Error(`Failed to fetch Chat certs (${res.status})`);
   }
