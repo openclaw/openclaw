@@ -1923,6 +1923,29 @@ exec-approvals: agent "myagent" uses legacy array allowlist format — run "open
 
 Run `openclaw doctor --fix` to auto-migrate all agents to the map format.
 
+**Common pattern: restrictive gateway + open sandbox:**
+
+Use a restrictive allowlist on gateway (only trusted binaries) and a wildcard `"*"` on sandbox (all commands allowed inside the container):
+
+```json
+{
+  "version": 1,
+  "agents": {
+    "myagent": {
+      "allowlist": {
+        "gateway": [
+          { "pattern": "/usr/local/bin/gh" },
+          { "pattern": "/usr/local/bin/xurl" }
+        ],
+        "sandbox": [{ "pattern": "*" }]
+      }
+    }
+  }
+}
+```
+
+The `"*"` wildcard matches any parsed executable command. Combined with `allowedHosts: ["gateway", "sandbox"]`, this lets the agent run arbitrary commands inside the sandbox while restricting gateway exec to explicitly approved binaries.
+
 ### `tools.loopDetection`
 
 Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection.
