@@ -451,7 +451,7 @@ describe("AcpGatewayStore", () => {
     });
   });
 
-  it("reloads non-terminal state as recovering with gateway_restart_reconcile", async () => {
+  it("reloads non-terminal state with a fresh restart grace window and allows same-node reconcile", async () => {
     const { root, store } = await createStore();
     const lease = await store.acquireLease({
       sessionKey: "agent:main:acp:test-session",
@@ -482,6 +482,7 @@ describe("AcpGatewayStore", () => {
     const reloaded = new AcpGatewayStore({
       storePath: path.join(root, "acp", "gateway-node-runtime-store.json"),
     });
+    const reloadedLease = await reloaded.getActiveLease("agent:main:acp:test-session");
 
     expect(await reloaded.getSession("agent:main:acp:test-session")).toMatchObject({
       state: "recovering",
@@ -491,15 +492,107 @@ describe("AcpGatewayStore", () => {
       state: "recovering",
       recoveryReason: "gateway_restart_reconcile",
     });
-    expect(await reloaded.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+    expect(reloadedLease).toMatchObject({
       state: "suspect",
     });
+    expect((reloadedLease?.expiresAt ?? 0) - (reloadedLease?.updatedAt ?? 0)).toBe(30_000);
     expect(await reloaded.listRecoverableSessions()).toMatchObject([
       {
         sessionKey: "agent:main:acp:test-session",
         state: "recovering",
       },
     ]);
+
+    await expect(
+      reloaded.reconcileSuspectLease({
+        sessionKey: "agent:main:acp:test-session",
+        nodeId: "node-1",
+        leaseId: reloadedLease?.leaseId ?? "",
+        leaseEpoch: reloadedLease?.leaseEpoch ?? 0,
+        now: (reloadedLease?.updatedAt ?? 0) + 1,
+        nodeRuntimeSessionId: "runtime-restart",
+        nodeWorkerRunId: "worker-restart",
+        workerProtocolVersion: 1,
+      }),
+    ).resolves.toMatchObject({
+      lease: {
+        state: "active",
+        nodeRuntimeSessionId: "runtime-restart",
+        nodeWorkerRunId: "worker-restart",
+        workerProtocolVersion: 1,
+      },
+      run: {
+        state: "running",
+      },
+      session: {
+        state: "running",
+      },
+    });
+  });
+
+  it("persists lost state when a restart-expired heartbeat is rejected on ingress", async () => {
+    const { root, store } = await createStore();
+    const lease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 11,
+    });
+    await store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      seq: 1,
+      event: {
+        type: "status",
+        text: "running",
+      },
+      now: 12,
+    });
+
+    const reloaded = new AcpGatewayStore({
+      storePath: path.join(root, "acp", "gateway-node-runtime-store.json"),
+    });
+    const reloadedLease = await reloaded.getActiveLease("agent:main:acp:test-session");
+    const expiredTs = (reloadedLease?.expiresAt ?? 0) + 1;
+
+    await expect(
+      reloaded.recordHeartbeat({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: reloadedLease?.leaseId ?? "",
+        leaseEpoch: reloadedLease?.leaseEpoch ?? 0,
+        state: "running",
+        nodeRuntimeSessionId: "runtime-expired",
+        nodeWorkerRunId: "worker-expired",
+        workerProtocolVersion: 1,
+        ts: expiredTs,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_ACTIVE_LEASE_MISSING",
+    });
+
+    expect(await reloaded.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "lost",
+    });
+    expect(await reloaded.getSession("agent:main:acp:test-session")).toMatchObject({
+      state: "recovering",
+      lastRecoveryReason: "lease_expired",
+      activeRunId: "run-1",
+    });
+    expect(await reloaded.getRun("run-1")).toMatchObject({
+      state: "recovering",
+      recoveryReason: "lease_expired",
+    });
   });
 
   it("marks suspect leases as lost after grace expiry without auto-failover", async () => {

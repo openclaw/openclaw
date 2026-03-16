@@ -325,109 +325,115 @@ export class AcpGatewayStore {
     params: AcpWorkerEventEnvelope & { now?: number; leaseTtlMs?: number },
   ): Promise<{ record: AcpGatewayRunEventRecord; duplicate: boolean }> {
     const now = params.now ?? Date.now();
-    return await this.mutateStore(async (store) => {
-      const { run, session, lease } = this.validateActiveLeaseBinding(store, params, now);
-      if (run.terminal) {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_RUN_TERMINATED",
-          `Run ${params.runId} already has a canonical terminal outcome.`,
-        );
-      }
-      const events = store.events[params.runId] ?? [];
-      const existing = events.find((entry) => entry.seq === params.seq);
-      if (existing) {
-        if (
-          existing.leaseId === params.leaseId &&
-          existing.leaseEpoch === params.leaseEpoch &&
-          existing.nodeId === params.nodeId &&
-          stableJson(existing.event) === stableJson(params.event)
-        ) {
-          return { record: existing, duplicate: true };
+    return await this.mutateStore(
+      async (store) => {
+        const { run, session, lease } = this.validateActiveLeaseBinding(store, params, now);
+        if (run.terminal) {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_RUN_TERMINATED",
+            `Run ${params.runId} already has a canonical terminal outcome.`,
+          );
         }
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_DUPLICATE_EVENT_MISMATCH",
-          `Run ${params.runId} already recorded seq ${params.seq} with a different payload.`,
-        );
-      }
-      const expectedSeq = run.highestAcceptedSeq + 1;
-      if (params.seq !== expectedSeq) {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_INVALID_SEQ",
-          `Run ${params.runId} expected seq ${expectedSeq} but received ${params.seq}.`,
-        );
-      }
-      const record: AcpGatewayRunEventRecord = {
-        eventId: `${params.runId}:${params.seq}`,
-        runId: params.runId,
-        sessionKey: params.sessionKey,
-        seq: params.seq,
-        nodeId: params.nodeId,
-        leaseId: params.leaseId,
-        leaseEpoch: params.leaseEpoch,
-        acceptedAt: now,
-        event: params.event,
-      };
-      events.push(record);
-      store.events[params.runId] = events;
-      run.highestAcceptedSeq = params.seq;
-      run.eventCount = events.length;
-      run.updatedAt = now;
-      if (run.state === "accepted" || run.state === "recovering") {
-        run.state = "running";
-      }
-      session.state = "running";
-      session.updatedAt = now;
-      lease.lastHeartbeatAt = now;
-      lease.updatedAt = now;
-      lease.expiresAt = now + (params.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS);
-      return { record, duplicate: false };
-    });
+        const events = store.events[params.runId] ?? [];
+        const existing = events.find((entry) => entry.seq === params.seq);
+        if (existing) {
+          if (
+            existing.leaseId === params.leaseId &&
+            existing.leaseEpoch === params.leaseEpoch &&
+            existing.nodeId === params.nodeId &&
+            stableJson(existing.event) === stableJson(params.event)
+          ) {
+            return { record: existing, duplicate: true };
+          }
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_DUPLICATE_EVENT_MISMATCH",
+            `Run ${params.runId} already recorded seq ${params.seq} with a different payload.`,
+          );
+        }
+        const expectedSeq = run.highestAcceptedSeq + 1;
+        if (params.seq !== expectedSeq) {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_INVALID_SEQ",
+            `Run ${params.runId} expected seq ${expectedSeq} but received ${params.seq}.`,
+          );
+        }
+        const record: AcpGatewayRunEventRecord = {
+          eventId: `${params.runId}:${params.seq}`,
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          seq: params.seq,
+          nodeId: params.nodeId,
+          leaseId: params.leaseId,
+          leaseEpoch: params.leaseEpoch,
+          acceptedAt: now,
+          event: params.event,
+        };
+        events.push(record);
+        store.events[params.runId] = events;
+        run.highestAcceptedSeq = params.seq;
+        run.eventCount = events.length;
+        run.updatedAt = now;
+        if (run.state === "accepted" || run.state === "recovering") {
+          run.state = "running";
+        }
+        session.state = "running";
+        session.updatedAt = now;
+        lease.lastHeartbeatAt = now;
+        lease.updatedAt = now;
+        lease.expiresAt = now + (params.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS);
+        return { record, duplicate: false };
+      },
+      { persistOnErrorCodes: ["ACP_NODE_ACTIVE_LEASE_MISSING"] },
+    );
   }
 
   async resolveTerminal(
     params: AcpWorkerTerminalEnvelope & { now?: number },
   ): Promise<{ run: AcpGatewayRunRecord; duplicate: boolean }> {
     const now = params.now ?? Date.now();
-    return await this.mutateStore(async (store) => {
-      const { run, session } = this.validateActiveLeaseBinding(store, params, now);
-      if (params.finalSeq !== run.highestAcceptedSeq) {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_INVALID_TERMINAL",
-          `Run ${params.runId} terminal finalSeq ${params.finalSeq} does not match highest accepted seq ${run.highestAcceptedSeq}.`,
-        );
-      }
-      const nextTerminal = {
-        terminalEventId: params.terminalEventId,
-        finalSeq: params.finalSeq,
-        kind: params.terminal.kind,
-        ...(params.terminal.stopReason ? { stopReason: params.terminal.stopReason } : {}),
-        ...(params.terminal.errorCode ? { errorCode: params.terminal.errorCode } : {}),
-        ...(params.terminal.errorMessage ? { errorMessage: params.terminal.errorMessage } : {}),
-        acceptedAt: now,
-        nodeId: params.nodeId,
-        leaseId: params.leaseId,
-        leaseEpoch: params.leaseEpoch,
-      } as const;
-      if (run.terminal) {
-        if (sameTerminal(run.terminal, nextTerminal)) {
-          return { run, duplicate: true };
+    return await this.mutateStore(
+      async (store) => {
+        const { run, session } = this.validateActiveLeaseBinding(store, params, now);
+        if (params.finalSeq !== run.highestAcceptedSeq) {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_INVALID_TERMINAL",
+            `Run ${params.runId} terminal finalSeq ${params.finalSeq} does not match highest accepted seq ${run.highestAcceptedSeq}.`,
+          );
         }
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_TERMINAL_CONFLICT",
-          `Run ${params.runId} already has a different canonical terminal outcome.`,
-        );
-      }
-      run.terminal = nextTerminal;
-      run.state = mapTerminalKindToRunState(params.terminal.kind);
-      run.updatedAt = now;
-      session.state = "idle";
-      session.updatedAt = now;
-      session.lastRunId = run.runId;
-      if (session.activeRunId === run.runId) {
-        delete session.activeRunId;
-      }
-      return { run, duplicate: false };
-    });
+        const nextTerminal = {
+          terminalEventId: params.terminalEventId,
+          finalSeq: params.finalSeq,
+          kind: params.terminal.kind,
+          ...(params.terminal.stopReason ? { stopReason: params.terminal.stopReason } : {}),
+          ...(params.terminal.errorCode ? { errorCode: params.terminal.errorCode } : {}),
+          ...(params.terminal.errorMessage ? { errorMessage: params.terminal.errorMessage } : {}),
+          acceptedAt: now,
+          nodeId: params.nodeId,
+          leaseId: params.leaseId,
+          leaseEpoch: params.leaseEpoch,
+        } as const;
+        if (run.terminal) {
+          if (sameTerminal(run.terminal, nextTerminal)) {
+            return { run, duplicate: true };
+          }
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_TERMINAL_CONFLICT",
+            `Run ${params.runId} already has a different canonical terminal outcome.`,
+          );
+        }
+        run.terminal = nextTerminal;
+        run.state = mapTerminalKindToRunState(params.terminal.kind);
+        run.updatedAt = now;
+        session.state = "idle";
+        session.updatedAt = now;
+        session.lastRunId = run.runId;
+        if (session.activeRunId === run.runId) {
+          delete session.activeRunId;
+        }
+        return { run, duplicate: false };
+      },
+      { persistOnErrorCodes: ["ACP_NODE_ACTIVE_LEASE_MISSING"] },
+    );
   }
 
   async reconcileSuspectLease(params: {
@@ -441,64 +447,112 @@ export class AcpGatewayStore {
     workerProtocolVersion?: number;
   }): Promise<AcpGatewayLeaseReconcileRecord> {
     const now = params.now ?? Date.now();
-    return await this.mutateStore(async (store) => {
-      const session = store.sessions[params.sessionKey];
-      if (!session) {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_SESSION_NOT_FOUND",
-          `ACP session ${params.sessionKey} does not exist.`,
-        );
-      }
-      const lease = store.leases[params.sessionKey];
-      if (!lease) {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_ACTIVE_LEASE_MISSING",
-          `ACP session ${params.sessionKey} does not have an active lease.`,
-        );
-      }
-      if (lease.nodeId !== params.nodeId) {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_NODE_MISMATCH",
-          `Worker node ${params.nodeId} does not own session ${params.sessionKey}.`,
-        );
-      }
-      if (lease.leaseEpoch !== params.leaseEpoch) {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_STALE_EPOCH",
-          `Worker epoch ${params.leaseEpoch} is stale for session ${params.sessionKey}; active epoch is ${lease.leaseEpoch}.`,
-        );
-      }
-      if (lease.leaseId !== params.leaseId) {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_STALE_LEASE",
-          `Worker lease ${params.leaseId} is stale for session ${params.sessionKey}; active lease is ${lease.leaseId}.`,
-        );
-      }
-      this.expireSuspectLeaseIfNeeded(store, lease, now);
-      if (lease.state !== "suspect") {
-        throw new AcpGatewayStoreError(
-          "ACP_NODE_ACTIVE_LEASE_MISSING",
-          `ACP session ${params.sessionKey} lease is not recoverable for reconcile; current state is ${lease.state}.`,
-        );
-      }
-      const runId = session.activeRunId;
-      const run = runId ? store.runs[runId] : undefined;
-      if (run && !run.terminal) {
-        this.reactivateLeaseFromWorkerState({
+    return await this.mutateStore(
+      async (store) => {
+        const session = store.sessions[params.sessionKey];
+        if (!session) {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_SESSION_NOT_FOUND",
+            `ACP session ${params.sessionKey} does not exist.`,
+          );
+        }
+        const lease = store.leases[params.sessionKey];
+        if (!lease) {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_ACTIVE_LEASE_MISSING",
+            `ACP session ${params.sessionKey} does not have an active lease.`,
+          );
+        }
+        if (lease.nodeId !== params.nodeId) {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_NODE_MISMATCH",
+            `Worker node ${params.nodeId} does not own session ${params.sessionKey}.`,
+          );
+        }
+        if (lease.leaseEpoch !== params.leaseEpoch) {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_STALE_EPOCH",
+            `Worker epoch ${params.leaseEpoch} is stale for session ${params.sessionKey}; active epoch is ${lease.leaseEpoch}.`,
+          );
+        }
+        if (lease.leaseId !== params.leaseId) {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_STALE_LEASE",
+            `Worker lease ${params.leaseId} is stale for session ${params.sessionKey}; active lease is ${lease.leaseId}.`,
+          );
+        }
+        this.expireSuspectLeaseIfNeeded(store, lease, now);
+        if (lease.state !== "suspect") {
+          throw new AcpGatewayStoreError(
+            "ACP_NODE_ACTIVE_LEASE_MISSING",
+            `ACP session ${params.sessionKey} lease is not recoverable for reconcile; current state is ${lease.state}.`,
+          );
+        }
+        const runId = session.activeRunId;
+        const run = runId ? store.runs[runId] : undefined;
+        if (run && !run.terminal) {
+          this.reactivateLeaseFromWorkerState({
+            session,
+            run,
+            lease,
+            now,
+            state: run.highestAcceptedSeq > 0 ? "running" : "idle",
+            nodeRuntimeSessionId: params.nodeRuntimeSessionId,
+            nodeWorkerRunId: params.nodeWorkerRunId,
+            workerProtocolVersion: params.workerProtocolVersion,
+          });
+        } else {
+          lease.state = "active";
+          lease.updatedAt = now;
+          lease.lastHeartbeatAt = now;
+          lease.expiresAt = now + DEFAULT_LEASE_TTL_MS;
+          if (params.nodeRuntimeSessionId) {
+            lease.nodeRuntimeSessionId = params.nodeRuntimeSessionId;
+          }
+          if (params.nodeWorkerRunId) {
+            lease.nodeWorkerRunId = params.nodeWorkerRunId;
+          }
+          if (typeof params.workerProtocolVersion === "number") {
+            lease.workerProtocolVersion = params.workerProtocolVersion;
+          }
+          session.state = "idle";
+          delete session.lastRecoveryReason;
+          session.updatedAt = now;
+        }
+        return {
           session,
-          run,
+          ...(run ? { run } : {}),
           lease,
-          now,
-          state: run.highestAcceptedSeq > 0 ? "running" : "idle",
-          nodeRuntimeSessionId: params.nodeRuntimeSessionId,
-          nodeWorkerRunId: params.nodeWorkerRunId,
-          workerProtocolVersion: params.workerProtocolVersion,
+        };
+      },
+      { persistOnErrorCodes: ["ACP_NODE_ACTIVE_LEASE_MISSING"] },
+    );
+  }
+
+  async recordHeartbeat(params: AcpWorkerHeartbeatEnvelope): Promise<AcpGatewayLeaseRecord> {
+    return await this.mutateStore(
+      async (store) => {
+        const { session, run, lease } = this.validateActiveLeaseBinding(store, params, params.ts, {
+          allowSuspect: true,
+          requireCurrentRun: true,
+          requireNonTerminalRun: true,
         });
-      } else {
-        lease.state = "active";
-        lease.updatedAt = now;
-        lease.lastHeartbeatAt = now;
-        lease.expiresAt = now + DEFAULT_LEASE_TTL_MS;
+        if (lease.state === "suspect") {
+          this.reactivateLeaseFromWorkerState({
+            session,
+            run,
+            lease,
+            now: params.ts,
+            state: params.state,
+            nodeRuntimeSessionId: params.nodeRuntimeSessionId,
+            nodeWorkerRunId: params.nodeWorkerRunId,
+            workerProtocolVersion: params.workerProtocolVersion,
+          });
+          return lease;
+        }
+        lease.lastHeartbeatAt = params.ts;
+        lease.updatedAt = params.ts;
+        lease.expiresAt = params.ts + DEFAULT_LEASE_TTL_MS;
         if (params.nodeRuntimeSessionId) {
           lease.nodeRuntimeSessionId = params.nodeRuntimeSessionId;
         }
@@ -508,52 +562,10 @@ export class AcpGatewayStore {
         if (typeof params.workerProtocolVersion === "number") {
           lease.workerProtocolVersion = params.workerProtocolVersion;
         }
-        session.state = "idle";
-        delete session.lastRecoveryReason;
-        session.updatedAt = now;
-      }
-      return {
-        session,
-        ...(run ? { run } : {}),
-        lease,
-      };
-    });
-  }
-
-  async recordHeartbeat(params: AcpWorkerHeartbeatEnvelope): Promise<AcpGatewayLeaseRecord> {
-    return await this.mutateStore(async (store) => {
-      const { session, run, lease } = this.validateActiveLeaseBinding(store, params, params.ts, {
-        allowSuspect: true,
-        requireCurrentRun: true,
-        requireNonTerminalRun: true,
-      });
-      if (lease.state === "suspect") {
-        this.reactivateLeaseFromWorkerState({
-          session,
-          run,
-          lease,
-          now: params.ts,
-          state: params.state,
-          nodeRuntimeSessionId: params.nodeRuntimeSessionId,
-          nodeWorkerRunId: params.nodeWorkerRunId,
-          workerProtocolVersion: params.workerProtocolVersion,
-        });
         return lease;
-      }
-      lease.lastHeartbeatAt = params.ts;
-      lease.updatedAt = params.ts;
-      lease.expiresAt = params.ts + DEFAULT_LEASE_TTL_MS;
-      if (params.nodeRuntimeSessionId) {
-        lease.nodeRuntimeSessionId = params.nodeRuntimeSessionId;
-      }
-      if (params.nodeWorkerRunId) {
-        lease.nodeWorkerRunId = params.nodeWorkerRunId;
-      }
-      if (typeof params.workerProtocolVersion === "number") {
-        lease.workerProtocolVersion = params.workerProtocolVersion;
-      }
-      return lease;
-    });
+      },
+      { persistOnErrorCodes: ["ACP_NODE_ACTIVE_LEASE_MISSING"] },
+    );
   }
 
   async markNodeDisconnected(params: {
@@ -625,12 +637,25 @@ export class AcpGatewayStore {
     });
   }
 
-  private async mutateStore<T>(mutate: (store: AcpGatewayStoreData) => Promise<T> | T): Promise<T> {
+  private async mutateStore<T>(
+    mutate: (store: AcpGatewayStoreData) => Promise<T> | T,
+    options?: { persistOnErrorCodes?: AcpGatewayStoreError["code"][] },
+  ): Promise<T> {
     return await this.withLock(async () => {
       const store = await this.readStore();
-      const result = await mutate(store);
-      await this.writeStore(store);
-      return cloneValue(result);
+      try {
+        const result = await mutate(store);
+        await this.writeStore(store);
+        return cloneValue(result);
+      } catch (error) {
+        if (
+          error instanceof AcpGatewayStoreError &&
+          options?.persistOnErrorCodes?.includes(error.code)
+        ) {
+          await this.writeStore(store);
+        }
+        throw error;
+      }
     });
   }
 
@@ -819,7 +844,6 @@ export class AcpGatewayStore {
         `ACP session ${params.sessionKey} lease is not active for worker progress; current state is ${lease.state}.`,
       );
     }
-    lease.updatedAt = now;
     return { session, run, lease };
   }
 
@@ -890,9 +914,10 @@ export class AcpGatewayStore {
     const now = Date.now();
     let changed = false;
     for (const lease of Object.values(store.leases)) {
-      if (lease.state === "active") {
+      if (lease.state === "active" || lease.state === "suspect") {
         lease.state = "suspect";
         lease.updatedAt = now;
+        lease.expiresAt = now + DEFAULT_LEASE_TTL_MS;
         changed = true;
       }
     }

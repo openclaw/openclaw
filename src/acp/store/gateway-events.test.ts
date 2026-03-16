@@ -252,7 +252,7 @@ describe("AcpGatewayNodeRuntime", () => {
     });
   });
 
-  it("rejects suspect-lease terminals until explicit reconcile succeeds", async () => {
+  it("accepts same-node heartbeat resume after restart within the refreshed grace window", async () => {
     const { runtime } = await createRuntime();
     const store = runtime.store;
 
@@ -267,6 +267,74 @@ describe("AcpGatewayNodeRuntime", () => {
       runId: "run-1",
       requestId: "req-1",
       now: 10,
+    });
+    await store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      seq: 1,
+      event: {
+        type: "status",
+        text: "running",
+      },
+      now: 11,
+    });
+
+    const restarted = new AcpGatewayNodeRuntime();
+    const restartedLease = await restarted.store.getActiveLease("agent:main:acp:test-session");
+
+    expect(restartedLease).toMatchObject({
+      state: "suspect",
+    });
+    expect((restartedLease?.expiresAt ?? 0) - (restartedLease?.updatedAt ?? 0)).toBe(30_000);
+
+    await expect(
+      restarted.ingestNodeEvent("node-1", {
+        event: "acp.worker.heartbeat",
+        payloadJSON: JSON.stringify({
+          nodeId: "node-1",
+          sessionKey: "agent:main:acp:test-session",
+          runId: "run-1",
+          leaseId: restartedLease?.leaseId ?? "",
+          leaseEpoch: restartedLease?.leaseEpoch ?? 0,
+          state: "running",
+          nodeRuntimeSessionId: "runtime-restart",
+          nodeWorkerRunId: "worker-restart",
+          workerProtocolVersion: 1,
+          ts: (restartedLease?.updatedAt ?? 0) + 1,
+        }),
+      }),
+    ).resolves.toBe(true);
+
+    expect(await restarted.store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "active",
+      nodeRuntimeSessionId: "runtime-restart",
+      nodeWorkerRunId: "worker-restart",
+      workerProtocolVersion: 1,
+    });
+    expect(await restarted.store.getRun("run-1")).toMatchObject({
+      state: "running",
+    });
+  });
+
+  it("rejects suspect-lease terminals until explicit reconcile succeeds", async () => {
+    const { runtime } = await createRuntime();
+    const store = runtime.store;
+    const now = Date.now();
+
+    const lease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now,
     });
     const worker = new FakeAcpNodeWorker("node-1");
 
@@ -290,7 +358,7 @@ describe("AcpGatewayNodeRuntime", () => {
       {
         kind: "disconnect",
         reason: "node_disconnected",
-        now: 20,
+        now: now + 10,
       },
     ]);
 
@@ -323,7 +391,7 @@ describe("AcpGatewayNodeRuntime", () => {
         sessionKey: "agent:main:acp:test-session",
         leaseId: lease.leaseId,
         leaseEpoch: lease.leaseEpoch,
-        now: 21,
+        now: now + 11,
         workerProtocolVersion: 1,
       },
       {

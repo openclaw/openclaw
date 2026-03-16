@@ -216,17 +216,18 @@ describe("handleNodeEvent ACP worker ingress", () => {
 
   it("recovers through gateway disconnect plus heartbeat reconnect before accepting a terminal", async () => {
     const runtime = await createRuntime();
+    const now = Date.now();
     const lease = await runtime.store.acquireLease({
       sessionKey: "agent:main:acp:test-session",
       nodeId: "node-1",
       leaseId: "lease-1",
-      now: 10,
+      now,
     });
     await runtime.store.startRun({
       sessionKey: "agent:main:acp:test-session",
       runId: "run-1",
       requestId: "req-1",
-      now: 10,
+      now,
     });
     await handleNodeEvent(buildCtx(), "node-1", {
       event: "acp.worker.event",
@@ -243,8 +244,9 @@ describe("handleNodeEvent ACP worker ingress", () => {
         },
       }),
     });
+    const disconnectNow = Date.now();
     await handleNodeDisconnect("node-1", {
-      now: 11,
+      now: disconnectNow,
     });
 
     await expect(
@@ -279,7 +281,7 @@ describe("handleNodeEvent ACP worker ingress", () => {
         nodeRuntimeSessionId: "runtime-1",
         nodeWorkerRunId: "worker-1",
         workerProtocolVersion: 1,
-        ts: 12,
+        ts: disconnectNow + 1,
       }),
     });
 
