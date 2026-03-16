@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/web-search-brave",
+  "name": "@openclaw/brave-plugin",
   "version": "2026.3.14",
   "private": true,
-  "description": "OpenClaw Brave web search provider plugin",
+  "description": "OpenClaw Brave plugin",
   "type": "module",
   "openclaw": {
     "extensions": [

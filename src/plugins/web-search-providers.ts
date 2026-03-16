@@ -7,11 +7,11 @@ import type { WebSearchProviderPlugin } from "./types.js";
 const log = createSubsystemLogger("plugins");
 
 const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
-  "web-search-brave",
-  "web-search-gemini",
-  "web-search-grok",
+  "brave",
+  "google",
   "moonshot",
-  "web-search-perplexity",
+  "perplexity",
+  "xai",
 ] as const;
 
 function withBundledWebSearchAllowlistCompat(
