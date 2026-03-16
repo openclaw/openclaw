@@ -51,6 +51,15 @@ function cleanLine(text: string, maxChars = 220): string {
   return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars - 1)}…`;
 }
 
+function formatInlineCode(text: string): string {
+  const longestBacktickRun = Math.max(
+    0,
+    ...[...text.matchAll(/`+/g)].map((match) => match[0].length),
+  );
+  const fence = "`".repeat(longestBacktickRun + 1);
+  return `${fence}${text}${fence}`;
+}
+
 function isErrnoCode(err: unknown, code: string): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === code;
 }
@@ -193,12 +202,14 @@ export function buildSreRuntimeGuardrailContextFromTranscript(params: {
   }
 
   if (currentUserArtifact && hasDataIncidentSignal) {
-    const singleVaultGraphqlEvidenceScript = singleVaultGraphqlEvidenceScriptPath();
+    const singleVaultGraphqlEvidenceScript = formatInlineCode(
+      singleVaultGraphqlEvidenceScriptPath(),
+    );
     guidance.push(
       "- For single-vault API/data incidents, compare one healthy same-chain control vault, direct onchain values, and public surfaces (`vaultV2ByAddress`, `vaultV2s`, `vaultV2transactions`) before calling it chain-wide.",
     );
     guidance.push(
-      `- Use \`${singleVaultGraphqlEvidenceScript}\` when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.`,
+      `- Use ${singleVaultGraphqlEvidenceScript} when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.`,
     );
     guidance.push(
       "- Do not call an ingestion/provenance root cause confirmed until you add one DB row/provenance fact and one job-path or simulation fact for the affected entity.",

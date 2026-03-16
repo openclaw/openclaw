@@ -98,6 +98,33 @@ describe("buildSreRuntimeGuardrailContextFromTranscript", () => {
     }
   });
 
+  it("renders helper overrides with display-safe code fences", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "single-vault-helper-"));
+    const helperPath = path.join(tmpDir, "single-vault-`evidence`.sh");
+    await fs.writeFile(helperPath, "#!/usr/bin/env bash\n");
+    await fs.chmod(helperPath, 0o755);
+    vi.stubEnv("SINGLE_VAULT_GRAPHQL_EVIDENCE_SCRIPT_PATH", helperPath);
+    const transcriptText = `
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"query VaultV2ByAddress { vaultV2ByAddress(address: \\"0xE18d7f0C6aaba1E600fF680459a357C3B3CfdB34\\", chainId: 999) { apy netApy } } sentryEventId=abc123"}]}}
+`;
+    try {
+      const context = buildSreRuntimeGuardrailContextFromTranscript({
+        agentId: "sre",
+        prompt: "look into this vault v2 graphql apy issue",
+        transcriptText,
+      });
+
+      const helperLine = context
+        ?.split("\n")
+        .find((line) => line.includes("when possible so the exact query replay"));
+      expect(helperLine).toContain(helperPath);
+      expect(helperLine).toMatch(/^- Use ``.*`` when possible so the exact query replay/);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to the default helper path for blank or relative env overrides", () => {
     const transcriptText = `
 {"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Root cause: vaultByAddress factory.chain is null"}]}}

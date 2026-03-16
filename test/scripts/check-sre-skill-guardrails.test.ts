@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { validateMorphoSreSkillText } from "../../scripts/check-sre-skill-guardrails.ts";
 
@@ -43,6 +44,14 @@ const VALID_SKILL = `
 describe("check-sre-skill-guardrails", () => {
   it("accepts a skill text with all required guardrails", () => {
     expect(validateMorphoSreSkillText(VALID_SKILL)).toEqual([]);
+  });
+
+  it("accepts the checked-in Morpho SRE skill text", async () => {
+    const skillText = await fs.readFile(
+      new URL("../../skills/morpho-sre/SKILL.md", import.meta.url),
+      "utf8",
+    );
+    expect(validateMorphoSreSkillText(skillText)).toEqual([]);
   });
 
   it("reports missing guardrails", () => {
