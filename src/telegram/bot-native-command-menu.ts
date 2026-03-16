@@ -145,24 +145,27 @@ async function writeCachedCommandHash(
   hash: string,
 ): Promise<void> {
   const filePath = resolveCommandHashPath(accountId, botIdentity);
-      try {
+  try {
     const dirPath = path.dirname(filePath);
-    
+
     // Guard against invalid directory paths that could result from malformed
     // state directory resolution (e.g., incomplete Windows extended-length
-    // path prefix "\\?\" without a drive letter).
+    // path prefix "\\?" without a drive letter).
     // Fixes #44199: ENOENT mkdir '\\?' on Windows
     //
-    // Check for:
+    // Rejects:
     // - Empty or current-directory paths
-    // - Bare/incomplete Windows UNC/extended-length prefixes (\\?, \\?\)
-    //   Note: Valid extended-length paths like \\?\C:\... should pass through
-    // - Non-absolute paths (relative paths should not appear here)
+    // - Bare/incomplete Windows extended-length prefixes: "\\?" or "\\?\"
+    //   (path.resolve normalises "\\?" to "\?", so we check both forms)
+    // - Non-absolute paths on the current platform OR on Windows
+    //   (path.win32.isAbsolute is used so that valid \\?\C:\... paths are
+    //    accepted even when running the check on a Linux CI host)
+    const isAbsolute = path.isAbsolute(dirPath) || path.win32.isAbsolute(dirPath);
     if (
       !dirPath ||
       dirPath === "." ||
-      /^\\\\[?]([/\\]?$|$)/.test(dirPath) ||
-      !path.isAbsolute(dirPath)
+      /^\\?\\[?][/\\]?$/.test(dirPath) ||
+      !isAbsolute
     ) {
       throw new Error(`Invalid directory path for command hash: "${dirPath}"`);
     }
