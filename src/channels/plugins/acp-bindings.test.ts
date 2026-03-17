@@ -5,6 +5,7 @@ const resolveAgentConfigMock = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
+const getChannelPluginCatalogEntryMock = vi.hoisted(() => vi.fn());
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
 const loadOpenClawPluginsMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
@@ -17,6 +18,10 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("./index.js", () => ({
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+}));
+
+vi.mock("./catalog.js", () => ({
+  getChannelPluginCatalogEntry: (...args: unknown[]) => getChannelPluginCatalogEntryMock(...args),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -99,6 +104,7 @@ describe("plugin ACP binding resolution", () => {
     resolveDefaultAgentIdMock.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
     getChannelPluginMock.mockReset();
+    getChannelPluginCatalogEntryMock.mockReset().mockReturnValue(undefined);
     applyPluginAutoEnableMock.mockReset().mockImplementation(({ config }: { config: unknown }) => ({
       config,
     }));
@@ -232,5 +238,60 @@ describe("plugin ACP binding resolution", () => {
         workspaceDir: "/tmp/codex",
       }),
     );
+  });
+
+  it("uses catalog plugin ids when they differ from the channel id", async () => {
+    const plugin = createDiscordAcpPlugin();
+    const cfg = createConfig();
+    getChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginCatalogEntryMock.mockReturnValue({
+      id: "discord",
+      pluginId: "@vendor/discord-runtime",
+    });
+    loadOpenClawPluginsMock.mockReturnValue({
+      channels: [{ plugin }],
+    });
+    const acpBindings = await importAcpBindings("plugin-id-scope");
+
+    const resolved = acpBindings.resolveConfiguredAcpBindingRecord({
+      cfg: cfg as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1479098716916023408",
+    });
+
+    expect(resolved?.spec.channel).toBe("discord");
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["@vendor/discord-runtime", "discord"],
+      }),
+    );
+  });
+
+  it("memoizes snapshot-loaded channel plugins per config", async () => {
+    const plugin = createDiscordAcpPlugin();
+    const cfg = createConfig();
+    getChannelPluginMock.mockReturnValue(undefined);
+    loadOpenClawPluginsMock.mockReturnValue({
+      channels: [{ plugin }],
+    });
+    const acpBindings = await importAcpBindings("memoized-snapshot");
+
+    const first = acpBindings.resolveConfiguredAcpBindingRecord({
+      cfg: cfg as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1479098716916023408",
+    });
+    const second = acpBindings.resolveConfiguredAcpBindingRecord({
+      cfg: cfg as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1479098716916023408",
+    });
+
+    expect(first?.spec.channel).toBe("discord");
+    expect(second?.spec.channel).toBe("discord");
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -25,9 +25,21 @@ import {
   normalizeAccountId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { getChannelPluginCatalogEntry } from "./catalog.js";
 import { getChannelPlugin } from "./index.js";
 
 type ChannelPluginLike = NonNullable<ReturnType<typeof getChannelPlugin>>;
+type ConfiguredBindingSnapshotContext = {
+  config: OpenClawConfig;
+  workspaceDirs: string[];
+  channelPluginCache: Map<string, ChannelPluginLike | null>;
+  scopedPluginIdsCache: Map<string, string[]>;
+};
+
+const configuredBindingSnapshotContextCache = new WeakMap<
+  OpenClawConfig,
+  ConfiguredBindingSnapshotContext
+>();
 
 function findChannelPlugin(params: {
   registry:
@@ -84,6 +96,46 @@ function listConfiguredBindingSnapshotWorkspaces(cfg: OpenClawConfig): {
   return { config: autoEnabled, workspaceDirs };
 }
 
+function resolveConfiguredBindingSnapshotContext(
+  cfg: OpenClawConfig,
+): ConfiguredBindingSnapshotContext {
+  const cached = configuredBindingSnapshotContextCache.get(cfg);
+  if (cached) {
+    return cached;
+  }
+  const { config, workspaceDirs } = listConfiguredBindingSnapshotWorkspaces(cfg);
+  const context: ConfiguredBindingSnapshotContext = {
+    config,
+    workspaceDirs,
+    channelPluginCache: new Map(),
+    scopedPluginIdsCache: new Map(),
+  };
+  configuredBindingSnapshotContextCache.set(cfg, context);
+  return context;
+}
+
+function resolveScopedPluginIdsForChannelSnapshot(params: {
+  context: ConfiguredBindingSnapshotContext;
+  workspaceDir: string;
+  channel: string;
+}): string[] {
+  const cacheKey = `${params.workspaceDir}\n${params.channel}`;
+  const cached = params.context.scopedPluginIdsCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const catalogEntry = getChannelPluginCatalogEntry(params.channel, {
+    workspaceDir: params.workspaceDir,
+  });
+  const pluginIds = Array.from(
+    new Set(
+      [catalogEntry?.pluginId, params.channel].filter((entry): entry is string => Boolean(entry)),
+    ),
+  );
+  params.context.scopedPluginIdsCache.set(cacheKey, pluginIds);
+  return pluginIds;
+}
+
 function resolveConfiguredBindingChannelPluginSnapshot(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -92,15 +144,22 @@ function resolveConfiguredBindingChannelPluginSnapshot(params: {
   if (!normalized) {
     return undefined;
   }
-  const { config, workspaceDirs } = listConfiguredBindingSnapshotWorkspaces(params.cfg);
-  for (const workspaceDir of workspaceDirs) {
+  const context = resolveConfiguredBindingSnapshotContext(params.cfg);
+  if (context.channelPluginCache.has(normalized)) {
+    return context.channelPluginCache.get(normalized) ?? undefined;
+  }
+  for (const workspaceDir of context.workspaceDirs) {
     try {
       const registry = loadOpenClawPlugins({
-        config,
+        config: context.config,
         workspaceDir,
         activate: false,
         cache: false,
-        onlyPluginIds: [normalized],
+        onlyPluginIds: resolveScopedPluginIdsForChannelSnapshot({
+          context,
+          workspaceDir,
+          channel: normalized,
+        }),
         includeSetupOnlyChannelPlugins: true,
         preferSetupRuntimeForChannelPlugins: true,
         runtimeOptions: {
@@ -112,12 +171,14 @@ function resolveConfiguredBindingChannelPluginSnapshot(params: {
         channel: normalized,
       });
       if (plugin?.acpBindings) {
+        context.channelPluginCache.set(normalized, plugin);
         return plugin;
       }
     } catch {
       continue;
     }
   }
+  context.channelPluginCache.set(normalized, null);
   return undefined;
 }
 
