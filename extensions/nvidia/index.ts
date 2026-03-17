@@ -1,4 +1,5 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
 import { buildNvidiaProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "nvidia";
@@ -17,18 +18,12 @@ const nvidiaPlugin = {
       auth: [],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...buildNvidiaProvider(),
-              apiKey,
-            },
-          };
-        },
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildNvidiaProvider,
+          }),
       },
     });
   },

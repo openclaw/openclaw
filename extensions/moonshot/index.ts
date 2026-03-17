@@ -7,10 +7,11 @@ import {
   getScopedCredentialValue,
   setScopedCredentialValue,
 } from "../../src/agents/tools/web-search-plugin-factory.js";
-import { moonshotProvider } from "../../src/media-understanding/providers/moonshot/index.js";
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
   applyMoonshotConfig,
   applyMoonshotConfigCn,
@@ -75,22 +76,13 @@ const moonshotPlugin = {
       ],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
-          const explicitBaseUrl =
-            typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
-          return {
-            provider: {
-              ...buildMoonshotProvider(),
-              ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-              apiKey,
-            },
-          };
-        },
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildMoonshotProvider,
+            allowExplicitBaseUrl: true,
+          }),
       },
       wrapStreamFn: (ctx) => {
         const thinkingType = resolveMoonshotThinkingType({
@@ -100,7 +92,7 @@ const moonshotPlugin = {
         return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
       },
     });
-    api.registerMediaUnderstandingProvider(moonshotProvider);
+    api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "kimi",

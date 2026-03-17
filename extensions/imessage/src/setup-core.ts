@@ -1,9 +1,5 @@
+import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
 import {
-  applyAccountNameToChannelSection,
-  DEFAULT_ACCOUNT_ID,
-  formatDocsLink,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
@@ -16,6 +12,7 @@ import type {
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
 } from "../../../src/plugin-sdk-internal/setup.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
@@ -98,66 +95,23 @@ async function promptIMessageAllowFrom(params: {
   });
 }
 
-export const imessageSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          imessage: {
-            ...next.channels?.imessage,
-            enabled: true,
-            ...buildIMessageSetupPatch(input),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        imessage: {
-          ...next.channels?.imessage,
-          enabled: true,
-          accounts: {
-            ...next.channels?.imessage?.accounts,
-            [accountId]: {
-              ...next.channels?.imessage?.accounts?.[accountId],
-              enabled: true,
-              ...buildIMessageSetupPatch(input),
-            },
-          },
-        },
-      },
-    };
-  },
+export const imessageSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
+  channelKey: channel,
+  buildPatch: (input) => buildIMessageSetupPatch(input),
+});
+
+type IMessageSetupWizardHandlers = {
+  resolveStatusLines: NonNullable<ChannelSetupWizard["status"]>["resolveStatusLines"];
+  resolveSelectionHint: NonNullable<ChannelSetupWizard["status"]>["resolveSelectionHint"];
+  resolveQuickstartScore: NonNullable<ChannelSetupWizard["status"]>["resolveQuickstartScore"];
+  shouldPromptCliPath: NonNullable<
+    NonNullable<ChannelSetupWizard["textInputs"]>[number]["shouldPrompt"]
+  >;
 };
 
-export function createIMessageSetupWizardProxy(
-  loadWizard: () => Promise<{ imessageSetupWizard: ChannelSetupWizard }>,
-) {
+export function createIMessageSetupWizardBase(
+  handlers: IMessageSetupWizardHandlers,
+): ChannelSetupWizard {
   const imessageDmPolicy: ChannelSetupDmPolicy = {
     label: "iMessage",
     channel,
@@ -193,12 +147,9 @@ export function createIMessageSetupWizardProxy(
             account.config.region,
           );
         }),
-      resolveStatusLines: async (params) =>
-        (await loadWizard()).imessageSetupWizard.status.resolveStatusLines?.(params) ?? [],
-      resolveSelectionHint: async (params) =>
-        await (await loadWizard()).imessageSetupWizard.status.resolveSelectionHint?.(params),
-      resolveQuickstartScore: async (params) =>
-        await (await loadWizard()).imessageSetupWizard.status.resolveQuickstartScore?.(params),
+      resolveStatusLines: handlers.resolveStatusLines,
+      resolveSelectionHint: handlers.resolveSelectionHint,
+      resolveQuickstartScore: handlers.resolveQuickstartScore,
     },
     credentials: [],
     textInputs: [
@@ -209,12 +160,7 @@ export function createIMessageSetupWizardProxy(
           resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
         currentValue: ({ cfg, accountId }) =>
           resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
-        shouldPrompt: async (params) => {
-          const input = (await loadWizard()).imessageSetupWizard.textInputs?.find(
-            (entry) => entry.inputKey === "cliPath",
-          );
-          return (await input?.shouldPrompt?.(params)) ?? false;
-        },
+        shouldPrompt: handlers.shouldPromptCliPath,
         confirmCurrentValue: false,
         applyCurrentValue: true,
         helpTitle: "iMessage",
@@ -234,4 +180,23 @@ export function createIMessageSetupWizardProxy(
     dmPolicy: imessageDmPolicy,
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
+}
+
+export function createIMessageSetupWizardProxy(
+  loadWizard: () => Promise<{ imessageSetupWizard: ChannelSetupWizard }>,
+) {
+  return createIMessageSetupWizardBase({
+    resolveStatusLines: async (params) =>
+      (await loadWizard()).imessageSetupWizard.status.resolveStatusLines?.(params) ?? [],
+    resolveSelectionHint: async (params) =>
+      await (await loadWizard()).imessageSetupWizard.status.resolveSelectionHint?.(params),
+    resolveQuickstartScore: async (params) =>
+      await (await loadWizard()).imessageSetupWizard.status.resolveQuickstartScore?.(params),
+    shouldPromptCliPath: async (params) => {
+      const input = (await loadWizard()).imessageSetupWizard.textInputs?.find(
+        (entry) => entry.inputKey === "cliPath",
+      );
+      return (await input?.shouldPrompt?.(params)) ?? false;
+    },
+  });
 }
