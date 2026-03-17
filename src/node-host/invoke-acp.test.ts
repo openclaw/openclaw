@@ -1,3 +1,7 @@
+import syncFs from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as runtimeRegistryTesting,
@@ -11,6 +15,7 @@ import type {
   AcpRuntimeHandle,
   AcpRuntimeTurnInput,
 } from "../acp/runtime/types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { __testing, handleAcpInvokeCommand } from "./invoke-acp.js";
 import type { NodeInvokeRequestPayload } from "./invoke.js";
 
@@ -210,6 +215,48 @@ function buildDeps(sendNodeEvent?: (event: string, payload: unknown) => Promise<
 }
 
 describe("handleAcpInvokeCommand", () => {
+  it("creates the node-host profile workspace before starting ACP runtime services", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-host-acp-"));
+    const workspaceDir = path.join(root, "workspace-acp-e2e");
+    const stop = vi.fn(async () => {});
+    let existsAtLoad = false;
+    let existsAtStart = false;
+
+    try {
+      const handle = await __testing.startNodeHostAcpRuntimeServicesForTests({
+        config: {
+          acp: {
+            backend: "acpx",
+          },
+        },
+        workspaceDir,
+        ensureAgentWorkspace: async (params) => {
+          await fs.mkdir(params?.dir ?? workspaceDir, { recursive: true });
+          return { dir: params?.dir ?? workspaceDir };
+        },
+        loadOpenClawPlugins: ({ workspaceDir: resolvedWorkspaceDir }) => {
+          existsAtLoad = syncFs.existsSync(resolvedWorkspaceDir);
+          return createEmptyPluginRegistry();
+        },
+        startPluginServices: async ({ workspaceDir: resolvedWorkspaceDir }) => {
+          existsAtStart = syncFs.existsSync(resolvedWorkspaceDir ?? "");
+          return {
+            stop,
+          };
+        },
+      });
+
+      expect(syncFs.existsSync(workspaceDir)).toBe(true);
+      expect(existsAtLoad).toBe(true);
+      expect(existsAtStart).toBe(true);
+
+      await handle.stop();
+      expect(stop).toHaveBeenCalledTimes(1);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("runs a real local runtime turn and emits canonical ACP worker traffic", async () => {
     const runtime = new FakeNodeHostRuntime();
     registerAcpRuntimeBackend({

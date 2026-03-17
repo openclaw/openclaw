@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { requireAcpRuntimeBackend, type AcpRuntimeBackend } from "../acp/runtime/registry.js";
 import type { AcpRuntime, AcpRuntimeHandle, AcpRuntimeStatus } from "../acp/runtime/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { NodeInvokeRequestPayload } from "./invoke.js";
 
@@ -139,6 +140,21 @@ let activeCancelAcknowledgementTimeoutMs = DEFAULT_ACTIVE_CANCEL_ACK_TIMEOUT_MS;
 
 let acpRuntimeServicesInit: Promise<void> | null = null;
 let acpRuntimeServicesHandle: PluginServicesHandle | null = null;
+
+type StartNodeHostAcpRuntimeServicesDeps = {
+  config: OpenClawConfig;
+  workspaceDir: string;
+  ensureAgentWorkspace: (params?: {
+    dir?: string;
+    ensureBootstrapFiles?: boolean;
+  }) => Promise<{ dir: string }>;
+  loadOpenClawPlugins: (params: { config: OpenClawConfig; workspaceDir: string }) => PluginRegistry;
+  startPluginServices: (params: {
+    registry: PluginRegistry;
+    config: OpenClawConfig;
+    workspaceDir?: string;
+  }) => Promise<PluginServicesHandle>;
+};
 
 type AcpInvokeCommandDeps = {
   ensureRuntimeReady?: () => Promise<void>;
@@ -336,25 +352,25 @@ async function ensureNodeHostAcpRuntimeReady(): Promise<void> {
     acpRuntimeServicesInit = (async () => {
       const [
         { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+        { ensureAgentWorkspace },
         { loadConfig },
         { loadOpenClawPlugins },
         { startPluginServices },
       ] = await Promise.all([
         import("../agents/agent-scope.js"),
+        import("../agents/workspace.js"),
         import("../config/config.js"),
         import("../plugins/loader.js"),
         import("../plugins/services.js"),
       ]);
       const config = loadConfig();
       const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-      const registry = loadOpenClawPlugins({
+      acpRuntimeServicesHandle = await startNodeHostAcpRuntimeServices({
         config,
         workspaceDir,
-      });
-      acpRuntimeServicesHandle = await startPluginServices({
-        registry,
-        config,
-        workspaceDir,
+        ensureAgentWorkspace,
+        loadOpenClawPlugins,
+        startPluginServices,
       });
     })().catch((error) => {
       acpRuntimeServicesInit = null;
@@ -362,6 +378,21 @@ async function ensureNodeHostAcpRuntimeReady(): Promise<void> {
     });
   }
   await acpRuntimeServicesInit;
+}
+
+async function startNodeHostAcpRuntimeServices(
+  params: StartNodeHostAcpRuntimeServicesDeps,
+): Promise<PluginServicesHandle> {
+  await params.ensureAgentWorkspace({ dir: params.workspaceDir });
+  const registry = params.loadOpenClawPlugins({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+  return await params.startPluginServices({
+    registry,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
 }
 
 function buildNodeRuntimeSessionId(handle: AcpRuntimeHandle): string {
@@ -1228,5 +1259,8 @@ export const __testing = {
     acpRuntimeServicesHandle = null;
     acpRuntimeServicesInit = null;
     await handle?.stop();
+  },
+  async startNodeHostAcpRuntimeServicesForTests(params: StartNodeHostAcpRuntimeServicesDeps) {
+    return await startNodeHostAcpRuntimeServices(params);
   },
 };
