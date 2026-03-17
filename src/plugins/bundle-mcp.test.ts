@@ -11,6 +11,53 @@ function getServerArgs(value: unknown): unknown[] | undefined {
   return isRecord(value) && Array.isArray(value.args) ? value.args : undefined;
 }
 
+async function realpathIfAbsolute(value: string): Promise<string> {
+  if (!path.isAbsolute(value)) {
+    return value;
+  }
+  let current = value;
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      const resolved = await fs.realpath(current);
+      return suffix.length === 0 ? resolved : path.join(resolved, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return value;
+      }
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+async function normalizeServerDefinition(value: unknown) {
+  if (!isRecord(value)) {
+    return value;
+  }
+  return {
+    ...value,
+    command:
+      typeof value.command === "string" ? await realpathIfAbsolute(value.command) : value.command,
+    args: Array.isArray(value.args)
+      ? await Promise.all(
+          value.args.map(async (entry) =>
+            typeof entry === "string" ? await realpathIfAbsolute(entry) : entry,
+          ),
+        )
+      : value.args,
+    cwd: typeof value.cwd === "string" ? await realpathIfAbsolute(value.cwd) : value.cwd,
+    env:
+      isRecord(value.env) && typeof value.env.PLUGIN_ROOT === "string"
+        ? {
+            ...value.env,
+            PLUGIN_ROOT: await realpathIfAbsolute(value.env.PLUGIN_ROOT),
+          }
+        : value.env,
+  };
+}
+
 const tempHarness = createBundleMcpTempHarness();
 
 afterEach(async () => {
@@ -56,7 +103,7 @@ describe("loadEnabledBundleMcpConfig", () => {
         throw new Error("expected bundled MCP args to include the server path");
       }
       expect(await fs.realpath(loadedServerPath)).toBe(resolvedServerPath);
-      expect(loadedServer.cwd).toBe(resolvedPluginRoot);
+      expect(await realpathIfAbsolute(String(loadedServer.cwd))).toBe(resolvedPluginRoot);
     } finally {
       env.restore();
     }
@@ -181,7 +228,7 @@ describe("loadEnabledBundleMcpConfig", () => {
       const resolvedPluginRoot = await fs.realpath(pluginRoot);
 
       expect(loaded.diagnostics).toEqual([]);
-      expect(loaded.config.mcpServers.inlineProbe).toEqual({
+      expect(await normalizeServerDefinition(loaded.config.mcpServers.inlineProbe)).toEqual({
         command: path.join(resolvedPluginRoot, "bin", "server.sh"),
         args: [
           path.join(resolvedPluginRoot, "servers", "probe.mjs"),
