@@ -1,17 +1,11 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/matrix";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/matrix";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { matrixPlugin } from "./src/channel.js";
 import { setMatrixRuntime } from "./src/runtime.js";
 
-const plugin = {
+export default defineChannelPluginEntry({
   id: "matrix",
   name: "Matrix",
-  description: "Matrix channel plugin (matrix-js-sdk)",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setMatrixRuntime(api.runtime);
-    api.registerChannel({ plugin: matrixPlugin });
-  },
-};
-
-export default plugin;
+  description: "Matrix channel plugin",
+  plugin: matrixPlugin,
+  setRuntime: setMatrixRuntime,
+});

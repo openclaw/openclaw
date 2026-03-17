@@ -397,8 +397,10 @@ export function wrapToolMutationLock(
       });
       workspaceMutationLocks.set(lockKey, current);
 
+      let ranMutation = false;
       try {
         await waitForQueuedMutation(previous, signal);
+        ranMutation = true;
         const lockFn = await getWithWorkspaceLock();
         return await lockFn(
           lockKey,
@@ -413,7 +415,18 @@ export function wrapToolMutationLock(
           },
         );
       } finally {
-        release?.();
+        if (ranMutation) {
+          // Mutation completed (or failed) — release so next waiter can proceed.
+          release?.();
+        } else {
+          // Aborted/errored before mutation ran — splice ourselves out of the
+          // queue by forwarding our promise to resolve only when our predecessor
+          // completes, preserving ordering for later waiters.
+          void previous.then(
+            () => release?.(),
+            () => release?.(),
+          );
+        }
         if (workspaceMutationLocks.get(lockKey) === current) {
           workspaceMutationLocks.delete(lockKey);
         }

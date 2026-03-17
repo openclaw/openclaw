@@ -1,11 +1,11 @@
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { HttpsProxyAgent } from "https-proxy-agent";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket from "ws";
-import type { DiscordAccountConfig } from "../../../../src/config/types.js";
-import { danger } from "../../../../src/globals.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
@@ -20,7 +20,7 @@ type DiscordGatewayFetch = (
 ) => Promise<DiscordGatewayMetadataResponse>;
 
 export function resolveDiscordGatewayIntents(
-  intentsConfig?: import("../../../../src/config/types.discord.js").DiscordIntentsConfig,
+  intentsConfig?: import("openclaw/plugin-sdk/config-runtime").DiscordIntentsConfig,
 ): number {
   let intents =
     GatewayIntents.Guilds |

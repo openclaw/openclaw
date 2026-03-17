@@ -25,7 +25,7 @@ const requiredPathGroups = [
   "dist/plugin-sdk/root-alias.cjs",
   "dist/build-info.json",
 ];
-const forbiddenPrefixes = ["dist/OpenClaw.app/"];
+const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. Keep enough headroom for the current pack while
 // failing fast if duplicate/shim content sneaks back into the release artifact.
@@ -341,31 +341,47 @@ const requiredPluginSdkExports = [
   "DEFAULT_GROUP_HISTORY_LIMIT",
 ];
 
-function checkPluginSdkExports() {
-  const distPath = resolve("dist", "plugin-sdk", "index.js");
-  let content: string;
+async function collectDistPluginSdkExports(): Promise<Set<string>> {
+  const pluginSdkDir = resolve("dist", "plugin-sdk");
+  let entries: string[];
   try {
-    content = readFileSync(distPath, "utf8");
+    entries = readdirSync(pluginSdkDir)
+      .filter((entry) => entry.endsWith(".js"))
+      .toSorted();
   } catch {
-    console.error("release-check: dist/plugin-sdk/index.js not found (build missing?).");
+    console.error("release-check: dist/plugin-sdk directory not found (build missing?).");
     process.exit(1);
-    return;
+    return new Set();
   }
 
-  const exportMatch = content.match(/export\s*\{([^}]+)\}\s*;?\s*$/);
-  if (!exportMatch) {
-    console.error("release-check: could not find export statement in dist/plugin-sdk/index.js.");
-    process.exit(1);
-    return;
+  const exportedNames = new Set<string>();
+  for (const entry of entries) {
+    const content = readFileSync(join(pluginSdkDir, entry), "utf8");
+    for (const match of content.matchAll(/export\s*\{([^}]+)\}(?:\s*from\s*["'][^"']+["'])?/g)) {
+      const names = match[1]?.split(",") ?? [];
+      for (const name of names) {
+        const parts = name.trim().split(/\s+as\s+/);
+        const exportName = (parts[parts.length - 1] || "").trim();
+        if (exportName) {
+          exportedNames.add(exportName);
+        }
+      }
+    }
+    for (const match of content.matchAll(
+      /export\s+(?:const|function|class|let|var)\s+([A-Za-z0-9_$]+)/g,
+    )) {
+      const exportName = match[1]?.trim();
+      if (exportName) {
+        exportedNames.add(exportName);
+      }
+    }
   }
 
-  const exportedNames = new Set(
-    exportMatch[1].split(",").map((s) => {
-      const parts = s.trim().split(/\s+as\s+/);
-      return (parts[parts.length - 1] || "").trim();
-    }),
-  );
+  return exportedNames;
+}
 
+async function checkPluginSdkExports() {
+  const exportedNames = await collectDistPluginSdkExports();
   const missingExports = requiredPluginSdkExports.filter((name) => !exportedNames.has(name));
   if (missingExports.length > 0) {
     console.error("release-check: missing critical plugin-sdk exports (#27569):");
@@ -376,10 +392,10 @@ function checkPluginSdkExports() {
   }
 }
 
-function main() {
+async function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
-  checkPluginSdkExports();
+  await checkPluginSdkExports();
   checkBundledExtensionRootDependencyMirrors();
 
   const results = runPackDry();
@@ -423,5 +439,8 @@ function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main();
+  void main().catch((error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  });
 }

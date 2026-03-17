@@ -31,6 +31,7 @@ function loadRootAliasWithStubs(options?: {
 }) {
   let createJitiCalls = 0;
   let jitiLoadCalls = 0;
+  let lastJitiOptions: Record<string, unknown> | undefined;
   const loadedSpecifiers: string[] = [];
   const monolithicExports = options?.monolithicExports ?? {
     slowHelper: () => "loaded",
@@ -58,8 +59,9 @@ function loadRootAliasWithStubs(options?: {
     }
     if (id === "jiti") {
       return {
-        createJiti() {
+        createJiti(_filename: string, jitiOptions?: Record<string, unknown>) {
           createJitiCalls += 1;
+          lastJitiOptions = jitiOptions;
           return (specifier: string) => {
             jitiLoadCalls += 1;
             loadedSpecifiers.push(specifier);
@@ -78,6 +80,9 @@ function loadRootAliasWithStubs(options?: {
     },
     get jitiLoadCalls() {
       return jitiLoadCalls;
+    },
+    get lastJitiOptions() {
+      return lastJitiOptions;
     },
     loadedSpecifiers,
   };
@@ -122,6 +127,7 @@ describe("plugin-sdk root alias", () => {
     expect("slowHelper" in lazyRootSdk).toBe(true);
     expect(lazyModule.createJitiCalls).toBe(1);
     expect(lazyModule.jitiLoadCalls).toBe(1);
+    expect(lazyModule.lastJitiOptions?.tryNative).toBe(true);
     expect((lazyRootSdk.slowHelper as () => string)()).toBe("loaded");
     expect(Object.keys(lazyRootSdk)).toContain("slowHelper");
     expect(Object.getOwnPropertyDescriptor(lazyRootSdk, "slowHelper")).toBeDefined();

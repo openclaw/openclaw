@@ -1,0 +1,46 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
+
+const tempDirs: string[] = [];
+const originalCwd = process.cwd();
+const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+function makeRepoRoot(prefix: string): string {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(repoRoot);
+  return repoRoot;
+}
+
+afterEach(() => {
+  process.chdir(originalCwd);
+  if (originalBundledDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledDir;
+  }
+  for (const dir of tempDirs.splice(0, tempDirs.length)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("resolveBundledPluginsDir", () => {
+  it("prefers the staged runtime bundled plugin tree from the package root", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-dir-runtime-");
+    fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    process.chdir(repoRoot);
+
+    expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
+      fs.realpathSync(path.join(repoRoot, "dist-runtime", "extensions")),
+    );
+  });
+});

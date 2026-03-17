@@ -1,8 +1,6 @@
-import {
-  collectAllowlistProviderRestrictSendersWarnings,
-  formatAllowFromLowercase,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildChannelConfigSchema,
@@ -14,6 +12,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/feishu";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/feishu";
+import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import {
   resolveFeishuAccount,
   resolveFeishuCredentials,
@@ -43,9 +42,12 @@ const meta: ChannelMeta = {
   order: 70,
 };
 
-async function loadFeishuChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
+type FeishuChannelRuntime = typeof import("./channel.runtime.js").feishuChannelRuntime;
+
+const loadFeishuChannelRuntime = createLazyRuntimeSurface(
+  () => import("./channel.runtime.js"),
+  ({ feishuChannelRuntime }) => feishuChannelRuntime,
+);
 
 function setFeishuNamedAccountEnabled(
   cfg: ClawdbotConfig,

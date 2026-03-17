@@ -1,5 +1,4 @@
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
 import { nostrPlugin } from "./src/channel.js";
 
-export default {
-  plugin: nostrPlugin,
-};
+export default defineSetupPluginEntry(nostrPlugin);

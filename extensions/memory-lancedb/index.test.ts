@@ -18,6 +18,18 @@ const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
 const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
+type MemoryPluginTestConfig = {
+  embedding?: {
+    apiKey?: string;
+    model?: string;
+    dimensions?: number;
+  };
+  dbPath?: string;
+  captureMaxChars?: number;
+  autoCapture?: boolean;
+  autoRecall?: boolean;
+};
+
 function installTmpDirHarness(params: { prefix: string }) {
   let tmpDir = "";
   let dbPath = "";
@@ -51,7 +63,7 @@ describe("memory plugin e2e", () => {
       },
       dbPath: getDbPath(),
       ...overrides,
-    });
+    }) as MemoryPluginTestConfig | undefined;
   }
 
   test("memory plugin registers and initializes correctly", async () => {
@@ -89,7 +101,7 @@ describe("memory plugin e2e", () => {
         apiKey: "${TEST_MEMORY_API_KEY}",
       },
       dbPath: getDbPath(),
-    });
+    }) as MemoryPluginTestConfig | undefined;
 
     expect(config?.embedding?.apiKey).toBe("test-key-123");
 
