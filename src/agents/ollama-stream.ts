@@ -391,8 +391,13 @@ export function buildAssistantMessage(
 
 // Returns a fresh RegExp instance each time to avoid shared mutable `lastIndex`
 // state across call-sites (extractMarkdownToolCalls + content stripping).
+//
+// The inner pattern uses [^`] to prevent matching across fence boundaries:
+// a single match cannot span two separate fenced blocks, so an explanatory
+// JSON block followed by a real tool-call block cannot be merged into one
+// corrupt payload.
 function makeMarkdownToolCallRe(): RegExp {
-  return /```(?:json)?\s*\n?\s*\{[\s\S]*?"name"\s*:\s*"([^"]+)"[\s\S]*?\}\s*\n?```/g;
+  return /```(?:json)?\s*\n?\s*(\{[^`]*?"name"\s*:\s*"[^"]+"[^`]*?\})\s*\n?```/g;
 }
 
 export function extractMarkdownToolCalls(content: string): OllamaToolCall[] {
@@ -400,10 +405,9 @@ export function extractMarkdownToolCalls(content: string): OllamaToolCall[] {
   const re = makeMarkdownToolCallRe();
   let match: RegExpExecArray | null;
   while ((match = re.exec(content)) !== null) {
-    const raw = match[0]
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/, "")
-      .trim();
+    // match[1] is the captured JSON object (inside the fence), extracted
+    // directly by the capturing group — no need for post-hoc string replacement.
+    const raw = (match[1] ?? "").trim();
     try {
       const parsed = parseJsonPreservingUnsafeIntegers(raw) as Record<string, unknown>;
       const name = typeof parsed.name === "string" ? parsed.name : undefined;
@@ -562,34 +566,43 @@ export function createOllamaStreamFn(
           }),
         });
 
-        // Track whether we have emitted any text_delta events.
-        // If the Markdown fallback later strips content, we need to know
-        // whether to suppress streaming (to avoid UI flicker).
-        let hasEmittedTextDelta = false;
+        // ── Dual-mode streaming strategy ──
+        //
+        // When the request includes tool definitions (ollamaTools.length > 0),
+        // some open-source models embed the tool call as a JSON fenced block
+        // inside the content stream rather than emitting a structured
+        // `tool_calls` field.  We cannot know until the stream is complete
+        // whether the content contains such a Markdown tool call.
+        //
+        // To avoid emitting text_delta events that contain raw JSON (which
+        // btw.ts accumulates additively and cannot "un-append"), we use a
+        // buffered strategy when tools are present:
+        //
+        //   • tools present  → buffer all deltas; emit nothing until done.
+        //   • no tools       → emit text_delta immediately (live typewriter).
+        //
+        // This eliminates the streamed-partial vs. final-content discrepancy
+        // without requiring a "corrective" event that consumers cannot handle.
+        const bufferForToolCheck = ollamaTools.length > 0;
 
         for await (const chunk of parseNdjsonStream(reader)) {
-          // ── Real-time text_delta events (manusilized: incremental streaming) ──
-          // Emit each content fragment immediately so the UI can render a
-          // live typewriter effect instead of waiting for the full response.
-          // NOTE: If the Markdown tool-call fallback later activates, the `done`
-          // event will carry cleaned content that differs from the streamed
-          // partials. UI consumers MUST treat the `done` message content as
-          // authoritative and discard streamed partials when a tool call is
-          // present (i.e. when stopReason === "toolUse").
           if (chunk.message?.content) {
             const delta = chunk.message.content;
             accumulatedContent += delta;
-            hasEmittedTextDelta = true;
-            stream.push({
-              type: "text_delta",
-              contentIndex,
-              delta,
-              partial: buildAssistantMessageWithZeroUsage({
-                model,
-                content: [{ type: "text", text: accumulatedContent }],
-                stopReason: "stop",
-              }),
-            });
+            if (!bufferForToolCheck) {
+              // ── Real-time text_delta (no-tools path) ──
+              // Emit each fragment immediately for a live typewriter effect.
+              stream.push({
+                type: "text_delta",
+                contentIndex,
+                delta,
+                partial: buildAssistantMessageWithZeroUsage({
+                  model,
+                  content: [{ type: "text", text: accumulatedContent }],
+                  stopReason: "stop",
+                }),
+              });
+            }
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
@@ -614,7 +627,12 @@ export function createOllamaStreamFn(
         // If the model produced no native tool_calls but embedded a JSON tool
         // call inside a fenced code block, extract it as a fallback so that
         // open-source models that don't support structured output still work.
-        if (accumulatedToolCalls.length === 0 && accumulatedContent) {
+        //
+        // Guard: only attempt Markdown extraction when the request actually
+        // included tool definitions.  Without this guard a model that returns
+        // an explanatory JSON code block (e.g. a README snippet) would be
+        // misidentified as a tool call, corrupting the conversation.
+        if (accumulatedToolCalls.length === 0 && accumulatedContent && ollamaTools.length > 0) {
           const markdownCalls = extractMarkdownToolCalls(accumulatedContent);
           if (markdownCalls.length > 0) {
             log.debug(
@@ -625,24 +643,29 @@ export function createOllamaStreamFn(
             // user doesn't see raw JSON in the chat bubble.
             const cleanedContent = accumulatedContent.replace(makeMarkdownToolCallRe(), "").trim();
             finalResponse.message.content = cleanedContent;
+          }
+        }
 
-            // If we already emitted text_delta events that included the raw JSON
-            // fenced blocks, send a corrective content_reset event so UI consumers
-            // can replace the progressively-rendered text with the cleaned version.
-            // This resolves the streamed-partial vs. final-content discrepancy
-            // identified in the code review.
-            if (hasEmittedTextDelta && cleanedContent !== accumulatedContent) {
-              stream.push({
-                type: "text_delta",
-                contentIndex,
-                delta: "",
-                partial: buildAssistantMessageWithZeroUsage({
-                  model,
-                  content: [{ type: "text", text: cleanedContent }],
-                  stopReason: "stop",
-                }),
-              });
-            }
+        // ── Flush buffered text_delta events (tools path) ──
+        // When tools were present we buffered all deltas to allow the Markdown
+        // fallback to strip JSON blocks before anything is emitted.  Now that
+        // we know the final visible content, emit a single text_delta so that
+        // consumers (btw.ts) receive the clean text without raw JSON.
+        // If a tool call was extracted the content may be empty; skip in that
+        // case so we don't emit a spurious empty delta.
+        if (bufferForToolCheck && accumulatedToolCalls.length === 0) {
+          const visibleContent = finalResponse.message.content ?? "";
+          if (visibleContent) {
+            stream.push({
+              type: "text_delta",
+              contentIndex,
+              delta: visibleContent,
+              partial: buildAssistantMessageWithZeroUsage({
+                model,
+                content: [{ type: "text", text: visibleContent }],
+                stopReason: "stop",
+              }),
+            });
           }
         }
 
