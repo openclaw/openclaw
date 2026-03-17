@@ -105,9 +105,10 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
     // directories that path_helper(8) would provide in a login shell.
     const etcDirs = readEtcPaths(platform);
     const hardcoded = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
-    // Deduplicate: hardcoded first, then any extras from /etc/paths{,.d/*}.
-    const seen = new Set(hardcoded);
-    return [...hardcoded, ...etcDirs.filter((d) => !seen.has(d))];
+    // /etc/paths entries first to match path_helper(8) precedence, then
+    // hardcoded fallbacks for dirs not covered by /etc/paths.
+    const seen = new Set(etcDirs);
+    return [...etcDirs, ...hardcoded.filter((d) => !seen.has(d))];
   }
   if (platform === "linux") {
     return ["/usr/local/bin", "/usr/bin", "/bin"];
