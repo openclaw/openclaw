@@ -364,14 +364,18 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 
 ### [Discord](https://docs.openclaw.ai/channels/discord)
 
-- Set `DISCORD_BOT_TOKEN` or `channels.discord.token` (env wins).
+- Set `DISCORD_BOT_TOKEN` or `channels.discord.token`.
 - Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `channels.discord.allowFrom`, `channels.discord.guilds`, or `channels.discord.mediaMaxMb` as needed.
 
 ```json5
 {
   channels: {
     discord: {
-      token: "1234abcd",
+      token: {
+        source: "env",
+        provider: "default",
+        id: "DISCORD_BOT_TOKEN",
+      },
     },
   },
 }
