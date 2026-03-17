@@ -83,7 +83,7 @@ export type BuiltInAuthChoiceGroupId =
   | "byteplus"
   | "custom";
 export type AuthChoiceGroupId = BuiltInAuthChoiceGroupId | (string & {});
-export type GatewayAuthChoice = "token" | "password";
+export type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
 export type TailscaleMode = "off" | "serve" | "funnel";
@@ -153,6 +153,16 @@ export type OnboardOptions = {
   gatewayToken?: string;
   gatewayTokenRefEnv?: string;
   gatewayPassword?: string;
+  /** Comma-separated or array of trusted proxy IPs for trusted-proxy auth */
+  gatewayTrustedProxies?: string | string[];
+  /** Header name containing user identity when using trusted-proxy auth */
+  gatewayTrustedProxyUserHeader?: string;
+  /** Comma-separated or array of required headers for trusted-proxy auth */
+  gatewayTrustedProxyRequiredHeaders?: string | string[];
+  /** Comma-separated or array of allowed origins for the Control UI */
+  gatewayControlUiAllowedOrigins?: string | string[];
+  /** Comma-separated or array of allowed users for trusted-proxy auth */
+  gatewayTrustedProxyAllowUsers?: string | string[];
   tailscale?: TailscaleMode;
   tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;

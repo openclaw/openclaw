@@ -95,6 +95,31 @@ openclaw onboard --non-interactive \
   --accept-risk
 ```
 
+Trusted proxy (non-interactive)
+
+You can configure trusted-proxy gateway auth non-interactively when running `openclaw onboard` by supplying the following flags. These write the equivalent keys into `gateway.auth.trustedProxy` and `gateway.trustedProxies` in the persisted config.
+
+- `--gateway-auth trusted-proxy` — enable trusted-proxy auth mode.
+- `--gateway-trusted-proxies <list>` — comma-separated list of trusted proxy IPs (required for `trusted-proxy`).
+- `--gateway-trusted-proxy-user-header <header>` — header name containing the authenticated user identity (default: `x-forwarded-user`).
+- `--gateway-trusted-proxy-required-headers <list>` — optional comma-separated list of headers the proxy must supply (e.g. `x-forwarded-proto,x-forwarded-host`).
+- `--gateway-trusted-proxy-allow-users <list>` — optional comma-separated list of allowed user identities; when set only these users may access the gateway. Leave empty to allow any authenticated proxy user.
+- `--gateway-controlui-allowed-origins <list>` — optional comma-separated list of origins to add to `gateway.controlUi.allowedOrigins` (Control UI access).
+
+Example (write config without waiting for a running gateway):
+
+```bash
+openclaw onboard --non-interactive --accept-risk \
+  --mode local \
+  --gateway-auth trusted-proxy \
+  --gateway-trusted-proxies "127.0.0.1,10.0.0.1" \
+  --gateway-trusted-proxy-user-header "X-Forwarded-User" \
+  --gateway-trusted-proxy-required-headers "x-forwarded-proto,x-forwarded-host" \
+  --gateway-trusted-proxy-allow-users "admin@example.com,nick@example.com" \
+  --gateway-controlui-allowed-origins "https://your-host.example.com" \
+  --skip-health
+```
+
 Non-interactive local gateway health:
 
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before it exits successfully.
