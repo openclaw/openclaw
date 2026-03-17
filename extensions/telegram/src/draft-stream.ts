@@ -282,12 +282,21 @@ export function createTelegramDraftStream(params: {
         // HTML rejected on first send — retry as plain text.
         parseModeDisabledForGeneration = sendGeneration;
         params.warn?.("telegram stream preview send: HTML parse error, retrying as plain text");
-        ({ sent } = await sendRenderedMessageWithThreadFallback({
-          renderedText: plainText,
-          renderedParseMode: undefined,
-          fallbackWarnMessage:
-            "telegram stream preview send (plain) failed with message_thread_id, retrying without thread",
-        }));
+        try {
+          ({ sent } = await sendRenderedMessageWithThreadFallback({
+            renderedText: plainText,
+            renderedParseMode: undefined,
+            fallbackWarnMessage:
+              "telegram stream preview send (plain) failed with message_thread_id, retrying without thread",
+          }));
+        } catch (plainErr) {
+          // Plain text retry also failed — reset messageSendAttempted when the
+          // error guarantees the message was never delivered.
+          if (isSafeToRetrySendError(plainErr) || isTelegramClientRejection(plainErr)) {
+            messageSendAttempted = false;
+          }
+          throw plainErr;
+        }
       } else {
         // Pre-connect failures (DNS, refused) and explicit Telegram rejections (4xx)
         // guarantee the message was never delivered — clear the flag so
