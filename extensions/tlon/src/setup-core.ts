@@ -1,6 +1,6 @@
 import {
-  applyAccountNameToChannelSection,
   patchScopedAccountConfig,
+  prepareScopedSetupConfig,
 } from "../../../src/channels/plugins/setup-helpers.js";
 import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import type { ChannelSetupInput } from "../../../src/channels/plugins/types.core.js";
@@ -29,7 +29,7 @@ export function applyTlonSetupConfig(params: {
 }): OpenClawConfig {
   const { cfg, accountId, input } = params;
   const useDefault = accountId === DEFAULT_ACCOUNT_ID;
-  const namedConfig = applyAccountNameToChannelSection({
+  const namedConfig = prepareScopedSetupConfig({
     cfg,
     channelKey: channel,
     accountId,
@@ -69,7 +69,7 @@ export function applyTlonSetupConfig(params: {
 export const tlonSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
+    prepareScopedSetupConfig({
       cfg,
       channelKey: channel,
       accountId,

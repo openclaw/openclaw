@@ -1,6 +1,6 @@
 import {
-  applyAccountNameToChannelSection,
   patchScopedAccountConfig,
+  prepareScopedSetupConfig,
 } from "../../../src/channels/plugins/setup-helpers.js";
 import {
   mergeAllowFromEntries,
@@ -115,7 +115,7 @@ export function clearNextcloudTalkAccountFields(
   } as CoreConfig;
 }
 
-async function promptNextcloudTalkAllowFrom(params: {
+export async function promptNextcloudTalkAllowFrom(params: {
   cfg: CoreConfig;
   prompter: WizardPrompter;
   accountId: string;
@@ -127,7 +127,7 @@ async function promptNextcloudTalkAllowFrom(params: {
       "1) Check the Nextcloud admin panel for user IDs",
       "2) Or look at the webhook payload logs when someone messages",
       "3) User IDs are typically lowercase usernames in Nextcloud",
-      `Docs: ${formatDocsLink("/channels/nextcloud-talk", "nextcloud-talk")}`,
+      `Docs: ${formatDocsLink("/channels/nextcloud-talk", "channels/nextcloud-talk")}`,
     ].join("\n"),
     "Nextcloud Talk user id",
   );
@@ -158,7 +158,7 @@ async function promptNextcloudTalkAllowFrom(params: {
   });
 }
 
-async function promptNextcloudTalkAllowFromForAccount(params: {
+export async function promptNextcloudTalkAllowFromForAccount(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;
@@ -174,7 +174,7 @@ async function promptNextcloudTalkAllowFromForAccount(params: {
   });
 }
 
-const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
+export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   label: "Nextcloud Talk",
   channel,
   policyKey: "channels.nextcloud-talk.dmPolicy",
@@ -187,7 +187,7 @@ const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
 export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
+    prepareScopedSetupConfig({
       cfg,
       channelKey: channel,
       accountId,
@@ -208,7 +208,7 @@ export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   },
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const setupInput = input as NextcloudSetupInput;
-    const namedConfig = applyAccountNameToChannelSection({
+    const namedConfig = prepareScopedSetupConfig({
       cfg,
       channelKey: channel,
       accountId,

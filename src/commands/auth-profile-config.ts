@@ -1,3 +1,4 @@
+import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 export function applyAuthProfileConfig(
@@ -10,7 +11,7 @@ export function applyAuthProfileConfig(
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
-  const normalizedProvider = params.provider.toLowerCase();
+  const normalizedProvider = normalizeProviderIdForAuth(params.provider);
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -21,7 +22,7 @@ export function applyAuthProfileConfig(
   };
 
   const configuredProviderProfiles = Object.entries(cfg.auth?.profiles ?? {})
-    .filter(([, profile]) => profile.provider.toLowerCase() === normalizedProvider)
+    .filter(([, profile]) => normalizeProviderIdForAuth(profile.provider) === normalizedProvider)
     .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
 
   // Maintain `auth.order` when it already exists. Additionally, if we detect
