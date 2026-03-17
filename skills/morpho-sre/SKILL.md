@@ -21,7 +21,10 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - In-cluster: prefer serviceaccount auth and plain `kubectl ...`; do not depend on `~/.kube/config`
 - Shell portability:
   - default command syntax must be POSIX `sh` compatible
+  - prefer direct tool commands over unnecessary `bash -lc` wrappers
   - do not use `set -o pipefail`, arrays, or other Bash-only features unless command is explicitly wrapped with `bash -lc '...'`
+  - when `bash -lc` is required and the payload contains quoted patterns (for example `rg` with `"`), wrap the outer payload in double quotes and escape inner double quotes instead of nesting raw single quotes
+  - prefer `python3 - <<'PY'`; only use `python` after a live `command -v python` check
 - Forked tests / anvil / replay / SDK repros: use Morpho cached RPC first (`skills/foundry-evm-debug/scripts/rpc-url.sh <chainId>`). Never use a repo's default RPC provider for forked simulations when the cached endpoint is available. If a forked run hits HTTP 429 or `failed to get fork block`, switch to cached Morpho RPC before concluding anything about application logic.
 - GitHub auth preflight (before any repo/PR work):
   1. Check if `/home/node/.openclaw/bin/gh` wrapper exists and is on PATH — use it (auto-mints App token)
@@ -50,6 +53,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - In monitored Slack incident threads, human follow-ups after the first bot reply must pass ingress and trigger fresh live checks; do not treat them like duplicate alert updates.
 - If an incident thread drifts into unrelated design/history questions, redirect that discussion to a DM or new thread instead of mixing it into RCA.
 - Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
+- Reply with conclusions only. Never include investigation steps, intermediate reasoning, tool output summaries, or step-by-step analysis in the thread reply. The reply must read as a polished status update, not a live investigation log. All investigation work happens silently; only the final answer goes to Slack.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement — do not split into acknowledge-then-fail-later.
 - If a human challenges or contradicts a technical claim in any thread (incident, bug-report, or general), immediately re-investigate with fresh live evidence. If a human questions the proposed fix or PR in-thread, re-open RCA before defending the fix. Respond in the same thread with updated evidence, a revised conclusion, or an explicit confirmation/disproof statement. Never go silent after a challenge.
@@ -174,7 +178,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 6. Cross-check k8s state + logs + metrics + traces.
 7. Clone related repo and inspect suspect commit/config only after live evidence or clear config-driven need.
 8. If fix path is clear, name the concrete follow-up PR candidate first: repo, path, title, and validation command.
-9. Create or reuse a Linear follow-up ticket before opening a PR; use that ticket's `gitBranchName` as the PR branch.
+9. Create or reuse a Linear follow-up ticket before opening a PR; use that ticket's `branchName` as the PR branch.
 10. If confidence is high and fix is scoped, create the fix PR automatically and link it back to Linear.
 11. Return evidence, hypotheses, confidence, suggested PRs, Linear ticket, and PR URL (or blocked reason).
 
@@ -347,6 +351,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Auto-intake the incident root, then continue answering human follow-ups (when @mentioned or the bot already replied) in the same thread with fresh evidence.
 - Always answer in the incident thread under alert root; never post RCA in channel root.
 - Keep thread reply concise (8-12 lines, no prose wall).
+- Reply with conclusions only. Never include investigation steps, intermediate reasoning, tool output summaries, or step-by-step analysis in the thread reply. The reply must read as a polished status update, not a live investigation log.
 - Use Slack mrkdwn only:
   - bold = `*text*`, inline code = `` `text` ``
   - never use Markdown `**text**` or heading syntax (`##`, `###`)
@@ -372,7 +377,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - If fix is scoped/reversible and confidence >= `AUTO_PR_MIN_CONFIDENCE`, create PR via `autofix-pr.sh` and post PR URL in-thread.
 - If fix is not open-PR ready yet, still name 1-2 concrete PR candidates with repo/path/title/validation.
 - For every incident follow-up that needs code/config work, create or reuse a Linear ticket first and mention it in-thread.
-- Any PR opened from incident follow-up must use the Linear ticket `gitBranchName` as the branch and add the PR URL back to the ticket.
+- Any PR opened from incident follow-up must use the Linear ticket `branchName` as the branch and add the PR URL back to the ticket.
 - If a thread question is vague/underspecified:
   - Do not refuse with “insufficient context” only.
   - Infer likely intent from latest triage sections (`impact_scope`, `signal_summary`, `rca_result`, `top_*` tables).
@@ -432,7 +437,7 @@ If `command -v` fails or PATH looks wrong, stop and reply in blocked mode instea
 # Inspect issue
 /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue get PLA-318
 
-# Create issue and return identifier + gitBranchName
+# Create issue and return identifier + branchName
 /home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh issue create \
   --title "Raise public replica memory limit after DB OOM incident" \
   --file /tmp/pla-318.md \
@@ -786,7 +791,7 @@ Use this flow only when:
 - confidence threshold (`AUTO_PR_MIN_CONFIDENCE`)
 - secret-pattern scan in staged diff before push
 - create/reuse Linear ticket when missing (`AUTO_PR_LINEAR_*`)
-- branch = Linear `gitBranchName`
+- branch = Linear `branchName`
 - conventional PR title carries the Linear ticket scope token
 - authenticated push + `gh pr create`
 - tracking label `openclaw-sre` on PR (`AUTO_PR_TRACKING_LABEL`)

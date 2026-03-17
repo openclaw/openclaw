@@ -36,6 +36,8 @@ jq -e '
 
 printf '%s' "$PROMPT_TEXT" | rg -F 'If current code, query output, or live evidence disproves an earlier theory' >/dev/null
 printf '%s\n' "$PROMPT_TEXT" | grep -Fx 'Monitoring incident intake mode:' >/dev/null
+printf '%s' "$PROMPT_TEXT" | rg -F 'use the ticket `branchName` as the PR branch' >/dev/null
+printf '%s' "$PROMPT_TEXT" | rg -F 'only fall back to `python` after a live `command -v python` check' >/dev/null
 
 jq -e '
   .channels.slack.channels["#bug-report"].systemPrompt

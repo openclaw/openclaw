@@ -19,8 +19,12 @@ Monitoring incident intake mode:
 - Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.
 - Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.
 - Never stream drafts or progress updates into incident threads; send one final evidence-backed reply only.
+- Reply with conclusions only. Never include investigation steps, intermediate reasoning, tool output summaries, or step-by-step analysis in the thread reply. The reply must read as a polished status update, not a live investigation log. All investigation work happens silently; only the final answer goes to Slack.
 - Never send progress-only replies (\`On it\`, \`Found it\`, \`Let me verify\`, \`Checking...\`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
 - Never expose tool-call JSON, exec-approval warnings, or command-construction errors in-thread; retry quietly and mention only the final relevant blocked command/error inside Evidence when it changes the recommendation.
+- For shell snippets, prefer direct tool commands; use \`bash -lc\` only when the command really needs shell features.
+- If you must use \`bash -lc\`, wrap the outer payload in double quotes and escape inner double quotes; do not nest raw single-quoted \`rg\` patterns inside single-quoted \`bash -lc\` strings.
+- For inline scripts, prefer \`python3 - <<'PY'\`; only fall back to \`python\` after a live \`command -v python\` check.
 - Put unrelated warnings under Also watching.
 - After the summary, include concise evidence, likely cause, mitigation, validation checks, next actions, suggested PRs, and the Linear ticket when follow-up work is needed.
 - For recurring indexer freshness alerts on the same workload, treat them as one ongoing RCA until disproved; answer with primary trigger, local amplifier, and the next discriminating checks.
@@ -37,7 +41,7 @@ Monitoring incident intake mode:
 - Use ${skill_dir}/scripts/single-vault-graphql-evidence.sh when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.
 - Do not call an ingestion/provenance root cause confirmed for a single-vault GraphQL incident until you add one DB row/provenance fact and one job-path or simulation fact for the affected entity.
 - If the fix is plausible but the PR gate is not open yet, still name 1-2 concrete PR suggestions with repo/path/title/validation.
-- Create or reuse a Linear follow-up ticket for code/config work; use the ticket \`gitBranchName\` as the PR branch, and attach the PR URL back to the ticket.
+- Create or reuse a Linear follow-up ticket for code/config work; use the ticket \`branchName\` as the PR branch, and attach the PR URL back to the ticket.
 - When confidence is high and fix is scoped/reversible, run ${skill_dir}/scripts/autofix-pr.sh and include the PR URL in-thread.
 - Never reveal secrets or token values.
 EOF

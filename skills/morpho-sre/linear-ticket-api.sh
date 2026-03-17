@@ -262,7 +262,7 @@ issue_json_by_ref() {
   local issue_ref="$1"
   local vars_json response
   vars_json="$(jq -nc --arg id "$issue_ref" '{ id: $id }')"
-  response="$(linear_graphql 'query($id:String!){ issue(id:$id){ id identifier title description url gitBranchName state { id name } labels { nodes { id name } } } }' "$vars_json")"
+  response="$(linear_graphql 'query($id:String!){ issue(id:$id){ id identifier title description url branchName gitBranchName: branchName state { id name } labels { nodes { id name } } } }' "$vars_json")"
   printf '%s\n' "$response"
 }
 
@@ -305,13 +305,13 @@ cmd_issue_get() {
 
 cmd_issue_get_branch() {
   local issue_ref="$1"
-  local response issue_id git_branch_name
+  local response issue_id branch_name
   response="$(issue_json_by_ref "$issue_ref")"
   issue_id="$(printf '%s\n' "$response" | jq -r '.data.issue.id // empty')"
   [[ -n "$issue_id" ]] || die "issue not found: ${issue_ref}"
-  git_branch_name="$(printf '%s\n' "$response" | jq -r '.data.issue.gitBranchName // empty')"
-  [[ -n "$git_branch_name" ]] || die "issue missing gitBranchName: ${issue_ref}"
-  printf '%s\n' "$git_branch_name"
+  branch_name="$(printf '%s\n' "$response" | jq -r '.data.issue.branchName // .data.issue.gitBranchName // empty')"
+  [[ -n "$branch_name" ]] || die "issue missing branchName/gitBranchName: ${issue_ref} (check Linear schema compatibility)"
+  printf '%s\n' "$branch_name"
 }
 
 cmd_issue_create() {
@@ -325,7 +325,7 @@ cmd_issue_create() {
   local priority_ref="${8:-}"
   local labels_raw="${9:-}"
   local description team_id project_id assignee_id state_id priority_value label_ids_json
-  local vars_json response success identifier url git_branch_name
+  local vars_json response success identifier url branch_name
 
   [[ -n "$title" ]] || die "missing issue title"
   [[ -n "$team_ref" ]] || die "missing team reference"
@@ -378,22 +378,23 @@ cmd_issue_create() {
         + (if ($labelIds | length) > 0 then { labelIds: $labelIds } else {} end))
       }'
   )"
-  response="$(linear_graphql 'mutation($input:IssueCreateInput!){ issueCreate(input:$input){ success issue { id identifier title url gitBranchName } } }' "$vars_json")"
+  response="$(linear_graphql 'mutation($input:IssueCreateInput!){ issueCreate(input:$input){ success issue { id identifier title url branchName gitBranchName: branchName } } }' "$vars_json")"
   success="$(printf '%s\n' "$response" | jq -r '.data.issueCreate.success // empty')"
   [[ "$success" == "true" ]] || die "issueCreate returned success=false"
   identifier="$(printf '%s\n' "$response" | jq -r '.data.issueCreate.issue.identifier // empty')"
   [[ -n "$identifier" ]] || die "issueCreate missing identifier"
   url="$(printf '%s\n' "$response" | jq -r '.data.issueCreate.issue.url // empty')"
-  git_branch_name="$(printf '%s\n' "$response" | jq -r '.data.issueCreate.issue.gitBranchName // empty')"
+  branch_name="$(printf '%s\n' "$response" | jq -r '.data.issueCreate.issue.branchName // .data.issueCreate.issue.gitBranchName // empty')"
 
   jq -nc \
     --arg identifier "$identifier" \
     --arg url "$url" \
-    --arg gitBranchName "$git_branch_name" \
+    --arg branchName "$branch_name" \
     '{
       identifier: $identifier,
       url: (if $url == "" then null else $url end),
-      gitBranchName: (if $gitBranchName == "" then null else $gitBranchName end)
+      branchName: (if $branchName == "" then null else $branchName end),
+      gitBranchName: (if $branchName == "" then null else $branchName end)
     }'
 }
 

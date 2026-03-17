@@ -80,6 +80,54 @@ describe("relationship index store", () => {
     expect(Object.keys(latest.nodes).toSorted()).toEqual(["message:1", "thread:1"]);
   });
 
+  it("skips corrupt NDJSON lines during compaction instead of crashing", async () => {
+    const env = await createStateEnv();
+    const paths = resolveRelationshipIndexStorePaths(env);
+
+    const validNode: RelationshipIndexNode = {
+      version: "sre.relationship-index-node.v1",
+      entityId: "message:valid",
+      entityType: "message",
+      observedAt: "2026-03-17T10:00:00.000Z",
+    };
+
+    // Write one valid append to create the directory and files
+    await appendRelationshipIndexUpdate(
+      { nodes: [validNode], edges: [] },
+      { env, compactAfterBytes: 1 },
+    );
+
+    // Inject a corrupt line into the nodes file
+    const nodesContent = await fs.readFile(paths.nodesPath, "utf8");
+    await fs.writeFile(
+      paths.nodesPath,
+      nodesContent + '{"entityId":"message:corrupt","broken json\n',
+      "utf8",
+    );
+
+    // Next append should not throw — corrupt line is skipped during compaction
+    await appendRelationshipIndexUpdate(
+      {
+        nodes: [
+          {
+            version: "sre.relationship-index-node.v1",
+            entityId: "message:after",
+            entityType: "message",
+            observedAt: "2026-03-17T10:01:00.000Z",
+          },
+        ],
+        edges: [],
+      },
+      { env, compactAfterBytes: 1 },
+    );
+
+    const finalLines = await readNdjson(paths.nodesPath);
+    const entityIds = finalLines.map((l) => (JSON.parse(l) as { entityId: string }).entityId);
+    expect(entityIds).toContain("message:valid");
+    expect(entityIds).toContain("message:after");
+    expect(entityIds).not.toContain("message:corrupt");
+  });
+
   it("compacts duplicate nodes and edges after the threshold is exceeded", async () => {
     const env = await createStateEnv();
     const paths = resolveRelationshipIndexStorePaths(env);

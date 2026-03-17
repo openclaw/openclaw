@@ -15,7 +15,7 @@ cat >"$FAKE_LINEAR" <<'EOF'
 set -euo pipefail
 
 LOG_FILE="${BUG_REPORT_FAKE_LOG:?}"
-printf '%s\0' "$@" | jq -Rs 'split("\u0000")[:-1] | { args: . }' >>"$LOG_FILE"
+printf '%s\0' "$@" | jq -Rs 'split("\u0000") | if .[-1] == "" then .[:-1] else . end | { args: . }' >>"$LOG_FILE"
 
 case "${1:-} ${2:-}" in
   "issue create")
@@ -27,7 +27,7 @@ case "${1:-} ${2:-}" in
       printf '%s\n' '<html>not-json</html>'
       exit 0
     fi
-    printf '%s\n' '{"identifier":"PLA-900","url":"https://linear.app/morpho-labs/issue/PLA-900/example","gitBranchName":"feature/pla-900-example"}'
+    printf '%s\n' '{"identifier":"PLA-900","url":"https://linear.app/morpho-labs/issue/PLA-900/example","branchName":"feature/pla-900-example"}'
     ;;
   "issue add-attachment")
     if [[ "${BUG_REPORT_FAKE_ATTACH_FAIL:-0}" == "1" ]]; then
@@ -96,19 +96,24 @@ consumer_issue="$(
 
 printf '%s\n' "$consumer_issue" | jq -e '.issue.identifier == "PLA-900"' >/dev/null
 printf '%s\n' "$consumer_issue" | jq -e '.threadAttachment.attached == true' >/dev/null
+printf '%s\n' "$consumer_issue" | jq -e '.issue.branchName == "feature/pla-900-example" and .issue.gitBranchName == "feature/pla-900-example"' >/dev/null
 printf '%s\n' "$consumer_issue" | jq -e --arg owner "$expected_consumer_owner" '.owner.assignee == $owner' >/dev/null
 
-jq -e '
-  select(.args[0] == "issue" and .args[1] == "create")
-  | (.args | index("--assignee")) as $assignee_idx
-  | ($assignee_idx != null)
-  and .args[$assignee_idx + 1] != ""
-  and (.args | index("--labels")) != null
+jq -se '
+  map(
+    select(.["args"][0] == "issue" and .["args"][1] == "create")
+    | (.args | index("--assignee")) as $assignee_idx
+    | ($assignee_idx != null)
+      and .args[$assignee_idx + 1] != ""
+      and (.args | index("--labels")) != null
+  ) | any
 ' "$FAKE_LOG" >/dev/null
 
-jq -e '
-  select(.args[0] == "issue" and .args[1] == "add-attachment")
-  | .args[3] == "https://morpholabs.slack.com/archives/C123/p1773576730195609"
+jq -se '
+  map(
+    select(.["args"][0] == "issue" and .["args"][1] == "add-attachment")
+    | .args[3] == "https://morpholabs.slack.com/archives/C123/p1773576730195609"
+  ) | any
 ' "$FAKE_LOG" >/dev/null
 
 consumer_issue_attach_warn="$(
