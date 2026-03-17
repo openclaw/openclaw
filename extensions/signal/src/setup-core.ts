@@ -1,7 +1,5 @@
 import {
   createPatchedAccountSetupAdapter,
-  formatCliCommand,
-  formatDocsLink,
   normalizeE164,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
@@ -16,6 +14,7 @@ import type {
   ChannelSetupWizard,
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
+import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/signal";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,

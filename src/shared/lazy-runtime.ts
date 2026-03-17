@@ -9,12 +9,14 @@ export function createLazyRuntimeSurface<TModule, TSurface>(
   };
 }
 
+/** Cache the raw dynamically imported runtime module behind a stable loader. */
 export function createLazyRuntimeModule<TModule>(
   importer: () => Promise<TModule>,
 ): () => Promise<TModule> {
   return createLazyRuntimeSurface(importer, (module) => module);
 }
 
+/** Cache a single named runtime export without repeating a custom selector closure per caller. */
 export function createLazyRuntimeNamedExport<TModule, const TKey extends keyof TModule>(
   importer: () => Promise<TModule>,
   key: TKey,

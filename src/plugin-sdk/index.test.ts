@@ -1,9 +1,13 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
+  buildPluginSdkEntrySources,
   buildPluginSdkPackageExports,
   buildPluginSdkSpecifiers,
   pluginSdkEntrypoints,
@@ -11,15 +15,9 @@ import {
 import * as sdk from "./index.js";
 
 const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
+const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
+const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
 
 describe("plugin-sdk exports", () => {
   it("does not expose runtime modules", () => {
@@ -72,33 +70,43 @@ describe("plugin-sdk exports", () => {
   });
 
   it("emits importable bundled subpath entries", { timeout: 240_000 }, async () => {
+    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-build-"));
     const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));
-    const repoDistDir = path.join(process.cwd(), "dist");
-    const repoPluginSdkDistDir = path.join(repoDistDir, "plugin-sdk");
 
     try {
-      expect(pluginSdkSpecifiers).toEqual(
-        pluginSdkEntrypoints.map((entry) =>
-          entry === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entry}`,
-        ),
+      const buildScriptPath = path.join(fixtureDir, "build-plugin-sdk.mjs");
+      await fs.writeFile(
+        buildScriptPath,
+        `import { build } from ${JSON.stringify(tsdownModuleUrl)};
+await build(${JSON.stringify({
+          clean: true,
+          config: false,
+          dts: false,
+          entry: buildPluginSdkEntrySources(),
+          env: { NODE_ENV: "production" },
+          fixedExtension: false,
+          logLevel: "error",
+          outDir,
+          platform: "node",
+        })});
+`,
       );
-      if (!(await pathExists(repoPluginSdkDistDir))) {
-        return;
-      }
+      await execFileAsync(process.execPath, [buildScriptPath], {
+        cwd: process.cwd(),
+      });
 
       for (const entry of pluginSdkEntrypoints) {
-        const module = await import(
-          pathToFileURL(path.join(repoPluginSdkDistDir, `${entry}.js`)).href
-        );
+        const module = await import(pathToFileURL(path.join(outDir, `${entry}.js`)).href);
         expect(module).toBeTypeOf("object");
       }
 
       const packageDir = path.join(fixtureDir, "openclaw");
       const consumerDir = path.join(fixtureDir, "consumer");
       const consumerEntry = path.join(consumerDir, "import-plugin-sdk.mjs");
+      const packagePluginSdkDistDir = path.join(packageDir, "dist", "plugin-sdk");
 
-      await fs.mkdir(packageDir, { recursive: true });
-      await fs.symlink(repoDistDir, path.join(packageDir, "dist"), "dir");
+      await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
+      await fs.cp(outDir, packagePluginSdkDistDir, { recursive: true });
       await fs.writeFile(
         path.join(packageDir, "package.json"),
         JSON.stringify(
@@ -113,7 +121,9 @@ describe("plugin-sdk exports", () => {
       );
 
       await fs.mkdir(path.join(consumerDir, "node_modules"), { recursive: true });
-      await fs.symlink(packageDir, path.join(consumerDir, "node_modules", "openclaw"), "dir");
+      await fs.cp(packageDir, path.join(consumerDir, "node_modules", "openclaw"), {
+        recursive: true,
+      });
       await fs.writeFile(
         consumerEntry,
         [
@@ -131,6 +141,7 @@ describe("plugin-sdk exports", () => {
         Object.fromEntries(pluginSdkSpecifiers.map((specifier: string) => [specifier, "object"])),
       );
     } finally {
+      await fs.rm(outDir, { recursive: true, force: true });
       await fs.rm(fixtureDir, { recursive: true, force: true });
     }
   });

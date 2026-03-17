@@ -56,6 +56,7 @@ export function createDiscordMessage(params: {
   id: string;
   channelId: string;
   content: string;
+  webhookId?: string;
   author: {
     id: string;
     bot: boolean;
@@ -74,6 +75,7 @@ export function createDiscordMessage(params: {
     mentionedUsers: params.mentionedUsers ?? [],
     mentionedRoles: [],
     mentionedEveryone: params.mentionedEveryone ?? false,
+    webhookId: params.webhookId,
     author: params.author,
   } as unknown as import("@buape/carbon").Message;
 }

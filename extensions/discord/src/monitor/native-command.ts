@@ -24,8 +24,8 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runti
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import {
-  ensureConfiguredAcpRouteReady,
-  resolveConfiguredAcpRoute,
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -192,6 +192,11 @@ function buildDiscordCommandOptions(params: {
       autocomplete,
     };
   }) satisfies CommandOptions;
+}
+
+function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
+  const normalized = commandName.trim().toLowerCase();
+  return normalized === "acp" || normalized === "new" || normalized === "reset";
 }
 
 function readDiscordCommandArgs(
@@ -1617,24 +1622,27 @@ async function dispatchDiscordCommandInteraction(params: {
   const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
   const configuredRoute =
     threadBinding == null
-      ? resolveConfiguredAcpRoute({
+      ? resolveConfiguredBindingRoute({
           cfg,
           route,
-          channel: "discord",
-          accountId,
-          conversationId: channelId,
-          parentConversationId: threadParentId,
+          conversation: {
+            channel: "discord",
+            accountId,
+            conversationId: channelId,
+            parentConversationId: threadParentId,
+          },
         })
       : null;
-  const configuredBinding = configuredRoute?.configuredBinding ?? null;
-  if (configuredBinding) {
-    const ensured = await ensureConfiguredAcpRouteReady({
+  const configuredBinding = configuredRoute?.bindingResolution ?? null;
+  const commandName = command.nativeName ?? command.key;
+  if (configuredBinding && !shouldBypassConfiguredAcpEnsure(commandName)) {
+    const ensured = await ensureConfiguredBindingRouteReady({
       cfg,
-      configuredBinding,
+      bindingResolution: configuredBinding,
     });
     if (!ensured.ok) {
       logVerbose(
-        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
       );
       await respond("Configured ACP binding is unavailable right now. Please try again.");
       return;
