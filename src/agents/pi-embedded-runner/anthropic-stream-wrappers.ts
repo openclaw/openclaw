@@ -399,8 +399,12 @@ export function isAnthropicBedrockModel(modelId: string, modelName?: string): bo
   }
 
   // Application Inference Profile ARN — check model name for Claude identification
-  // ARN format: arn:aws:bedrock:<region>:<account>:application-inference-profile/<id>
-  if (normalized.startsWith("arn:aws:bedrock:") && normalized.includes(":application-inference-profile/")) {
+  // ARN format: arn:<partition>:bedrock:<region>:<account>:application-inference-profile/<id>
+  // Supports all AWS partitions with Bedrock: aws, aws-cn, aws-us-gov
+  if (
+    /^arn:aws(-cn|-us-gov)?:bedrock:/.test(normalized) &&
+    normalized.includes(":application-inference-profile/")
+  ) {
     return modelName ? modelName.toLowerCase().includes("claude") : false;
   }
 
@@ -417,9 +421,22 @@ export function isAnthropicBedrockModel(modelId: string, modelName?: string): bo
 /** Returns true when the ID matches a known non-Anthropic Bedrock model-ID pattern. */
 function looksLikeStandardBedrockModelId(normalizedId: string): boolean {
   const knownPrefixes = [
-    "amazon.", "meta.", "mistral.", "cohere.", "ai21.", "stability.",
-    "deepseek.", "luma.", "google.", "nvidia.", "minimax.", "moonshot.",
-    "openai.", "qwen.", "writer.", "zai.",
+    "amazon.",
+    "meta.",
+    "mistral.",
+    "cohere.",
+    "ai21.",
+    "stability.",
+    "deepseek.",
+    "luma.",
+    "google.",
+    "nvidia.",
+    "minimax.",
+    "moonshot.",
+    "openai.",
+    "qwen.",
+    "writer.",
+    "zai.",
   ];
   return knownPrefixes.some((prefix) => normalizedId.startsWith(prefix));
 }

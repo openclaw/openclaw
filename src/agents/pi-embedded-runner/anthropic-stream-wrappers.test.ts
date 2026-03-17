@@ -39,7 +39,8 @@ describe("isAnthropicBedrockModel", () => {
 
   describe("Application Inference Profile ARNs", () => {
     it("should return true for Application Inference Profile ARNs when model name contains 'claude'", () => {
-      const arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+      const arn =
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
       expect(isAnthropicBedrockModel(arn, "Claude 3 Opus Profile")).toBe(true);
       expect(isAnthropicBedrockModel(arn, "My Claude Model")).toBe(true);
       expect(isAnthropicBedrockModel(arn, "claude-profile")).toBe(true);
@@ -47,7 +48,8 @@ describe("isAnthropicBedrockModel", () => {
     });
 
     it("should return false for Application Inference Profile ARNs when model name does not contain 'claude'", () => {
-      const arn = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/llama-profile";
+      const arn =
+        "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/llama-profile";
       expect(isAnthropicBedrockModel(arn, "Llama 2 Profile")).toBe(false);
       expect(isAnthropicBedrockModel(arn, "Titan Model")).toBe(false);
       expect(isAnthropicBedrockModel(arn, "General Model")).toBe(false);
