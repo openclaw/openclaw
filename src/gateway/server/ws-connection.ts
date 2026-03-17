@@ -265,16 +265,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     const handshakeTimeoutMs = getHandshakeTimeoutMs();
-    const handshakeTimer = setTimeout(() => {
-      if (!client) {
-        handshakeState = "failed";
-        setCloseCause("handshake-timeout", {
-          handshakeMs: Date.now() - openedAt,
-        });
-        logWsControl.warn(`handshake timeout conn=${connId} remote=${remoteAddr ?? "?"}`);
-        close();
-      }
-    }, handshakeTimeoutMs);
+    // FIX: Attach message handler BEFORE starting the handshake timer.
+    // On Windows + Node.js v24, the timer callback can fire before the
+    // WebSocket "message" event is processed in the event loop, causing
+    // legitimate connect requests to be rejected with a handshake timeout.
+    let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
 
     attachGatewayWsMessageHandler({
       socket,
@@ -298,7 +293,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       send,
       close,
       isClosed: () => closed,
-      clearHandshakeTimer: () => clearTimeout(handshakeTimer),
+      clearHandshakeTimer: () => {
+        if (handshakeTimer) clearTimeout(handshakeTimer);
+      },
       getClient: () => client,
       setClient: (next) => {
         client = next;
@@ -314,5 +311,16 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       logHealth,
       logWsControl,
     });
+
+    handshakeTimer = setTimeout(() => {
+      if (!client) {
+        handshakeState = "failed";
+        setCloseCause("handshake-timeout", {
+          handshakeMs: Date.now() - openedAt,
+        });
+        logWsControl.warn(`handshake timeout conn=${connId} remote=${remoteAddr ?? "?"}`);
+        close();
+      }
+    }, handshakeTimeoutMs);
   });
 }
