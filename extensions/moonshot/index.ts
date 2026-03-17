@@ -1,16 +1,15 @@
+import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../../src/agents/pi-embedded-runner/moonshot-stream-wrappers.js";
+} from "openclaw/plugin-sdk/provider-stream";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
   setScopedCredentialValue,
-} from "../../src/agents/tools/web-search-plugin-factory.js";
-import { moonshotProvider } from "../../src/media-understanding/providers/moonshot/index.js";
-import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/provider-web-search";
+import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
   applyMoonshotConfig,
   applyMoonshotConfigCn,
@@ -100,7 +99,7 @@ const moonshotPlugin = {
         return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
       },
     });
-    api.registerMediaUnderstandingProvider(moonshotProvider);
+    api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "kimi",

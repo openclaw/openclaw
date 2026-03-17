@@ -1,5 +1,5 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildMicrosoftSpeechProvider } from "../../src/tts/providers/microsoft.js";
+import { buildMicrosoftSpeechProvider } from "openclaw/plugin-sdk/speech";
 
 const microsoftPlugin = {
   id: "microsoft",

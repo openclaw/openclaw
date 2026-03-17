@@ -1,6 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { openaiProvider } from "../../src/media-understanding/providers/openai/index.js";
-import { buildOpenAISpeechProvider } from "../../src/tts/providers/openai.js";
+import { buildOpenAIImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { buildOpenAISpeechProvider } from "openclaw/plugin-sdk/speech";
+import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
@@ -13,7 +14,8 @@ const openAIPlugin = {
     api.registerProvider(buildOpenAIProvider());
     api.registerProvider(buildOpenAICodexProviderPlugin());
     api.registerSpeechProvider(buildOpenAISpeechProvider());
-    api.registerMediaUnderstandingProvider(openaiProvider);
+    api.registerMediaUnderstandingProvider(openaiMediaUnderstandingProvider);
+    api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());
   },
 };
 
