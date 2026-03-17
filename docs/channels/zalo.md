@@ -160,7 +160,7 @@ For a quick support snapshot, see [Capabilities](#capabilities). The notes below
 - **Text messages**: Full support with 2000 character chunking.
 - **Plain URLs in text**: Behave like normal text input.
 - **Link previews / rich link cards**: See the Marketplace-bot status in [Capabilities](#capabilities); they did not reliably trigger a reply.
-- **Image messages**: Inbound image events are supported. Zalo Bot image payloads use `photo_url` for the image URL, and OpenClaw accepts that field with backward-compatible fallback to `photo`.
+- **Image messages**: Inbound image messages are supported.
 - **Stickers**: See the Marketplace-bot status in [Capabilities](#capabilities).
 - **Voice notes / audio files / video / generic file attachments**: See the Marketplace-bot status in [Capabilities](#capabilities).
 - **Unsupported types**: Logged (for example, messages from protected users).
@@ -169,22 +169,22 @@ For a quick support snapshot, see [Capabilities](#capabilities). The notes below
 
 This table summarizes current **Zalo Bot Creator / Marketplace bot** behavior in OpenClaw.
 
-| Feature                     | Status                                                   |
-| --------------------------- | -------------------------------------------------------- |
-| Direct messages             | ✅ Supported                                             |
-| Groups                      | ❌ Not available for Marketplace bots                    |
-| Media (inbound images)      | ✅ Supported (`message.image.received` with `photo_url`) |
-| Media (outbound images)     | ⚠️ Not re-tested for Marketplace bots                    |
-| Plain URLs in text          | ✅ Supported                                             |
-| Link previews               | ⚠️ Unreliable for Marketplace bots                       |
-| Reactions                   | ❌ Not supported                                         |
-| Stickers                    | ⚠️ No agent reply for Marketplace bots                   |
-| Voice notes / audio / video | ⚠️ No agent reply for Marketplace bots                   |
-| File attachments            | ⚠️ No agent reply for Marketplace bots                   |
-| Threads                     | ❌ Not supported                                         |
-| Polls                       | ❌ Not supported                                         |
-| Native commands             | ❌ Not supported                                         |
-| Streaming                   | ⚠️ Blocked (2000 char limit)                             |
+| Feature                     | Status                                 |
+| --------------------------- | -------------------------------------- |
+| Direct messages             | ✅ Supported                           |
+| Groups                      | ❌ Not available for Marketplace bots  |
+| Media (inbound images)      | ✅ Supported                           |
+| Media (outbound images)     | ⚠️ Not re-tested for Marketplace bots  |
+| Plain URLs in text          | ✅ Supported                           |
+| Link previews               | ⚠️ Unreliable for Marketplace bots     |
+| Reactions                   | ❌ Not supported                       |
+| Stickers                    | ⚠️ No agent reply for Marketplace bots |
+| Voice notes / audio / video | ⚠️ No agent reply for Marketplace bots |
+| File attachments            | ⚠️ No agent reply for Marketplace bots |
+| Threads                     | ❌ Not supported                       |
+| Polls                       | ❌ Not supported                       |
+| Native commands             | ❌ Not supported                       |
+| Streaming                   | ⚠️ Blocked (2000 char limit)           |
 
 ## Delivery targets (CLI/cron)
 
@@ -201,8 +201,8 @@ This table summarizes current **Zalo Bot Creator / Marketplace bot** behavior in
 
 **Image messages are not processed:**
 
-- Confirm the inbound event is `message.image.received`
-- Check gateway logs for the raw inbound payload and verify the image URL is present as `photo_url` (or legacy `photo`)
+- Confirm the bot is receiving an inbound image event
+- Check gateway logs for the raw inbound payload and verify a usable image URL is present
 - Verify the image size stays within `channels.zalo.mediaMaxMb`
 
 **Webhook not receiving events:**
