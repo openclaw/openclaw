@@ -234,6 +234,46 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
   });
 
+  it("applies exchanged copilot baseUrl to returned model", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "github-copilot",
+        id: "gpt-4.1",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "ghu_test",
+      source: "profile:github-copilot:default",
+      mode: "token",
+    });
+    hoisted.resolveCopilotApiTokenMock.mockResolvedValueOnce({
+      token: "copilot-runtime-token",
+      expiresAt: Date.now() + 60_000,
+      source: "cache:/tmp/copilot-token.json",
+      baseUrl: "https://api.copilot.enterprise.example",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "github-copilot",
+      modelId: "gpt-4.1",
+    });
+
+    expect(result).not.toHaveProperty("error");
+    if ("error" in result) {
+      return;
+    }
+    expect(result.model).toEqual(
+      expect.objectContaining({
+        baseUrl: "https://api.copilot.enterprise.example",
+      }),
+    );
+  });
+
   it("returns error when getApiKeyForModel throws", async () => {
     hoisted.getApiKeyForModelMock.mockRejectedValueOnce(new Error("Profile not found: copilot"));
 

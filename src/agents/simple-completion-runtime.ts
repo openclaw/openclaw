@@ -19,6 +19,11 @@ type SimpleCompletionAuthStorage = {
   setRuntimeApiKey: (provider: string, apiKey: string) => void;
 };
 
+type CompletionRuntimeCredential = {
+  apiKey: string;
+  baseUrl?: string;
+};
+
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
 export type PreparedSimpleCompletionModel =
@@ -90,17 +95,22 @@ async function setRuntimeApiKeyForCompletion(params: {
   authStorage: SimpleCompletionAuthStorage;
   model: Model<Api>;
   apiKey: string;
-}): Promise<string> {
+}): Promise<CompletionRuntimeCredential> {
   if (params.model.provider === "github-copilot") {
     const { resolveCopilotApiToken } = await import("../../extensions/github-copilot/token.js");
     const copilotToken = await resolveCopilotApiToken({
       githubToken: params.apiKey,
     });
     params.authStorage.setRuntimeApiKey(params.model.provider, copilotToken.token);
-    return copilotToken.token;
+    return {
+      apiKey: copilotToken.token,
+      baseUrl: copilotToken.baseUrl,
+    };
   }
   params.authStorage.setRuntimeApiKey(params.model.provider, params.apiKey);
-  return params.apiKey;
+  return {
+    apiKey: params.apiKey,
+  };
 }
 
 function hasMissingApiKeyAllowance(params: {
@@ -155,12 +165,21 @@ export async function prepareSimpleCompletionModel(params: {
   }
 
   let resolvedApiKey = rawApiKey;
+  let resolvedModel = resolved.model;
   if (rawApiKey) {
-    resolvedApiKey = await setRuntimeApiKeyForCompletion({
+    const runtimeCredential = await setRuntimeApiKeyForCompletion({
       authStorage: resolved.authStorage,
       model: resolved.model,
       apiKey: rawApiKey,
     });
+    resolvedApiKey = runtimeCredential.apiKey;
+    const runtimeBaseUrl = runtimeCredential.baseUrl?.trim();
+    if (runtimeBaseUrl) {
+      resolvedModel = {
+        ...resolvedModel,
+        baseUrl: runtimeBaseUrl,
+      };
+    }
   }
 
   const resolvedAuth: ResolvedProviderAuth = {
@@ -169,7 +188,7 @@ export async function prepareSimpleCompletionModel(params: {
   };
 
   return {
-    model: applyLocalNoAuthHeaderOverride(resolved.model, resolvedAuth),
+    model: applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
     auth: resolvedAuth,
   };
 }
