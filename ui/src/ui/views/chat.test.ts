@@ -91,6 +91,12 @@ function createChatHeaderState(
     sessionKey: "main",
     connected: true,
     sessionsHideCron: true,
+    sessionsLoading: false,
+    sessionsError: null,
+    sessionsFilterActive: "0",
+    sessionsFilterLimit: "0",
+    sessionsIncludeGlobal: true,
+    sessionsIncludeUnknown: true,
     sessionsResult: {
       ts: 0,
       path: "",
@@ -111,6 +117,7 @@ function createChatHeaderState(
     chatModelOverrides: {},
     chatModelCatalog: catalog,
     chatModelsLoading: false,
+    chatSending: false,
     client: { request } as unknown as GatewayBrowserClient,
     settings: {
       gatewayUrl: "",

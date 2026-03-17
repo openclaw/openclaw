@@ -11,7 +11,7 @@ export function safeRealpathSync(targetPath: string, cache?: Map<string, string>
     return cached;
   }
   try {
-    const resolved = fs.realpathSync(targetPath);
+    const resolved = fs.realpathSync.native(targetPath);
     cache?.set(targetPath, resolved);
     return resolved;
   } catch {

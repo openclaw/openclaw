@@ -155,6 +155,11 @@ export async function acquireFileLock(
   }
 
   const attempts = Math.max(1, options.retries.retries + 1);
+  // One-shot budget for the post-reclaim free slot (see stale-reclaim comment
+  // below).  Consumed the first time we step attempt back; subsequent stale
+  // detections on the last slot are allowed to exhaust the loop and time out,
+  // preventing an endless spin when fs.rm silently fails (e.g. EACCES/EPERM).
+  let reclaimSlotAvailable = true;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const handle = await fs.open(lockPath, "wx");
@@ -228,7 +233,15 @@ export async function acquireFileLock(
         // upcoming += 1 nets to zero, guaranteeing at least one post-reclaim
         // open(O_EXCL) attempt.  No extra sleep budget is consumed — we only
         // charge a retry for backoff sleeps, not reclaim-only work.
-        if (attempt >= attempts - 1) {
+        //
+        // Safety bound: reclaimSlotAvailable is consumed after the first use.
+        // If fs.rm silently fails (EACCES/EPERM swallowed by .catch above),
+        // subsequent iterations will still detect isStale=true; without the
+        // bound, decrementing attempt on every last-slot iteration would spin
+        // the loop forever.  After the one-shot budget is gone, the loop is
+        // allowed to exhaust normally and throw timeout.
+        if (reclaimSlotAvailable && attempt >= attempts - 1) {
+          reclaimSlotAvailable = false;
           attempt -= 1;
         }
         continue;

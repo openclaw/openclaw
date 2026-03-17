@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getProcessStartTime } from "../shared/pid-alive.js";
 import { withFileLock } from "./file-lock.js";
 
@@ -209,6 +209,40 @@ describe("withFileLock", () => {
       ),
     ).resolves.toBeUndefined();
     expect(ran).toBe(true);
+  });
+
+  it("times out (does not spin forever) when a stale lock cannot be removed", async () => {
+    // Safety bound: if fs.rm silently fails (EACCES/EPERM — swallowed by
+    // .catch), subsequent iterations keep seeing isStale=true.  The one-shot
+    // reclaimSlotAvailable guard must prevent the attempt -= 1 trick from
+    // repeating indefinitely; after the free slot is consumed, the loop must
+    // exhaust its retry budget and throw timeout rather than hanging forever.
+    //
+    // We simulate the condition by mocking fs.rm as a no-op so the .lock
+    // file is never removed — every subsequent open(O_EXCL) still sees EEXIST.
+    // Without the reclaimSlotAvailable bound, each stale detection on the last
+    // slot would decrement attempt and loop back, spinning forever.
+    const lockPath = `${targetFile}.lock`;
+    await fs.mkdir(path.dirname(targetFile), { recursive: true });
+    await fs.writeFile(lockPath, JSON.stringify({ pid: 0, createdAt: new Date(0).toISOString() }));
+    await ageFile(lockPath, LOCK_OPTIONS.stale + 1_000);
+
+    // Spy on fs.rm: resolve successfully but do nothing, so the lock file
+    // persists and isStaleLock() keeps returning true on every iteration.
+    const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+
+    try {
+      await expect(
+        withFileLock(
+          targetFile,
+          { ...LOCK_OPTIONS, retries: { ...LOCK_OPTIONS.retries, retries: 2 } },
+          async () => {},
+        ),
+      ).rejects.toThrow("file lock timeout");
+    } finally {
+      rmSpy.mockRestore();
+      await fs.rm(lockPath, { force: true }).catch(() => {});
+    }
   });
 
   it("two concurrent waiters on a stale lock never overlap inside fn()", async () => {
