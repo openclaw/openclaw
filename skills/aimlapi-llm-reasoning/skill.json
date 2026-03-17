@@ -1,6 +1,0 @@
-{
-  "name": "aimlapi-llm-reasoning",
-  "description": "Run AIMLAPI LLM and reasoning workflows through chat completions.",
-  "env": ["AIMLAPI_API_KEY"],
-  "primaryEnv": "AIMLAPI_API_KEY"
-}
