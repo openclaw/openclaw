@@ -116,8 +116,10 @@ Examples:
   speech + media-understanding + image-generation behavior
 - the bundled `elevenlabs` plugin owns ElevenLabs speech behavior
 - the bundled `microsoft` plugin owns Microsoft speech behavior
-- the bundled `google`, `minimax`, `mistral`, `moonshot`, and `zai` plugins own
-  their media-understanding backends
+- the bundled `google` plugin owns Google model-provider behavior plus Google
+  media-understanding + image-generation + web-search behavior
+- the bundled `minimax`, `mistral`, `moonshot`, and `zai` plugins own their
+  media-understanding backends
 - the `voice-call` plugin is a feature plugin: it owns call transport, tools,
   CLI, routes, and runtime, but it consumes core TTS/STT capability instead of
   inventing a second speech stack
