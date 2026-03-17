@@ -195,7 +195,7 @@ export function registerGatewayCli(program: Command) {
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
     .option("--token <token>", "Gateway token (applies to all probes)")
     .option("--password <password>", "Gateway password (applies to all probes)")
-    .option("--timeout <ms>", "Overall probe budget in ms", "3000")
+    .option("--timeout <ms>", "Overall probe budget in ms", "10000")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runGatewayCommand(async () => {

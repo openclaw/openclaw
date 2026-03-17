@@ -125,7 +125,7 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
 
 export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
   if (kind === "localLoopback") {
-    return Math.min(800, overallMs);
+    return overallMs;
   }
   if (kind === "sshTunnel") {
     return Math.min(2000, overallMs);

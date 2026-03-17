@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
@@ -49,6 +50,9 @@ export function registerSecurityCli(program: Command) {
     .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
+      if (opts.json) {
+        routeLogsToStderr();
+      }
       const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
 
       const cfg = loadConfig();
@@ -60,8 +64,8 @@ export function registerSecurityCli(program: Command) {
       });
 
       if (opts.json) {
-        defaultRuntime.log(
-          JSON.stringify(fixResult ? { fix: fixResult, report } : report, null, 2),
+        process.stdout.write(
+          `${JSON.stringify(fixResult ? { fix: fixResult, report } : report, null, 2)}\n`,
         );
         return;
       }
