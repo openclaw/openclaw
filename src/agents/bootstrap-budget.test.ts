@@ -6,8 +6,10 @@ import {
   buildBootstrapTruncationReportMeta,
   buildBootstrapTruncationSignature,
   formatBootstrapTruncationWarningLines,
+  prependBootstrapPromptWarning,
   resolveBootstrapWarningSignaturesSeen,
 } from "./bootstrap-budget.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 describe("buildBootstrapInjectionStats", () => {
@@ -104,6 +106,34 @@ describe("analyzeBootstrapBudget", () => {
 });
 
 describe("bootstrap prompt warnings", () => {
+  it("prepends warning details to the turn prompt instead of mutating the system prompt", () => {
+    const prompt = prependBootstrapPromptWarning("Please continue.", [
+      "AGENTS.md: 200 raw -> 0 injected",
+    ]);
+    expect(prompt).toContain("[Bootstrap truncation warning]");
+    expect(prompt).toContain("Treat Project Context as partial");
+    expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
+    expect(prompt).toContain("Please continue.");
+  });
+
+  it("preserves raw prompt whitespace when prepending warning details", () => {
+    const prompt = prependBootstrapPromptWarning("  indented\nkeep tail  ", [
+      "AGENTS.md: 200 raw -> 0 injected",
+    ]);
+
+    expect(prompt.endsWith("  indented\nkeep tail  ")).toBe(true);
+  });
+
+  it("preserves exact heartbeat prompts without warning prefixes", () => {
+    const heartbeatPrompt = "Read HEARTBEAT.md. Reply HEARTBEAT_OK.";
+
+    expect(
+      prependBootstrapPromptWarning(heartbeatPrompt, ["AGENTS.md: 200 raw -> 0 injected"], {
+        preserveExactPrompt: heartbeatPrompt,
+      }),
+    ).toBe(heartbeatPrompt);
+  });
+
   it("resolves seen signatures from report history or legacy single signature", () => {
     expect(
       resolveBootstrapWarningSignaturesSeen({
@@ -393,5 +423,36 @@ describe("bootstrap prompt warnings", () => {
     expect(meta.nearLimitFiles).toBeGreaterThanOrEqual(1);
     expect(meta.promptWarningSignature).toBeTruthy();
     expect(meta.warningSignaturesSeen?.length).toBeGreaterThan(0);
+  });
+
+  it("improves cache-relevant system prompt stability versus legacy warning injection", () => {
+    const contextFiles = [{ path: "AGENTS.md", content: "Follow AGENTS guidance." }];
+    const warningLines = ["AGENTS.md: 200 raw -> 0 injected"];
+    const stableSystemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles,
+    });
+    const optimizedTurns = [stableSystemPrompt, stableSystemPrompt, stableSystemPrompt];
+    const injectLegacyWarning = (prompt: string, lines: string[]) => {
+      const warningBlock = [
+        "⚠ Bootstrap truncation warning:",
+        ...lines.map((line) => `- ${line}`),
+        "",
+      ].join("\n");
+      return prompt.replace("## AGENTS.md", `${warningBlock}## AGENTS.md`);
+    };
+    const legacyTurns = [
+      injectLegacyWarning(optimizedTurns[0] ?? "", warningLines),
+      optimizedTurns[1] ?? "",
+      injectLegacyWarning(optimizedTurns[2] ?? "", warningLines),
+    ];
+    const cacheHitRate = (turns: string[]) => {
+      const hits = turns.slice(1).filter((turn, index) => turn === turns[index]).length;
+      return hits / Math.max(1, turns.length - 1);
+    };
+
+    expect(cacheHitRate(legacyTurns)).toBe(0);
+    expect(cacheHitRate(optimizedTurns)).toBe(1);
+    expect(optimizedTurns[0]).not.toContain("⚠ Bootstrap truncation warning:");
   });
 });
