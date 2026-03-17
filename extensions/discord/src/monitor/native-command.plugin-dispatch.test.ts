@@ -212,6 +212,79 @@ describe("Discord native plugin command dispatch", () => {
     );
   });
 
+  it("blocks unauthorized Discord senders before requireAuth:false plugin commands execute", async () => {
+    const cfg = {
+      commands: {
+        allowFrom: {
+          discord: ["user:123456789012345678"],
+        },
+      },
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "345678901234567890": {
+              channels: {
+                "234567890123456789": {
+                  allow: true,
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "pair",
+      description: "Pair",
+      acceptsArgs: true,
+    };
+    const command = createDiscordNativeCommand({
+      command: commandSpec,
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId: "234567890123456789",
+      guildId: "345678901234567890",
+      guildName: "Test Guild",
+    });
+    interaction.user.id = "999999999999999999";
+    interaction.options.getString.mockReturnValue("now");
+
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+        requireAuth: false,
+        handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
+      }),
+    ).toEqual({ ok: true });
+
+    const executeSpy = vi.spyOn(pluginCommandsModule, "executePluginCommand");
+    const dispatchSpy = vi
+      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+      .mockResolvedValue({} as never);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(executeSpy).not.toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "You are not authorized to use this command.",
+        ephemeral: true,
+      }),
+    );
+  });
+
   it("executes matched plugin commands directly without invoking the agent dispatcher", async () => {
     const cfg = createConfig();
     const commandSpec: NativeCommandSpec = {
