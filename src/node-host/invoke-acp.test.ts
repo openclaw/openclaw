@@ -828,7 +828,7 @@ describe("handleAcpInvokeCommand", () => {
       handled: true,
       ok: true,
       payload: {
-        state: "running",
+        state: "cancelling",
         nodeRuntimeSessionId: "acpx-session-1",
         nodeWorkerRunId: expect.any(String),
       },

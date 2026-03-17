@@ -447,6 +447,70 @@ describe("handleNodeEvent ACP worker ingress", () => {
     });
   });
 
+  it("keeps a durably cancelling run cancelling during reconnect after node-host cancel-timeout status", async () => {
+    const runtime = await createRuntime();
+    const now = Date.now();
+    const lease = await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now,
+    });
+    await handleNodeEvent(buildCtx(), "node-1", {
+      event: "acp.worker.event",
+      payloadJSON: JSON.stringify({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        seq: 1,
+        event: {
+          type: "status",
+          text: "working",
+        },
+      }),
+    });
+    await runtime.store.recordCancelRequested({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      now: now + 5,
+    });
+    await handleNodeDisconnect("node-1", {
+      now: now + 10,
+    });
+
+    await handleNodeConnected({
+      nodeId: "node-1",
+      invokeNode: async () => ({
+        ok: true,
+        payload: {
+          nodeId: "node-1",
+          ok: true,
+          sessionKey: "agent:main:acp:test-session",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+          state: "cancelling",
+          nodeRuntimeSessionId: "runtime-1",
+          nodeWorkerRunId: "worker-1",
+          workerProtocolVersion: 1,
+        },
+      }),
+      now: now + 11,
+    });
+
+    expect(await runtime.store.getRun("run-1")).toMatchObject({
+      state: "cancelling",
+      cancelRequestedAt: now + 5,
+    });
+  });
+
   it("marks a reconnecting lease lost when acp.session.status is incoherent", async () => {
     const runtime = await createRuntime();
     const now = Date.now();

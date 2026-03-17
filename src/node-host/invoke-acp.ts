@@ -1098,7 +1098,6 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
         },
       };
     }
-    session.state = "running";
     return {
       handled: true,
       ok: false,
