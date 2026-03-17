@@ -2,15 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerFeishuChatTools } from "./chat.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const { chatGetMock, chatMembersGetMock } = vi.hoisted(() => ({
+  chatGetMock: vi.fn(),
+  chatMembersGetMock: vi.fn(),
+}));
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
 describe("registerFeishuChatTools", () => {
-  const chatGetMock = vi.hoisted(() => vi.fn());
-  const chatMembersGetMock = vi.hoisted(() => vi.fn());
-
   beforeEach(() => {
     vi.clearAllMocks();
     createFeishuClientMock.mockReturnValue({

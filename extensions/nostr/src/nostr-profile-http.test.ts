@@ -142,6 +142,13 @@ describe("nostr-profile-http", () => {
     clearNostrProfileRateLimitStateForTest();
   });
 
+  function expectOkResponse(res: ReturnType<typeof createMockResponse>) {
+    expect(res._getStatusCode()).toBe(200);
+    const data = JSON.parse(res._getData());
+    expect(data.ok).toBe(true);
+    return data;
+  }
+
   describe("route matching", () => {
     it("returns false for non-nostr paths", async () => {
       const ctx = createMockContext();
