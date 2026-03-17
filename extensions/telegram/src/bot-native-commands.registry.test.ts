@@ -1,20 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { clearPluginCommands, registerPluginCommand } from "../../../src/plugins/commands.js";
+const deliveryMocks = vi.hoisted(() => ({
+  deliverReplies: vi.fn(async () => ({ delivered: true })),
+}));
+
+vi.mock("./bot/delivery.js", () => ({
+  deliverReplies: deliveryMocks.deliverReplies,
+}));
+
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
   createPrivateCommandContext,
-  deliverReplies,
-  resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
 
 describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeEach(() => {
     clearPluginCommands();
-    resetNativeCommandMenuMocks();
+    deliveryMocks.deliverReplies.mockClear();
+    deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
   });
 
   afterEach(() => {
@@ -49,7 +56,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     await handler?.(createPrivateCommandContext({ match: "now" }));
 
-    expect(deliverReplies).toHaveBeenCalledWith(
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "paired:now" })],
       }),
@@ -89,7 +96,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     await handler?.(createPrivateCommandContext({ match: "now", messageId: 2 }));
 
-    expect(deliverReplies).toHaveBeenCalledWith(
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "paired:now" })],
       }),
@@ -157,7 +164,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       }),
     );
 
-    expect(deliverReplies).toHaveBeenCalledWith(
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ text: "paired:now" })],
       }),
