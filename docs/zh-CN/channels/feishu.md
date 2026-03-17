@@ -86,7 +86,7 @@ Lark（国际版）租户应使用 [https://open.larksuite.com/app](https://open
 2. 填写应用名称和描述
 3. 选择应用图标
 
-![Create enterprise app](../images/feishu-step2-create-app.png)
+![Create enterprise app](../../images/feishu-step2-create-app.png)
 
 ### 3. 复制凭证
 
@@ -97,7 +97,7 @@ Lark（国际版）租户应使用 [https://open.larksuite.com/app](https://open
 
 ❗ **重要：**请将 App Secret 妥善保密。
 
-![Get credentials](../images/feishu-step3-credentials.png)
+![Get credentials](../../images/feishu-step3-credentials.png)
 
 ### 4. 配置权限
 
@@ -131,7 +131,7 @@ Lark（国际版）租户应使用 [https://open.larksuite.com/app](https://open
 }
 ```
 
-![Configure permissions](../images/feishu-step4-permissions.png)
+![Configure permissions](../../images/feishu-step4-permissions.png)
 
 ### 5. 启用机器人能力
 
@@ -140,7 +140,7 @@ Lark（国际版）租户应使用 [https://open.larksuite.com/app](https://open
 1. 启用机器人能力
 2. 设置机器人名称
 
-![Enable bot capability](../images/feishu-step5-bot-capability.png)
+![Enable bot capability](../../images/feishu-step5-bot-capability.png)
 
 ### 6. 配置事件订阅
 
@@ -156,7 +156,7 @@ Lark（国际版）租户应使用 [https://open.larksuite.com/app](https://open
 
 ⚠️ 如果 Gateway 网关未运行，长连接设置可能无法保存。
 
-![Configure event subscription](../images/feishu-step6-event-subscription.png)
+![Configure event subscription](../../images/feishu-step6-event-subscription.png)
 
 ### 7. 发布应用
 
@@ -211,7 +211,7 @@ openclaw channels add
 
 下图展示了 **Verification Token** 的位置。**Encrypt Key** 位于同一个 **Encryption** 区域中。
 
-![Verification Token location](../images/feishu-verification-token.png)
+![Verification Token location](../../images/feishu-verification-token.png)
 
 ### 通过环境变量配置
 

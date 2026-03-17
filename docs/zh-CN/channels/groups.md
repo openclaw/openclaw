@@ -42,7 +42,7 @@ requireMention? 是 -> 被提及? 否 -> 仅存储为上下文
 否则 -> 回复
 ```
 
-![群消息流程](/images/groups-flow.svg)
+![群消息流程](../../images/groups-flow.svg)
 
 如果你想...
 | 目标 | 设置什么 |
