@@ -49,7 +49,7 @@ vi.mock("../../../../src/pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(),
 }));
 
-describe("signal createSignalEventHandler inbound contract", () => {
+describe("signal createSignalEventHandler inbound context", () => {
   beforeEach(() => {
     capture.ctx = undefined;
     sendTypingMock.mockReset().mockResolvedValue(true);

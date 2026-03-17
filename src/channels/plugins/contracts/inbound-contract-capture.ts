@@ -1,4 +1,4 @@
-import type { MsgContext } from "../../src/auto-reply/templating.js";
+import type { MsgContext } from "../../../auto-reply/templating.js";
 import { buildDispatchInboundCaptureMock } from "./dispatch-inbound-capture.js";
 
 export type InboundContextCapture = {
@@ -13,7 +13,7 @@ export async function buildDispatchInboundContextCapture(
   importOriginal: <T extends Record<string, unknown>>() => Promise<T>,
   capture: InboundContextCapture,
 ) {
-  const actual = await importOriginal<typeof import("../../src/auto-reply/dispatch.js")>();
+  const actual = await importOriginal<typeof import("../../../auto-reply/dispatch.js")>();
   return buildDispatchInboundCaptureMock(actual, (ctx) => {
     capture.ctx = ctx as MsgContext;
   });
