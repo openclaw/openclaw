@@ -425,8 +425,8 @@ export {
   resolveRuntimeEnv,
   resolveRuntimeEnvWithUnavailableExit,
 } from "./runtime.js";
-export { detectBinary } from "../commands/onboard-helpers.js";
-export { installSignalCli } from "../commands/signal-install.js";
+export { detectBinary } from "../plugins/setup-binary.js";
+export { installSignalCli } from "../plugins/signal-cli-install.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 export { readBooleanParam } from "./boolean-param.js";
@@ -798,21 +798,21 @@ export {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
-} from "../commands/self-hosted-provider-setup.ts";
+} from "../plugins/provider-self-hosted-setup.js";
 export {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
-} from "../commands/ollama-setup.ts";
+} from "../plugins/provider-ollama-setup.js";
 export {
   VLLM_DEFAULT_BASE_URL,
   VLLM_DEFAULT_CONTEXT_WINDOW,
   VLLM_DEFAULT_COST,
   VLLM_DEFAULT_MAX_TOKENS,
   promptAndConfigureVllm,
-} from "../commands/vllm-setup.ts";
+} from "../plugins/provider-vllm-setup.js";
 export {
   buildOllamaProvider,
   buildSglangProvider,

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../commands/auth-choice.apply.plugin-provider.js";
-import type { AuthChoice } from "../../commands/onboard-types.js";
 import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
@@ -129,7 +128,7 @@ describe("provider auth-choice contract", () => {
       { authChoice: "minimax-global-oauth" as const, expectedProvider: "minimax-portal" },
       { authChoice: "modelstudio-api-key" as const, expectedProvider: "modelstudio" },
       { authChoice: "ollama" as const, expectedProvider: "ollama" },
-      { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
+      { authChoice: "unknown", expectedProvider: undefined },
     ] as const;
 
     for (const scenario of scenarios) {
