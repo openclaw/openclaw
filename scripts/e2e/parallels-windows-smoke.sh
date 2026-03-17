@@ -15,6 +15,9 @@ TARGET_PACKAGE_SPEC=""
 JSON_OUTPUT=0
 KEEP_SERVER=0
 CHECK_LATEST_REF=1
+SNAPSHOT_ID=""
+SNAPSHOT_STATE=""
+SNAPSHOT_NAME=""
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
@@ -194,7 +197,7 @@ ps_array_literal() {
   printf '@(%s)' "$joined"
 }
 
-resolve_snapshot_id() {
+resolve_snapshot_info() {
   local json hint
   json="$(prlctl snapshot-list "$VM_NAME" --json)"
   hint="$SNAPSHOT_HINT"
@@ -202,28 +205,54 @@ resolve_snapshot_id() {
 import difflib
 import json
 import os
+import re
 import sys
 
 payload = json.loads(os.environ["SNAPSHOT_JSON"])
 hint = os.environ["SNAPSHOT_HINT"].strip().lower()
 best_id = None
+best_meta = None
 best_score = -1.0
+
+def aliases(name: str) -> list[str]:
+    values = [name]
+    for pattern in (
+        r"^(.*)-poweroff$",
+        r"^(.*)-poweroff-\d{4}-\d{2}-\d{2}$",
+    ):
+        match = re.match(pattern, name)
+        if match:
+            values.append(match.group(1))
+    return values
+
 for snapshot_id, meta in payload.items():
     name = str(meta.get("name", "")).strip()
     lowered = name.lower()
     score = 0.0
-    if lowered == hint:
-        score = 10.0
-    elif hint and hint in lowered:
-        score = 5.0 + len(hint) / max(len(lowered), 1)
-    else:
-        score = difflib.SequenceMatcher(None, hint, lowered).ratio()
+    for alias in aliases(lowered):
+        if alias == hint:
+            score = max(score, 10.0)
+        elif hint and hint in alias:
+            score = max(score, 5.0 + len(hint) / max(len(alias), 1))
+        else:
+            score = max(score, difflib.SequenceMatcher(None, hint, alias).ratio())
+    if str(meta.get("state", "")).lower() == "poweroff":
+        score += 0.5
     if score > best_score:
         best_score = score
         best_id = snapshot_id
+        best_meta = meta
 if not best_id:
     sys.exit("no snapshot matched")
-print(best_id)
+print(
+    "\t".join(
+        [
+            best_id,
+            str(best_meta.get("state", "")).strip(),
+            str(best_meta.get("name", "")).strip(),
+        ]
+    )
+)
 PY
 }
 
@@ -338,10 +367,29 @@ restore_snapshot() {
   local snapshot_id="$1"
   say "Restore snapshot $SNAPSHOT_HINT ($snapshot_id)"
   prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
+  if [[ "$SNAPSHOT_STATE" == "poweroff" ]]; then
+    wait_for_vm_status "stopped" || die "restored poweroff snapshot did not reach stopped state in $VM_NAME"
+    say "Start restored poweroff snapshot $SNAPSHOT_NAME"
+    prlctl start "$VM_NAME" >/dev/null
+  fi
 }
 
 verify_windows_user_ready() {
   guest_exec cmd.exe /d /s /c "echo ready"
+}
+
+wait_for_vm_status() {
+  local expected="$1"
+  local deadline status
+  deadline=$((SECONDS + TIMEOUT_SNAPSHOT_S))
+  while (( SECONDS < deadline )); do
+    status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
+    if [[ "$status" == *" $expected" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 wait_for_guest_ready() {
@@ -830,13 +878,16 @@ run_upgrade_lane() {
   UPGRADE_AGENT_STATUS="pass"
 }
 
-SNAPSHOT_ID="$(resolve_snapshot_id)"
+IFS=$'\t' read -r SNAPSHOT_ID SNAPSHOT_STATE SNAPSHOT_NAME <<<"$(resolve_snapshot_info)"
+[[ -n "$SNAPSHOT_ID" ]] || die "failed to resolve snapshot id"
+[[ -n "$SNAPSHOT_NAME" ]] || SNAPSHOT_NAME="$SNAPSHOT_HINT"
 LATEST_VERSION="$(resolve_latest_version)"
 HOST_IP="$(resolve_host_ip)"
 HOST_PORT="$(resolve_host_port)"
 
 say "VM: $VM_NAME"
 say "Snapshot hint: $SNAPSHOT_HINT"
+say "Resolved snapshot: $SNAPSHOT_NAME [$SNAPSHOT_STATE]"
 say "Latest npm version: $LATEST_VERSION"
 say "Current head: $(git rev-parse --short HEAD)"
 say "Run logs: $RUN_DIR"
