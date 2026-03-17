@@ -1,8 +1,7 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it } from "vitest";
+import { signalOutbound, telegramOutbound } from "../../test/channel-outbounds.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import { signalOutbound } from "../channels/plugins/outbound/signal.js";
-import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
