@@ -38,7 +38,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../../../src/config/runtime-group-policy.js";
 import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
-import { danger, logVerbose, shouldLogVerbose, warn } from "../../../../src/globals.js";
+import { danger, isVerbose, logVerbose, shouldLogVerbose, warn } from "../../../../src/globals.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
 import { getPluginCommandSpecs } from "../../../../src/plugins/commands.js";
@@ -273,14 +273,18 @@ async function deployDiscordCommands(params: {
       body === undefined
         ? undefined
         : Buffer.byteLength(typeof body === "string" ? body : JSON.stringify(body), "utf8");
-    params.runtime.log?.(
-      `discord startup [${accountId}] deploy-rest:put:start ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path}${typeof commandCount === "number" ? ` commands=${commandCount}` : ""}${typeof bodyBytes === "number" ? ` bytes=${bodyBytes}` : ""}`,
-    );
+    if (shouldLogVerbose()) {
+      params.runtime.log?.(
+        `discord startup [${accountId}] deploy-rest:put:start ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path}${typeof commandCount === "number" ? ` commands=${commandCount}` : ""}${typeof bodyBytes === "number" ? ` bytes=${bodyBytes}` : ""}`,
+      );
+    }
     try {
       const result = await originalPut(path, data, query);
-      params.runtime.log?.(
-        `discord startup [${accountId}] deploy-rest:put:done ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}`,
-      );
+      if (shouldLogVerbose()) {
+        params.runtime.log?.(
+          `discord startup [${accountId}] deploy-rest:put:done ${Math.max(0, Date.now() - startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}`,
+        );
+      }
       return result;
     } catch (err) {
       params.runtime.error?.(
@@ -359,6 +363,9 @@ function logDiscordStartupPhase(params: {
   gateway?: GatewayPlugin;
   details?: string;
 }) {
+  if (!isVerbose()) {
+    return;
+  }
   const elapsedMs = Math.max(0, Date.now() - params.startAt);
   const suffix = [params.details, formatDiscordStartupGatewayState(params.gateway)]
     .filter((value): value is string => Boolean(value))
@@ -367,7 +374,6 @@ function logDiscordStartupPhase(params: {
     `discord startup [${params.accountId}] ${params.phase} ${elapsedMs}ms${suffix ? ` ${suffix}` : ""}`,
   );
 }
-
 function formatDiscordDeployErrorDetails(err: unknown): string {
   if (!err || typeof err !== "object") {
     return "";
@@ -769,6 +775,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
     earlyGatewayEmitter = getDiscordGatewayEmitter(lifecycleGateway);
     onEarlyGatewayDebug = (msg: unknown) => {
+      if (!isVerbose()) {
+        return;
+      }
       runtime.log?.(
         `discord startup [${account.accountId}] gateway-debug ${Math.max(0, Date.now() - startupStartedAt)}ms ${String(msg)}`,
       );

@@ -8,6 +8,7 @@ import {
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -80,16 +81,18 @@ import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
-type CopilotTokenState = {
-  githubToken: string;
-  expiresAt: number;
+type RuntimeAuthState = {
+  sourceApiKey: string;
+  authMode: string;
+  profileId?: string;
+  expiresAt?: number;
   refreshTimer?: ReturnType<typeof setTimeout>;
   refreshInFlight?: Promise<void>;
 };
 
-const COPILOT_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-const COPILOT_REFRESH_RETRY_MS = 60 * 1000;
-const COPILOT_REFRESH_MIN_DELAY_MS = 5 * 1000;
+const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
+const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 // Keep overload pacing noticeable enough to avoid tight retry bursts, but short
 // enough that fallback still feels responsive within a single turn.
 const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
@@ -299,6 +302,7 @@ export async function runEmbeddedPiAgent(
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
+        allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
       const prevCwd = process.cwd();
 
@@ -380,20 +384,21 @@ export async function runEmbeddedPiAgent(
           model: modelId,
         });
       }
+      let runtimeModel = model;
 
       const ctxInfo = resolveContextWindowInfo({
         cfg: params.config,
         provider,
         modelId,
-        modelContextWindow: model.contextWindow,
+        modelContextWindow: runtimeModel.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       });
       // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
       // threshold uses the effective limit, not the native context window.
-      const effectiveModel =
-        ctxInfo.tokens < (model.contextWindow ?? Infinity)
-          ? { ...model, contextWindow: ctxInfo.tokens }
-          : model;
+      let effectiveModel =
+        ctxInfo.tokens < (runtimeModel.contextWindow ?? Infinity)
+          ? { ...runtimeModel, contextWindow: ctxInfo.tokens }
+          : runtimeModel;
       const ctxGuard = evaluateContextWindowGuard({
         info: ctxInfo,
         warnBelowTokens: CONTEXT_WINDOW_WARN_BELOW_TOKENS,
@@ -447,103 +452,142 @@ export async function runEmbeddedPiAgent(
       const attemptedThinking = new Set<ThinkLevel>();
       let apiKeyInfo: ApiKeyInfo | null = null;
       let lastProfileId: string | undefined;
-      const copilotTokenState: CopilotTokenState | null =
-        model.provider === "github-copilot" ? { githubToken: "", expiresAt: 0 } : null;
-      let copilotRefreshCancelled = false;
-      const hasCopilotGithubToken = () => Boolean(copilotTokenState?.githubToken.trim());
+      let runtimeAuthState: RuntimeAuthState | null = null;
+      let runtimeAuthRefreshCancelled = false;
+      const hasRefreshableRuntimeAuth = () => Boolean(runtimeAuthState?.sourceApiKey.trim());
 
-      const clearCopilotRefreshTimer = () => {
-        if (!copilotTokenState?.refreshTimer) {
+      const clearRuntimeAuthRefreshTimer = () => {
+        if (!runtimeAuthState?.refreshTimer) {
           return;
         }
-        clearTimeout(copilotTokenState.refreshTimer);
-        copilotTokenState.refreshTimer = undefined;
+        clearTimeout(runtimeAuthState.refreshTimer);
+        runtimeAuthState.refreshTimer = undefined;
       };
 
-      const stopCopilotRefreshTimer = () => {
-        if (!copilotTokenState) {
+      const stopRuntimeAuthRefreshTimer = () => {
+        if (!runtimeAuthState) {
           return;
         }
-        copilotRefreshCancelled = true;
-        clearCopilotRefreshTimer();
+        runtimeAuthRefreshCancelled = true;
+        clearRuntimeAuthRefreshTimer();
       };
 
-      const refreshCopilotToken = async (reason: string): Promise<void> => {
-        if (!copilotTokenState) {
+      const refreshRuntimeAuth = async (reason: string): Promise<void> => {
+        if (!runtimeAuthState) {
           return;
         }
-        if (copilotTokenState.refreshInFlight) {
-          await copilotTokenState.refreshInFlight;
+        if (runtimeAuthState.refreshInFlight) {
+          await runtimeAuthState.refreshInFlight;
           return;
         }
-        const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
-        copilotTokenState.refreshInFlight = (async () => {
-          const githubToken = copilotTokenState.githubToken.trim();
-          if (!githubToken) {
-            throw new Error("Copilot refresh requires a GitHub token.");
+        runtimeAuthState.refreshInFlight = (async () => {
+          const sourceApiKey = runtimeAuthState?.sourceApiKey.trim() ?? "";
+          if (!sourceApiKey) {
+            throw new Error(`Runtime auth refresh requires a source credential.`);
           }
-          log.debug(`Refreshing GitHub Copilot token (${reason})...`);
-          const copilotToken = await resolveCopilotApiToken({
-            githubToken,
+          log.debug(`Refreshing runtime auth for ${runtimeModel.provider} (${reason})...`);
+          const preparedAuth = await prepareProviderRuntimeAuth({
+            provider: runtimeModel.provider,
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            env: process.env,
+            context: {
+              config: params.config,
+              agentDir,
+              workspaceDir: resolvedWorkspace,
+              env: process.env,
+              provider: runtimeModel.provider,
+              modelId,
+              model: runtimeModel,
+              apiKey: sourceApiKey,
+              authMode: runtimeAuthState?.authMode ?? "unknown",
+              profileId: runtimeAuthState?.profileId,
+            },
           });
-          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-          copilotTokenState.expiresAt = copilotToken.expiresAt;
-          const remaining = copilotToken.expiresAt - Date.now();
-          log.debug(
-            `Copilot token refreshed; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
-          );
+          if (!preparedAuth?.apiKey) {
+            throw new Error(
+              `Provider "${runtimeModel.provider}" does not support runtime auth refresh.`,
+            );
+          }
+          authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
+          if (preparedAuth.baseUrl) {
+            runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
+            effectiveModel = { ...effectiveModel, baseUrl: preparedAuth.baseUrl };
+          }
+          runtimeAuthState = {
+            ...runtimeAuthState,
+            expiresAt: preparedAuth.expiresAt,
+          };
+          if (preparedAuth.expiresAt) {
+            const remaining = preparedAuth.expiresAt - Date.now();
+            log.debug(
+              `Runtime auth refreshed for ${runtimeModel.provider}; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
+            );
+          }
         })()
           .catch((err) => {
-            log.warn(`Copilot token refresh failed: ${describeUnknownError(err)}`);
+            log.warn(
+              `Runtime auth refresh failed for ${runtimeModel.provider}: ${describeUnknownError(err)}`,
+            );
             throw err;
           })
           .finally(() => {
-            copilotTokenState.refreshInFlight = undefined;
+            if (runtimeAuthState) {
+              runtimeAuthState.refreshInFlight = undefined;
+            }
           });
-        await copilotTokenState.refreshInFlight;
+        await runtimeAuthState.refreshInFlight;
       };
 
-      const scheduleCopilotRefresh = (): void => {
-        if (!copilotTokenState || copilotRefreshCancelled) {
+      const scheduleRuntimeAuthRefresh = (): void => {
+        if (!runtimeAuthState || runtimeAuthRefreshCancelled) {
           return;
         }
-        if (!hasCopilotGithubToken()) {
-          log.warn("Skipping Copilot refresh scheduling; GitHub token missing.");
+        if (!hasRefreshableRuntimeAuth()) {
+          log.warn(
+            `Skipping runtime auth refresh scheduling for ${runtimeModel.provider}; source credential missing.`,
+          );
           return;
         }
-        clearCopilotRefreshTimer();
+        if (!runtimeAuthState.expiresAt) {
+          return;
+        }
+        clearRuntimeAuthRefreshTimer();
         const now = Date.now();
-        const refreshAt = copilotTokenState.expiresAt - COPILOT_REFRESH_MARGIN_MS;
-        const delayMs = Math.max(COPILOT_REFRESH_MIN_DELAY_MS, refreshAt - now);
+        const refreshAt = runtimeAuthState.expiresAt - RUNTIME_AUTH_REFRESH_MARGIN_MS;
+        const delayMs = Math.max(RUNTIME_AUTH_REFRESH_MIN_DELAY_MS, refreshAt - now);
         const timer = setTimeout(() => {
-          if (copilotRefreshCancelled) {
+          if (runtimeAuthRefreshCancelled) {
             return;
           }
-          refreshCopilotToken("scheduled")
-            .then(() => scheduleCopilotRefresh())
+          refreshRuntimeAuth("scheduled")
+            .then(() => scheduleRuntimeAuthRefresh())
             .catch(() => {
-              if (copilotRefreshCancelled) {
+              if (runtimeAuthRefreshCancelled) {
                 return;
               }
               const retryTimer = setTimeout(() => {
-                if (copilotRefreshCancelled) {
+                if (runtimeAuthRefreshCancelled) {
                   return;
                 }
-                refreshCopilotToken("scheduled-retry")
-                  .then(() => scheduleCopilotRefresh())
+                refreshRuntimeAuth("scheduled-retry")
+                  .then(() => scheduleRuntimeAuthRefresh())
                   .catch(() => undefined);
-              }, COPILOT_REFRESH_RETRY_MS);
-              copilotTokenState.refreshTimer = retryTimer;
-              if (copilotRefreshCancelled) {
+              }, RUNTIME_AUTH_REFRESH_RETRY_MS);
+              const activeRuntimeAuthState = runtimeAuthState;
+              if (activeRuntimeAuthState) {
+                activeRuntimeAuthState.refreshTimer = retryTimer;
+              }
+              if (runtimeAuthRefreshCancelled && activeRuntimeAuthState) {
                 clearTimeout(retryTimer);
-                copilotTokenState.refreshTimer = undefined;
+                activeRuntimeAuthState.refreshTimer = undefined;
               }
             });
         }, delayMs);
-        copilotTokenState.refreshTimer = timer;
-        if (copilotRefreshCancelled) {
+        runtimeAuthState.refreshTimer = timer;
+        if (runtimeAuthRefreshCancelled) {
           clearTimeout(timer);
-          copilotTokenState.refreshTimer = undefined;
+          runtimeAuthState.refreshTimer = undefined;
         }
       };
 
@@ -599,7 +643,7 @@ export async function runEmbeddedPiAgent(
 
       const resolveApiKeyForCandidate = async (candidate?: string) => {
         return getApiKeyForModel({
-          model,
+          model: runtimeModel,
           cfg: params.config,
           profileId: candidate,
           store: authStore,
@@ -613,26 +657,53 @@ export async function runEmbeddedPiAgent(
         if (!apiKeyInfo.apiKey) {
           if (apiKeyInfo.mode !== "aws-sdk") {
             throw new Error(
-              `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
+              `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
             );
           }
           lastProfileId = resolvedProfileId;
           return;
         }
-        if (model.provider === "github-copilot") {
-          const { resolveCopilotApiToken } =
-            await import("../../providers/github-copilot-token.js");
-          const copilotToken = await resolveCopilotApiToken({
-            githubToken: apiKeyInfo.apiKey,
-          });
-          authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
-          if (copilotTokenState) {
-            copilotTokenState.githubToken = apiKeyInfo.apiKey;
-            copilotTokenState.expiresAt = copilotToken.expiresAt;
-            scheduleCopilotRefresh();
+        let runtimeAuthHandled = false;
+        const preparedAuth = await prepareProviderRuntimeAuth({
+          provider: runtimeModel.provider,
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+          env: process.env,
+          context: {
+            config: params.config,
+            agentDir,
+            workspaceDir: resolvedWorkspace,
+            env: process.env,
+            provider: runtimeModel.provider,
+            modelId,
+            model: runtimeModel,
+            apiKey: apiKeyInfo.apiKey,
+            authMode: apiKeyInfo.mode,
+            profileId: apiKeyInfo.profileId,
+          },
+        });
+        if (preparedAuth?.baseUrl) {
+          runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
+          effectiveModel = { ...effectiveModel, baseUrl: preparedAuth.baseUrl };
+        }
+        if (preparedAuth?.apiKey) {
+          authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
+          runtimeAuthState = {
+            sourceApiKey: apiKeyInfo.apiKey,
+            authMode: apiKeyInfo.mode,
+            profileId: apiKeyInfo.profileId,
+            expiresAt: preparedAuth.expiresAt,
+          };
+          if (preparedAuth.expiresAt) {
+            scheduleRuntimeAuthRefresh();
           }
+          runtimeAuthHandled = true;
+        }
+        if (runtimeAuthHandled) {
+          // Plugin-owned runtime auth already stored the exchanged credential.
         } else {
-          authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+          authStorage.setRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey);
+          runtimeAuthState = null;
         }
         lastProfileId = apiKeyInfo.profileId;
       };
@@ -721,11 +792,11 @@ export async function runEmbeddedPiAgent(
         }
       }
 
-      const maybeRefreshCopilotForAuthError = async (
+      const maybeRefreshRuntimeAuthForAuthError = async (
         errorText: string,
         retried: boolean,
       ): Promise<boolean> => {
-        if (!copilotTokenState || retried) {
+        if (!runtimeAuthState || retried) {
           return false;
         }
         if (!isFailoverErrorMessage(errorText)) {
@@ -735,8 +806,8 @@ export async function runEmbeddedPiAgent(
           return false;
         }
         try {
-          await refreshCopilotToken("auth-error");
-          scheduleCopilotRefresh();
+          await refreshRuntimeAuth("auth-error");
+          scheduleRuntimeAuthRefresh();
           return true;
         } catch {
           return false;
@@ -846,7 +917,7 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const copilotAuthRetry = authRetryPending;
+          const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -882,6 +953,7 @@ export async function runEmbeddedPiAgent(
             workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
+            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             contextEngine,
             contextTokenBudget: ctxInfo.tokens,
             skillsSnapshot: params.skillsSnapshot,
@@ -1233,7 +1305,7 @@ export async function runEmbeddedPiAgent(
               ? describeFailoverError(normalizedPromptFailover)
               : describeFailoverError(promptError);
             const errorText = promptErrorDetails.message || describeUnknownError(promptError);
-            if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
+            if (await maybeRefreshRuntimeAuthForAuthError(errorText, runtimeAuthRetry)) {
               authRetryPending = true;
               continue;
             }
@@ -1403,9 +1475,9 @@ export async function runEmbeddedPiAgent(
 
           if (
             authFailure &&
-            (await maybeRefreshCopilotForAuthError(
+            (await maybeRefreshRuntimeAuthForAuthError(
               lastAssistant?.errorMessage ?? "",
-              copilotAuthRetry,
+              runtimeAuthRetry,
             ))
           ) {
             authRetryPending = true;
@@ -1620,7 +1692,7 @@ export async function runEmbeddedPiAgent(
         }
       } finally {
         await contextEngine.dispose?.();
-        stopCopilotRefreshTimer();
+        stopRuntimeAuthRefreshTimer();
         process.chdir(prevCwd);
       }
     }),

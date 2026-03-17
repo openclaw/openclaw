@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import type {
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+  WhatsAppAccountConfig,
+} from "openclaw/plugin-sdk/whatsapp";
 import { createAccountListHelpers } from "../../../src/channels/plugins/account-helpers.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { resolveOAuthDir } from "../../../src/config/paths.js";
-import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../../../src/config/types.js";
 import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
 import { resolveUserPath } from "../../../src/utils.js";

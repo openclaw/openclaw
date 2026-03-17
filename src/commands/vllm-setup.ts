@@ -1,14 +1,20 @@
+import {
+  VLLM_DEFAULT_API_KEY_ENV_VAR,
+  VLLM_DEFAULT_BASE_URL,
+  VLLM_MODEL_PLACEHOLDER,
+  VLLM_PROVIDER_LABEL,
+} from "../agents/vllm-defaults.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   applyProviderDefaultModel,
-  promptAndConfigureOpenAICompatibleSelfHostedProvider,
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
+  promptAndConfigureOpenAICompatibleSelfHostedProvider,
 } from "./self-hosted-provider-setup.js";
 
-export const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
+export { VLLM_DEFAULT_BASE_URL } from "../agents/vllm-defaults.js";
 export const VLLM_DEFAULT_CONTEXT_WINDOW = SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
 export const VLLM_DEFAULT_MAX_TOKENS = SELF_HOSTED_DEFAULT_MAX_TOKENS;
 export const VLLM_DEFAULT_COST = SELF_HOSTED_DEFAULT_COST;
@@ -21,10 +27,10 @@ export async function promptAndConfigureVllm(params: {
     cfg: params.cfg,
     prompter: params.prompter,
     providerId: "vllm",
-    providerLabel: "vLLM",
+    providerLabel: VLLM_PROVIDER_LABEL,
     defaultBaseUrl: VLLM_DEFAULT_BASE_URL,
-    defaultApiKeyEnvVar: "VLLM_API_KEY",
-    modelPlaceholder: "meta-llama/Meta-Llama-3-8B-Instruct",
+    defaultApiKeyEnvVar: VLLM_DEFAULT_API_KEY_ENV_VAR,
+    modelPlaceholder: VLLM_MODEL_PLACEHOLDER,
   });
   return {
     config: result.config,
