@@ -6,28 +6,24 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { type OutboundSendDeps, resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/channel-runtime";
-import {
-  buildAgentSessionKey,
-  resolveThreadSessionKeys,
-  type RoutePeer,
-} from "openclaw/plugin-sdk/core";
+import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram";
 import {
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
-  getChatChannelMeta,
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
+  TelegramConfigSchema,
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
-  TelegramConfigSchema,
   type ChannelPlugin,
   type ChannelMessageActionAdapter,
   type OpenClawConfig,
@@ -48,25 +44,23 @@ import { monitorTelegramProvider } from "./monitor.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
 import { sendTelegramPayloadMessages } from "./outbound-adapter.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
-import {
-  findTelegramTokenOwnerAccountId,
-  formatDuplicateTelegramTokenReason,
-  telegramConfigAccessors,
-  telegramConfigBase,
-} from "./plugin-shared.js";
 import { probeTelegram, type TelegramProbe } from "./probe.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { sendTypingTelegram } from "./send.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
+import {
+  createTelegramPluginBase,
+  findTelegramTokenOwnerAccountId,
+  formatDuplicateTelegramTokenReason,
+  telegramConfigAccessors,
+} from "./shared.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
 
 type TelegramSendFn = ReturnType<
   typeof getTelegramRuntime
 >["channel"]["telegram"]["sendMessageTelegram"];
-
-const meta = getChatChannelMeta("telegram");
 
 type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
 
@@ -185,34 +179,13 @@ function parseTelegramExplicitTarget(raw: string) {
   };
 }
 
-function normalizeOutboundThreadId(value?: string | number | null): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return undefined;
-    }
-    return String(Math.trunc(value));
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function buildTelegramBaseSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
   accountId?: string | null;
   peer: RoutePeer;
 }) {
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: "telegram",
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    identityLinks: params.cfg.session?.identityLinks,
-  });
+  return buildOutboundBaseSessionKey({ ...params, channel: "telegram" });
 }
 
 function resolveTelegramOutboundSessionRoute(params: {
@@ -324,12 +297,11 @@ function readTelegramAllowlistConfig(account: ResolvedTelegramAccount) {
 }
 
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
-  id: "telegram",
-  meta: {
-    ...meta,
-    quickstartAllowFrom: true,
-  },
-  setupWizard: telegramSetupWizard,
+  ...createTelegramPluginBase({
+    configSchema: buildChannelConfigSchema(TelegramConfigSchema),
+    setupWizard: telegramSetupWizard,
+    setup: telegramSetupAdapter,
+  }),
   pairing: {
     idLabel: "telegramUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(telegram|tg):/i, ""),
@@ -347,49 +319,6 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       );
     },
   },
-  capabilities: {
-    chatTypes: ["direct", "group", "channel", "thread"],
-    reactions: true,
-    threads: true,
-    media: true,
-    polls: true,
-    nativeCommands: true,
-    blockStreaming: true,
-  },
-  reload: { configPrefixes: ["channels.telegram"] },
-  configSchema: buildChannelConfigSchema(TelegramConfigSchema),
-  config: {
-    ...telegramConfigBase,
-    isConfigured: (account, cfg) => {
-      if (!account.token?.trim()) {
-        return false;
-      }
-      return !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
-    },
-    unconfiguredReason: (account, cfg) => {
-      if (!account.token?.trim()) {
-        return "not configured";
-      }
-      const ownerAccountId = findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
-      if (!ownerAccountId) {
-        return "not configured";
-      }
-      return formatDuplicateTelegramTokenReason({
-        accountId: account.accountId,
-        ownerAccountId,
-      });
-    },
-    describeAccount: (account, cfg) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured:
-        Boolean(account.token?.trim()) &&
-        !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
-      tokenSource: account.tokenSource,
-    }),
-    ...telegramConfigAccessors,
-  },
   allowlist: {
     supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
     readConfig: ({ cfg, accountId }) =>
@@ -404,11 +333,15 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       }),
     }),
   },
-  acpBindings: {
-    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+  bindings: {
+    compileConfiguredBinding: ({ conversationId }) =>
       normalizeTelegramAcpConversationId(conversationId),
-    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
-      matchTelegramAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+    matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      matchTelegramAcpConversation({
+        bindingConversationId: compiledBinding.conversationId,
+        conversationId,
+        parentConversationId,
+      }),
   },
   security: {
     resolveDmPolicy: resolveTelegramDmPolicy,

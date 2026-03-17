@@ -1,105 +1,40 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/tlon";
 import { tlonChannelConfigSchema } from "./config-schema.js";
-import { tlonSetupAdapter } from "./setup-core.js";
-import { applyTlonSetupConfig } from "./setup-core.js";
-import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
+import {
+  applyTlonSetupConfig,
+  createTlonSetupWizardBase,
+  resolveTlonSetupConfigured,
+  tlonSetupAdapter,
+} from "./setup-core.js";
+import {
+  formatTargetHint,
+  normalizeShip,
+  parseTlonTarget,
+  resolveTlonOutboundTarget,
+} from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { validateUrbitBaseUrl } from "./urbit/base-url.js";
 
 const TLON_CHANNEL_ID = "tlon" as const;
 
-let tlonChannelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
+const loadTlonChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
-async function loadTlonChannelRuntime() {
-  tlonChannelRuntimePromise ??= import("./channel.runtime.js");
-  return tlonChannelRuntimePromise;
-}
-
-const tlonSetupWizardProxy = {
-  channel: "tlon",
-  status: {
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "configured",
-    unconfiguredHint: "urbit messenger",
-    configuredScore: 1,
-    unconfiguredScore: 4,
-    resolveConfigured: async ({ cfg }) =>
-      await (await loadTlonChannelRuntime()).tlonSetupWizard.status.resolveConfigured({ cfg }),
-    resolveStatusLines: async ({ cfg, configured }) =>
-      (await (
-        await loadTlonChannelRuntime()
-      ).tlonSetupWizard.status.resolveStatusLines?.({
-        cfg,
-        configured,
-      })) ?? [],
-  },
-  introNote: {
-    title: "Tlon setup",
-    lines: [
-      "You need your Urbit ship URL and login code.",
-      "Example URL: https://your-ship-host",
-      "Example ship: ~sampel-palnet",
-      "If your ship URL is on a private network (LAN/localhost), you must explicitly allow it during setup.",
-      "Docs: https://docs.openclaw.ai/channels/tlon",
-    ],
-  },
-  credentials: [],
-  textInputs: [
-    {
-      inputKey: "ship",
-      message: "Ship name",
-      placeholder: "~sampel-palnet",
-      currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).ship ?? undefined,
-      validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-      normalizeValue: ({ value }) => normalizeShip(String(value).trim()),
-      applySet: async ({ cfg, accountId, value }) =>
-        applyTlonSetupConfig({
-          cfg,
-          accountId,
-          input: { ship: value },
-        }),
-    },
-    {
-      inputKey: "url",
-      message: "Ship URL",
-      placeholder: "https://your-ship-host",
-      currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).url ?? undefined,
-      validate: ({ value }) => {
-        const next = validateUrbitBaseUrl(String(value ?? ""));
-        if (!next.ok) {
-          return next.error;
-        }
-        return undefined;
-      },
-      normalizeValue: ({ value }) => String(value).trim(),
-      applySet: async ({ cfg, accountId, value }) =>
-        applyTlonSetupConfig({
-          cfg,
-          accountId,
-          input: { url: value },
-        }),
-    },
-    {
-      inputKey: "code",
-      message: "Login code",
-      placeholder: "lidlut-tabwed-pillex-ridrup",
-      currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).code ?? undefined,
-      validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-      normalizeValue: ({ value }) => String(value).trim(),
-      applySet: async ({ cfg, accountId, value }) =>
-        applyTlonSetupConfig({
-          cfg,
-          accountId,
-          input: { code: value },
-        }),
-    },
-  ],
+const tlonSetupWizardProxy = createTlonSetupWizardBase({
+  resolveConfigured: async ({ cfg }) =>
+    await (await loadTlonChannelRuntime()).tlonSetupWizard.status.resolveConfigured({ cfg }),
+  resolveStatusLines: async ({ cfg, configured }) =>
+    (await (
+      await loadTlonChannelRuntime()
+    ).tlonSetupWizard.status.resolveStatusLines?.({
+      cfg,
+      configured,
+    })) ?? [],
   finalize: async (params) =>
     await (
       await loadTlonChannelRuntime()
     ).tlonSetupWizard.finalize!(params),
-} satisfies NonNullable<ChannelPlugin["setupWizard"]>;
+}) satisfies NonNullable<ChannelPlugin["setupWizard"]>;
 
 export const tlonPlugin: ChannelPlugin = {
   id: TLON_CHANNEL_ID,
@@ -217,19 +152,7 @@ export const tlonPlugin: ChannelPlugin = {
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 10000,
-    resolveTarget: ({ to }) => {
-      const parsed = parseTlonTarget(to ?? "");
-      if (!parsed) {
-        return {
-          ok: false,
-          error: new Error(`Invalid Tlon target. Use ${formatTargetHint()}`),
-        };
-      }
-      if (parsed.kind === "dm") {
-        return { ok: true, to: parsed.ship };
-      }
-      return { ok: true, to: parsed.nest };
-    },
+    resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
     sendText: async (params) =>
       await (
         await loadTlonChannelRuntime()

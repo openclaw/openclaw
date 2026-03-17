@@ -360,6 +360,30 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Enable: `BYTEPLUS_API_KEY=... BYTEPLUS_LIVE_TEST=1 pnpm test:live src/agents/byteplus.live.test.ts`
 - Optional model override: `BYTEPLUS_CODING_MODEL=ark-code-latest`
 
+## Image generation live
+
+- Test: `src/image-generation/runtime.live.test.ts`
+- Command: `pnpm test:live src/image-generation/runtime.live.test.ts`
+- Scope:
+  - Enumerates every registered image-generation provider plugin
+  - Loads missing provider env vars from your login shell (`~/.profile`) before probing
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Skips providers with no usable auth/profile/model
+  - Runs the stock image-generation variants through the shared runtime capability:
+    - `google:flash-generate`
+    - `google:pro-generate`
+    - `google:pro-edit`
+    - `openai:default-generate`
+- Current bundled providers covered:
+  - `openai`
+  - `google`
+- Optional narrowing:
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-1,google/gemini-3.1-flash-image-preview"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit"`
+- Optional auth behavior:
+  - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
+
 ## Docker runners (optional “works in Linux” checks)
 
 These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount CLI auth homes like `~/.codex`, `~/.claude`, `~/.qwen`, and `~/.minimax` when present, then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:

@@ -1,7 +1,6 @@
 import {
   buildOauthProviderAuthResult,
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderCatalogContext,
@@ -13,6 +12,10 @@ import {
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
+import {
+  minimaxMediaUnderstandingProvider,
+  minimaxPortalMediaUnderstandingProvider,
+} from "./media-understanding-provider.js";
 import { loginMiniMaxPortalOAuth, type MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
@@ -155,12 +158,11 @@ function createOAuthHandler(region: MiniMaxRegion) {
   };
 }
 
-const minimaxPlugin = {
+export default definePluginEntry({
   id: API_PROVIDER_ID,
   name: "MiniMax",
   description: "Bundled MiniMax API-key and OAuth provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: API_PROVIDER_ID,
       label: PROVIDER_LABEL,
@@ -273,7 +275,7 @@ const minimaxPlugin = {
       ],
       isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
     });
+    api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
   },
-};
-
-export default minimaxPlugin;
+});

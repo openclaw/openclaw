@@ -5,12 +5,17 @@ import {
 } from "../../agents/model-auth.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
+  generateImage,
+  listRuntimeImageGenerationProviders,
+} from "../../image-generation/runtime.js";
+import {
   describeImageFile,
+  describeImageFileWithModel,
   describeVideoFile,
   runMediaUnderstandingFile,
   transcribeAudioFile,
 } from "../../media-understanding/runtime.js";
-import { listSpeechVoices, textToSpeech, textToSpeechTelephony } from "../../tts/tts.js";
+import { listSpeechVoices, textToSpeech, textToSpeechTelephony } from "../../tts/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -145,8 +150,13 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     mediaUnderstanding: {
       runFile: runMediaUnderstandingFile,
       describeImageFile,
+      describeImageFileWithModel,
       describeVideoFile,
       transcribeAudioFile,
+    },
+    imageGeneration: {
+      generate: generateImage,
+      listProviders: listRuntimeImageGenerationProviders,
     },
     webSearch: {
       listProviders: listWebSearchProviders,
