@@ -87,10 +87,10 @@ python seedream_image_generate.py -p "Generate 3 cute dog pictures" -g --max-ima
 # Image-to-image
 python seedream_image_generate.py -p "Convert this image to anime style" -i "https://example.com/image.jpg" --version 5.0
 
-# Web search tool (5.0-lite only)
+# Web search tool (5.0 only)
 python seedream_image_generate.py -p "Latest 2026 smartphone" --web-search --version 5.0
 
-# Custom output format (5.0-lite only)
+# Custom output format (5.0 only)
 python seedream_image_generate.py -p "A beautiful landscape" --output-format png --version 5.0
 
 # List all supported versions
@@ -127,13 +127,13 @@ sys.path.append("scripts")
 from seedream_image_generate import seedream_generate
 
 async def main():
-    # Use 5.0-lite version (default)
+    # Use 5.0 version (default)
     result = await seedream_generate([
         {
             "prompt": "A cute kitten",
             "size": "2048x2048",
             "watermark": False,
-            "output_format": "png"  # 5.0-lite only
+            "output_format": "png"  # 5.0 only
         }
     ], version="5.0")
     
@@ -156,7 +156,7 @@ asyncio.run(main())
 - You need better style reproduction
 - You have moderate quality requirements
 
-### Choose 5.0-lite (Recommended) if:
+### Choose 5.0 (Recommended) if:
 - You want the highest quality
 - You need breakthrough creative expression
 - You have extreme detail requirements
@@ -164,7 +164,7 @@ asyncio.run(main())
 - **You need custom output format (png/jpeg)** ⭐
 - Important projects and work
 
-**When in doubt, use 5.0-lite!** ⭐
+**When in doubt, use 5.0!** ⭐
 
 ## Prompt Engineering Tips
 
@@ -173,14 +173,14 @@ asyncio.run(main())
 [Subject Description] + [Style/Art Movement] + [Lighting/Atmosphere] + [Quality/Resolution]
 ```
 
-### Advanced Prompts (Optimized for 5.0-lite)
+### Advanced Prompts (Optimized for 5.0)
 ```
-[Subject Description], [Creative Style/Art Movement], [Unique Perspective/Composition], [Special Lighting/Atmosphere], [Emphasizing 5.0-lite creative expression]
+[Subject Description], [Creative Style/Art Movement], [Unique Perspective/Composition], [Special Lighting/Atmosphere], [Emphasizing 5.0 creative expression]
 ```
 
 ## Parameter Support by Version
 
-| Parameter | Seedream 4.0 | Seedream 4.5 | Seedream 5.0-lite | Description |
+| Parameter | Seedream 4.0 | Seedream 4.5 | Seedream 5.0 | Description |
 |-----------|--------------|--------------|-------------------|-------------|
 | model | ✅ | ✅ | ✅ | Model name |
 | prompt | ✅ | ✅ | ✅ | Prompt (required) |
@@ -192,13 +192,13 @@ asyncio.run(main())
 | watermark | ✅ | ✅ | ✅ | Watermark (true/false) |
 | stream | ✅ | ✅ | ✅ | Streaming output |
 | optimize_prompt_options | ✅ | ✅ | ✅ | Prompt optimization config |
-| **tools** | ❌ | ❌ | **✅** | Tool configuration (5.0-lite only) |
-| **output_format** | ❌ | ❌ | **✅** | Output format (png/jpeg, 5.0-lite only) |
+| **tools** | ❌ | ❌ | **✅** | Tool configuration (5.0 only) |
+| **output_format** | ❌ | ❌ | **✅** | Output format (png/jpeg, 5.0 only) |
 
 ## FAQ
 
 ### Q: What's the difference between the versions?
-A: 4.0 is for quick daily use, 4.5 offers better details for complex scenes, and 5.0-lite provides the highest quality with unique tools support.
+A: 4.0 is for quick daily use, 4.5 offers better details for complex scenes, and 5.0 provides the highest quality with unique tools support.
 
 ### Q: How long are generated URLs valid?
 A: URLs are valid for 24 hours. Please download and save your images promptly.
