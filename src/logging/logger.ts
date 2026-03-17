@@ -47,6 +47,8 @@ const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type LoggerSettings = {
   level?: LogLevel;
+  /** Custom log directory. Retains daily rolling filenames. Ignored when `file` is set. */
+  dir?: string;
   file?: string;
   maxFileBytes?: number;
   consoleLevel?: LogLevel;
