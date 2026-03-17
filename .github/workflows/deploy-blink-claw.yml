@@ -5,14 +5,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Never cancel mid-deploy — queue it instead.
 concurrency:
   group: deploy-blink-claw
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Build on Fly → Update all agents
+    name: Build & push → Update all agents
     runs-on: ubuntu-24.04
 
     steps:
@@ -24,52 +23,40 @@ jobs:
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-      # Build on Fly's remote infrastructure — no Docker setup needed.
-      # Fly's remote builders are fast, dedicated machines with their own layer cache.
-      # --build-only: build the image but don't deploy machines
-      # --remote-only: build on Fly's builders, not locally
-      # --push: push the result to registry.fly.io/blink-claw (deployment tag)
-      # NOTE: --build-only pushes as a deployment tag, NOT as :latest.
-      # We capture the image ref and use it explicitly in the update step.
-      - name: Build image on Fly remote builder
-        id: build
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Fly registry
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: |
-          OUTPUT=$(flyctl deploy \
-            --build-only \
-            --remote-only \
-            --push \
-            --app blink-claw \
-            --build-arg OPENCLAW_INSTALL_BROWSER=1 \
-            --build-arg "OPENCLAW_EXTENSIONS=telegram discord slack whatsapp" \
-            --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=gh jq python3 python3-pip ffmpeg tmux ripgrep sqlite3 unzip zip wget fzf fd-find bat" \
-            --build-arg OPENCLAW_INSTALL_BLINK_TOOLS=1 \
-            2>&1)
-          echo "$OUTPUT"
-          # Extract the image ref (registry.fly.io/blink-claw:deployment-...@sha256:...)
-          IMAGE=$(echo "$OUTPUT" | grep -oE 'registry\.fly\.io/blink-claw:[^ ]+' | tail -1)
-          if [ -z "$IMAGE" ]; then
-            # Fallback: get the most recently built image from the app
-            IMAGE=$(flyctl releases list --app blink-claw --json 2>/dev/null \
-              | jq -r '.[0].ImageRef // empty' 2>/dev/null || true)
-          fi
-          echo "Built image: $IMAGE"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+        run: flyctl auth docker
 
-      # Update every running blink-claw-* machine to the newly built image.
-      # Uses the exact image ref from the build step, not :latest (which --build-only does NOT update).
-      # Skips the registry-only app (blink-claw) and the manager.
+      # Build with Docker Buildx and push as :latest directly.
+      # Uses registry-based layer cache for speed (~3-5 min after first build).
+      # This replaces the broken flyctl --build-only --push approach which
+      # pushed as a deployment tag that couldn't be resolved by flyctl machines update.
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: registry.fly.io/blink-claw:latest
+          build-args: |
+            OPENCLAW_INSTALL_BROWSER=1
+            OPENCLAW_EXTENSIONS=telegram discord slack whatsapp
+            OPENCLAW_DOCKER_APT_PACKAGES=gh jq python3 python3-pip ffmpeg tmux ripgrep sqlite3 unzip zip wget fzf fd-find bat
+            OPENCLAW_INSTALL_BLINK_TOOLS=1
+          cache-from: type=registry,ref=registry.fly.io/blink-claw:buildcache
+          cache-to: type=registry,ref=registry.fly.io/blink-claw:buildcache,mode=max
+
+      # Update every running blink-claw-* machine to the newly pushed :latest.
+      # Skips the registry-only app (blink-claw) and the claw-manager.
       - name: Update all running Blink Claw agents
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          NEW_IMAGE: ${{ steps.build.outputs.image }}
         run: |
-          if [ -z "$NEW_IMAGE" ]; then
-            echo "::error::No image ref captured from build step — cannot update agents safely."
-            exit 1
-          fi
-          echo "Updating all agents to: $NEW_IMAGE"
+          IMAGE="registry.fly.io/blink-claw:latest"
+          echo "Updating all agents to: $IMAGE"
 
           APPS=$(flyctl apps list --org blink-new --json \
             | jq -r '.[].Name' \
@@ -81,22 +68,22 @@ jobs:
             exit 0
           fi
 
-          echo "Apps to update: $APPS"
+          echo "Found $(echo "$APPS" | wc -l) agent apps"
 
           FAILED=0
           for APP in $APPS; do
             MACHINES=$(flyctl machines list --app "$APP" --json 2>/dev/null \
-              | jq -r '.[].id' 2>/dev/null || true)
+              | jq -r '.[] | select(.state == "started" or .state == "stopped") | .id' 2>/dev/null || true)
 
             if [ -z "$MACHINES" ]; then
-              echo "  $APP: no machines, skipping"
+              echo "  $APP: no active machines, skipping"
               continue
             fi
 
             for MACHINE in $MACHINES; do
               echo "  Updating $APP / $MACHINE ..."
               flyctl machines update "$MACHINE" \
-                --image "$NEW_IMAGE" \
+                --image "$IMAGE" \
                 --app "$APP" \
                 --yes \
               || { echo "  WARNING: failed to update $MACHINE in $APP"; FAILED=1; }
@@ -110,6 +97,3 @@ jobs:
         if: failure()
         run: |
           echo "::error::Deploy failed — check the logs above."
-          # Add Slack/Telegram webhook here if desired:
-          # curl -s -X POST "${{ secrets.SLACK_WEBHOOK }}" \
-          #   -d '{"text":"❌ Blink Claw deploy failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}'
