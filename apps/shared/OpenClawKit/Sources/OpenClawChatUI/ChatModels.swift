@@ -275,7 +275,24 @@ public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {
     public let seq: Int?
     public let stream: String
     public let ts: Int?
+    public let sessionKey: String?
     public let data: [String: AnyCodable]
+
+    public init(
+        runId: String,
+        seq: Int?,
+        stream: String,
+        ts: Int?,
+        sessionKey: String? = nil,
+        data: [String: AnyCodable])
+    {
+        self.runId = runId
+        self.seq = seq
+        self.stream = stream
+        self.ts = ts
+        self.sessionKey = sessionKey
+        self.data = data
+    }
 }
 
 public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {

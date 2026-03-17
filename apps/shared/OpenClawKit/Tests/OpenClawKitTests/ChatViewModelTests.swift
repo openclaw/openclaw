@@ -130,6 +130,7 @@ private func emitAssistantText(
     transport: TestChatTransport,
     runId: String,
     text: String,
+    sessionKey: String? = nil,
     seq: Int = 1)
 {
     transport.emit(
@@ -139,12 +140,14 @@ private func emitAssistantText(
                 seq: seq,
                 stream: "assistant",
                 ts: Int(Date().timeIntervalSince1970 * 1000),
+                sessionKey: sessionKey,
                 data: ["text": AnyCodable(text)])))
 }
 
 private func emitToolStart(
     transport: TestChatTransport,
     runId: String,
+    sessionKey: String? = nil,
     seq: Int = 2)
 {
     transport.emit(
@@ -154,6 +157,7 @@ private func emitToolStart(
                 seq: seq,
                 stream: "tool",
                 ts: Int(Date().timeIntervalSince1970 * 1000),
+                sessionKey: sessionKey,
                 data: [
                     "phase": AnyCodable("start"),
                     "name": AnyCodable("demo"),
@@ -470,6 +474,46 @@ extension TestChatTransportState {
         }
     }
 
+    @Test func acceptsAgentEventsForCanonicalSessionKeyEvenWhenRunIDDiffersFromSessionID() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        emitAssistantText(
+            transport: transport,
+            runId: "server-run-1",
+            text: "stream via session key",
+            sessionKey: "agent:main:main")
+        emitToolStart(
+            transport: transport,
+            runId: "server-run-1",
+            sessionKey: "agent:main:main")
+
+        try await waitUntil("assistant stream visible via sessionKey") {
+            await MainActor.run { vm.streamingAssistantText == "stream via session key" }
+        }
+        try await waitUntil("tool call pending via sessionKey") {
+            await MainActor.run { vm.pendingToolCalls.count == 1 }
+        }
+    }
+
+    @Test func ignoresAgentEventsForOtherSessionKeys() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        emitAssistantText(
+            transport: transport,
+            runId: "server-run-2",
+            text: "wrong session",
+            sessionKey: "agent:main:other")
+
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        #expect(await MainActor.run { vm.streamingAssistantText } == nil)
+    }
+
     @Test func acceptsCanonicalSessionKeyEventsForExternalRuns() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(messages: [chatTextMessage(role: "user", text: "first", timestamp: now)])
@@ -496,6 +540,43 @@ extension TestChatTransportState {
         try await waitUntil("history refresh after canonical external event") {
             await MainActor.run { vm.messages.count == 2 }
         }
+    }
+
+    @Test func appendsFinalAssistantMessageImmediatelyWithoutHistoryRefresh() async throws {
+        let history = historyPayload(messages: [])
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm)
+        await sendUserMessage(vm)
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        emitAssistantText(transport: transport, runId: "sess-main", text: "partial")
+        try await waitUntil("assistant stream visible") {
+            await MainActor.run { vm.streamingAssistantText == "partial" }
+        }
+
+        let runId = try #require(await transport.lastSentRunId())
+        let finalMessage = AnyCodable([
+            "role": "assistant",
+            "content": [["type": "text", "text": "final from event"]],
+            "timestamp": Date().timeIntervalSince1970 * 1000,
+        ])
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: finalMessage,
+                    errorMessage: nil)))
+
+        try await waitUntil("final message appended immediately") {
+            await MainActor.run {
+                vm.messages.contains(where: { message in
+                    message.role == "assistant" && message.content.contains(where: { $0.text == "final from event" })
+                })
+            }
+        }
+        #expect(await MainActor.run { vm.streamingAssistantText } == nil)
     }
 
     @Test func preservesMessageIDsAcrossHistoryRefreshes() async throws {

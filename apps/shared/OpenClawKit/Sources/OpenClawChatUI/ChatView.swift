@@ -200,7 +200,7 @@ public struct OpenClawChatView: View {
                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
         }
 
-        if self.viewModel.pendingRunCount > 0 {
+        if self.viewModel.pendingRunCount > 0 && !self.hasVisibleStreamingAssistantText {
             HStack {
                 ChatTypingIndicatorBubble(style: self.style)
                     .equatable()
@@ -291,13 +291,16 @@ public struct OpenClawChatView: View {
         return text
     }
 
+    private var hasVisibleStreamingAssistantText: Bool {
+        guard let text = self.viewModel.streamingAssistantText else { return false }
+        return AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
+    }
+
     private var hasVisibleMessageListContent: Bool {
         if !self.visibleMessages.isEmpty {
             return true
         }
-        if let text = self.viewModel.streamingAssistantText,
-           AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
-        {
+        if self.hasVisibleStreamingAssistantText {
             return true
         }
         if self.viewModel.pendingRunCount > 0 {
