@@ -981,18 +981,24 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         accountId: ctx.accountId,
         kind: "subagent",
       });
+      let tbManager: Awaited<ReturnType<typeof createFeishuThreadBindingManager>> | null = null;
       if (threadBindingPolicy.enabled) {
-        createFeishuThreadBindingManager({
+        tbManager = createFeishuThreadBindingManager({
           accountId: ctx.accountId,
           cfg: ctx.cfg,
         });
       }
-      return monitorFeishuProvider({
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        accountId: ctx.accountId,
-      });
+      try {
+        return await monitorFeishuProvider({
+          config: ctx.cfg,
+          runtime: ctx.runtime,
+          abortSignal: ctx.abortSignal,
+          accountId: ctx.accountId,
+        });
+      } catch (err) {
+        tbManager?.stop();
+        throw err;
+      }
     },
     stopAccount: async (ctx) => {
       const { getFeishuThreadBindingManager } = await import("./thread-bindings.js");

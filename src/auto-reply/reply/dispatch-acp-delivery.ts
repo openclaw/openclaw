@@ -188,6 +188,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     // payloads from the normal inference pipeline (e.g. Feishu with
     // disableBlockStreaming). Promote blocks to finals so they reach the
     // user through the channel's normal final-reply path.
+    // Note: ACP blocks are cumulative (each contains all text so far), so
+    // the Feishu final-text dedupe set never silently drops content.
     return params.dispatcher.sendFinalReply(ttsPayload);
   };
 
