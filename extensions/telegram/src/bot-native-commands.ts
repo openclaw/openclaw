@@ -79,9 +79,6 @@ import { buildInlineKeyboard } from "./send.js";
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
 type TelegramNativeCommandContext = Context & { match?: string };
-type TelegramNativeCommandMessage = NonNullable<
-  TelegramNativeCommandContext["message"] | TelegramNativeCommandContext["channelPost"]
->;
 
 type TelegramCommandAuthResult = {
   chatId: number;
@@ -156,7 +153,7 @@ function isChannelPostContext(ctx: TelegramNativeCommandContext) {
 }
 
 async function resolveTelegramCommandAuth(params: {
-  msg: TelegramNativeCommandMessage;
+  msg: NonNullable<TelegramNativeCommandContext["message"]>;
   bot: Bot;
   cfg: OpenClawConfig;
   accountId: string;
@@ -330,19 +327,15 @@ async function resolveTelegramCommandAuth(params: {
   const groupSenderAllowed = isGroup
     ? isSenderAllowed({ allow: effectiveGroupAllow, senderId, senderUsername })
     : false;
-  const channelPolicy = isChannelPost && useAccessGroups ? resolveGroupPolicy(chatId) : null;
+  const channelPolicy = isChannelPost ? resolveGroupPolicy(chatId) : null;
   const commandAuthorizers = isChannelPost
-    ? useAccessGroups
-      ? [
-          // Channel posts have no human sender identity, so explicit chat allow is the auth source.
-          {
-            configured: true,
-            // policyAccess already rejects denied chats above; groupConfig here means
-            // the channel matched an explicit chat entry rather than only the "*" default.
-            allowed: Boolean(channelPolicy?.groupConfig),
-          },
-        ]
-      : []
+    ? [
+        // Channel posts have no human sender identity, so explicit chat allow is the auth source.
+        {
+          configured: true,
+          allowed: Boolean(channelPolicy?.allowlistEnabled && channelPolicy.allowed),
+        },
+      ]
     : [
         { configured: dmAllow.hasEntries, allowed: senderAllowed },
         ...(isGroup
@@ -484,7 +477,7 @@ export const registerTelegramNativeCommands = ({
   });
 
   const resolveCommandRuntimeContext = async (params: {
-    msg: TelegramNativeCommandMessage;
+    msg: NonNullable<TelegramNativeCommandContext["message"]>;
     isGroup: boolean;
     isForum: boolean;
     resolvedThreadId?: number;
