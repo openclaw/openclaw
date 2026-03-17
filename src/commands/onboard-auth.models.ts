@@ -1,7 +1,7 @@
 import {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
-} from "../agents/models-config.providers.static.js";
+} from "../../extensions/qianfan/provider-catalog.js";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import {
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
