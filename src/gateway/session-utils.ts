@@ -727,7 +727,7 @@ function isPrimaryAgentSessionKey(key: string, cfg: OpenClawConfig): boolean {
     return false;
   }
   const normalizedMainKey = normalizeMainKey(cfg.session?.mainKey);
-  return parsed.rest === normalizedMainKey || parsed.rest === "main";
+  return parsed.rest === normalizedMainKey;
 }
 
 export function listSessionsFromStore(params: {
