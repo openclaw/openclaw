@@ -19,7 +19,7 @@ export type {
 } from "../channels/plugins/types.adapters.js";
 export type { InspectedTelegramAccount } from "../../extensions/telegram/api.js";
 export type { ResolvedTelegramAccount } from "../../extensions/telegram/api.js";
-export type { TelegramProbe } from "../../extensions/telegram/api.js";
+export type { TelegramProbe } from "../../extensions/telegram/runtime-api.js";
 export type { TelegramButtonStyle, TelegramInlineButtons } from "../../extensions/telegram/api.js";
 export type { StickerMetadata } from "../../extensions/telegram/api.js";
 
@@ -96,10 +96,10 @@ export {
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
-} from "../../extensions/telegram/api.js";
+} from "../../extensions/telegram/runtime-api.js";
 export { getCacheStats, searchStickers } from "../../extensions/telegram/api.js";
-export { resolveTelegramToken } from "../../extensions/telegram/api.js";
-export { telegramMessageActions } from "../../extensions/telegram/api.js";
+export { resolveTelegramToken } from "../../extensions/telegram/runtime-api.js";
+export { telegramMessageActions } from "../../extensions/telegram/runtime-api.js";
 export { collectTelegramStatusIssues } from "../../extensions/telegram/api.js";
 export { sendTelegramPayloadMessages } from "../../extensions/telegram/api.js";
 export {

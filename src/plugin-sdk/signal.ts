@@ -52,6 +52,6 @@ export {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
 } from "../../extensions/signal/api.js";
-export { resolveSignalReactionLevel } from "../../extensions/signal/api.js";
-export { removeReactionSignal, sendReactionSignal } from "../../extensions/signal/api.js";
-export { sendMessageSignal } from "../../extensions/signal/api.js";
+export { resolveSignalReactionLevel } from "../../extensions/signal/runtime-api.js";
+export { removeReactionSignal, sendReactionSignal } from "../../extensions/signal/runtime-api.js";
+export { sendMessageSignal } from "../../extensions/signal/runtime-api.js";
