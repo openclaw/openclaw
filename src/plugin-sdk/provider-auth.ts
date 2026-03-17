@@ -3,6 +3,7 @@
 export type { OpenClawConfig } from "../config/config.js";
 export type { SecretInput } from "../config/types.secrets.js";
 export type { ProviderAuthResult } from "../plugins/types.js";
+export type { ProviderAuthContext } from "../plugins/types.js";
 export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 
@@ -16,6 +17,7 @@ export {
 } from "../agents/auth-profiles.js";
 export {
   MINIMAX_OAUTH_MARKER,
+  resolveOAuthApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "../agents/model-auth-markers.js";
 export {
@@ -35,6 +37,7 @@ export {
 } from "../plugins/provider-auth-token.js";
 export { applyAuthProfileConfig, buildApiKeyCredential } from "../plugins/provider-auth-helpers.js";
 export { githubCopilotLoginCommand } from "../providers/github-copilot-auth.js";
+export { loginChutes } from "../commands/chutes-oauth.js";
 export { loginOpenAICodexOAuth } from "../plugins/provider-openai-codex-oauth.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export { coerceSecretRef } from "../config/types.secrets.js";
