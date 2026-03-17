@@ -385,6 +385,31 @@ describe("GatewayClient close handling", () => {
     }
   });
 
+  it("cancels a pending reconnect when start is called during backoff", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      getLatestWs().emitClose(1012, "service restart");
+      expect(vi.getTimerCount()).toBe(1);
+
+      // A manual restart should replace the delayed retry instead of racing it later.
+      client.start();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(wsInstances).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(wsInstances).toHaveLength(2);
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not clear persisted device auth when explicit shared token is provided", () => {
     const onClose = vi.fn();
     const identity: DeviceIdentity = {

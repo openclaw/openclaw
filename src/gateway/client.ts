@@ -163,12 +163,20 @@ export class GatewayClient {
         : 30_000;
   }
 
+  private clearReconnectTimer() {
+    if (!this.reconnectTimer) {
+      return;
+    }
+    // Manual reconnects and shutdown should cancel delayed retries, not just drop the handle.
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+  }
+
   start() {
     if (this.closed) {
       return;
     }
-    // A fired reconnect timer hands control back to start(); drop the stale handle first.
-    this.reconnectTimer = null;
+    this.clearReconnectTimer();
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
       this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
@@ -327,10 +335,7 @@ export class GatewayClient {
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingConnectErrorDetailCode = null;
     // Prompt shutdown requires cancelling any pending retry timers.
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
+    this.clearReconnectTimer();
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -728,9 +733,7 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-    }
+    this.clearReconnectTimer();
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
     // Keep reconnect timers ref'd so long-running clients stay alive between disconnect and retry.
