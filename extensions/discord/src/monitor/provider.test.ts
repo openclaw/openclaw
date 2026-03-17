@@ -9,7 +9,7 @@ import {
   getProviderMonitorTestMocks,
   mockResolvedDiscordAccountConfig,
   resetDiscordProviderMonitorMocks,
-} from "./provider.test-support.js";
+} from "../../../../test/helpers/extensions/discord-provider.test-support.js";
 
 const {
   clientConstructorOptionsMock,
@@ -37,9 +37,15 @@ const {
   voiceRuntimeModuleLoadedMock,
 } = getProviderMonitorTestMocks();
 
-vi.mock("../../../../src/plugins/commands.js", () => ({
-  getPluginCommandSpecs: getPluginCommandSpecsMock,
-}));
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
+  return {
+    ...actual,
+    getPluginCommandSpecs: getPluginCommandSpecsMock,
+  };
+});
 
 vi.mock("../voice/manager.runtime.js", () => {
   voiceRuntimeModuleLoadedMock();

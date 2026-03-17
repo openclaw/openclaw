@@ -8,7 +8,7 @@ import {
   usageNow,
 } from "./provider-usage.test-support.js";
 
-type ProviderAuth = ProviderUsageAuth;
+type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 
 describe("provider-usage.load", () => {
   it("loads snapshots for copilot gemini codex and xiaomi", async () => {

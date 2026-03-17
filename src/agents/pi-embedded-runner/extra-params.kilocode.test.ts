@@ -126,7 +126,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
     const capturedPayload = applyAndCaptureReasoning({
       modelId: "kilo/auto",
       initialPayload: { reasoning_effort: "high" },
-    });
+    }) as Record<string, unknown>;
 
     // kilo/auto should not have reasoning injected
     expect(capturedPayload?.reasoning).toBeUndefined();
@@ -136,7 +136,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
   it("injects reasoning.effort for non-auto kilocode models", () => {
     const capturedPayload = applyAndCaptureReasoning({
       modelId: "anthropic/claude-sonnet-4",
-    });
+    }) as Record<string, unknown>;
 
     // Non-auto models should have reasoning injected
     expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
@@ -150,7 +150,7 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
         },
       },
       modelId: "anthropic/claude-sonnet-4",
-    });
+    }) as Record<string, unknown>;
 
     expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
   });
@@ -167,10 +167,10 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
       } as Model<"openai-completions">,
       payload: { reasoning_effort: "high" },
       thinkingLevel: "high",
-    }).payload as Record<string, unknown> | undefined;
+    }).payload as Record<string, unknown>;
 
     // x-ai models reject reasoning.effort — should be skipped
-    expect(capturedPayload?.["reasoning"]).toBeUndefined();
+    expect(capturedPayload?.reasoning).toBeUndefined();
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
   });
 });

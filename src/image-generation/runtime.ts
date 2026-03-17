@@ -1,3 +1,4 @@
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -7,7 +8,12 @@ import {
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
-import type { GeneratedImageAsset, ImageGenerationResult } from "./types.js";
+import type {
+  GeneratedImageAsset,
+  ImageGenerationResolution,
+  ImageGenerationResult,
+  ImageGenerationSourceImage,
+} from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
 
@@ -15,9 +21,12 @@ export type GenerateImageParams = {
   cfg: OpenClawConfig;
   prompt: string;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   modelOverride?: string;
   count?: number;
   size?: string;
+  resolution?: ImageGenerationResolution;
+  inputImages?: ImageGenerationSourceImage[];
 };
 
 export type GenerateImageRuntimeResult = {
@@ -130,8 +139,11 @@ export async function generateImage(
         prompt: params.prompt,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        authStore: params.authStore,
         count: params.count,
         size: params.size,
+        resolution: params.resolution,
+        inputImages: params.inputImages,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");
