@@ -1,3 +1,4 @@
+import type { Message } from "@grammyjs/types";
 import type { Bot, Context } from "grammy";
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/channel-runtime";
@@ -153,7 +154,7 @@ function isChannelPostContext(ctx: TelegramNativeCommandContext) {
 }
 
 async function resolveTelegramCommandAuth(params: {
-  msg: NonNullable<TelegramNativeCommandContext["message"]>;
+  msg: Message;
   bot: Bot;
   cfg: OpenClawConfig;
   accountId: string;
@@ -481,7 +482,7 @@ export const registerTelegramNativeCommands = ({
   });
 
   const resolveCommandRuntimeContext = async (params: {
-    msg: NonNullable<TelegramNativeCommandContext["message"]>;
+    msg: Message;
     isGroup: boolean;
     isForum: boolean;
     resolvedThreadId?: number;
