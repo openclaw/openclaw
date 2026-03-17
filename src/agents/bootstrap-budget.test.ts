@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
@@ -106,14 +107,15 @@ describe("analyzeBootstrapBudget", () => {
 });
 
 describe("bootstrap prompt warnings", () => {
-  it("prepends warning details to the turn prompt instead of mutating the system prompt", () => {
-    const prompt = prependBootstrapPromptWarning("Please continue.", [
+  it("appends warning details to the turn prompt instead of mutating the system prompt", () => {
+    const prompt = appendBootstrapPromptWarning("Please continue.", [
       "AGENTS.md: 200 raw -> 0 injected",
     ]);
+    expect(prompt.startsWith("Please continue.")).toBe(true);
     expect(prompt).toContain("[Bootstrap truncation warning]");
     expect(prompt).toContain("Treat Project Context as partial");
     expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
-    expect(prompt).toContain("Please continue.");
+    expect(prompt.endsWith("- AGENTS.md: 200 raw -> 0 injected")).toBe(true);
   });
 
   it("preserves raw prompt whitespace when appending warning details", () => {
