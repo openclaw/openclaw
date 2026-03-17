@@ -1,38 +1,11 @@
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
-
-type NativeCommandBot = {
-  api: {
-    setMyCommands: ReturnType<typeof vi.fn>;
-    sendMessage: ReturnType<typeof vi.fn>;
-  };
-  command: ReturnType<typeof vi.fn>;
-};
-
-type RegisterTelegramNativeCommandsParams = {
-  bot: NativeCommandBot;
-  cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  accountId: string;
-  telegramCfg: TelegramAccountConfig;
-  allowFrom: string[];
-  groupAllowFrom: string[];
-  replyToMode: string;
-  textLimit: number;
-  useAccessGroups: boolean;
-  nativeEnabled: boolean;
-  nativeSkillsEnabled: boolean;
-  nativeDisabledExplicit: boolean;
-  resolveGroupPolicy: () => { allowlistEnabled: boolean; allowed: boolean };
-  resolveTelegramGroupConfig: () => {
-    groupConfig: undefined;
-    topicConfig: undefined;
-  };
-  shouldSkipUpdate: () => boolean;
-  opts: { token: string };
-};
+import {
+  createNativeCommandTestParams as createBaseNativeCommandTestParams,
+  createTelegramPrivateCommandContext,
+  type NativeCommandTestParams as RegisterTelegramNativeCommandsParams,
+} from "./bot-native-commands.fixture-test-support.js";
 
 type RegisteredCommand = {
   command: string;
@@ -98,61 +71,12 @@ export function createNativeCommandTestParams(
   cfg: OpenClawConfig,
   params: Partial<RegisterTelegramNativeCommandsParams> = {},
 ): RegisterTelegramNativeCommandsParams {
-  return {
-    bot:
-      params.bot ??
-      ({
-        api: {
-          setMyCommands: vi.fn().mockResolvedValue(undefined),
-          sendMessage: vi.fn().mockResolvedValue(undefined),
-        },
-        command: vi.fn(),
-      } as unknown as RegisterTelegramNativeCommandsParams["bot"]),
+  return createBaseNativeCommandTestParams({
     cfg,
     runtime: params.runtime ?? ({} as RuntimeEnv),
-    accountId: params.accountId ?? "default",
-    telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
-    allowFrom: params.allowFrom ?? [],
-    groupAllowFrom: params.groupAllowFrom ?? [],
-    replyToMode: params.replyToMode ?? "off",
-    textLimit: params.textLimit ?? 4000,
-    useAccessGroups: params.useAccessGroups ?? false,
-    nativeEnabled: params.nativeEnabled ?? true,
-    nativeSkillsEnabled: params.nativeSkillsEnabled ?? true,
-    nativeDisabledExplicit: params.nativeDisabledExplicit ?? false,
-    resolveGroupPolicy:
-      params.resolveGroupPolicy ??
-      (() =>
-        ({
-          allowlistEnabled: false,
-          allowed: true,
-        }) as ReturnType<RegisterTelegramNativeCommandsParams["resolveGroupPolicy"]>),
-    resolveTelegramGroupConfig:
-      params.resolveTelegramGroupConfig ??
-      (() => ({
-        groupConfig: undefined,
-        topicConfig: undefined,
-      })),
-    shouldSkipUpdate: params.shouldSkipUpdate ?? (() => false),
-    opts: params.opts ?? { token: "token" },
-  };
+    nativeSkillsEnabled: true,
+    ...params,
+  });
 }
 
-export function createPrivateCommandContext(params?: {
-  match?: string;
-  messageId?: number;
-  date?: number;
-  chatId?: number;
-  userId?: number;
-  username?: string;
-}) {
-  return {
-    match: params?.match ?? "",
-    message: {
-      message_id: params?.messageId ?? 1,
-      date: params?.date ?? Math.floor(Date.now() / 1000),
-      chat: { id: params?.chatId ?? 123, type: "private" as const },
-      from: { id: params?.userId ?? 456, username: params?.username ?? "alice" },
-    },
-  };
-}
+export { createTelegramPrivateCommandContext as createPrivateCommandContext };
