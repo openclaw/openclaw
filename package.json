@@ -230,6 +230,10 @@
       "types": "./dist/plugin-sdk/lobster.d.ts",
       "default": "./dist/plugin-sdk/lobster.js"
     },
+    "./plugin-sdk/lazy-runtime": {
+      "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
+      "default": "./dist/plugin-sdk/lazy-runtime.js"
+    },
     "./plugin-sdk/matrix": {
       "types": "./dist/plugin-sdk/matrix.d.ts",
       "default": "./dist/plugin-sdk/matrix.js"
