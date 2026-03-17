@@ -126,7 +126,7 @@ importers:
         specifier: 21.3.2
         version: 21.3.2
       gaxios:
-        specifier: ^7.1.3
+        specifier: 7.1.3
         version: 7.1.3
       grammy:
         specifier: ^1.41.1
