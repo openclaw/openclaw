@@ -166,13 +166,10 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });
     suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
-    const mod = await import("./apply.js");
-    applyMediaUnderstanding = mod.applyMediaUnderstanding;
-    const runner = await import("./runner.js");
-    clearMediaUnderstandingBinaryCacheForTests = runner.clearMediaUnderstandingBinaryCacheForTests;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     resolveApiKeyForProviderMock.mockClear();
     hasAvailableAuthForProviderMock.mockClear();
     getApiKeyForModelMock.mockClear();
@@ -181,6 +178,10 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     runCommandWithTimeoutMock.mockReset();
     mockDeliverOutboundPayloads.mockClear();
     mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "echo-1" }]);
+    const mod = await import("./apply.js");
+    applyMediaUnderstanding = mod.applyMediaUnderstanding;
+    const runner = await import("./runner.js");
+    clearMediaUnderstandingBinaryCacheForTests = runner.clearMediaUnderstandingBinaryCacheForTests;
     clearMediaUnderstandingBinaryCacheForTests?.();
   });
 
