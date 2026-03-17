@@ -18,7 +18,7 @@ Subcommands (read-only):
   query run <query-id> [--param key=value] [--performance medium|large]
   query run-sql --sql <sql> [--param key=value]
   execution results <execution-id> [--limit N] [--offset N] [--timeout N]
-  dataset search [--category <cat>] [--blockchain <chain>] [--include-schema]
+  dataset search [--categories <cat>] [--blockchains <chain>] [--include-schema]
   dataset search-by-contract --contract-address <addr> [--include-schema]
   docs search --query <text> [--api-reference-only] [--code-only]
   usage [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]
@@ -42,7 +42,7 @@ Examples:
   dune-cli.sh --probe-auth
   dune-cli.sh query run-sql --sql "SELECT * FROM ethereum.transactions LIMIT 5"
   dune-cli.sh query run 12345 --param chain_id=1
-  dune-cli.sh dataset search --blockchain ethereum --category decoded --include-schema
+  dune-cli.sh dataset search --blockchains ethereum --categories decoded --include-schema
   dune-cli.sh dataset search-by-contract --contract-address 0x1234...
   dune-cli.sh docs search --query "how to query NFT transfers"
 EOF
@@ -86,7 +86,7 @@ load_api_key_from_vault_token() {
 
   local secret_json
   secret_json="$(
-    curl -fsS \
+    curl -fsS --max-time 10 \
       -H "X-Vault-Token: ${vault_token}" \
       "${vault_addr%/}/v1/${secret_path}"
   )" || { echo "dune-cli:warning vault secret fetch failed at ${secret_path}" >&2; return 1; }
@@ -124,7 +124,7 @@ load_api_key_from_vault_jwt() {
   }
   local login_json
   login_json="$(
-    curl -fsS \
+    curl -fsS --max-time 10 \
       -H 'Content-Type: application/json' \
       --data "$login_payload" \
       "${vault_addr%/}/v1/auth/${auth_path}/login"
@@ -136,7 +136,7 @@ load_api_key_from_vault_jwt() {
 
   local secret_json
   secret_json="$(
-    curl -fsS \
+    curl -fsS --max-time 10 \
       -H "X-Vault-Token: ${vault_token}" \
       "${vault_addr%/}/v1/${secret_path}"
   )" || { echo "dune-cli:warning vault secret fetch failed at ${secret_path}" >&2; return 1; }

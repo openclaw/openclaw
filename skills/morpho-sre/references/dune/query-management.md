@@ -1,6 +1,6 @@
 # Query Management
 
-> **Prerequisite:** Read the [main skill](../SKILL.md) for authentication, global flags, and key concepts.
+> **Prerequisite:** Read the [main skill](../../SKILL.md) for authentication, global flags, and key concepts.
 
 Manage saved Dune queries -- create, retrieve, update, and archive.
 

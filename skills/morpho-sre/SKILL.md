@@ -191,7 +191,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 
 # Run ad-hoc DuneSQL query
 /home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh query run-sql \
-  --sql "SELECT block_number, block_time FROM ethereum.blocks ORDER BY block_number DESC LIMIT 5"
+  --sql "SELECT number, time FROM ethereum.blocks ORDER BY number DESC LIMIT 5"
 
 # Search decoded tables for a contract
 /home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh dataset search-by-contract \

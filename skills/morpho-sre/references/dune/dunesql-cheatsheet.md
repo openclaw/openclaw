@@ -1,6 +1,6 @@
 # DuneSQL Cheatsheet
 
-> **Prerequisite:** Read the [main skill](../SKILL.md) for authentication, global flags, and key concepts.
+> **Prerequisite:** Read the [main skill](../../SKILL.md) for authentication, global flags, and key concepts.
 
 Quick reference for DuneSQL -- the Trino-based query engine used by Dune. Use this when writing, debugging, or optimizing queries.
 

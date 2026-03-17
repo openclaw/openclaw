@@ -1,6 +1,6 @@
 # Documentation Search & Account Usage
 
-> **Prerequisite:** Read the [main skill](../SKILL.md) for authentication, global flags, and key concepts.
+> **Prerequisite:** Read the [main skill](../../SKILL.md) for authentication, global flags, and key concepts.
 
 ---
 
@@ -133,4 +133,4 @@ dune usage --start-date 2025-01-01 --end-date 2025-06-01 -o json
 
 ## See Also
 
-- [Main skill](../SKILL.md) -- Authentication, global flags, and command overview
+- [Main skill](../../SKILL.md) -- Authentication, global flags, and command overview

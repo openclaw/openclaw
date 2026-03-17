@@ -1,6 +1,6 @@
 # Install & Recovery
 
-> **Prerequisite:** Read the [main skill](../SKILL.md) for authentication, global flags, and key concepts.
+> **Prerequisite:** Read the [main skill](../../SKILL.md) for authentication, global flags, and key concepts.
 
 This reference covers CLI installation, authentication failure recovery, and version compatibility checks. These steps are only needed when a `dune` command fails.
 
@@ -139,14 +139,14 @@ This skill is written for the Dune CLI version specified by `cli_version` in the
 - Unexpected output format (e.g. JSON fields the skill references are missing)
 - A command documented in this skill doesn't exist
 
-When you see such an error, run `dune --version`, parse the major.minor, and compare to `cli_version`:
+When you see such an error, run `dune --version` and compare to the expected version (v0.1.x):
 
-- **Major version mismatch**: **Stop.** Tell the user the CLI version is incompatible and they must upgrade (or downgrade). Point them to re-run the install steps from Option A above.
-- **Minor version mismatch**: **Warn** the user that versions differ and recommend upgrading the CLI or the skill. Continue attempting the task -- minor differences are usually non-breaking.
+- **Major version mismatch**: **Stop.** Tell the user the CLI version is incompatible and they must upgrade (or downgrade). Point them to re-run the install steps above.
+- **Minor version mismatch**: **Warn** the user that versions differ and recommend upgrading. Continue attempting the task -- minor differences are usually non-breaking.
 - **Versions match**: Not a version problem. Debug the error normally.
 
 ---
 
 ## See Also
 
-- [Main skill](../SKILL.md) -- Command overview and key concepts
+- [Main skill](../../SKILL.md) -- Command overview and key concepts

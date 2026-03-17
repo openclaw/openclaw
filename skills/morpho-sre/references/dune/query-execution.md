@@ -1,6 +1,6 @@
 # Query Execution
 
-> **Prerequisite:** Read the [main skill](../SKILL.md) for authentication, global flags, and key concepts.
+> **Prerequisite:** Read the [main skill](../../SKILL.md) for authentication, global flags, and key concepts.
 
 Execute DuneSQL queries and retrieve results. This is the most commonly used part of the CLI.
 

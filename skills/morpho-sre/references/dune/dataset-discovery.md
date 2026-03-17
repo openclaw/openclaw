@@ -1,6 +1,6 @@
 # Dataset Discovery
 
-> **Prerequisite:** Read the [main skill](../SKILL.md) for authentication, global flags, and key concepts.
+> **Prerequisite:** Read the [main skill](../../SKILL.md) for authentication, global flags, and key concepts.
 
 Search the Dune dataset catalog to discover tables and their schemas before writing SQL.
 
