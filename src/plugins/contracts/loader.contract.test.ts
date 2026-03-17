@@ -19,6 +19,7 @@ describe("plugin loader contract", () => {
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue({
       providers: [],
+      mediaUnderstandingProviders: [],
       webSearchProviders: [],
     });
   });

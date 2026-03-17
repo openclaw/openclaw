@@ -1,5 +1,6 @@
 import type {
   AnyAgentTool,
+  MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   ProviderPlugin,
   SpeechProviderPlugin,
@@ -10,6 +11,7 @@ export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
   speechProviders: SpeechProviderPlugin[];
+  mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   tools: AnyAgentTool[];
 };
@@ -17,12 +19,14 @@ export type CapturedPluginRegistration = {
 export function createCapturedPluginRegistration(): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
+  const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const tools: AnyAgentTool[] = [];
 
   return {
     providers,
     speechProviders,
+    mediaUnderstandingProviders,
     webSearchProviders,
     tools,
     api: {
@@ -31,6 +35,9 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
       },
       registerSpeechProvider(provider: SpeechProviderPlugin) {
         speechProviders.push(provider);
+      },
+      registerMediaUnderstandingProvider(provider: MediaUnderstandingProviderPlugin) {
+        mediaUnderstandingProviders.push(provider);
       },
       registerWebSearchProvider(provider: WebSearchProviderPlugin) {
         webSearchProviders.push(provider);

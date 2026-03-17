@@ -24,6 +24,7 @@ import { applyAuthProfileConfig } from "../../src/commands/onboard-auth.js";
 import type { SecretInput } from "../../src/config/types.secrets.js";
 import { resolveRequiredHomeDir } from "../../src/infra/home-dir.js";
 import { fetchZaiUsage } from "../../src/infra/provider-usage.fetch.js";
+import { zaiProvider } from "../../src/media-understanding/providers/zai/index.js";
 import { normalizeOptionalSecretInput } from "../../src/utils/normalize-secret-input.js";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -334,6 +335,7 @@ const zaiPlugin = {
       fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
       isCacheTtlEligible: () => true,
     });
+    api.registerMediaUnderstandingProvider(zaiProvider);
   },
 };
 
