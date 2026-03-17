@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
@@ -33,13 +33,13 @@ function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
 
 type EmbeddingsModule = typeof import("./embeddings.js");
 type AuthModule = typeof import("../agents/model-auth.js");
-type ResolvedProviderAuth = Awaited<ReturnType<AuthModule["resolveApiKeyForProvider"]>>;
 
 let authModule: AuthModule;
 let createEmbeddingProvider: EmbeddingsModule["createEmbeddingProvider"];
 let DEFAULT_LOCAL_MODEL: EmbeddingsModule["DEFAULT_LOCAL_MODEL"];
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   authModule = await import("../agents/model-auth.js");
   ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
 });
@@ -336,18 +336,12 @@ describe("embedding provider auto selection", () => {
   });
 
   it("selects the first available remote provider in auto mode", async () => {
-    const cases: Array<{
-      name: string;
-      expectedProvider: "openai" | "gemini" | "mistral";
-      fetchMockFactory: typeof createFetchMock | typeof createGeminiFetchMock;
-      resolveApiKey: (provider: string) => ResolvedProviderAuth;
-      expectedUrl: string;
-    }> = [
+    for (const testCase of [
       {
         name: "openai first",
         expectedProvider: "openai" as const,
         fetchMockFactory: createFetchMock,
-        resolveApiKey(provider: string): ResolvedProviderAuth {
+        resolveApiKey(provider: string) {
           if (provider === "openai") {
             return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
           }
@@ -359,16 +353,12 @@ describe("embedding provider auto selection", () => {
         name: "gemini fallback",
         expectedProvider: "gemini" as const,
         fetchMockFactory: createGeminiFetchMock,
-        resolveApiKey(provider: string): ResolvedProviderAuth {
+        resolveApiKey(provider: string) {
           if (provider === "openai") {
             throw new Error('No API key found for provider "openai".');
           }
           if (provider === "google") {
-            return {
-              apiKey: "gemini-key",
-              source: "env: GEMINI_API_KEY",
-              mode: "api-key" as const,
-            };
+            return { apiKey: "gemini-key", source: "env: GEMINI_API_KEY", mode: "api-key" };
           }
           throw new Error(`Unexpected provider ${provider}`);
         },
@@ -378,21 +368,15 @@ describe("embedding provider auto selection", () => {
         name: "mistral after earlier misses",
         expectedProvider: "mistral" as const,
         fetchMockFactory: createFetchMock,
-        resolveApiKey(provider: string): ResolvedProviderAuth {
+        resolveApiKey(provider: string) {
           if (provider === "mistral") {
-            return {
-              apiKey: "mistral-key",
-              source: "env: MISTRAL_API_KEY",
-              mode: "api-key" as const,
-            };
+            return { apiKey: "mistral-key", source: "env: MISTRAL_API_KEY", mode: "api-key" };
           }
           throw new Error(`No API key found for provider "${provider}".`);
         },
         expectedUrl: "https://api.mistral.ai/v1/embeddings",
       },
-    ];
-
-    for (const testCase of cases) {
+    ]) {
       vi.resetAllMocks();
       vi.unstubAllGlobals();
       const fetchMock = testCase.fetchMockFactory();
@@ -551,13 +535,10 @@ describe("local embedding normalization", () => {
 });
 
 describe("local embedding ensureContext concurrency", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.doUnmock("./node-llama.js");
-  });
-
   afterEach(() => {
+    vi.resetAllMocks();
     vi.resetModules();
+    vi.unstubAllGlobals();
     vi.doUnmock("./node-llama.js");
   });
 
@@ -686,11 +667,6 @@ describe("local embedding ensureContext concurrency", () => {
 });
 
 describe("FTS-only fallback when no provider available", () => {
-  beforeEach(async () => {
-    authModule = await import("../agents/model-auth.js");
-    ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
-  });
-
   it("returns null provider when all requested auth paths fail", async () => {
     vi.mocked(authModule.resolveApiKeyForProvider).mockRejectedValue(
       new Error("No API key found for provider"),
