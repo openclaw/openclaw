@@ -1,14 +1,12 @@
-import { describeImageWithModel } from "../../src/media-understanding/providers/image.js";
 import {
   assertOkOrThrowHttpError,
+  describeImageWithModel,
   normalizeBaseUrl,
   postJsonRequest,
-} from "../../src/media-understanding/providers/shared.js";
-import type {
-  MediaUnderstandingProvider,
-  VideoDescriptionRequest,
-  VideoDescriptionResult,
-} from "../../src/media-understanding/types.js";
+  type MediaUnderstandingProvider,
+  type VideoDescriptionRequest,
+  type VideoDescriptionResult,
+} from "openclaw/plugin-sdk/media-understanding";
 
 export const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_MOONSHOT_VIDEO_MODEL = "kimi-k2.5";

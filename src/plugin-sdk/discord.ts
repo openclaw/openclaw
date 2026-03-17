@@ -61,7 +61,6 @@ export {
   createDiscordActionGate,
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
-  resolveDiscordAccount,
 } from "../../extensions/discord/src/accounts.js";
 export { inspectDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
 export {

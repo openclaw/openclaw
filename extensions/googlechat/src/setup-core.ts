@@ -1,5 +1,4 @@
-import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { createPatchedAccountSetupAdapter, DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 
 const channel = "googlechat" as const;
 

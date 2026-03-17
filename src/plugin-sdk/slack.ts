@@ -50,7 +50,6 @@ export {
   listEnabledSlackAccounts,
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
-  resolveSlackAccount,
   resolveSlackReplyToMode,
 } from "../../extensions/slack/src/accounts.js";
 export { isSlackInteractiveRepliesEnabled } from "../../extensions/slack/src/interactive-replies.js";

@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "../../src/config/types.models.js";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";

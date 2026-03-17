@@ -1,8 +1,8 @@
 import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
+import { resolveSignalAccount } from "../../../plugin-sdk/account-resolution.js";
 import {
   listEnabledSignalAccounts,
   removeReactionSignal,
-  resolveSignalAccount,
   resolveSignalReactionLevel,
   sendReactionSignal,
 } from "../../../plugin-sdk/signal.js";

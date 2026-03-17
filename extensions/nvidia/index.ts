@@ -1,5 +1,5 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { buildNvidiaProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "nvidia";
