@@ -159,14 +159,14 @@ export function buildPluginInspectReport(params: {
       name: entry.hookName,
       priority: entry.priority,
     }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .toSorted((a, b) => a.name.localeCompare(b.name));
   const customHooks = report.hooks
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
       name: entry.entry.hook.name,
-      events: [...entry.events].sort(),
+      events: [...entry.events].toSorted(),
     }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .toSorted((a, b) => a.name.localeCompare(b.name));
   const tools = report.tools
     .filter((entry) => entry.pluginId === plugin.id)
     .map((entry) => ({
