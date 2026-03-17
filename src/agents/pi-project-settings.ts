@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
@@ -18,7 +19,9 @@ export const SANITIZED_PROJECT_PI_KEYS = ["shellPath", "shellCommandPrefix"] as 
 
 export type EmbeddedPiProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
-type PiSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]>;
+type PiSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]> & {
+  mcpServers?: Record<string, BundleMcpServerConfig>;
+};
 
 function sanitizePiSettingsSnapshot(settings: PiSettingsSnapshot): PiSettingsSnapshot {
   const sanitized = { ...settings };
