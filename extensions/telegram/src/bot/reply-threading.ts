@@ -54,12 +54,18 @@ export async function sendChunkedTelegramReplyText<
   }) => Promise<boolean | void>;
 }): Promise<void> {
   const applyDelivered = params.markDelivered ?? markDelivered;
+  let firstSentChunk = false;
   for (let i = 0; i < params.chunks.length; i += 1) {
     const chunk = params.chunks[i];
     if (!chunk) {
       continue;
     }
     const isFirstChunk = i === 0;
+    // Track whether we have already successfully sent a chunk.  Reply markup
+    // (inline buttons) must be attached to the first *actually delivered* chunk,
+    // not necessarily chunk index 0 — because sendChunk can return false for
+    // skipped/empty chunks, losing the markup if it was only attached to i===0.
+    const isFirstSentChunk = !firstSentChunk;
     const replyToMessageId = resolveReplyToForSend({
       replyToId: params.replyToId,
       replyToMode: params.replyToMode,
@@ -73,7 +79,7 @@ export async function sendChunkedTelegramReplyText<
       chunk,
       isFirstChunk,
       replyToMessageId,
-      replyMarkup: isFirstChunk ? params.replyMarkup : undefined,
+      replyMarkup: isFirstSentChunk ? params.replyMarkup : undefined,
       replyQuoteText: shouldAttachQuote ? params.replyQuoteText : undefined,
     });
     // Skip delivery bookkeeping when the chunk was not actually sent
@@ -83,6 +89,7 @@ export async function sendChunkedTelegramReplyText<
     if (sent === false) {
       continue;
     }
+    firstSentChunk = true;
     markReplyApplied(params.progress, replyToMessageId);
     applyDelivered(params.progress);
   }
