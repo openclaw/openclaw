@@ -235,6 +235,7 @@ export const ModelProviderSchema = z
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
+    requestDelayMs: z.number().int().min(0).max(120_000).optional(),
     models: z.array(ModelDefinitionSchema),
   })
   .strict();
@@ -254,6 +255,7 @@ export const BedrockDiscoverySchema = z
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
+    requestDelayMs: z.number().int().min(0).max(120_000).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
     bedrockDiscovery: BedrockDiscoverySchema,
   })

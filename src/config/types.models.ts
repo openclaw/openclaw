@@ -57,6 +57,8 @@ export type ModelProviderConfig = {
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
+  /** Minimum milliseconds between consecutive API request starts for this provider (overrides models.requestDelayMs). */
+  requestDelayMs?: number;
   models: ModelDefinitionConfig[];
 };
 
@@ -71,6 +73,8 @@ export type BedrockDiscoveryConfig = {
 
 export type ModelsConfig = {
   mode?: "merge" | "replace";
+  /** Minimum milliseconds between consecutive model API request starts per provider (default timing for all providers). */
+  requestDelayMs?: number;
   providers?: Record<string, ModelProviderConfig>;
   bedrockDiscovery?: BedrockDiscoveryConfig;
 };
