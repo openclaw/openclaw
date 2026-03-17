@@ -1307,95 +1307,104 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     });
   });
 
-  it("does not reuse cached registries when env-resolved install paths change", () => {
-    useNoBundledPlugins();
-    const openclawHome = makeTempDir();
-    const ignoredHome = makeTempDir();
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(openclawHome, "plugins", "tracked-install-cache");
-    mkdirSafe(pluginDir);
-    const plugin = writePlugin({
-      id: "tracked-install-cache",
-      dir: pluginDir,
-      filename: "index.cjs",
-      body: `module.exports = { id: "tracked-install-cache", register() {} };`,
-    });
+  it.each([
+    {
+      name: "does not reuse cached registries when env-resolved install paths change",
+      setup: () => {
+        useNoBundledPlugins();
+        const openclawHome = makeTempDir();
+        const ignoredHome = makeTempDir();
+        const stateDir = makeTempDir();
+        const pluginDir = path.join(openclawHome, "plugins", "tracked-install-cache");
+        mkdirSafe(pluginDir);
+        const plugin = writePlugin({
+          id: "tracked-install-cache",
+          dir: pluginDir,
+          filename: "index.cjs",
+          body: `module.exports = { id: "tracked-install-cache", register() {} };`,
+        });
 
-    const options = {
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["tracked-install-cache"],
-          installs: {
-            "tracked-install-cache": {
-              source: "path" as const,
-              installPath: "~/plugins/tracked-install-cache",
-              sourcePath: "~/plugins/tracked-install-cache",
+        const options = {
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["tracked-install-cache"],
+              installs: {
+                "tracked-install-cache": {
+                  source: "path" as const,
+                  installPath: "~/plugins/tracked-install-cache",
+                  sourcePath: "~/plugins/tracked-install-cache",
+                },
+              },
             },
           },
-        },
+        };
+
+        const secondHome = makeTempDir();
+        return {
+          loadFirst: () =>
+            loadOpenClawPlugins({
+              ...options,
+              env: {
+                ...process.env,
+                OPENCLAW_HOME: openclawHome,
+                HOME: ignoredHome,
+                OPENCLAW_STATE_DIR: stateDir,
+                CLAWDBOT_STATE_DIR: undefined,
+                OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+              },
+            }),
+          loadVariant: () =>
+            loadOpenClawPlugins({
+              ...options,
+              env: {
+                ...process.env,
+                OPENCLAW_HOME: secondHome,
+                HOME: ignoredHome,
+                OPENCLAW_STATE_DIR: stateDir,
+                CLAWDBOT_STATE_DIR: undefined,
+                OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+              },
+            }),
+        };
       },
-    };
+    },
+    {
+      name: "does not reuse cached registries across gateway subagent binding modes",
+      setup: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "cache-gateway-bindable",
+          filename: "cache-gateway-bindable.cjs",
+          body: `module.exports = { id: "cache-gateway-bindable", register() {} };`,
+        });
 
-    const secondHome = makeTempDir();
-    const secondOptions = {
-      ...options,
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: secondHome,
-        HOME: ignoredHome,
-        OPENCLAW_STATE_DIR: stateDir,
-        CLAWDBOT_STATE_DIR: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+        const options = {
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              allow: ["cache-gateway-bindable"],
+              load: {
+                paths: [plugin.file],
+              },
+            },
+          },
+        };
+
+        return {
+          loadFirst: () => loadOpenClawPlugins(options),
+          loadVariant: () =>
+            loadOpenClawPlugins({
+              ...options,
+              runtimeOptions: {
+                allowGatewaySubagentBinding: true,
+              },
+            }),
+        };
       },
-    };
-    expectCacheMissThenHit({
-      loadFirst: () =>
-        loadOpenClawPlugins({
-          ...options,
-          env: {
-            ...process.env,
-            OPENCLAW_HOME: openclawHome,
-            HOME: ignoredHome,
-            OPENCLAW_STATE_DIR: stateDir,
-            CLAWDBOT_STATE_DIR: undefined,
-            OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-          },
-        }),
-      loadVariant: () => loadOpenClawPlugins(secondOptions),
-    });
-  });
-
-  it("does not reuse cached registries across gateway subagent binding modes", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "cache-gateway-bindable",
-      filename: "cache-gateway-bindable.cjs",
-      body: `module.exports = { id: "cache-gateway-bindable", register() {} };`,
-    });
-
-    const options = {
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          allow: ["cache-gateway-bindable"],
-          load: {
-            paths: [plugin.file],
-          },
-        },
-      },
-    };
-
-    expectCacheMissThenHit({
-      loadFirst: () => loadOpenClawPlugins(options),
-      loadVariant: () =>
-        loadOpenClawPlugins({
-          ...options,
-          runtimeOptions: {
-            allowGatewaySubagentBinding: true,
-          },
-        }),
-    });
+    },
+  ])("$name", ({ setup }) => {
+    expectCacheMissThenHit(setup());
   });
 
   it("evicts least recently used registries when the loader cache exceeds its cap", () => {
