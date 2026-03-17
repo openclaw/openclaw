@@ -1,4 +1,3 @@
-import * as extensionApi from "openclaw/extension-api";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as coreSdk from "openclaw/plugin-sdk/core";
 import type {
@@ -13,11 +12,15 @@ import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
 import * as nostrSdk from "openclaw/plugin-sdk/nostr";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
 import * as providerSetupSdk from "openclaw/plugin-sdk/provider-setup";
+import * as routingSdk from "openclaw/plugin-sdk/routing";
+import * as runtimeSdk from "openclaw/plugin-sdk/runtime";
 import * as sandboxSdk from "openclaw/plugin-sdk/sandbox";
 import * as selfHostedProviderSetupSdk from "openclaw/plugin-sdk/self-hosted-provider-setup";
+import * as setupSdk from "openclaw/plugin-sdk/setup";
 import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
+import * as testingSdk from "openclaw/plugin-sdk/testing";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
@@ -45,15 +48,26 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof compatSdk.resolveControlCommandGate).toBe("function");
   });
 
-  it("exports core routing helpers", () => {
-    expect(typeof coreSdk.buildAgentSessionKey).toBe("function");
-    expect(typeof coreSdk.resolveThreadSessionKeys).toBe("function");
-    expect(typeof coreSdk.runPassiveAccountLifecycle).toBe("function");
-    expect(typeof coreSdk.createLoggerBackedRuntime).toBe("function");
+  it("keeps core focused on generic shared exports", () => {
+    expect(typeof coreSdk.emptyPluginConfigSchema).toBe("function");
+    expect(typeof coreSdk.definePluginEntry).toBe("function");
+    expect(typeof coreSdk.defineChannelPluginEntry).toBe("function");
+    expect(typeof coreSdk.defineSetupPluginEntry).toBe("function");
+    expect("runPassiveAccountLifecycle" in asExports(coreSdk)).toBe(false);
+    expect("createLoggerBackedRuntime" in asExports(coreSdk)).toBe(false);
     expect("registerSandboxBackend" in asExports(coreSdk)).toBe(false);
     expect("promptAndConfigureOpenAICompatibleSelfHostedProviderAuth" in asExports(coreSdk)).toBe(
       false,
     );
+  });
+
+  it("exports routing helpers from the dedicated subpath", () => {
+    expect(typeof routingSdk.buildAgentSessionKey).toBe("function");
+    expect(typeof routingSdk.resolveThreadSessionKeys).toBe("function");
+  });
+
+  it("exports runtime helpers from the dedicated subpath", () => {
+    expect(typeof runtimeSdk.createLoggerBackedRuntime).toBe("function");
   });
 
   it("exports provider setup helpers from the dedicated subpath", () => {
@@ -62,6 +76,14 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof providerSetupSdk.promptAndConfigureOpenAICompatibleSelfHostedProviderAuth).toBe(
       "function",
     );
+  });
+
+  it("exports shared setup helpers from the dedicated subpath", () => {
+    expect(typeof setupSdk.DEFAULT_ACCOUNT_ID).toBe("string");
+    expect(typeof setupSdk.formatDocsLink).toBe("function");
+    expect(typeof setupSdk.mergeAllowFromEntries).toBe("function");
+    expect(typeof setupSdk.setTopLevelChannelDmPolicyWithAllowFrom).toBe("function");
+    expect(typeof setupSdk.formatResolvedUnresolvedNote).toBe("function");
   });
 
   it("exports narrow self-hosted provider setup helpers", () => {
@@ -91,6 +113,11 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<PluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
+  });
+
+  it("exports the public testing seam", () => {
+    expect(typeof testingSdk.removeAckReactionAfterReply).toBe("function");
+    expect(typeof testingSdk.shouldAckReaction).toBe("function");
   });
 
   it("keeps core shared types aligned with the channel prelude", () => {
@@ -241,9 +268,5 @@ describe("plugin-sdk subpath exports", () => {
 
     const zalo = await import("openclaw/plugin-sdk/zalo");
     expect(typeof zalo.resolveClientIp).toBe("function");
-  });
-
-  it("exports the extension api bridge", () => {
-    expect(typeof extensionApi.runEmbeddedPiAgent).toBe("function");
   });
 });

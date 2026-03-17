@@ -1,3 +1,4 @@
+import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "openclaw/plugin-sdk/bluebubbles";
 import {
   buildChannelConfigSchema,
@@ -11,13 +12,13 @@ import {
   resolveBlueBubblesGroupToolPolicy,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/bluebubbles";
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
-  createAccountStatusSink,
-  formatNormalizedAllowFromEntries,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
@@ -37,12 +38,12 @@ import {
   parseBlueBubblesTarget,
 } from "./targets.js";
 
-let blueBubblesChannelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
+type BlueBubblesChannelRuntime = typeof import("./channel.runtime.js").blueBubblesChannelRuntime;
 
-function loadBlueBubblesChannelRuntime() {
-  blueBubblesChannelRuntimePromise ??= import("./channel.runtime.js");
-  return blueBubblesChannelRuntimePromise;
-}
+const loadBlueBubblesChannelRuntime = createLazyRuntimeSurface(
+  () => import("./channel.runtime.js"),
+  ({ blueBubblesChannelRuntime }) => blueBubblesChannelRuntime,
+);
 
 const meta = {
   id: "bluebubbles",

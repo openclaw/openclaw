@@ -70,6 +70,90 @@
       "types": "./dist/plugin-sdk/routing.d.ts",
       "default": "./dist/plugin-sdk/routing.js"
     },
+    "./plugin-sdk/runtime": {
+      "types": "./dist/plugin-sdk/runtime.d.ts",
+      "default": "./dist/plugin-sdk/runtime.js"
+    },
+    "./plugin-sdk/runtime-env": {
+      "types": "./dist/plugin-sdk/runtime-env.d.ts",
+      "default": "./dist/plugin-sdk/runtime-env.js"
+    },
+    "./plugin-sdk/setup": {
+      "types": "./dist/plugin-sdk/setup.d.ts",
+      "default": "./dist/plugin-sdk/setup.js"
+    },
+    "./plugin-sdk/config-runtime": {
+      "types": "./dist/plugin-sdk/config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/config-runtime.js"
+    },
+    "./plugin-sdk/reply-runtime": {
+      "types": "./dist/plugin-sdk/reply-runtime.d.ts",
+      "default": "./dist/plugin-sdk/reply-runtime.js"
+    },
+    "./plugin-sdk/channel-runtime": {
+      "types": "./dist/plugin-sdk/channel-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-runtime.js"
+    },
+    "./plugin-sdk/infra-runtime": {
+      "types": "./dist/plugin-sdk/infra-runtime.d.ts",
+      "default": "./dist/plugin-sdk/infra-runtime.js"
+    },
+    "./plugin-sdk/media-runtime": {
+      "types": "./dist/plugin-sdk/media-runtime.d.ts",
+      "default": "./dist/plugin-sdk/media-runtime.js"
+    },
+    "./plugin-sdk/media-understanding-runtime": {
+      "types": "./dist/plugin-sdk/media-understanding-runtime.d.ts",
+      "default": "./dist/plugin-sdk/media-understanding-runtime.js"
+    },
+    "./plugin-sdk/conversation-runtime": {
+      "types": "./dist/plugin-sdk/conversation-runtime.d.ts",
+      "default": "./dist/plugin-sdk/conversation-runtime.js"
+    },
+    "./plugin-sdk/text-runtime": {
+      "types": "./dist/plugin-sdk/text-runtime.d.ts",
+      "default": "./dist/plugin-sdk/text-runtime.js"
+    },
+    "./plugin-sdk/agent-runtime": {
+      "types": "./dist/plugin-sdk/agent-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-runtime.js"
+    },
+    "./plugin-sdk/speech-runtime": {
+      "types": "./dist/plugin-sdk/speech-runtime.d.ts",
+      "default": "./dist/plugin-sdk/speech-runtime.js"
+    },
+    "./plugin-sdk/plugin-runtime": {
+      "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
+      "default": "./dist/plugin-sdk/plugin-runtime.js"
+    },
+    "./plugin-sdk/security-runtime": {
+      "types": "./dist/plugin-sdk/security-runtime.d.ts",
+      "default": "./dist/plugin-sdk/security-runtime.js"
+    },
+    "./plugin-sdk/gateway-runtime": {
+      "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
+      "default": "./dist/plugin-sdk/gateway-runtime.js"
+    },
+    "./plugin-sdk/cli-runtime": {
+      "types": "./dist/plugin-sdk/cli-runtime.d.ts",
+      "default": "./dist/plugin-sdk/cli-runtime.js"
+    },
+    "./plugin-sdk/hook-runtime": {
+      "types": "./dist/plugin-sdk/hook-runtime.d.ts",
+      "default": "./dist/plugin-sdk/hook-runtime.js"
+    },
+    "./plugin-sdk/process-runtime": {
+      "types": "./dist/plugin-sdk/process-runtime.d.ts",
+      "default": "./dist/plugin-sdk/process-runtime.js"
+    },
+    "./plugin-sdk/acp-runtime": {
+      "types": "./dist/plugin-sdk/acp-runtime.d.ts",
+      "default": "./dist/plugin-sdk/acp-runtime.js"
+    },
+    "./plugin-sdk/zai": {
+      "types": "./dist/plugin-sdk/zai.d.ts",
+      "default": "./dist/plugin-sdk/zai.js"
+    },
     "./plugin-sdk/telegram": {
       "types": "./dist/plugin-sdk/telegram.d.ts",
       "default": "./dist/plugin-sdk/telegram.js"
@@ -194,6 +278,10 @@
       "types": "./dist/plugin-sdk/talk-voice.d.ts",
       "default": "./dist/plugin-sdk/talk-voice.js"
     },
+    "./plugin-sdk/testing": {
+      "types": "./dist/plugin-sdk/testing.d.ts",
+      "default": "./dist/plugin-sdk/testing.js"
+    },
     "./plugin-sdk/test-utils": {
       "types": "./dist/plugin-sdk/test-utils.d.ts",
       "default": "./dist/plugin-sdk/test-utils.js"
@@ -226,11 +314,126 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
+    "./plugin-sdk/account-resolution": {
+      "types": "./dist/plugin-sdk/account-resolution.d.ts",
+      "default": "./dist/plugin-sdk/account-resolution.js"
+    },
+    "./plugin-sdk/allow-from": {
+      "types": "./dist/plugin-sdk/allow-from.d.ts",
+      "default": "./dist/plugin-sdk/allow-from.js"
+    },
+    "./plugin-sdk/allowlist-resolution": {
+      "types": "./dist/plugin-sdk/allowlist-resolution.d.ts",
+      "default": "./dist/plugin-sdk/allowlist-resolution.js"
+    },
+    "./plugin-sdk/allowlist-config-edit": {
+      "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
+      "default": "./dist/plugin-sdk/allowlist-config-edit.js"
+    },
+    "./plugin-sdk/boolean-param": {
+      "types": "./dist/plugin-sdk/boolean-param.d.ts",
+      "default": "./dist/plugin-sdk/boolean-param.js"
+    },
+    "./plugin-sdk/channel-config-helpers": {
+      "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-helpers.js"
+    },
+    "./plugin-sdk/channel-config-schema": {
+      "types": "./dist/plugin-sdk/channel-config-schema.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-schema.js"
+    },
+    "./plugin-sdk/channel-lifecycle": {
+      "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
+      "default": "./dist/plugin-sdk/channel-lifecycle.js"
+    },
+    "./plugin-sdk/channel-policy": {
+      "types": "./dist/plugin-sdk/channel-policy.d.ts",
+      "default": "./dist/plugin-sdk/channel-policy.js"
+    },
+    "./plugin-sdk/group-access": {
+      "types": "./dist/plugin-sdk/group-access.d.ts",
+      "default": "./dist/plugin-sdk/group-access.js"
+    },
+    "./plugin-sdk/directory-runtime": {
+      "types": "./dist/plugin-sdk/directory-runtime.d.ts",
+      "default": "./dist/plugin-sdk/directory-runtime.js"
+    },
+    "./plugin-sdk/json-store": {
+      "types": "./dist/plugin-sdk/json-store.d.ts",
+      "default": "./dist/plugin-sdk/json-store.js"
+    },
     "./plugin-sdk/keyed-async-queue": {
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
-    "./extension-api": "./dist/extensionAPI.js",
+    "./plugin-sdk/provider-auth": {
+      "types": "./dist/plugin-sdk/provider-auth.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-catalog": {
+      "types": "./dist/plugin-sdk/provider-catalog.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog.js"
+    },
+    "./plugin-sdk/provider-models": {
+      "types": "./dist/plugin-sdk/provider-models.d.ts",
+      "default": "./dist/plugin-sdk/provider-models.js"
+    },
+    "./plugin-sdk/provider-onboard": {
+      "types": "./dist/plugin-sdk/provider-onboard.d.ts",
+      "default": "./dist/plugin-sdk/provider-onboard.js"
+    },
+    "./plugin-sdk/provider-stream": {
+      "types": "./dist/plugin-sdk/provider-stream.d.ts",
+      "default": "./dist/plugin-sdk/provider-stream.js"
+    },
+    "./plugin-sdk/provider-usage": {
+      "types": "./dist/plugin-sdk/provider-usage.d.ts",
+      "default": "./dist/plugin-sdk/provider-usage.js"
+    },
+    "./plugin-sdk/provider-web-search": {
+      "types": "./dist/plugin-sdk/provider-web-search.d.ts",
+      "default": "./dist/plugin-sdk/provider-web-search.js"
+    },
+    "./plugin-sdk/image-generation": {
+      "types": "./dist/plugin-sdk/image-generation.d.ts",
+      "default": "./dist/plugin-sdk/image-generation.js"
+    },
+    "./plugin-sdk/image-generation-runtime": {
+      "types": "./dist/plugin-sdk/image-generation-runtime.d.ts",
+      "default": "./dist/plugin-sdk/image-generation-runtime.js"
+    },
+    "./plugin-sdk/reply-history": {
+      "types": "./dist/plugin-sdk/reply-history.d.ts",
+      "default": "./dist/plugin-sdk/reply-history.js"
+    },
+    "./plugin-sdk/media-understanding": {
+      "types": "./dist/plugin-sdk/media-understanding.d.ts",
+      "default": "./dist/plugin-sdk/media-understanding.js"
+    },
+    "./plugin-sdk/google": {
+      "types": "./dist/plugin-sdk/google.d.ts",
+      "default": "./dist/plugin-sdk/google.js"
+    },
+    "./plugin-sdk/request-url": {
+      "types": "./dist/plugin-sdk/request-url.d.ts",
+      "default": "./dist/plugin-sdk/request-url.js"
+    },
+    "./plugin-sdk/runtime-store": {
+      "types": "./dist/plugin-sdk/runtime-store.d.ts",
+      "default": "./dist/plugin-sdk/runtime-store.js"
+    },
+    "./plugin-sdk/speech": {
+      "types": "./dist/plugin-sdk/speech.d.ts",
+      "default": "./dist/plugin-sdk/speech.js"
+    },
+    "./plugin-sdk/state-paths": {
+      "types": "./dist/plugin-sdk/state-paths.d.ts",
+      "default": "./dist/plugin-sdk/state-paths.js"
+    },
+    "./plugin-sdk/tool-send": {
+      "types": "./dist/plugin-sdk/tool-send.d.ts",
+      "default": "./dist/plugin-sdk/tool-send.js"
+    },
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
@@ -248,7 +451,7 @@
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json || true",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
-    "check": "pnpm check:host-env-policy:swift && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
+    "check": "pnpm check:host-env-policy:swift && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:plugins:no-extension-test-core-imports && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
@@ -300,6 +503,7 @@
     "lint:docs": "pnpm dlx markdownlint-cli2",
     "lint:docs:fix": "pnpm dlx markdownlint-cli2 --fix",
     "lint:fix": "oxlint --type-aware --fix && pnpm format",
+    "lint:plugins:no-extension-test-core-imports": "node --import tsx scripts/check-no-extension-test-core-imports.ts",
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import tsx scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
     "lint:plugins:no-register-http-handler": "node scripts/check-no-register-http-handler.mjs",
     "lint:swift": "swiftlint lint --config .swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",
@@ -329,7 +533,9 @@
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "vitest run --config vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
     "test:channels": "vitest run --config vitest.channels.config.ts",
-    "test:contracts": "pnpm test -- src/channels/plugins/contracts src/plugins/contracts",
+    "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",
+    "test:contracts:channels": "OPENCLAW_TEST_PROFILE=low pnpm test -- src/channels/plugins/contracts",
+    "test:contracts:plugins": "OPENCLAW_TEST_PROFILE=low pnpm test -- src/plugins/contracts",
     "test:coverage": "vitest run --config vitest.unit.config.ts --coverage",
     "test:docker:all": "pnpm test:docker:live-models && pnpm test:docker:live-gateway && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",
     "test:docker:cleanup": "bash scripts/test-cleanup-docker.sh",
@@ -402,7 +608,7 @@
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "file-type": "^21.3.2",
-    "gaxios": "^7.1.3",
+    "gaxios": "7.1.3",
     "grammy": "^1.41.1",
     "hono": "4.12.7",
     "https-proxy-agent": "^8.0.0",

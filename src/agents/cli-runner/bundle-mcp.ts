@@ -5,43 +5,20 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
+  extractMcpServerMap,
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
-  type BundleMcpServerConfig,
 } from "../../plugins/bundle-mcp.js";
-import { isRecord } from "../../utils.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
 };
 
-function extractServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
-  if (!isRecord(raw)) {
-    return {};
-  }
-  const nested = isRecord(raw.mcpServers)
-    ? raw.mcpServers
-    : isRecord(raw.servers)
-      ? raw.servers
-      : raw;
-  if (!isRecord(nested)) {
-    return {};
-  }
-  const result: Record<string, BundleMcpServerConfig> = {};
-  for (const [serverName, serverRaw] of Object.entries(nested)) {
-    if (!isRecord(serverRaw)) {
-      continue;
-    }
-    result[serverName] = { ...serverRaw };
-  }
-  return result;
-}
-
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
   try {
     const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
-    return { mcpServers: extractServerMap(raw) };
+    return { mcpServers: extractMcpServerMap(raw) };
   } catch {
     return { mcpServers: {} };
   }

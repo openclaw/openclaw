@@ -1,4 +1,4 @@
-import { jidToE164, normalizeE164 } from "../../../../../src/utils.js";
+import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import type { WebInboundMsg } from "../types.js";
 
 export function resolvePeerId(msg: WebInboundMsg) {

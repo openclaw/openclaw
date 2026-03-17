@@ -1,5 +1,5 @@
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
-import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
@@ -64,8 +64,8 @@ vi.mock("grammy", () => ({
   InputFile: class {},
 }));
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig,
