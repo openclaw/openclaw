@@ -1,368 +1,449 @@
-# ACP Pluginification Architecture Plan
+# Bindings Capability Architecture Plan
 
 Status: proposal
 
 ## Summary
 
-The long-term goal is not to move all ACP code out of core. The long-term goal is to make core own only the generic ACP session kernel while channel plugins own channel-specific binding semantics and ACP runtime backend plugins own backend-specific runtime behavior. If we get that split right, the hot path becomes simple, fast, and durable: no plugin discovery during message handling, no channel-specific logic in core ACP code, and no duplicated session state machine in every channel.
+The goal is not to move all ACP code out of core.
 
-## Why This Should Last
+The goal is to make `bindings` a small core capability, keep the ACP session kernel in core, and move ACP-specific binding policy plus codex app server policy out of core.
 
-The parts of the system that change over time are not all equally volatile.
+That gives us a lightweight core without hiding core semantics behind plugin indirection.
 
-- Channel transport semantics change often.
-- Runtime backend behavior changes often.
-- Session lifecycle, persistence, retries, cancellation, and concurrency change slowly.
+## Current Conclusion
 
-A durable architecture splits on those lines.
+The current architecture should converge on this split:
 
-If we instead split by "everything ACP should be a plugin", we force each channel plugin to either duplicate the ACP session state machine or depend on a special plugin bootstrapping path that is more complicated than core. That is not a lightweight core; that is a hidden core disguised as plugin indirection.
+- Core owns the generic binding capability.
+- Core owns the generic ACP session kernel.
+- Channel plugins own channel-specific binding semantics.
+- ACP backend plugins own runtime protocol details.
+- Product-level consumers like ACP configured bindings and the codex app server sit on top of the binding capability instead of hardcoding their own binding plumbing.
 
-## Core Principle
+This is different from "everything becomes a plugin".
 
-Core should understand only stable nouns, not specific channels.
+## Why This Changed
+
+The current codebase already shows that there are really three different layers:
+
+- binding and conversation ownership
+- long-lived session and runtime-handle orchestration
+- product-specific turn logic
+
+Those layers should not all be forced into one runtime engine.
+
+Today the duplication is mostly in the execution/control-plane shape, not in storage or binding plumbing:
+
+- the main harness has its own turn engine
+- ACP has its own session control plane
+- the codex app server plugin path likely owns its own app-level turn engine outside this repo
+
+The right move is to share the stable control-plane contracts, not to force all three into one giant executor.
+
+## Verified Current State
+
+### Generic binding pieces already exist
+
+- `src/infra/outbound/session-binding-service.ts` already provides a generic binding store and adapter model.
+- `src/plugins/conversation-binding.ts` already lets plugins request a conversation binding and stores plugin-owned binding metadata.
+- `src/plugins/types.ts` already exposes plugin-facing binding APIs.
+- `src/plugins/types.ts` already exposes the generic `inbound_claim` hook.
+
+### ACP is only partially pluginified
+
+- `src/channels/plugins/acp-bindings.ts` handles ACP configured binding lookup.
+- `src/channels/plugins/acp-routing.ts` handles ACP configured route wrapping.
+- `src/acp/persistent-bindings.lifecycle.ts` still owns configured ACP ensure and reset behavior.
+- `src/channels/plugins/types.adapters.ts` only exposes ACP-specific normalize and match hooks today.
+
+### Codex app server is already closer to the desired shape
+
+From this repo's side, the codex app server path is much thinner:
+
+- a plugin binds a conversation
+- core stores that binding
+- inbound dispatch targets the plugin's `inbound_claim` hook
+
+What core does not provide for the codex app server path is an ACP-like shared session kernel. If the app server needs retries, long-lived runtime handles, cancellation, or session health logic, it must own that itself today.
+
+## The Durable Split
+
+### 1. Core Binding Capability
+
+This should become the primary shared seam.
+
+Responsibilities:
+
+- canonical `ConversationRef`
+- binding record storage
+- configured binding compilation
+- runtime-created binding storage
+- fast binding lookup on inbound
+- binding touch/unbind lifecycle
+- generic dispatch handoff to the binding target
+
+What core binding capability must not own:
+
+- Discord thread rules
+- Telegram topic rules
+- Feishu chat rules
+- ACP session orchestration
+- codex app server business logic
+
+### 2. Core Stateful Target Kernel
+
+This is the small generic kernel for long-lived bound targets.
+
+Responsibilities:
+
+- ensure target ready
+- run turn
+- cancel turn
+- close target
+- reset target
+- status and health
+- persistence of target metadata
+- retries and runtime-handle safety
+- per-target serialization and concurrency
+
+ACP is the first real implementation of this shape.
+
+This kernel should stay in core because it is mandatory infrastructure and has strict startup, reset, and recovery semantics.
+
+### 3. Channel Binding Providers
+
+Each channel plugin should own the meaning of "this channel conversation maps to this binding rule".
+
+Responsibilities:
+
+- normalize configured binding targets
+- normalize inbound conversations
+- match inbound conversations against compiled bindings
+- define channel-specific matching priority
+- optionally provide binding description text for status and logs
+
+This is where Discord channel vs thread logic, Telegram topic rules, and Feishu conversation rules belong.
+
+### 4. Product Consumers
+
+Bindings are a shared capability. Different products should consume it differently.
+
+ACP configured bindings:
+
+- compile config rules
+- resolve a target session
+- ensure the ACP session is ready through the ACP kernel
+
+Codex app server:
+
+- create runtime-requested bindings
+- claim inbound messages through plugin hooks
+- optionally adopt the shared stateful target contract later if it really needs long-lived session orchestration
+
+Main harness:
+
+- does not need to become "a binding product"
+- may eventually share small lifecycle contracts, but it should not be forced into the same engine as ACP
+
+## The Key Architectural Decision
+
+The shared abstraction should be:
+
+- `bindings` as the capability
+- `stateful target drivers` as an optional lower-level contract
+
+The shared abstraction should not be:
+
+- "one runtime engine for main harness, ACP, and codex app server"
+
+That would overfit very different systems into one executor.
+
+## Stable Nouns
+
+Core should understand only stable nouns.
 
 The stable nouns are:
 
 - `ConversationRef`
-- `ConfiguredAcpBindingRule`
-- `CompiledAcpBinding`
+- `BindingRule`
+- `CompiledBinding`
 - `BindingResolution`
-- `AcpSessionRef`
-- `AcpRuntimeBackend`
+- `BindingTargetDescriptor`
+- `StatefulTargetDriver`
+- `StatefulTargetHandle`
 
-Discord, Telegram, Feishu, and future channels should all compile down to those nouns.
+ACP, codex app server, and future products should compile down to those nouns instead of leaking product-specific routing rules through core.
 
-## Target Architecture
+## Proposed Capability Model
 
-### 1. Core ACP Kernel
+### Binding capability
 
-Core keeps the generic ACP engine.
+The binding capability should support both configured bindings and runtime-created bindings.
 
-Responsibilities:
+Required operations:
 
-- session lifecycle
-- persistence
-- concurrency limits
-- retry policy
-- cancellation
-- runtime-handle validation
-- backend registry
-- generic reset/reinitialize semantics
+- compile configured bindings at startup or reload
+- resolve a binding from an inbound `ConversationRef`
+- create a runtime binding
+- touch and unbind an existing binding
+- dispatch a resolved binding to its target
 
-This is the code that should stay in core:
+### Binding target descriptor
 
-- `src/acp/control-plane/manager.core.ts`
-- generic ACP session metadata/storage code
-- generic runtime backend registry
+A resolved binding should point to a typed target descriptor rather than ad hoc ACP- or plugin-specific metadata blobs.
 
-What core must not know:
+The descriptor should be able to represent at least:
 
-- Discord thread semantics
-- Telegram topic semantics
-- Feishu chat peculiarities
-- channel-specific configured-binding matching rules
+- plugin-owned inbound claim targets
+- stateful target drivers
 
-### 2. Channel ACP Binding Adapters
+That means the same binding capability can support both:
 
-Each channel plugin owns the meaning of "this inbound conversation maps to this ACP binding".
+- codex app server plugin-bound conversations
+- ACP configured bindings
 
-Responsibilities:
+without pretending they are the same product.
 
-- normalize configured binding target
-- normalize inbound conversation into a canonical `ConversationRef`
-- match configured bindings for that channel
-- optionally describe binding/recovery UX for logs and status
+### Stateful target driver
 
-This is the right home for:
+This is the reusable control-plane contract for long-lived bound targets.
 
-- thread vs parent-channel handling
-- topic handling
-- account-specific conversation identity rules
-- channel-specific matching priority
+Required operations:
 
-This is currently only partially true. Today `ChannelAcpBindingAdapter` only exposes matching helpers in `src/channels/plugins/types.adapters.ts:544-562`.
+- `ensureReady`
+- `runTurn`
+- `cancel`
+- `close`
+- `reset`
+- `status`
+- `health`
 
-### 3. ACP Runtime Backend Plugins
+ACP should remain the first built-in driver.
 
-Backend plugins own runtime protocol specifics only.
+If the codex app server later proves that it also needs durable session handles, it can either:
 
-Responsibilities:
+- use a driver that consumes this contract, or
+- keep its own product-owned runtime if that remains simpler
 
-- ensure session
-- run turn
-- get status
-- cancel
-- close
-- backend-specific doctor/reporting
+That should be a product decision, not something forced by the binding capability.
 
-This is the role of `acpx` today.
+## Why ACP Kernel Stays In Core
 
-### 4. Compiled Binding Registry
+ACP's kernel should remain in core because session lifecycle, persistence, retries, cancellation, and runtime-handle safety are generic platform machinery.
 
-Configured ACP bindings should be compiled at startup and on config/plugin reload, not discovered on the inbound hot path.
+Those concerns are not channel-specific, and they are not codex-app-server-specific.
 
-Responsibilities:
+If we move that machinery into an ordinary plugin, we create circular bootstrapping:
 
-- walk configured ACP bindings once
-- ask the owning channel plugin to normalize each binding target
-- materialize `CompiledAcpBinding` entries
-- index them by canonical `ConversationRef`
-- expose a fast lookup API during inbound handling
+- channels need it during startup and inbound routing
+- reset and recovery need it when plugins may already be degraded
+- failure semantics become special-case core logic anyway
 
-This is the key piece that makes the design elegant.
+If we later wrap it in a "built-in capability module", that is still effectively core.
 
-Without it, core keeps doing workspace scans, catalog lookups, and snapshot plugin loads while handling messages. That is tolerable as a migration bridge, but it is not the final architecture.
+## What Should Move Out Of Core
 
-## What The Final Split Should Feel Like
+The following should move out of ACP-shaped core code:
 
-### Inbound Message Path
+- channel-specific configured binding matching
+- channel-specific binding target normalization
+- channel-specific recovery UX
+- ACP-specific route wrapping helpers as named ACP seams
+- codex app server fallback policy beyond generic plugin-bound dispatch behavior
 
-1. Channel plugin receives inbound event.
-2. Channel plugin produces canonical `ConversationRef`.
-3. Core binding registry resolves `BindingResolution` with no plugin discovery.
-4. Core ACP kernel ensures or reuses the generic ACP session.
-5. Backend plugin runs the turn.
+The following should stay:
 
-### Configured Binding Compilation Path
+- generic binding storage and dispatch
+- generic ACP control plane
+- generic stateful target driver contract
 
-1. Core loads enabled channel plugins at startup or reload.
-2. Core iterates configured ACP bindings from config.
-3. Core dispatches each binding to the owning channel ACP binding adapter.
-4. Channel adapter returns a normalized binding descriptor.
-5. Core stores it in a compiled registry.
+## Current Problems To Remove
 
-### Reset/New Path
+### Hot-path plugin discovery
 
-1. Channel command surface identifies the bound session or binding key.
-2. Core ACP kernel performs generic close/reinitialize/reset.
-3. Channel plugin does not rebuild lifecycle semantics itself.
+`src/channels/plugins/acp-bindings.ts` still bootstraps and discovers plugins while resolving configured ACP bindings.
 
-This keeps the channel plugin responsible for "which session should this conversation use?" while core remains responsible for "how does a session safely live and die?"
+That is acceptable only as migration scaffolding.
 
-## Why The ACP Kernel Should Not Become An Ordinary Plugin
+The final design should compile configured bindings at startup or reload and perform plain data lookups during inbound handling.
 
-In principle, the ACP kernel could be moved behind a privileged system-plugin abstraction. In practice, it should not be moved into an ordinary plugin.
+### ACP-shaped core seams
 
-An ordinary plugin is the wrong shape because:
+`src/channels/plugins/acp-bindings.ts`, `src/channels/plugins/acp-routing.ts`, and `src/acp/persistent-bindings.lifecycle.ts` are still ACP-shaped interfaces in core.
 
-- it must be discovered and loaded by the same plugin system it would be underpinning
-- channels would depend on it during startup, reset, reload, and inbound routing
-- failure semantics become circular: if the kernel plugin is broken, the plugin system itself now needs special-case handling to recover
-- mandatory ordering, availability, and dependency wiring would reintroduce core semantics behind plugin indirection
+That is the wrong long-term naming and ownership boundary.
 
-So the clean architecture is:
+### Thin channel adapter contract
 
-- core kernel
-- plugin-owned channel semantics
-- plugin-owned runtime backends
+`src/channels/plugins/types.adapters.ts` only exposes ACP-specific normalize and match helpers today.
 
-Not:
+That is not enough for the final binding capability design.
 
-- "everything is a plugin", except one plugin that behaves exactly like core
+## Target Contracts
 
-## The Current Gap
+### Channel binding provider contract
 
-Today the system is in a halfway state.
+Conceptually, each channel plugin should support:
 
-Good:
-
-- configured binding lookup and route wrapping are moving behind the plugin seam
-- backend runtime concerns are already plugin-shaped
-
-Still heavy in core:
-
-- configured binding resolution logic in `src/channels/plugins/acp-bindings.ts`
-- configured binding ensure/reset logic in `src/acp/persistent-bindings.lifecycle.ts`
-- inbound call sites still directly call core helpers instead of a stable plugin-facing binding service
-- the hot path still has migration scaffolding for plugin snapshot discovery
-
-This is the right migration direction, but not the ideal destination.
-
-## Target Contract
-
-The eventual `ChannelAcpBindingAdapter` should be expanded from a matching helper into a true channel binding contract.
-
-It should conceptually support:
-
-- `compileConfiguredBinding(binding, cfg) -> CompiledAcpBinding | null`
-- `resolveInboundConversation(event/context) -> ConversationRef`
+- `compileConfiguredBinding(binding, cfg) -> CompiledBinding | null`
+- `resolveInboundConversation(event) -> ConversationRef | null`
 - `matchInboundConversation(compiledBinding, conversation) -> BindingMatch | null`
-- `describeBinding(binding) -> string` for logs/status/debugging
+- `describeBinding(compiledBinding) -> string | undefined`
 
-Core should then own:
+### Binding capability contract
 
-- `resolveCompiledAcpBinding(conversationRef)`
-- `ensureBindingSession(bindingResolution)`
-- `resetBindingSession(bindingResolution)`
+Core should support:
 
-That is the durable split.
+- `compileConfiguredBindings(cfg, plugins) -> CompiledBindingRegistry`
+- `resolveBinding(conversationRef) -> BindingResolution | null`
+- `createRuntimeBinding(target, conversationRef, metadata) -> BindingRecord`
+- `touchBinding(bindingId)`
+- `unbindBinding(bindingId | target)`
+- `dispatchResolvedBinding(bindingResolution, inboundEvent)`
 
-## Implementation Plan
+### Stateful target driver contract
 
-### Phase 1: Freeze The Core Nouns
+Core should support:
 
-Introduce and document the stable internal types:
+- `ensureReady(targetRef, cfg)`
+- `runTurn(targetRef, input)`
+- `cancel(targetRef, reason)`
+- `close(targetRef, reason)`
+- `reset(targetRef, reason)`
+- `status(targetRef)`
+- `health(targetRef)`
+
+## File-Level Transition Plan
+
+### Keep
+
+- `src/infra/outbound/session-binding-service.ts`
+- `src/plugins/conversation-binding.ts`
+- `src/acp/control-plane/*`
+- `extensions/acpx/*`
+
+### Generalize
+
+- `src/channels/plugins/types.adapters.ts`
+  - evolve from `ChannelAcpBindingAdapter` into a generic channel binding provider contract
+- `src/plugin-sdk/conversation-runtime.ts`
+  - export generic binding capability surfaces instead of ACP-shaped routing helpers
+- `src/acp/persistent-bindings.lifecycle.ts`
+  - either become a generic stateful target driver consumer or be renamed to ACP driver-specific lifecycle code
+
+### Shrink Or Delete
+
+- `src/channels/plugins/acp-bindings.ts`
+  - replace with compiled binding registry logic or delete once fully superseded
+- `src/channels/plugins/acp-routing.ts`
+  - replace with generic resolved-binding dispatch helpers or delete once call sites move
+- `src/acp/persistent-bindings.resolve.ts`
+  - keep only as compatibility facade during migration
+- `src/acp/persistent-bindings.route.ts`
+  - keep only as compatibility facade during migration
+
+## Recommended Refactor Order
+
+### Phase 1: Freeze the nouns
+
+Introduce and document the stable binding and target types:
 
 - `ConversationRef`
-- `CompiledAcpBinding`
+- `CompiledBinding`
 - `BindingResolution`
-- `AcpBindingSessionIdentity`
+- `BindingTargetDescriptor`
+- `StatefulTargetDriver`
+
+Do this before more movement so the rest of the refactor has firm vocabulary.
+
+### Phase 2: Promote bindings to a first-class core capability
+
+Refactor the existing generic binding store into an explicit capability layer.
 
 Requirements:
 
-- channel-agnostic
-- serializable
-- stable enough for persistence and tests
+- runtime-created bindings stay supported
+- configured bindings become first-class
+- lookup becomes channel-agnostic
 
-Why:
+### Phase 3: Compile configured bindings at startup and reload
 
-Until these nouns exist, the code will keep leaking Discord or Telegram semantics across layers.
+Move configured binding compilation off the inbound hot path.
 
-### Phase 2: Add A Binding Compiler Service
-
-Create a core service that compiles configured ACP bindings at startup and config/plugin reload.
-
-Responsibilities:
+Requirements:
 
 - load enabled channel plugins once
-- for each configured ACP binding, call the owning channel adapter
-- build a compiled registry indexed by `ConversationRef`
-- expose a fast `resolve(conversationRef)` API
+- compile configured bindings once
+- rebuild on config or plugin reload
+- inbound path becomes pure registry lookup
 
-Why:
+### Phase 4: Expand the channel provider seam
 
-This removes plugin discovery from the hot path and turns binding resolution into data lookup instead of runtime introspection.
+Replace the ACP-specific adapter shape with a generic channel binding provider contract.
 
-### Phase 3: Expand `ChannelAcpBindingAdapter`
+Requirements:
 
-Replace the current minimal adapter with a compiler-friendly contract.
+- channel plugins own normalization and matching
+- core no longer knows channel-specific configured binding rules
 
-Current:
+### Phase 5: Re-express ACP as a binding consumer plus built-in stateful target driver
 
-- `normalizeConfiguredBindingTarget`
-- `matchConfiguredBinding`
+Move ACP configured binding policy to the new binding capability while keeping ACP runtime orchestration in core.
 
-Desired:
+Requirements:
 
-- configured binding compilation
-- inbound conversation normalization
-- match/priority semantics against compiled bindings
+- ACP configured bindings resolve through the generic binding registry
+- ACP target readiness uses the ACP driver contract
+- ACP-specific naming disappears from generic binding code
 
-Why:
+### Phase 6: Keep codex app server on the same binding capability
 
-The plugin should own the semantic translation from its transport model into `ConversationRef`. Core should never need to rediscover that logic.
+Do not force the codex app server into ACP semantics.
 
-### Phase 4: Move Inbound Call Sites To The Compiled Registry
+Requirements:
 
-Refactor channel code so inbound handlers do not call binding resolution helpers that trigger snapshot plugin loading.
+- codex app server keeps runtime-created bindings through the same binding capability
+- inbound claim remains the default delivery path
+- only adopt the stateful target driver seam if the app server truly needs long-lived target orchestration
 
-Instead:
+### Phase 7: Remove ACP-shaped compatibility facades
 
-- channel code produces `ConversationRef`
-- core compiled registry resolves the binding
-- core ACP kernel ensures the session
+Once all call sites are on the generic capability:
 
-Why:
-
-This is the point where the migration becomes structurally complete from the hot path perspective.
-
-### Phase 5: Reduce `src/channels/plugins/acp-bindings.ts` To A Thin Facade Or Delete It
-
-Once the compiler service exists, the current file should either disappear or become a compatibility facade over:
-
-- compiler service
-- compiled registry
-- adapter contracts
-
-Why:
-
-Today that file is doing too many jobs:
-
-- plugin snapshot discovery
-- catalog/plugin-id scoping
-- workspace scanning
-- binding normalization
-- binding matching
-- session-key reverse resolution
-
-That is not the final shape.
-
-### Phase 6: Keep `persistent-bindings.lifecycle` Generic Or Rename It
-
-`src/acp/persistent-bindings.lifecycle.ts` should survive only if it becomes purely generic binding-session lifecycle code.
-
-Allowed responsibilities:
-
-- generic ensure/reset/reinitialize
-- state compatibility checks
-- calls into the ACP kernel
-
-Disallowed responsibilities:
-
-- channel-specific target normalization
-- channel-specific matching logic
-- runtime plugin discovery
-
-Why:
-
-This is where lightweight core and durable semantics can coexist.
-
-### Phase 7: Expose Stable SDK Surfaces
-
-Promote the durable ACP binding surfaces into plugin SDK exports so external channel plugins do not need internal imports or special knowledge.
-
-This should include:
-
-- the channel ACP binding adapter contract
-- canonical conversation/binding types
-- any channel runtime helpers required for ACP-bound inbound flows
-
-Why:
-
-A design is not truly pluginified if only built-in channel code can use it cleanly.
+- delete ACP-shaped routing helpers
+- delete hot-path plugin bootstrapping logic
+- keep only thin compatibility exports if external plugins still need a deprecation window
 
 ## Success Criteria
 
 The architecture is done when all of these are true:
 
-- no inbound ACP binding resolution performs plugin discovery
-- no workspace scanning happens on the message hot path
-- core ACP code contains no Discord/Telegram/Feishu matching semantics
-- channel plugins do not implement their own ACP session state machine
-- backend plugins remain runtime-only
-- startup and reload build a compiled binding registry once
-- external channel plugins can participate without internal imports
+- no inbound configured-binding resolution performs plugin discovery
+- no channel-specific binding semantics remain in generic core binding code
+- ACP still uses a core session kernel
+- codex app server and ACP both sit on top of the same binding capability
+- the binding capability can represent both configured and runtime-created bindings
+- long-lived target orchestration is shared through a small core driver contract
+- the main harness is not forced into the ACP engine
+- external plugins can use the same capability without internal imports
 
 ## Non-Goals
 
-These are not part of the holy grail:
+These are not goals of the remaining refactor:
 
-- moving the ACP session kernel out of core
-- making every channel own session persistence and retry logic
-- making ACP runtime plugins understand channels
-- turning the ACP kernel into an ordinary plugin
-
-## Recommended Near-Term Sequence
-
-If we continue iterating from the current branch, the best order is:
-
-1. Introduce `ConversationRef` and `CompiledAcpBinding` explicitly.
-2. Build a startup/reload compiled registry for configured ACP bindings.
-3. Refactor Discord, Telegram, and Feishu inbound paths to use the compiled registry.
-4. Shrink `src/channels/plugins/acp-bindings.ts` into compiler/registry helpers only.
-5. Trim `src/acp/persistent-bindings.lifecycle.ts` down to generic binding-session lifecycle.
-6. Export the durable ACP binding contract through the plugin SDK.
-
-That gets us to the elegant end state without destabilizing the ACP kernel.
+- moving the ACP session kernel into an ordinary plugin
+- forcing the main harness, ACP, and codex app server into one executor
+- making every channel implement its own retry and session-safety logic
+- keeping ACP-shaped naming in the long-term generic binding layer
 
 ## Bottom Line
 
-The 20-year architecture is:
+The right 20-year split is:
 
-- core owns the ACP kernel
+- bindings are the shared core capability
+- ACP session orchestration remains a small built-in core kernel
 - channel plugins own binding semantics
-- backend plugins own runtime semantics
-- startup compiles binding config into a fast generic registry
+- backend plugins own runtime protocol details
+- product consumers like ACP configured bindings and codex app server build on the same binding capability without being forced into one runtime engine
 
-That is the simplest design that keeps core lightweight without making the system fragile.
+That is the leanest core that still has honest boundaries.
