@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { AgentAcpBinding } from "../../config/types.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { getActivePluginRegistry, getActivePluginRegistryKey } from "../../plugins/runtime.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -27,7 +27,22 @@ import {
 } from "../../routing/session-key.js";
 import { getChannelPlugin } from "./index.js";
 
-const bootstrapAttempts = new Set<string>();
+type ChannelPluginLike = NonNullable<ReturnType<typeof getChannelPlugin>>;
+
+function findChannelPlugin(params: {
+  registry:
+    | {
+        channels?: Array<{ plugin?: ChannelPluginLike | null } | null> | null;
+      }
+    | null
+    | undefined;
+  channel: string;
+}): ChannelPluginLike | undefined {
+  return (
+    params.registry?.channels?.find((entry) => entry?.plugin?.id === params.channel)?.plugin ??
+    undefined
+  );
+}
 
 function resolveLoadedChannelPlugin(channel: string) {
   const normalized = channel.trim().toLowerCase();
@@ -40,39 +55,70 @@ function resolveLoadedChannelPlugin(channel: string) {
     return current;
   }
 
-  const activeRegistry = getActivePluginRegistry();
-  if (!activeRegistry) {
-    return undefined;
-  }
-  return activeRegistry.channels.find((entry) => entry?.plugin?.id === normalized)?.plugin;
+  return findChannelPlugin({
+    registry: getActivePluginRegistry(),
+    channel: normalized,
+  });
 }
 
-function maybeBootstrapConfiguredBindingChannelPlugin(params: {
+function listConfiguredBindingSnapshotWorkspaces(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  workspaceDirs: string[];
+} {
+  const autoEnabled = applyPluginAutoEnable({ config: cfg }).config;
+  const seen = new Set<string>();
+  const workspaceDirs: string[] = [];
+  const addWorkspaceDir = (agentId: string) => {
+    const workspaceDir = resolveAgentWorkspaceDir(autoEnabled, agentId);
+    if (!workspaceDir || seen.has(workspaceDir)) {
+      return;
+    }
+    seen.add(workspaceDir);
+    workspaceDirs.push(workspaceDir);
+  };
+
+  addWorkspaceDir(resolveDefaultAgentId(autoEnabled));
+  for (const binding of listAcpBindings(autoEnabled)) {
+    addWorkspaceDir(pickFirstExistingAgentId(autoEnabled, binding.agentId ?? "main"));
+  }
+  return { config: autoEnabled, workspaceDirs };
+}
+
+function resolveConfiguredBindingChannelPluginSnapshot(params: {
   cfg: OpenClawConfig;
   channel: string;
-}): void {
-  if (resolveLoadedChannelPlugin(params.channel)) {
-    return;
+}) {
+  const normalized = params.channel.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
   }
-
-  const registryKey = getActivePluginRegistryKey() ?? "<none>";
-  const attemptKey = `${registryKey}:${params.channel.trim().toLowerCase()}`;
-  if (bootstrapAttempts.has(attemptKey)) {
-    return;
+  const { config, workspaceDirs } = listConfiguredBindingSnapshotWorkspaces(params.cfg);
+  for (const workspaceDir of workspaceDirs) {
+    try {
+      const registry = loadOpenClawPlugins({
+        config,
+        workspaceDir,
+        activate: false,
+        cache: false,
+        onlyPluginIds: [normalized],
+        includeSetupOnlyChannelPlugins: true,
+        preferSetupRuntimeForChannelPlugins: true,
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      });
+      const plugin = findChannelPlugin({
+        registry,
+        channel: normalized,
+      });
+      if (plugin?.acpBindings) {
+        return plugin;
+      }
+    } catch {
+      continue;
+    }
   }
-  bootstrapAttempts.add(attemptKey);
-
-  const autoEnabled = applyPluginAutoEnable({ config: params.cfg }).config;
-  const defaultAgentId = resolveDefaultAgentId(autoEnabled);
-  const workspaceDir = resolveAgentWorkspaceDir(autoEnabled, defaultAgentId);
-  try {
-    loadOpenClawPlugins({
-      config: autoEnabled,
-      workspaceDir,
-    });
-  } catch {
-    bootstrapAttempts.delete(attemptKey);
-  }
+  return undefined;
 }
 
 function resolveConfiguredBindingChannelPlugin(params: { cfg: OpenClawConfig; channel: string }) {
@@ -86,11 +132,10 @@ function resolveConfiguredBindingChannelPlugin(params: { cfg: OpenClawConfig; ch
     return current;
   }
 
-  maybeBootstrapConfiguredBindingChannelPlugin({
+  return resolveConfiguredBindingChannelPluginSnapshot({
     cfg: params.cfg,
     channel: normalized,
   });
-  return resolveLoadedChannelPlugin(normalized);
 }
 
 function normalizeBindingChannel(params: {
