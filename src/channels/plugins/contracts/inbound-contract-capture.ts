@@ -1,5 +1,5 @@
-import { buildDispatchInboundCaptureMock } from "../../../../test/helpers/dispatch-inbound-capture.js";
 import type { MsgContext } from "../../../auto-reply/templating.js";
+import { buildDispatchInboundCaptureMock } from "./dispatch-inbound-capture.js";
 
 export type InboundContextCapture = {
   ctx: MsgContext | undefined;
