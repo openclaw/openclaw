@@ -1,4 +1,5 @@
-// Public pairing/session-binding helpers for plugins that manage conversation ownership.
+// Public binding helpers for both runtime plugin-owned bindings and
+// config-driven channel bindings.
 
 export {
   createConversationBindingRecord,
@@ -7,7 +8,7 @@ export {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
   unbindConversationBindingRecord,
-} from "../channels/plugins/binding-records.js";
+} from "../bindings/records.js";
 export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,

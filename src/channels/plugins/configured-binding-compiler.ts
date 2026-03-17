@@ -11,6 +11,9 @@ import type {
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
 
+// Configured bindings are channel-owned rules compiled from config, separate
+// from runtime plugin-owned conversation bindings.
+
 type ChannelPluginLike = NonNullable<ReturnType<typeof getChannelPlugin>>;
 
 export type CompiledConfiguredBindingRegistry = {

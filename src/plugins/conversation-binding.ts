@@ -6,13 +6,16 @@ import {
   createConversationBindingRecord,
   resolveConversationBindingRecord,
   unbindConversationBindingRecord,
-} from "../channels/plugins/binding-records.js";
+} from "../bindings/records.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import type {
   PluginConversationBinding,
+  PluginConversationBindingResolvedEvent,
+  PluginConversationBindingResolutionDecision,
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
 } from "./types.js";
@@ -28,7 +31,9 @@ const LEGACY_CODEX_PLUGIN_SESSION_PREFIXES = [
   "openclaw-codex-app-server:thread:",
 ] as const;
 
-type PluginBindingApprovalDecision = "allow-once" | "allow-always" | "deny";
+// Runtime plugin conversation bindings are approval-driven and distinct from
+// configured channel bindings compiled from config.
+type PluginBindingApprovalDecision = PluginConversationBindingResolutionDecision;
 
 type PluginBindingApprovalEntry = {
   pluginRoot: string;
@@ -89,7 +94,7 @@ type PluginBindingResolveResult =
       status: "approved";
       binding: PluginConversationBinding;
       request: PendingPluginBindingRequest;
-      decision: PluginBindingApprovalDecision;
+      decision: Exclude<PluginBindingApprovalDecision, "deny">;
     }
   | {
       status: "denied";
@@ -717,6 +722,11 @@ export async function resolvePluginConversationBindingApproval(params: {
   }
   pendingRequests.delete(params.approvalId);
   if (params.decision === "deny") {
+    await notifyPluginConversationBindingResolved({
+      status: "denied",
+      decision: "deny",
+      request,
+    });
     log.info(
       `plugin binding denied plugin=${request.pluginId} root=${request.pluginRoot} channel=${request.conversation.channel} account=${request.conversation.accountId} conversation=${request.conversation.conversationId}`,
     );
@@ -745,12 +755,54 @@ export async function resolvePluginConversationBindingApproval(params: {
   log.info(
     `plugin binding approved plugin=${request.pluginId} root=${request.pluginRoot} decision=${params.decision} channel=${request.conversation.channel} account=${request.conversation.accountId} conversation=${request.conversation.conversationId}`,
   );
+  await notifyPluginConversationBindingResolved({
+    status: "approved",
+    binding,
+    decision: params.decision,
+    request,
+  });
   return {
     status: "approved",
     binding,
     request,
     decision: params.decision,
   };
+}
+
+async function notifyPluginConversationBindingResolved(params: {
+  status: "approved" | "denied";
+  binding?: PluginConversationBinding;
+  decision: PluginConversationBindingResolutionDecision;
+  request: PendingPluginBindingRequest;
+}): Promise<void> {
+  const registrations = getActivePluginRegistry()?.conversationBindingResolvedHandlers ?? [];
+  for (const registration of registrations) {
+    if (registration.pluginId !== params.request.pluginId) {
+      continue;
+    }
+    const registeredRoot = registration.pluginRoot?.trim();
+    if (registeredRoot && registeredRoot !== params.request.pluginRoot) {
+      continue;
+    }
+    try {
+      const event: PluginConversationBindingResolvedEvent = {
+        status: params.status,
+        binding: params.binding,
+        decision: params.decision,
+        request: {
+          summary: params.request.summary,
+          detachHint: params.request.detachHint,
+          requestedBySenderId: params.request.requestedBySenderId,
+          conversation: params.request.conversation,
+        },
+      };
+      await registration.handler(event);
+    } catch (error) {
+      log.warn(
+        `plugin binding resolved callback failed plugin=${registration.pluginId} root=${registration.pluginRoot ?? "<none>"}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 }
 
 export function buildPluginBindingResolvedText(params: PluginBindingResolveResult): string {

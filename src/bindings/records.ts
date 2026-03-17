@@ -5,8 +5,10 @@ import {
   type SessionBindingCapabilities,
   type SessionBindingRecord,
   type SessionBindingUnbindInput,
-} from "../../infra/outbound/session-binding-service.js";
+} from "../infra/outbound/session-binding-service.js";
 
+// Shared binding record helpers used by both configured bindings and
+// runtime-created plugin conversation bindings.
 export async function createConversationBindingRecord(
   input: SessionBindingBindInput,
 ): Promise<SessionBindingRecord> {

@@ -7,6 +7,9 @@ import {
   resolveConfiguredBindingRecordForConversation as resolveConfiguredBindingRecordForConversationRaw,
 } from "./configured-binding-registry.js";
 
+// Thin public wrapper around the configured-binding registry. Runtime plugin
+// conversation bindings use a separate approval-driven path in src/plugins/.
+
 export function primeConfiguredBindingRegistry(
   ...args: Parameters<typeof primeConfiguredBindingRegistryRaw>
 ): ReturnType<typeof primeConfiguredBindingRegistryRaw> {
