@@ -1,11 +1,11 @@
 import {
+  formatDocsLink,
   type OpenClawConfig,
   promptLegacyChannelAllowFrom,
   resolveSetupAccountId,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "../../../src/terminal/links.js";
 import { resolveDefaultDiscordAccountId, resolveDiscordAccount } from "./accounts.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import {
@@ -100,28 +100,20 @@ async function resolveDiscordGroupAllowlist(params: {
   });
 }
 
-export const discordSetupWizard: ChannelSetupWizard = createDiscordSetupWizardBase(async () => ({
-  discordSetupWizard: {
-    dmPolicy: {
-      promptAllowFrom: promptDiscordAllowFrom,
-    },
-    groupAccess: {
-      resolveAllowlist: async ({ cfg, accountId, credentialValues, entries }) =>
-        await resolveDiscordGroupAllowlist({
-          cfg,
-          accountId,
-          credentialValues,
-          entries,
-        }),
-    },
-    allowFrom: {
-      resolveEntries: async ({ cfg, accountId, credentialValues, entries }) =>
-        await resolveDiscordAllowFromEntries({
-          token:
-            resolveDiscordAccount({ cfg, accountId }).token ||
-            (typeof credentialValues.token === "string" ? credentialValues.token : ""),
-          entries,
-        }),
-    },
-  } as ChannelSetupWizard,
-}));
+export const discordSetupWizard: ChannelSetupWizard = createDiscordSetupWizardBase({
+  promptAllowFrom: promptDiscordAllowFrom,
+  resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) =>
+    await resolveDiscordAllowFromEntries({
+      token:
+        resolveDiscordAccount({ cfg, accountId }).token ||
+        (typeof credentialValues.token === "string" ? credentialValues.token : ""),
+      entries,
+    }),
+  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries }) =>
+    await resolveDiscordGroupAllowlist({
+      cfg,
+      accountId,
+      credentialValues,
+      entries,
+    }),
+});

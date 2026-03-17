@@ -362,20 +362,43 @@ describe("tts", () => {
   });
 
   describe("summarizeText", () => {
+    let summarizeTextForTest: typeof summarizeText;
+    let resolveTtsConfigForTest: typeof resolveTtsConfig;
+    let completeSimpleForTest: typeof completeSimple;
+    let getApiKeyForModelForTest: typeof getApiKeyForModel;
+    let resolveModelAsyncForTest: typeof resolveModelAsync;
+    let ensureCustomApiRegisteredForTest: typeof ensureCustomApiRegistered;
+
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
-    const baseConfig = resolveTtsConfig(baseCfg);
+
+    beforeEach(async () => {
+      vi.resetModules();
+      ({ completeSimple: completeSimpleForTest } = await import("@mariozechner/pi-ai"));
+      ({ getApiKeyForModel: getApiKeyForModelForTest } = await import("../agents/model-auth.js"));
+      ({ resolveModelAsync: resolveModelAsyncForTest } =
+        await import("../agents/pi-embedded-runner/model.js"));
+      ({ ensureCustomApiRegistered: ensureCustomApiRegisteredForTest } =
+        await import("../agents/custom-api-registry.js"));
+      const ttsModule = await import("./tts.js");
+      summarizeTextForTest = ttsModule._test.summarizeText;
+      resolveTtsConfigForTest = ttsModule.resolveTtsConfig;
+      vi.mocked(completeSimpleForTest).mockResolvedValue(
+        mockAssistantMessage([{ type: "text", text: "Summary" }]),
+      );
+    });
 
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      vi.mocked(completeSimple).mockResolvedValue(
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      vi.mocked(completeSimpleForTest).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: mockSummary }]),
       );
 
       const longText = "A".repeat(2000);
-      const result = await summarizeText({
+      const result = await summarizeTextForTest({
         text: longText,
         targetLength: 1500,
         cfg: baseCfg,
@@ -387,11 +410,12 @@ describe("tts", () => {
       expect(result.inputLength).toBe(2000);
       expect(result.outputLength).toBe(mockSummary.length);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(completeSimple).toHaveBeenCalledTimes(1);
+      expect(completeSimpleForTest).toHaveBeenCalledTimes(1);
     });
 
     it("calls the summary model with the expected parameters", async () => {
-      await summarizeText({
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      await summarizeTextForTest({
         text: "Long text to summarize",
         targetLength: 500,
         cfg: baseCfg,
@@ -399,11 +423,11 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      const callArgs = vi.mocked(completeSimple).mock.calls[0];
+      const callArgs = vi.mocked(completeSimpleForTest).mock.calls[0];
       expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
       expect(callArgs?.[2]?.maxTokens).toBe(250);
       expect(callArgs?.[2]?.temperature).toBe(0.3);
-      expect(getApiKeyForModel).toHaveBeenCalledTimes(1);
+      expect(getApiKeyForModelForTest).toHaveBeenCalledTimes(1);
     });
 
     it("uses summaryModel override when configured", async () => {
@@ -411,8 +435,8 @@ describe("tts", () => {
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
-      const config = resolveTtsConfig(cfg);
-      await summarizeText({
+      const config = resolveTtsConfigForTest(cfg);
+      await summarizeTextForTest({
         text: "Long text to summarize",
         targetLength: 500,
         cfg,
@@ -420,11 +444,17 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      expect(resolveModelAsync).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
+      expect(resolveModelAsyncForTest).toHaveBeenCalledWith(
+        "openai",
+        "gpt-4.1-mini",
+        undefined,
+        cfg,
+      );
     });
 
     it("registers the Ollama api before direct summarization", async () => {
-      vi.mocked(resolveModelAsync).mockResolvedValue({
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      vi.mocked(resolveModelAsyncForTest).mockResolvedValue({
         ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
         model: {
           ...createResolvedModel("ollama", "qwen3:8b", "ollama").model,
@@ -432,7 +462,7 @@ describe("tts", () => {
         },
       } as never);
 
-      await summarizeText({
+      await summarizeTextForTest({
         text: "Long text to summarize",
         targetLength: 500,
         cfg: baseCfg,
@@ -440,10 +470,11 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      expect(ensureCustomApiRegistered).toHaveBeenCalledWith("ollama", expect.any(Function));
+      expect(ensureCustomApiRegisteredForTest).toHaveBeenCalledWith("ollama", expect.any(Function));
     });
 
     it("validates targetLength bounds", async () => {
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
       const cases = [
         { targetLength: 99, shouldThrow: true },
         { targetLength: 100, shouldThrow: false },
@@ -451,7 +482,7 @@ describe("tts", () => {
         { targetLength: 10001, shouldThrow: true },
       ] as const;
       for (const testCase of cases) {
-        const call = summarizeText({
+        const call = summarizeTextForTest({
           text: "text",
           targetLength: testCase.targetLength,
           cfg: baseCfg,
@@ -469,6 +500,7 @@ describe("tts", () => {
     });
 
     it("throws when summary output is missing or empty", async () => {
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
       const cases = [
         { name: "no summary blocks", message: mockAssistantMessage([]) },
         {
@@ -477,9 +509,9 @@ describe("tts", () => {
         },
       ] as const;
       for (const testCase of cases) {
-        vi.mocked(completeSimple).mockResolvedValue(testCase.message);
+        vi.mocked(completeSimpleForTest).mockResolvedValue(testCase.message);
         await expect(
-          summarizeText({
+          summarizeTextForTest({
             text: "text",
             targetLength: 500,
             cfg: baseCfg,

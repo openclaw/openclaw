@@ -8,10 +8,7 @@ import {
   collectOpenProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
-import {
-  buildOutboundBaseSessionKey,
-  normalizeOutboundThreadId,
-} from "openclaw/plugin-sdk/core";
+import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   buildComputedAccountStatusSnapshot,
@@ -25,10 +22,11 @@ import {
   resolveConfiguredFromRequiredCredentialStatuses,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
+  createSlackActions,
   type ChannelPlugin,
   type OpenClawConfig,
+  type SlackActionContext,
 } from "openclaw/plugin-sdk/slack";
-import { createSlackActions } from "../../../src/channels/plugins/slack.actions.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listEnabledSlackAccounts,
@@ -489,7 +487,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   actions: createSlackActions(SLACK_CHANNEL, {
     invoke: async (action, cfg, toolContext) =>
-      await getSlackRuntime().channel.slack.handleSlackAction(action, cfg, toolContext),
+      await getSlackRuntime().channel.slack.handleSlackAction(
+        action,
+        cfg as OpenClawConfig,
+        toolContext as SlackActionContext | undefined,
+      ),
   }),
   setup: slackSetupAdapter,
   outbound: {

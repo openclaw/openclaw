@@ -175,6 +175,7 @@ describe("createEnvPatchedAccountSetupAdapter", () => {
 
     expect(
       adapter.validateInput?.({
+        cfg: asConfig({}),
         accountId: "work",
         input: { useEnv: true },
       }),
@@ -182,6 +183,7 @@ describe("createEnvPatchedAccountSetupAdapter", () => {
 
     expect(
       adapter.validateInput?.({
+        cfg: asConfig({}),
         accountId: DEFAULT_ACCOUNT_ID,
         input: {},
       }),
@@ -189,6 +191,7 @@ describe("createEnvPatchedAccountSetupAdapter", () => {
 
     expect(
       adapter.validateInput?.({
+        cfg: asConfig({}),
         accountId: DEFAULT_ACCOUNT_ID,
         input: { token: "tok" },
       }),
