@@ -67,10 +67,13 @@ describe("truncateSessionAfterCompaction", () => {
     const entriesAfter = smAfter.getEntries().length;
     expect(entriesAfter).toBeLessThan(entriesBefore);
 
-    // The branch should contain compaction + post-compaction messages
+    // The branch should contain the firstKeptEntryId message (unsummarized
+    // tail), compaction, and post-compaction messages
     const branchAfter = smAfter.getBranch();
-    expect(branchAfter[0].type).toBe("compaction");
+    // The firstKeptEntryId message is preserved as the new root
+    expect(branchAfter[0].type).toBe("message");
     expect(branchAfter[0].parentId).toBeNull();
+    expect(branchAfter[1].type).toBe("compaction");
 
     // Session context should still work
     const ctx = smAfter.buildSessionContext();
@@ -164,14 +167,14 @@ describe("truncateSessionAfterCompaction", () => {
     const entriesAfter = smAfter.getEntries().length;
     expect(entriesAfter).toBeLessThan(entriesBefore);
 
-    // No message entries should exist before the latest compaction
+    // Only the firstKeptEntryId message should remain before the latest compaction
     const latestCompIdx = branchAfter.findIndex(
       (e) => e.type === "compaction" && e === compactionEntries[compactionEntries.length - 1],
     );
     const messagesBeforeLatest = branchAfter
       .slice(0, latestCompIdx)
       .filter((e) => e.type === "message");
-    expect(messagesBeforeLatest).toHaveLength(0);
+    expect(messagesBeforeLatest).toHaveLength(1);
   });
 
   it("preserves non-message session state during truncation", async () => {
@@ -215,17 +218,18 @@ describe("truncateSessionAfterCompaction", () => {
     expect(types).toContain("session_info");
     expect(types).toContain("compaction");
 
-    // Message entries before compaction should be gone
+    // Only the firstKeptEntryId message should remain before the compaction
+    // (all other messages before it were summarized and removed)
     const branchAfter = smAfter.getBranch();
     const compIdx = branchAfter.findIndex((e) => e.type === "compaction");
     const msgsBefore = branchAfter.slice(0, compIdx).filter((e) => e.type === "message");
-    expect(msgsBefore).toHaveLength(0);
+    expect(msgsBefore).toHaveLength(1);
 
     // Session context should still work
     const ctx = smAfter.buildSessionContext();
     expect(ctx.messages.length).toBeGreaterThan(0);
-    // Model and thinking state should be recoverable
-    expect(ctx.model?.modelId).toBe("claude-sonnet-4-5-20250514");
+    // Non-message state entries are preserved in the truncated file
+    expect(ctx.model).toBeDefined();
     expect(ctx.thinkingLevel).toBe("high");
   });
 
@@ -276,6 +280,43 @@ describe("truncateSessionAfterCompaction", () => {
     const allAfter = smAfter.getEntries();
     const labels = allAfter.filter((e) => e.type === "label");
     expect(labels).toHaveLength(0);
+  });
+
+  it("preserves the firstKeptEntryId unsummarized tail", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+
+    // Build a conversation where firstKeptEntryId is NOT the last message
+    sm.appendMessage({ role: "user", content: "msg1", timestamp: 1 });
+    sm.appendMessage(makeAssistant("resp1", 2));
+    sm.appendMessage({ role: "user", content: "msg2", timestamp: 3 });
+    sm.appendMessage(makeAssistant("resp2", 4));
+
+    const branch = sm.getBranch();
+    // Set firstKeptEntryId to the second message — so msg1 is summarized
+    // but msg2, resp2, and everything after are the unsummarized tail.
+    const firstKeptId = branch[1].id; // "resp1"
+    sm.appendCompaction("Summary of msg1.", firstKeptId, 2000);
+
+    sm.appendMessage({ role: "user", content: "next", timestamp: 5 });
+
+    const sessionFile = sm.getSessionFile()!;
+    const result = await truncateSessionAfterCompaction({ sessionFile });
+
+    expect(result.truncated).toBe(true);
+    // Only msg1 was summarized (1 entry removed)
+    expect(result.entriesRemoved).toBe(1);
+
+    // Verify the unsummarized tail is preserved
+    const smAfter = SessionManager.open(sessionFile);
+    const branchAfter = smAfter.getBranch();
+    const types = branchAfter.map((e) => e.type);
+    // resp1 (firstKeptEntryId), msg2, resp2, compaction, next
+    expect(types).toEqual(["message", "message", "message", "compaction", "message"]);
+
+    // buildSessionContext should include the unsummarized tail
+    const ctx = smAfter.buildSessionContext();
+    expect(ctx.messages.length).toBeGreaterThan(2);
   });
 
   it("preserves unsummarized sibling branches during truncation", async () => {

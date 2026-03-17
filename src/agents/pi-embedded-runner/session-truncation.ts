@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SessionEntry } from "@mariozechner/pi-coding-agent";
+import type { CompactionEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { log } from "./logger.js";
 
@@ -20,12 +20,15 @@ import { log } from "./logger.js";
  *    Note: label and branch_summary entries referencing removed messages are
  *    also dropped to avoid dangling metadata.
  * 3. All entries from sibling branches not covered by the compaction
- * 4. The compaction entry and all entries after it in the current branch
+ * 4. The unsummarized tail: entries from `firstKeptEntryId` through (and
+ *    including) the compaction entry, plus all entries after it
  *
- * Only `message` entries in the current branch that precede the latest
- * compaction are removed — they are the entries the compaction summarized.
- * Entries whose parent was removed are re-parented to the nearest kept
- * ancestor (or become roots).
+ * Only `message` entries in the current branch that precede the compaction's
+ * `firstKeptEntryId` are removed — they are the entries the compaction
+ * actually summarized. Entries from `firstKeptEntryId` onward are preserved
+ * because `buildSessionContext()` expects them when reconstructing the
+ * session. Entries whose parent was removed are re-parented to the nearest
+ * kept ancestor (or become roots).
  */
 export async function truncateSessionAfterCompaction(params: {
   sessionFile: string;
@@ -71,10 +74,21 @@ export async function truncateSessionAfterCompaction(params: {
     return { truncated: false, entriesRemoved: 0, reason: "compaction already at root" };
   }
 
-  // Collect IDs of entries in the current branch that precede the compaction.
-  // These are the candidates for removal (only message-type ones will be removed).
+  // The compaction's firstKeptEntryId marks the start of the "unsummarized
+  // tail" — entries from firstKeptEntryId through the compaction that
+  // buildSessionContext() expects to find when reconstructing the session.
+  // Only entries *before* firstKeptEntryId were actually summarized.
+  const compactionEntry = branch[latestCompactionIdx] as CompactionEntry;
+  const { firstKeptEntryId } = compactionEntry;
+
+  // Collect IDs of entries in the current branch that were actually summarized
+  // (everything before firstKeptEntryId). Entries from firstKeptEntryId through
+  // the compaction are the unsummarized tail and must be preserved.
   const summarizedBranchIds = new Set<string>();
   for (let i = 0; i < latestCompactionIdx; i++) {
+    if (firstKeptEntryId && branch[i].id === firstKeptEntryId) {
+      break; // Everything from here to the compaction is the unsummarized tail
+    }
     summarizedBranchIds.add(branch[i].id);
   }
 
