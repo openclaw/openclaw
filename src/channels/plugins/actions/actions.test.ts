@@ -516,41 +516,58 @@ describe("handleDiscordMessageAction", () => {
     );
   });
 
-  it("falls back to toolContext.currentMessageId for reactions when messageId is omitted", async () => {
-    await handleDiscordMessageAction({
-      action: "react",
-      params: {
-        channelId: "123",
-        emoji: "ok",
-      },
-      cfg: {} as OpenClawConfig,
-      toolContext: { currentMessageId: "9001" },
-    });
-
-    const call = handleDiscordAction.mock.calls.at(-1);
-    expect(call?.[0]).toEqual(
-      expect.objectContaining({
-        action: "react",
-        channelId: "123",
-        messageId: "9001",
-        emoji: "ok",
-      }),
-    );
-  });
-
-  it("rejects reactions when neither messageId nor toolContext.currentMessageId is provided", async () => {
-    await expect(
-      handleDiscordMessageAction({
-        action: "react",
-        params: {
-          channelId: "123",
-          emoji: "ok",
+  it("handles discord reaction messageId resolution", async () => {
+    const cases = [
+      {
+        name: "falls back to toolContext.currentMessageId",
+        run: async () => {
+          await handleDiscordMessageAction({
+            action: "react",
+            params: {
+              channelId: "123",
+              emoji: "ok",
+            },
+            cfg: {} as OpenClawConfig,
+            toolContext: { currentMessageId: "9001" },
+          });
         },
-        cfg: {} as OpenClawConfig,
-      }),
-    ).rejects.toThrow(/messageId required/i);
+        assert: () => {
+          const call = handleDiscordAction.mock.calls.at(-1);
+          expect(call?.[0]).toEqual(
+            expect.objectContaining({
+              action: "react",
+              channelId: "123",
+              messageId: "9001",
+              emoji: "ok",
+            }),
+          );
+        },
+      },
+      {
+        name: "rejects when no message id source is available",
+        run: async () => {
+          await expect(
+            handleDiscordMessageAction({
+              action: "react",
+              params: {
+                channelId: "123",
+                emoji: "ok",
+              },
+              cfg: {} as OpenClawConfig,
+            }),
+          ).rejects.toThrow(/messageId required/i);
+        },
+        assert: () => {
+          expect(handleDiscordAction).not.toHaveBeenCalled();
+        },
+      },
+    ] as const;
 
-    expect(handleDiscordAction).not.toHaveBeenCalled();
+    for (const testCase of cases) {
+      handleDiscordAction.mockClear();
+      await testCase.run();
+      testCase.assert();
+    }
   });
 });
 
