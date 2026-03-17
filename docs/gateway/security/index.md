@@ -568,6 +568,8 @@ tool calls. Reduce the blast radius by:
 - For OpenResponses URL inputs (`input_file` / `input_image`), set tight
   `gateway.http.endpoints.responses.files.urlAllowlist` and
   `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
+  Empty allowlists are treated as unset; use `files.allowUrl: false` / `images.allowUrl: false`
+  if you want to disable URL fetching entirely.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
@@ -738,7 +740,7 @@ In minimal mode, the Gateway still broadcasts enough for device discovery (`role
 Gateway auth is **required by default**. If no token/password is configured,
 the Gateway refuses WebSocket connections (fail‑closed).
 
-The setup wizard generates a token by default (even for loopback) so
+Onboarding generates a token by default (even for loopback) so
 local clients must authenticate.
 
 Set a token so **all** WS clients must authenticate:
