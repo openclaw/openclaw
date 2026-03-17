@@ -11,8 +11,8 @@ import {
   setSetupChannelEnabled,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "../../../src/terminal/links.js";
 import { type ChannelSetupDmPolicy, type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
