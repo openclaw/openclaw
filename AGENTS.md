@@ -90,6 +90,21 @@
   `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
 - Verify: `openclaw channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/openclaw-gateway.log`.
 
+## Gateway Recovery (macOS multi-worktree)
+
+If the main gateway is down and not responding — **before spending time debugging** — check the runbook first: `docs/gateway/troubleshooting.md` section "Gateway starts but exits silently after a few minutes".
+
+The most common silent-exit pattern on macOS dev setups:
+
+1. **Config-reload triggered `process.exit()`**: The gateway's file watcher detected a config change, built a reload plan with `restartGateway=true`, and called `process.exit()`. If the LaunchAgent is disabled, no restart happens and the gateway stays down silently.
+   - Fix: `openclaw config set gateway.reload.mode hot` then `openclaw gateway install` to re-enable the service.
+
+2. **Wrong gateway owns the runtime**: In a multi-worktree setup, a worktree gateway may have grabbed the main config lock. Check lock files at `$TMPDIR/openclaw-$(id -u)/gateway.*.lock` — each contains the `configPath` and PID. Only kill the process whose `configPath` matches `~/.openclaw/openclaw.json`; leave worktree gateways (different configPaths/ports) alone.
+
+3. **LaunchAgent disabled**: Run `openclaw gateway install` — do NOT use manual `launchctl enable` from a shell (fails with error 125 from a non-GUI session). If a stale lock blocks startup, add `--force`.
+
+Verify recovery: `openclaw gateway status --deep` and `openclaw channels status --probe`.
+
 ## Build, Test, and Development Commands
 
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).

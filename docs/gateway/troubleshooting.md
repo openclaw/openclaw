@@ -303,6 +303,80 @@ Related:
 - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
 - [/tools/browser](/tools/browser)
 
+## Gateway starts but exits silently after a few minutes
+
+Use this when the gateway process starts, passes health checks, then dies a few minutes later with no error in the logs and no crash message.
+
+```bash
+openclaw gateway status
+openclaw logs --follow
+openclaw doctor
+```
+
+Look for:
+
+- Process exits cleanly (exit code 0) — no crash, just a quiet stop.
+- Log lines like `config change detected; evaluating reload` or `config reload requires gateway restart` shortly before the exit.
+- Service manager (LaunchAgent on macOS, systemd on Linux) not active or not enabled, so the process is never restarted after exit.
+
+### Root cause
+
+The gateway watches its config file for changes using a file watcher (`src/gateway/config-reload.ts`). When a change is detected, it builds a reload plan. For changes in the `channels` category (or any other path that sets `restartGateway = true`), the default reload mode (`hybrid`) calls `process.exit()` and expects the service manager to restart the process.
+
+If the service manager is disabled or not running, the gateway exits and stays down silently.
+
+Common triggers for a config-change-induced exit:
+
+- Another process (including your own CLI) wrote to the config file.
+- The gateway itself updated internal fields on startup.
+- A worktree-based gateway process was sharing or watching the same config file.
+
+### Fix option 1: set hot-reload mode (recommended for dev)
+
+```bash
+openclaw config set gateway.reload.mode hot
+```
+
+With `mode = "hot"`, the gateway logs a warning for changes that normally require a restart but does **not** exit. Channels are hot-reloaded where possible. This keeps the process alive when the service manager is unavailable.
+
+### Fix option 2: ensure the service manager is enabled
+
+On macOS, reinstall and enable the LaunchAgent:
+
+```bash
+openclaw gateway install
+```
+
+Verify it is loaded and running:
+
+```bash
+launchctl print gui/$UID | grep openclaw
+openclaw gateway status --deep
+```
+
+### Multi-worktree caution
+
+If you have multiple git worktrees each running their own gateway, confirm which process owns the main config before restarting anything.
+
+Each gateway holds a lock file at `$TMPDIR/openclaw-<uid>/gateway.*.lock` containing the `configPath` and PID it was started with. Check the lock files to identify which process owns which config:
+
+```bash
+ls /private/var/folders/*/*/T/openclaw-$(id -u)/gateway.*.lock 2>/dev/null || \
+  ls /tmp/openclaw-$(id -u)/gateway.*.lock 2>/dev/null
+```
+
+Only kill the process whose `configPath` matches the config you want to restart. Use `--force` if a stale lock remains after a previous crash:
+
+```bash
+openclaw gateway run --bind loopback --port 18789 --force
+```
+
+Related:
+
+- [/gateway/background-process](/gateway/background-process)
+- [/gateway/configuration-reference](/gateway/configuration-reference)
+- [/gateway/gateway-lock](/gateway/gateway-lock)
+
 ## If you upgraded and something suddenly broke
 
 Most post-upgrade breakage is config drift or stricter defaults now being enforced.
