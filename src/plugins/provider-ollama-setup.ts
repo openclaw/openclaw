@@ -293,7 +293,7 @@ async function storeOllamaCredential(agentDir?: string): Promise<void> {
 export async function promptAndConfigureOllama(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
-}): Promise<{ config: OpenClawConfig; defaultModelId: string }> {
+}): Promise<{ config: OpenClawConfig }> {
   const { prompter } = params;
 
   // 1. Prompt base URL
@@ -398,14 +398,13 @@ export async function promptAndConfigureOllama(params: {
     ...modelNames.filter((name) => !suggestedModels.includes(name)),
   ];
 
-  const defaultModelId = suggestedModels[0] ?? OLLAMA_DEFAULT_MODEL;
   const config = applyOllamaProviderConfig(
     params.cfg,
     baseUrl,
     orderedModelNames,
     discoveredModelsByName,
   );
-  return { config, defaultModelId };
+  return { config };
 }
 
 /** Non-interactive: auto-discover models and configure provider. */
@@ -512,15 +511,14 @@ export async function configureOllamaNonInteractive(params: {
 /** Pull the configured default Ollama model if it isn't already available locally. */
 export async function ensureOllamaModelPulled(params: {
   config: OpenClawConfig;
+  model: string;
   prompter: WizardPrompter;
 }): Promise<void> {
-  const modelCfg = params.config.agents?.defaults?.model;
-  const modelId = typeof modelCfg === "string" ? modelCfg : modelCfg?.primary;
-  if (!modelId?.startsWith("ollama/")) {
+  if (!params.model.startsWith("ollama/")) {
     return;
   }
   const baseUrl = params.config.models?.providers?.ollama?.baseUrl ?? OLLAMA_DEFAULT_BASE_URL;
-  const modelName = modelId.slice("ollama/".length);
+  const modelName = params.model.slice("ollama/".length);
   if (isOllamaCloudModel(modelName)) {
     return;
   }

@@ -49,7 +49,6 @@ export default definePluginEntry({
                 },
               ],
               configPatch: result.config,
-              defaultModel: `ollama/${result.defaultModelId}`,
             };
           },
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
@@ -118,7 +117,7 @@ export default definePluginEntry({
           return;
         }
         const providerSetup = await loadProviderSetup();
-        await providerSetup.ensureOllamaModelPulled({ config, prompter });
+        await providerSetup.ensureOllamaModelPulled({ config, model, prompter });
       },
     });
   },
