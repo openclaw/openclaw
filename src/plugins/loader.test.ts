@@ -2394,119 +2394,138 @@ module.exports = {
     ).toBe(true);
   });
 
-  it("enforces memory slot selection", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-    const memoryA = writePlugin({
-      id: "memory-a",
-      body: `module.exports = { id: "memory-a", kind: "memory", register() {} };`,
-    });
-    const memoryB = writePlugin({
-      id: "memory-b",
-      body: `module.exports = { id: "memory-b", kind: "memory", register() {} };`,
-    });
+  it("enforces memory slot loading rules", () => {
+    const scenarios = [
+      {
+        label: "enforces memory slot selection",
+        loadRegistry: () => {
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+          const memoryA = writePlugin({
+            id: "memory-a",
+            body: `module.exports = { id: "memory-a", kind: "memory", register() {} };`,
+          });
+          const memoryB = writePlugin({
+            id: "memory-b",
+            body: `module.exports = { id: "memory-b", kind: "memory", register() {} };`,
+          });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [memoryA.file, memoryB.file] },
-          slots: { memory: "memory-b" },
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                load: { paths: [memoryA.file, memoryB.file] },
+                slots: { memory: "memory-b" },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const a = registry.plugins.find((entry) => entry.id === "memory-a");
+          const b = registry.plugins.find((entry) => entry.id === "memory-b");
+          expect(b?.status).toBe("loaded");
+          expect(a?.status).toBe("disabled");
         },
       },
-    });
+      {
+        label: "skips importing bundled memory plugins that are disabled by memory slot",
+        loadRegistry: () => {
+          const bundledDir = makeTempDir();
+          const memoryADir = path.join(bundledDir, "memory-a");
+          const memoryBDir = path.join(bundledDir, "memory-b");
+          mkdirSafe(memoryADir);
+          mkdirSafe(memoryBDir);
+          writePlugin({
+            id: "memory-a",
+            dir: memoryADir,
+            filename: "index.cjs",
+            body: `throw new Error("memory-a should not be imported when slot selects memory-b");`,
+          });
+          writePlugin({
+            id: "memory-b",
+            dir: memoryBDir,
+            filename: "index.cjs",
+            body: `module.exports = { id: "memory-b", kind: "memory", register() {} };`,
+          });
+          fs.writeFileSync(
+            path.join(memoryADir, "openclaw.plugin.json"),
+            JSON.stringify(
+              {
+                id: "memory-a",
+                kind: "memory",
+                configSchema: EMPTY_PLUGIN_SCHEMA,
+              },
+              null,
+              2,
+            ),
+            "utf-8",
+          );
+          fs.writeFileSync(
+            path.join(memoryBDir, "openclaw.plugin.json"),
+            JSON.stringify(
+              {
+                id: "memory-b",
+                kind: "memory",
+                configSchema: EMPTY_PLUGIN_SCHEMA,
+              },
+              null,
+              2,
+            ),
+            "utf-8",
+          );
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const a = registry.plugins.find((entry) => entry.id === "memory-a");
-    const b = registry.plugins.find((entry) => entry.id === "memory-b");
-    expect(b?.status).toBe("loaded");
-    expect(a?.status).toBe("disabled");
-  });
-
-  it("skips importing bundled memory plugins that are disabled by memory slot", () => {
-    const bundledDir = makeTempDir();
-    const memoryADir = path.join(bundledDir, "memory-a");
-    const memoryBDir = path.join(bundledDir, "memory-b");
-    mkdirSafe(memoryADir);
-    mkdirSafe(memoryBDir);
-    writePlugin({
-      id: "memory-a",
-      dir: memoryADir,
-      filename: "index.cjs",
-      body: `throw new Error("memory-a should not be imported when slot selects memory-b");`,
-    });
-    writePlugin({
-      id: "memory-b",
-      dir: memoryBDir,
-      filename: "index.cjs",
-      body: `module.exports = { id: "memory-b", kind: "memory", register() {} };`,
-    });
-    fs.writeFileSync(
-      path.join(memoryADir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "memory-a",
-          kind: "memory",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: ["memory-a", "memory-b"],
+                slots: { memory: "memory-b" },
+                entries: {
+                  "memory-a": { enabled: true },
+                  "memory-b": { enabled: true },
+                },
+              },
+            },
+          });
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(memoryBDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "memory-b",
-          kind: "memory",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          allow: ["memory-a", "memory-b"],
-          slots: { memory: "memory-b" },
-          entries: {
-            "memory-a": { enabled: true },
-            "memory-b": { enabled: true },
-          },
-        },
-      },
-    });
-
-    const a = registry.plugins.find((entry) => entry.id === "memory-a");
-    const b = registry.plugins.find((entry) => entry.id === "memory-b");
-    expect(a?.status).toBe("disabled");
-    expect(String(a?.error ?? "")).toContain('memory slot set to "memory-b"');
-    expect(b?.status).toBe("loaded");
-  });
-
-  it("disables memory plugins when slot is none", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-    const memory = writePlugin({
-      id: "memory-off",
-      body: `module.exports = { id: "memory-off", kind: "memory", register() {} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [memory.file] },
-          slots: { memory: "none" },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const a = registry.plugins.find((entry) => entry.id === "memory-a");
+          const b = registry.plugins.find((entry) => entry.id === "memory-b");
+          expect(a?.status).toBe("disabled");
+          expect(String(a?.error ?? "")).toContain('memory slot set to "memory-b"');
+          expect(b?.status).toBe("loaded");
         },
       },
-    });
+      {
+        label: "disables memory plugins when slot is none",
+        loadRegistry: () => {
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+          const memory = writePlugin({
+            id: "memory-off",
+            body: `module.exports = { id: "memory-off", kind: "memory", register() {} };`,
+          });
 
-    const entry = registry.plugins.find((item) => item.id === "memory-off");
-    expect(entry?.status).toBe("disabled");
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                load: { paths: [memory.file] },
+                slots: { memory: "none" },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const entry = registry.plugins.find((item) => item.id === "memory-off");
+          expect(entry?.status).toBe("disabled");
+        },
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const registry = scenario.loadRegistry();
+      scenario.assert(registry);
+    }
   });
 
   it("resolves duplicate plugin ids by source precedence", () => {
