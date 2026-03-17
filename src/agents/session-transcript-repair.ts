@@ -262,7 +262,10 @@ export function repairToolCallInputs(
         if (
           (block as { type?: unknown }).type === "toolCall" ||
           (block as { type?: unknown }).type === "toolUse" ||
-          (block as { type?: unknown }).type === "functionCall"
+          (block as { type?: unknown }).type === "functionCall" ||
+          (block as { type?: unknown }).type === "tool_use" ||
+          (block as { type?: unknown }).type === "tool_call" ||
+          (block as { type?: unknown }).type === "function_call"
         ) {
           // Only sanitize (redact) sessions_spawn blocks; all others are passed through
           // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
