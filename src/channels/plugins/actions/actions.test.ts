@@ -498,24 +498,6 @@ describe("handleDiscordMessageAction", () => {
     expect(call?.[1]).toEqual(expect.any(Object));
   });
 
-  it("forwards trusted mediaLocalRoots for send actions", async () => {
-    await handleDiscordMessageAction({
-      action: "send",
-      params: { to: "channel:123", message: "hi", media: "/tmp/file.png" },
-      cfg: {} as OpenClawConfig,
-      mediaLocalRoots: ["/tmp/agent-root"],
-    });
-
-    expect(handleDiscordAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sendMessage",
-        mediaUrl: "/tmp/file.png",
-      }),
-      expect.any(Object),
-      expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
-    );
-  });
-
   it("handles discord reaction messageId resolution", async () => {
     const cases = [
       {
@@ -886,29 +868,6 @@ describe("telegramMessageActions", () => {
     }
   });
 
-  it("forwards trusted mediaLocalRoots for send", async () => {
-    const cfg = telegramCfg();
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "send",
-      params: {
-        to: "123",
-        media: "/tmp/voice.ogg",
-      },
-      cfg,
-      mediaLocalRoots: ["/tmp/agent-root"],
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "sendMessage",
-        mediaUrl: "/tmp/voice.ogg",
-      }),
-      cfg,
-      expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
-    );
-  });
-
   it("rejects non-integer messageId for edit before reaching telegram-actions", async () => {
     const cfg = telegramCfg();
     const handleAction = telegramMessageActions.handleAction;
@@ -1024,6 +983,66 @@ describe("telegramMessageActions", () => {
       }
     }
   });
+});
+
+it("forwards trusted mediaLocalRoots for send actions", async () => {
+  const cases = [
+    {
+      name: "discord",
+      run: async () => {
+        await handleDiscordMessageAction({
+          action: "send",
+          params: { to: "channel:123", message: "hi", media: "/tmp/file.png" },
+          cfg: {} as OpenClawConfig,
+          mediaLocalRoots: ["/tmp/agent-root"],
+        });
+      },
+      assert: () => {
+        expect(handleDiscordAction).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "sendMessage",
+            mediaUrl: "/tmp/file.png",
+          }),
+          expect.any(Object),
+          expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
+        );
+      },
+      clear: () => handleDiscordAction.mockClear(),
+    },
+    {
+      name: "telegram",
+      run: async () => {
+        const cfg = telegramCfg();
+        await telegramMessageActions.handleAction?.({
+          channel: "telegram",
+          action: "send",
+          params: {
+            to: "123",
+            media: "/tmp/voice.ogg",
+          },
+          cfg,
+          mediaLocalRoots: ["/tmp/agent-root"],
+        });
+      },
+      assert: () => {
+        expect(handleTelegramAction).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: "sendMessage",
+            mediaUrl: "/tmp/voice.ogg",
+          }),
+          expect.any(Object),
+          expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
+        );
+      },
+      clear: () => handleTelegramAction.mockClear(),
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    testCase.clear();
+    await testCase.run();
+    testCase.assert();
+  }
 });
 
 describe("signalMessageActions", () => {
