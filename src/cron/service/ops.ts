@@ -43,6 +43,15 @@ export type CronListPageOptions = {
   callerSessionKey?: string;
   /** When true, bypasses ownership filtering (admin/owner sessions only). */
   ownerOverride?: boolean;
+  /**
+   * When true, callerOwnsJob returns false (deny) when caller identity is
+   * unknown (both callerSessionKey and callerAgentId are undefined and
+   * ownerOverride is false), instead of falling through to the backward-compat
+   * allow-all path. Use this when the caller context is authenticated but the
+   * protocol cannot supply a sessionKey — e.g. the cron.runs handler — to
+   * prevent identity-less requests from bypassing the ownership filter.
+   */
+  denyWithoutIdentity?: boolean;
 };
 
 export type CronMutationCallerOptions = {
@@ -52,6 +61,12 @@ export type CronMutationCallerOptions = {
   callerSessionKey?: string;
   /** When true, bypasses ownership checks (admin/owner sessions only). */
   ownerOverride?: boolean;
+  /**
+   * When true, deny access when caller identity is unknown (both
+   * callerSessionKey and callerAgentId are undefined and ownerOverride is
+   * false). Overrides the default backward-compat allow-all path.
+   */
+  denyWithoutIdentity?: boolean;
 };
 
 export type CronListPageResult = {
@@ -68,7 +83,8 @@ export type CronListPageResult = {
  *
  * Ownership rules:
  * - ownerOverride bypasses all checks (admin sessions).
- * - No caller identity → preserve backward compat (local CLI, tests).
+ * - No caller identity + denyWithoutIdentity → deny (enforced filter path).
+ * - No caller identity (default) → preserve backward compat (local CLI, tests).
  * - Job has no owner metadata → accessible to any caller (legacy jobs).
  * - Otherwise the caller must match by sessionKey or agentId.
  */
@@ -76,9 +92,12 @@ function callerOwnsJob(job: CronJob, caller: CronMutationCallerOptions): boolean
   if (caller.ownerOverride) {
     return true;
   }
-  // No caller identity available — preserve backward compat (local CLI, tests).
+  // No caller identity available.
   if (!caller.callerAgentId && !caller.callerSessionKey) {
-    return true;
+    // When denyWithoutIdentity is set, unknown callers are denied so the
+    // ownership filter is actually enforced (e.g. cron.runs scope=all).
+    // Otherwise fall through to allow-all for backward compat (local CLI, tests).
+    return !caller.denyWithoutIdentity;
   }
   if (caller.callerAgentId && job.agentId && caller.callerAgentId === job.agentId) {
     return true;
@@ -252,6 +271,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       callerAgentId: opts?.callerAgentId,
       callerSessionKey: opts?.callerSessionKey,
       ownerOverride: opts?.ownerOverride,
+      denyWithoutIdentity: opts?.denyWithoutIdentity,
     };
     const source = state.store?.jobs ?? [];
     const filtered = source.filter((job) => {

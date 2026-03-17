@@ -287,6 +287,10 @@ export const cronHandlers: GatewayRequestHandlers = {
     if (scope === "all") {
       // sessionKey is derived from authenticated client context only — never from
       // request params — to prevent callers from spoofing ownership identity.
+      // denyWithoutIdentity:true ensures that non-admin callers with no resolvable
+      // identity (ConnectParams carries no sessionKey) see an empty jobNameById
+      // rather than all jobs. Without this flag, callerOwnsJob falls back to
+      // allow-all when identity is unknown, defeating the ownership filter.
       const callerOpts = resolveCronCallerOptions(client);
       let allJobs: Awaited<ReturnType<typeof context.cron.listPage>>["jobs"] = [];
       let pageOffset = 0;
@@ -296,6 +300,7 @@ export const cronHandlers: GatewayRequestHandlers = {
           includeDisabled: true,
           callerSessionKey: callerOpts.callerSessionKey,
           ownerOverride: callerOpts.ownerOverride,
+          denyWithoutIdentity: true,
           limit: 200,
           offset: pageOffset,
         });
