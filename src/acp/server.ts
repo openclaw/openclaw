@@ -7,12 +7,17 @@ import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { isMainModule } from "../infra/is-main.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
 
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
+  // Route logs to stderr so any logging doesn't corrupt
+  // the JSON-RPC stream on stdout.
+  routeLogsToStderr();
+
   const cfg = loadConfig();
   const connection = buildGatewayConnectionDetails({
     config: cfg,
