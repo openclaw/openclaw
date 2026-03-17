@@ -29,11 +29,13 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type {
   SpeechProviderConfiguredContext,
+  SpeechListVoicesRequest,
   SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisResult,
   SpeechTelephonySynthesisRequest,
   SpeechTelephonySynthesisResult,
+  SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -872,6 +874,7 @@ export type SpeechProviderPlugin = {
   synthesizeTelephony?: (
     req: SpeechTelephonySynthesisRequest,
   ) => Promise<SpeechTelephonySynthesisResult>;
+  listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
 };
 
 export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
