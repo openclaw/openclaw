@@ -1,11 +1,10 @@
+import baiduPlugin from "../../extensions/baidu/index.js";
 import bravePlugin from "../../extensions/brave/index.js";
 import firecrawlPlugin from "../../extensions/firecrawl/index.js";
 import googlePlugin from "../../extensions/google/index.js";
 import moonshotPlugin from "../../extensions/moonshot/index.js";
 import perplexityPlugin from "../../extensions/perplexity/index.js";
 import xaiPlugin from "../../extensions/xai/index.js";
-import baiduPlugin from "../../extensions/baidu/index.js";
-
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,

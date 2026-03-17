@@ -9,7 +9,6 @@ import {
   pathExists,
   splitSetupEntries,
   setSetupChannelEnabled,
-  type DmPolicy,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
