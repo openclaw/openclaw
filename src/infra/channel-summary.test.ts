@@ -1,12 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
 }));
 
-const { buildChannelSummary } = await import("./channel-summary.js");
-const { listChannelPlugins } = await import("../channels/plugins/index.js");
+let buildChannelSummary: typeof import("./channel-summary.js").buildChannelSummary;
+let listChannelPlugins: typeof import("../channels/plugins/index.js").listChannelPlugins;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ buildChannelSummary } = await import("./channel-summary.js"));
+  ({ listChannelPlugins } = await import("../channels/plugins/index.js"));
+});
 
 function makeSlackHttpSummaryPlugin(): ChannelPlugin {
   return {

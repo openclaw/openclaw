@@ -1,9 +1,8 @@
 /**
  * Test: before_compaction & after_compaction hook wiring
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -11,13 +10,6 @@ const hookMocks = vi.hoisted(() => ({
     runBeforeCompaction: vi.fn(async () => {}),
     runAfterCompaction: vi.fn(async () => {}),
   },
-}));
-
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => hookMocks.runner,
-}));
-
-vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: vi.fn(),
 }));
 
@@ -25,19 +17,23 @@ describe("compaction hook wiring", () => {
   let handleAutoCompactionStart: typeof import("../agents/pi-embedded-subscribe.handlers.compaction.js").handleAutoCompactionStart;
   let handleAutoCompactionEnd: typeof import("../agents/pi-embedded-subscribe.handlers.compaction.js").handleAutoCompactionEnd;
 
-  beforeAll(async () => {
-    ({ handleAutoCompactionStart, handleAutoCompactionEnd } =
-      await import("../agents/pi-embedded-subscribe.handlers.compaction.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runBeforeCompaction.mockClear();
     hookMocks.runner.runBeforeCompaction.mockResolvedValue(undefined);
     hookMocks.runner.runAfterCompaction.mockClear();
     hookMocks.runner.runAfterCompaction.mockResolvedValue(undefined);
-    vi.mocked(emitAgentEvent).mockClear();
+    hookMocks.emitAgentEvent.mockClear();
+    vi.doMock("../plugins/hook-runner-global.js", () => ({
+      getGlobalHookRunner: () => hookMocks.runner,
+    }));
+    vi.doMock("../infra/agent-events.js", () => ({
+      emitAgentEvent: hookMocks.emitAgentEvent,
+    }));
+    ({ handleAutoCompactionStart, handleAutoCompactionEnd } =
+      await import("../agents/pi-embedded-subscribe.handlers.compaction.js"));
   });
 
   function createCompactionEndCtx(params: {
@@ -94,7 +90,7 @@ describe("compaction hook wiring", () => {
     const hookCtx = beforeCalls[0]?.[1] as { sessionKey?: string } | undefined;
     expect(hookCtx?.sessionKey).toBe("agent:main:web-abc123");
     expect(ctx.ensureCompactionPromise).toHaveBeenCalledTimes(1);
-    expect(emitAgentEvent).toHaveBeenCalledWith({
+    expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r1",
       stream: "compaction",
       data: { phase: "start" },
@@ -135,7 +131,7 @@ describe("compaction hook wiring", () => {
     expect(event?.compactedCount).toBe(1);
     expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
     expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
-    expect(emitAgentEvent).toHaveBeenCalledWith({
+    expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r2",
       stream: "compaction",
       data: { phase: "end", willRetry: false, completed: true },
@@ -166,7 +162,7 @@ describe("compaction hook wiring", () => {
     expect(ctx.noteCompactionRetry).toHaveBeenCalledTimes(1);
     expect(ctx.resetForCompactionRetry).toHaveBeenCalledTimes(1);
     expect(ctx.maybeResolveCompactionWait).not.toHaveBeenCalled();
-    expect(emitAgentEvent).toHaveBeenCalledWith({
+    expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r3",
       stream: "compaction",
       data: { phase: "end", willRetry: true, completed: true },

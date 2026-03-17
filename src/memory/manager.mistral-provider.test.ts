@@ -11,7 +11,7 @@ import type {
   OllamaEmbeddingClient,
   OpenAiEmbeddingClient,
 } from "./embeddings.js";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import type { MemoryIndexManager } from "./index.js";
 
 const { createEmbeddingProviderMock } = vi.hoisted(() => ({
   createEmbeddingProviderMock: vi.fn(),
@@ -24,6 +24,10 @@ vi.mock("./embeddings.js", () => ({
 vi.mock("./sqlite-vec.js", () => ({
   loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
 }));
+
+type MemoryIndexModule = typeof import("./index.js");
+
+let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
 
 function createProvider(id: string): EmbeddingProvider {
   return {
@@ -64,6 +68,8 @@ describe("memory manager mistral provider wiring", () => {
   let manager: MemoryIndexManager | null = null;
 
   beforeEach(async () => {
+    vi.resetModules();
+    ({ getMemorySearchManager } = await import("./index.js"));
     createEmbeddingProviderMock.mockReset();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
     indexPath = path.join(workspaceDir, "index.sqlite");

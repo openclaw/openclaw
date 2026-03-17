@@ -1,7 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import * as authModule from "../agents/model-auth.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
-import { createEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
 vi.mock("../agents/model-auth.js", async () => {
@@ -33,12 +31,25 @@ function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
   return { url, init: init as RequestInit | undefined };
 }
 
+type EmbeddingsModule = typeof import("./embeddings.js");
+type AuthModule = typeof import("../agents/model-auth.js");
+
+let authModule: AuthModule;
+let createEmbeddingProvider: EmbeddingsModule["createEmbeddingProvider"];
+let DEFAULT_LOCAL_MODEL: EmbeddingsModule["DEFAULT_LOCAL_MODEL"];
+
+beforeEach(async () => {
+  vi.resetModules();
+  authModule = await import("../agents/model-auth.js");
+  ({ createEmbeddingProvider, DEFAULT_LOCAL_MODEL } = await import("./embeddings.js"));
+});
+
 afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllGlobals();
 });
 
-function requireProvider(result: Awaited<ReturnType<typeof createEmbeddingProvider>>) {
+function requireProvider(result: Awaited<ReturnType<EmbeddingsModule["createEmbeddingProvider"]>>) {
   if (!result.provider) {
     throw new Error("Expected embedding provider");
   }
@@ -71,7 +82,7 @@ function createLocalProvider(options?: { fallback?: "none" | "openai" }) {
 }
 
 function expectAutoSelectedProvider(
-  result: Awaited<ReturnType<typeof createEmbeddingProvider>>,
+  result: Awaited<ReturnType<EmbeddingsModule["createEmbeddingProvider"]>>,
   expectedId: "openai" | "gemini" | "mistral",
 ) {
   expect(result.requestedProvider).toBe("auto");

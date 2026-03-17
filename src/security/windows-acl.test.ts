@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
@@ -8,15 +8,26 @@ vi.mock("node:os", () => ({
   userInfo: () => ({ username: MOCK_USERNAME }),
 }));
 
-const {
-  createIcaclsResetCommand,
-  formatIcaclsResetCommand,
-  formatWindowsAclSummary,
-  inspectWindowsAcl,
-  parseIcaclsOutput,
-  resolveWindowsUserPrincipal,
-  summarizeWindowsAcl,
-} = await import("./windows-acl.js");
+let createIcaclsResetCommand: typeof import("./windows-acl.js").createIcaclsResetCommand;
+let formatIcaclsResetCommand: typeof import("./windows-acl.js").formatIcaclsResetCommand;
+let formatWindowsAclSummary: typeof import("./windows-acl.js").formatWindowsAclSummary;
+let inspectWindowsAcl: typeof import("./windows-acl.js").inspectWindowsAcl;
+let parseIcaclsOutput: typeof import("./windows-acl.js").parseIcaclsOutput;
+let resolveWindowsUserPrincipal: typeof import("./windows-acl.js").resolveWindowsUserPrincipal;
+let summarizeWindowsAcl: typeof import("./windows-acl.js").summarizeWindowsAcl;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    createIcaclsResetCommand,
+    formatIcaclsResetCommand,
+    formatWindowsAclSummary,
+    inspectWindowsAcl,
+    parseIcaclsOutput,
+    resolveWindowsUserPrincipal,
+    summarizeWindowsAcl,
+  } = await import("./windows-acl.js"));
+});
 
 function aclEntry(params: {
   principal: string;

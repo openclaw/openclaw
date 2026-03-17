@@ -1,16 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
-import { loadWebMedia } from "../../../extensions/whatsapp/src/media.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
-import { runMessageAction } from "./message-action-runner.js";
 
 vi.mock("../../../extensions/whatsapp/src/media.js", async () => {
   const actual = await vi.importActual<typeof import("../../../extensions/whatsapp/src/media.js")>(
@@ -79,8 +76,17 @@ async function expectSandboxMediaRewrite(params: {
   );
 }
 
-let createPluginRuntime: typeof import("../../plugins/runtime/index.js").createPluginRuntime;
-let setSlackRuntime: typeof import("../../../extensions/slack/src/runtime.js").setSlackRuntime;
+type MessageActionRunnerModule = typeof import("./message-action-runner.js");
+type WhatsAppMediaModule = typeof import("../../../extensions/whatsapp/src/media.js");
+type SlackChannelModule = typeof import("../../../extensions/slack/src/channel.js");
+type RuntimeIndexModule = typeof import("../../plugins/runtime/index.js");
+type SlackRuntimeModule = typeof import("../../../extensions/slack/src/runtime.js");
+
+let runMessageAction: MessageActionRunnerModule["runMessageAction"];
+let loadWebMedia: WhatsAppMediaModule["loadWebMedia"];
+let slackPlugin: SlackChannelModule["slackPlugin"];
+let createPluginRuntime: RuntimeIndexModule["createPluginRuntime"];
+let setSlackRuntime: SlackRuntimeModule["setSlackRuntime"];
 
 function installSlackRuntime() {
   const runtime = createPluginRuntime();
@@ -88,7 +94,11 @@ function installSlackRuntime() {
 }
 
 describe("runMessageAction media behavior", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ runMessageAction } = await import("./message-action-runner.js"));
+    ({ loadWebMedia } = await import("../../../extensions/whatsapp/src/media.js"));
+    ({ slackPlugin } = await import("../../../extensions/slack/src/channel.js"));
     ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
     ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
   });

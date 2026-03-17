@@ -16,13 +16,14 @@ vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
 }));
 
-import {
-  __testing,
-  cleanStaleGatewayProcessesSync,
-  findGatewayPidsOnPortSync,
-} from "./restart-stale-pids.js";
+let __testing: typeof import("./restart-stale-pids.js").__testing;
+let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
+let findGatewayPidsOnPortSync: typeof import("./restart-stale-pids.js").findGatewayPidsOnPortSync;
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
+    await import("./restart-stale-pids.js"));
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();

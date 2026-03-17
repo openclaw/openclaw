@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
@@ -14,11 +13,20 @@ vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
 }));
 
-import {
-  __testing,
-  listConfiguredMessageChannels,
-  resolveMessageChannelSelection,
-} from "./channel-selection.js";
+type ChannelSelectionModule = typeof import("./channel-selection.js");
+type RuntimeModule = typeof import("../../runtime.js");
+
+let __testing: ChannelSelectionModule["__testing"];
+let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessageChannels"];
+let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
+let runtimeModule: RuntimeModule;
+
+beforeEach(async () => {
+  vi.resetModules();
+  runtimeModule = await import("../../runtime.js");
+  ({ __testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
+    await import("./channel-selection.js"));
+});
 
 function makePlugin(params: {
   id: string;
@@ -40,9 +48,10 @@ function makePlugin(params: {
 }
 
 describe("listConfiguredMessageChannels", () => {
-  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    errorSpy = vi.spyOn(runtimeModule.defaultRuntime, "error").mockImplementation(() => undefined);
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
     mocks.resolveOutboundChannelPlugin.mockReset();

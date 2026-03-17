@@ -1,11 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  installMessageActionRunnerTestRegistry,
-  resetMessageActionRunnerTestRegistry,
-  slackConfig,
-  telegramConfig,
-} from "./message-action-runner.test-helpers.js";
-
 const mocks = vi.hoisted(() => ({
   executePollAction: vi.fn(),
 }));
@@ -20,10 +13,18 @@ vi.mock("./outbound-send-service.js", async () => {
   };
 });
 
-import { runMessageAction } from "./message-action-runner.js";
+type MessageActionRunnerModule = typeof import("./message-action-runner.js");
+type MessageActionRunnerTestHelpersModule =
+  typeof import("./message-action-runner.test-helpers.js");
+
+let runMessageAction: MessageActionRunnerModule["runMessageAction"];
+let installMessageActionRunnerTestRegistry: MessageActionRunnerTestHelpersModule["installMessageActionRunnerTestRegistry"];
+let resetMessageActionRunnerTestRegistry: MessageActionRunnerTestHelpersModule["resetMessageActionRunnerTestRegistry"];
+let slackConfig: MessageActionRunnerTestHelpersModule["slackConfig"];
+let telegramConfig: MessageActionRunnerTestHelpersModule["telegramConfig"];
 
 async function runPollAction(params: {
-  cfg: typeof slackConfig;
+  cfg: MessageActionRunnerTestHelpersModule["slackConfig"];
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
 }) {
@@ -44,7 +45,15 @@ async function runPollAction(params: {
     | undefined;
 }
 describe("runMessageAction poll handling", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ runMessageAction } = await import("./message-action-runner.js"));
+    ({
+      installMessageActionRunnerTestRegistry,
+      resetMessageActionRunnerTestRegistry,
+      slackConfig,
+      telegramConfig,
+    } = await import("./message-action-runner.test-helpers.js"));
     installMessageActionRunnerTestRegistry();
     mocks.executePollAction.mockResolvedValue({
       handledBy: "core",
@@ -54,14 +63,14 @@ describe("runMessageAction poll handling", () => {
   });
 
   afterEach(() => {
-    resetMessageActionRunnerTestRegistry();
+    resetMessageActionRunnerTestRegistry?.();
     mocks.executePollAction.mockReset();
   });
 
   it.each([
     {
       name: "requires at least two poll options",
-      cfg: telegramConfig,
+      getCfg: () => telegramConfig,
       actionParams: {
         channel: "telegram",
         target: "telegram:123",
@@ -72,7 +81,7 @@ describe("runMessageAction poll handling", () => {
     },
     {
       name: "rejects durationSeconds outside telegram",
-      cfg: slackConfig,
+      getCfg: () => slackConfig,
       actionParams: {
         channel: "slack",
         target: "#C12345678",
@@ -84,7 +93,7 @@ describe("runMessageAction poll handling", () => {
     },
     {
       name: "rejects poll visibility outside telegram",
-      cfg: slackConfig,
+      getCfg: () => slackConfig,
       actionParams: {
         channel: "slack",
         target: "#C12345678",
@@ -94,8 +103,8 @@ describe("runMessageAction poll handling", () => {
       },
       message: /pollAnonymous\/pollPublic are only supported for Telegram polls/i,
     },
-  ])("$name", async ({ cfg, actionParams, message }) => {
-    await expect(runPollAction({ cfg, actionParams })).rejects.toThrow(message);
+  ])("$name", async ({ getCfg, actionParams, message }) => {
+    await expect(runPollAction({ cfg: getCfg(), actionParams })).rejects.toThrow(message);
     expect(mocks.executePollAction).not.toHaveBeenCalled();
   });
 

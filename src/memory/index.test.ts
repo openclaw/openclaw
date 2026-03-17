@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import "./test-runtime-mocks.js";
+import type { MemoryIndexManager } from "./index.js";
+
+type MemoryIndexModule = typeof import("./index.js");
+
+let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -151,6 +155,9 @@ describe("memory index", () => {
   });
 
   beforeEach(async () => {
+    vi.resetModules();
+    await import("./test-runtime-mocks.js");
+    ({ getMemorySearchManager } = await import("./index.js"));
     // Perf: most suites don't need atomic swap behavior for full reindexes.
     // Keep atomic reindex tests on the safe path.
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");

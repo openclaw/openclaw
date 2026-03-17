@@ -12,14 +12,16 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     resolveProviderUsageSnapshotWithPluginMock(...args),
 }));
 
-import { loadProviderUsageSummary } from "./provider-usage.load.js";
+let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProviderUsageSummary;
 
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 
 describe("provider-usage.load plugin seam", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     resolveProviderUsageSnapshotWithPluginMock.mockReset();
     resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
+    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
   });
 
   it("prefers plugin-owned usage snapshots", async () => {
