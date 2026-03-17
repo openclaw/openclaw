@@ -2,31 +2,32 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../../../src/config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import { optimizeImageToPng } from "../../../src/media/image-ops.js";
 import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import { captureEnv } from "../../../test/helpers/extensions/env.js";
 import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
-import {
-  LocalMediaAccessError,
-  loadWebMedia,
-  loadWebMediaRaw,
-  optimizeImageToJpeg,
-} from "./media.js";
 
-const convertHeicToJpegMock = vi.fn();
+const state = vi.hoisted(() => ({
+  convertHeicToJpegMock: vi.fn(),
+}));
 
-vi.mock("../../../src/media/image-ops.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/media/image-ops.js")>(
-    "../../../src/media/image-ops.js",
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
   );
   return {
     ...actual,
-    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
+    convertHeicToJpeg: (...args: unknown[]) => state.convertHeicToJpegMock(...args),
   };
 });
+
+let LocalMediaAccessError: typeof import("./media.js").LocalMediaAccessError;
+let loadWebMedia: typeof import("./media.js").loadWebMedia;
+let loadWebMediaRaw: typeof import("./media.js").loadWebMediaRaw;
+let optimizeImageToJpeg: typeof import("./media.js").optimizeImageToJpeg;
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -49,6 +50,11 @@ async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
   return file;
 }
 
+async function loadMediaModule(): Promise<void> {
+  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
+    await import("./media.js"));
+}
+
 function buildDeterministicBytes(length: number): Buffer {
   const buffer = Buffer.allocUnsafe(length);
   let seed = 0x12345678;
@@ -68,6 +74,7 @@ function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: numb
 }
 
 beforeAll(async () => {
+  await loadMediaModule();
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );
@@ -122,8 +129,10 @@ afterAll(async () => {
   await fs.rm(fixtureRoot, { recursive: true, force: true });
 });
 
-afterEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  vi.resetModules();
+  await loadMediaModule();
 });
 
 describe("web media loading", () => {
@@ -193,11 +202,11 @@ describe("web media loading", () => {
   });
 
   it("normalizes HEIC local files to JPEG output", async () => {
-    convertHeicToJpegMock.mockResolvedValueOnce(tinyPngBuffer);
+    state.convertHeicToJpegMock.mockResolvedValueOnce(tinyPngBuffer);
 
     const result = await loadWebMedia(fakeHeicFile, 1024 * 1024);
 
-    expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
+    expect(state.convertHeicToJpegMock).toHaveBeenCalledTimes(1);
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
     expect(result.fileName).toBe(path.basename(fakeHeicFile, ".heic") + ".jpg");

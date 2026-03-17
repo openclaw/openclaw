@@ -4,16 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { redactIdentifier } from "../../../src/logging/redact-identifier.js";
-import { setActiveWebListener } from "./active-listener.js";
 
-const loadWebMediaMock = vi.fn();
-vi.mock("./media.js", () => ({
-  loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
+const state = vi.hoisted(() => ({
+  loadWebMediaMock: vi.fn(),
 }));
 
-import { sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } from "./send.js";
+vi.mock("./media.js", () => ({
+  loadWebMedia: (...args: unknown[]) => state.loadWebMediaMock(...args),
+}));
+
+let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
+let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
+let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
+let setActiveWebListener: typeof import("./active-listener.js").setActiveWebListener;
+let resetLogger: typeof import("../../../src/logging.js").resetLogger;
+let setLoggerOverride: typeof import("../../../src/logging.js").setLoggerOverride;
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
@@ -21,8 +27,12 @@ describe("web outbound", () => {
   const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
   const sendReaction = vi.fn(async () => {});
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
+    ({ setActiveWebListener } = await import("./active-listener.js"));
+    ({ resetLogger, setLoggerOverride } = await import("../../../src/logging.js"));
     setActiveWebListener({
       sendComposingTo,
       sendMessage,
@@ -53,7 +63,7 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "hello", undefined, undefined);
 
     const buf = Buffer.from("img");
-    loadWebMediaMock.mockResolvedValueOnce({
+    state.loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
       contentType: "image/jpeg",
       kind: "image",
@@ -91,7 +101,7 @@ describe("web outbound", () => {
 
   it("maps audio to PTT with opus mime when ogg", async () => {
     const buf = Buffer.from("audio");
-    loadWebMediaMock.mockResolvedValueOnce({
+    state.loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
       contentType: "audio/ogg",
       kind: "audio",
@@ -110,7 +120,7 @@ describe("web outbound", () => {
 
   it("maps video with caption", async () => {
     const buf = Buffer.from("video");
-    loadWebMediaMock.mockResolvedValueOnce({
+    state.loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
       contentType: "video/mp4",
       kind: "video",
@@ -124,7 +134,7 @@ describe("web outbound", () => {
 
   it("marks gif playback for video when requested", async () => {
     const buf = Buffer.from("gifvid");
-    loadWebMediaMock.mockResolvedValueOnce({
+    state.loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
       contentType: "video/mp4",
       kind: "video",
@@ -141,7 +151,7 @@ describe("web outbound", () => {
 
   it("maps image with caption", async () => {
     const buf = Buffer.from("img");
-    loadWebMediaMock.mockResolvedValueOnce({
+    state.loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
       contentType: "image/jpeg",
       kind: "image",
@@ -155,7 +165,7 @@ describe("web outbound", () => {
 
   it("maps other kinds to document with filename", async () => {
     const buf = Buffer.from("pdf");
-    loadWebMediaMock.mockResolvedValueOnce({
+    state.loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
       contentType: "application/pdf",
       kind: "document",
@@ -177,7 +187,7 @@ describe("web outbound", () => {
       sendPoll,
       sendReaction,
     });
-    loadWebMediaMock.mockResolvedValueOnce({
+    state.loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("img"),
       contentType: "image/jpeg",
       kind: "image",
@@ -204,7 +214,7 @@ describe("web outbound", () => {
       mediaLocalRoots: ["/tmp/workspace"],
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", {
+    expect(state.loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", {
       maxBytes: 100 * 1024 * 1024,
       localRoots: ["/tmp/workspace"],
     });
