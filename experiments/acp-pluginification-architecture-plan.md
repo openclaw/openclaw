@@ -260,16 +260,15 @@ The following should stay:
 
 ## Current Problems To Remove
 
-### ACP compatibility aliases still leak through the generic seam
+### Residual cleanup is now small
 
-The generic capability is in place, but ACP-era names still remain in public and semi-public surfaces:
+Most ACP-era compatibility names are gone from the generic seam.
 
-- `src/channels/plugins/types.plugin.ts` still exposes `acpBindings`
-- `src/channels/plugins/types.adapters.ts` still exports `ChannelAcpBinding*` aliases
-- `src/channels/plugins/binding-provider.ts` still falls back to `plugin.acpBindings`
-- `src/plugin-sdk/conversation-runtime.ts` still re-exports ACP-shaped route helpers
+The remaining cleanup is smaller:
 
-That is now compatibility debt, not architecture.
+- `src/acp/persistent-bindings.ts` compatibility barrel can be deleted once tests stop importing it
+- ACP-named tests and mocks can be renamed over time for consistency
+- docs should stop describing already-removed ACP wrappers as if they still exist
 
 ### Configured binding implementation is still too monolithic
 
@@ -352,16 +351,12 @@ Core should support:
 
 ### Shrink Or Delete
 
-- `src/channels/plugins/acp-binding-sessions.ts`
-  - keep only if an ACP compatibility shim is still needed; otherwise fold callers onto the generic target APIs
-- `src/channels/plugins/types.plugin.ts`
-  - remove `acpBindings` once third-party callers are off the old name
-- `src/channels/plugins/binding-provider.ts`
-  - remove `plugin.acpBindings` fallback once the deprecation window closes
+- `src/acp/persistent-bindings.ts`
+  - delete the compatibility barrel once tests import the real modules directly
 - `src/acp/persistent-bindings.resolve.ts`
-  - keep only as compatibility facade during migration
-- `src/acp/persistent-bindings.route.ts`
-  - keep only as compatibility facade during migration
+  - keep only while ACP-specific compatibility helpers are still useful to internal callers
+- ACP-named test files
+  - rename over time once the behavior is stable and there is no risk of mixing behavioral and naming churn
 
 ## Recommended Refactor Order
 
@@ -429,17 +424,15 @@ Requirements:
 - ACP target readiness uses the ACP driver contract
 - ACP-specific naming disappears from generic binding code
 
-### Phase 6: Remove ACP compatibility aliases from the generic seam
+### Phase 6: Finish residual ACP cleanup
 
-Remove the last ACP-era names from the generic interfaces.
+Remove the last compatibility leftovers and stale naming.
 
 Requirements:
 
-- remove `acpBindings` from `src/channels/plugins/types.plugin.ts`
-- remove `ChannelAcpBinding*` aliases from `src/channels/plugins/types.adapters.ts`
-- stop `src/channels/plugins/binding-provider.ts` from checking `plugin.acpBindings`
-- stop exporting ACP-shaped route helpers from `src/plugin-sdk/conversation-runtime.ts`
-- shrink or delete `src/channels/plugins/acp-binding-sessions.ts`
+- delete `src/acp/persistent-bindings.ts`
+- rename ACP-named tests where that improves clarity without changing behavior
+- keep docs synchronized with the actual generic seam instead of the earlier transition state
 
 ### Phase 7: Split the configured binding registry by responsibility
 

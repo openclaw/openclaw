@@ -30,7 +30,14 @@ vi.mock("./runtime/session-meta.js", () => ({
   readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
-type PersistentBindingsModule = typeof import("./persistent-bindings.js");
+type PersistentBindingsModule = Pick<
+  typeof import("./persistent-bindings.resolve.js"),
+  "resolveConfiguredAcpBindingRecord" | "resolveConfiguredAcpBindingSpecBySessionKey"
+> &
+  Pick<
+    typeof import("./persistent-bindings.lifecycle.js"),
+    "ensureConfiguredAcpBindingSession" | "resetAcpSessionInPlace"
+  >;
 let persistentBindings: PersistentBindingsModule;
 let persistentBindingsImportScope = 0;
 
@@ -176,10 +183,23 @@ function mockReadySession(params: {
 beforeEach(async () => {
   vi.resetModules();
   persistentBindingsImportScope += 1;
-  persistentBindings = await importFreshModule<PersistentBindingsModule>(
-    import.meta.url,
-    `./persistent-bindings.js?scope=${persistentBindingsImportScope}`,
-  );
+  const [resolveModule, lifecycleModule] = await Promise.all([
+    importFreshModule<typeof import("./persistent-bindings.resolve.js")>(
+      import.meta.url,
+      `./persistent-bindings.resolve.js?scope=${persistentBindingsImportScope}`,
+    ),
+    importFreshModule<typeof import("./persistent-bindings.lifecycle.js")>(
+      import.meta.url,
+      `./persistent-bindings.lifecycle.js?scope=${persistentBindingsImportScope}`,
+    ),
+  ]);
+  persistentBindings = {
+    resolveConfiguredAcpBindingRecord: resolveModule.resolveConfiguredAcpBindingRecord,
+    resolveConfiguredAcpBindingSpecBySessionKey:
+      resolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
+    ensureConfiguredAcpBindingSession: lifecycleModule.ensureConfiguredAcpBindingSession,
+    resetAcpSessionInPlace: lifecycleModule.resetAcpSessionInPlace,
+  };
   setActivePluginRegistry(
     createTestRegistry([
       { pluginId: "discord", plugin: discordPlugin, source: "test" },
