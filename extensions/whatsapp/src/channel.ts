@@ -41,6 +41,10 @@ import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const meta = getChatChannelMeta("whatsapp");
 
+async function loadWhatsAppChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
 function normalizeWhatsAppPayloadText(text: string | undefined): string {
   return (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, "");
 }

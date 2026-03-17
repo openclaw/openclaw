@@ -1,11 +1,9 @@
 import {
-  DEFAULT_ACCOUNT_ID,
   detectBinary,
   formatCliCommand,
   formatDocsLink,
   installSignalCli,
   type OpenClawConfig,
-  parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
