@@ -2,9 +2,9 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { McpsSigningTransport, McpsConfig } from "mcps-openclaw";
 import type { OpenClawConfig } from "../config/config.js";
 import { logDebug, logWarn } from "../logger.js";
-import { McpsSigningTransport, McpsConfig } from "mcps-openclaw";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 import {
   describeStdioMcpServerLaunchConfig,
@@ -163,9 +163,7 @@ export async function createBundleMcpToolRuntime(params: {
 
       // Wrap with MCPS signing if configured
       const mcpsOpts = McpsConfig.fromServerConfig(rawServer, serverName);
-      const activeTransport = mcpsOpts
-        ? new McpsSigningTransport(transport, mcpsOpts)
-        : transport;
+      const activeTransport = mcpsOpts ? new McpsSigningTransport(transport, mcpsOpts) : transport;
       if (mcpsOpts) {
         logDebug(`bundle-mcp: MCPS signing enabled for "${serverName}"`);
       }
@@ -181,7 +179,7 @@ export async function createBundleMcpToolRuntime(params: {
         serverName,
         client,
         transport,
-        activeTransport: mcpsOpts ? activeTransport as { close: () => Promise<void> } : undefined,
+        activeTransport: mcpsOpts ? (activeTransport as { close: () => Promise<void> }) : undefined,
         detachStderr: attachStderrLogging(serverName, transport),
       };
 
