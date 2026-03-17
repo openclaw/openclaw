@@ -58,7 +58,7 @@ import fs from "node:fs";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { makePrompter, makeRuntime } from "../setup/__tests__/test-utils.js";
@@ -89,6 +89,7 @@ const baseEntry: ChannelPluginCatalogEntry = {
 beforeEach(() => {
   vi.clearAllMocks();
   resolveBundledPluginSources.mockReturnValue(new Map());
+  vi.mocked(loadOpenClawPlugins).mockReturnValue(createEmptyPluginRegistry());
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -388,6 +389,38 @@ describe("ensureChannelSetupPluginInstalled", () => {
     );
   });
 
+  it("preserves setup-only channel registrations in scoped snapshots", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+    const runtimeChannelRegistration = {
+      pluginId: "msteams-runtime",
+      plugin: { id: "msteams" },
+      source: "runtime",
+    };
+    const setupOnlyRegistration = {
+      pluginId: "msteams-setup",
+      plugin: { id: "msteams" },
+      source: "setup",
+      enabled: true,
+    };
+    vi.mocked(loadOpenClawPlugins).mockReturnValue({
+      ...createEmptyPluginRegistry(),
+      channels: [runtimeChannelRegistration] as unknown as PluginRegistry["channels"],
+      channelSetups: [setupOnlyRegistration] as unknown as PluginRegistry["channelSetups"],
+    });
+
+    const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "msteams",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(snapshot.channels).toEqual([runtimeChannelRegistration]);
+    expect(snapshot.channelSetups).toEqual([setupOnlyRegistration]);
+    expect(snapshot.channelSetups).not.toBe(snapshot.channels);
+  });
+
   it("scopes snapshots by plugin id when channel and plugin ids differ", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
@@ -410,5 +443,48 @@ describe("ensureChannelSetupPluginInstalled", () => {
         activate: false,
       }),
     );
+  });
+
+  it("preserves setup-only channel registrations in scoped snapshots", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {};
+    const setupOnlyPlugin = {
+      id: "slack",
+      meta: {
+        id: "slack",
+        label: "Slack",
+        selectionLabel: "Slack",
+        docsPath: "/channels/slack",
+        blurb: "setup-only test plugin",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+      },
+    };
+    vi.mocked(loadOpenClawPlugins).mockReturnValue({
+      ...createEmptyPluginRegistry(),
+      channels: [],
+      channelSetups: [
+        {
+          pluginId: "@openclaw/slack-plugin",
+          plugin: setupOnlyPlugin as never,
+          source: "test",
+          enabled: true,
+        },
+      ],
+    });
+
+    const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg,
+      runtime,
+      channel: "slack",
+      pluginId: "@openclaw/slack-plugin",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(snapshot.channels).toEqual([]);
+    expect(snapshot.channelSetups).toHaveLength(1);
+    expect(snapshot.channelSetups[0]?.pluginId).toBe("@openclaw/slack-plugin");
   });
 });

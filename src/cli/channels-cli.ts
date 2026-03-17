@@ -13,6 +13,7 @@ const optionNamesAdd = [
   "channel",
   "account",
   "name",
+  "soul",
   "token",
   "privateKey",
   "tokenFile",
@@ -45,6 +46,7 @@ const optionNamesAdd = [
   "groupChannels",
   "dmAllowlist",
   "autoDiscoverChannels",
+  "soul",
 ] as const;
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
@@ -197,6 +199,7 @@ export function registerChannelsCli(program: Command) {
     .option("--dm-allowlist <list>", "Tlon DM allowlist (comma-separated ships)")
     .option("--auto-discover-channels", "Tlon auto-discover group channels")
     .option("--no-auto-discover-channels", "Disable Tlon auto-discovery")
+    .option("--soul <file>", "Account-scoped SOUL file override")
     .option("--use-env", "Use env token (default account only)", false)
     .action(async (opts, command) => {
       await runChannelsCommand(async () => {

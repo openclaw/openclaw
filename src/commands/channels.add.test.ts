@@ -190,6 +190,80 @@ describe("channelsAddCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("uses setup-only channel registrations from scoped snapshots", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry());
+    const catalogEntry: ChannelPluginCatalogEntry = {
+      id: "msteams",
+      pluginId: "@openclaw/msteams-plugin",
+      meta: {
+        id: "msteams",
+        label: "Microsoft Teams",
+        selectionLabel: "Microsoft Teams",
+        docsPath: "/channels/msteams",
+        blurb: "teams channel",
+      },
+      install: {
+        npmSpec: "@openclaw/msteams",
+      },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    const setupOnlyMSTeamsPlugin = {
+      ...createChannelTestPluginBase({
+        id: "msteams",
+        label: "Microsoft Teams",
+        docsPath: "/channels/msteams",
+      }),
+      setup: {
+        applyAccountConfig: vi.fn(({ cfg, input }) => ({
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            msteams: {
+              enabled: true,
+              tenantId: input.token,
+            },
+          },
+        })),
+      },
+    };
+    const setupOnlySnapshot = createTestRegistry();
+    setupOnlySnapshot.channels = [];
+    setupOnlySnapshot.channelSetups = [
+      {
+        pluginId: "msteams",
+        plugin:
+          setupOnlyMSTeamsPlugin as (typeof setupOnlySnapshot.channelSetups)[number]["plugin"],
+        source: "test",
+        enabled: true,
+      },
+    ];
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(setupOnlySnapshot);
+
+    await channelsAddCommand(
+      {
+        channel: "msteams",
+        account: "default",
+        token: "tenant-setup-only",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: {
+          msteams: {
+            enabled: true,
+            tenantId: "tenant-setup-only",
+          },
+        },
+      }),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("uses the installed external channel snapshot without reinstalling", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry());

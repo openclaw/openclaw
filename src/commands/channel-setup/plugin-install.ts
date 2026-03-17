@@ -29,7 +29,7 @@ type InstallResult = {
 };
 
 type ChannelSetupPluginRegistrySnapshot = PluginRegistry & {
-  channelSetups: PluginRegistry["channels"];
+  channelSetups: PluginRegistry["channelSetups"];
 };
 
 function hasGitWorkspace(workspaceDir?: string): boolean {
@@ -267,7 +267,9 @@ export function reloadChannelSetupPluginRegistryForChannel(params: {
   workspaceDir?: string;
 }): void {
   const activeRegistry = getActivePluginRegistry();
-  const onlyPluginIds = activeRegistry?.plugins.length ? undefined : [params.pluginId ?? params.channel];
+  const onlyPluginIds = activeRegistry?.plugins.length
+    ? undefined
+    : [params.pluginId ?? params.channel];
   loadChannelSetupPluginRegistry({
     ...params,
     onlyPluginIds,
@@ -288,6 +290,6 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   });
   return {
     ...registry,
-    channelSetups: registry.channels,
+    channelSetups: registry.channelSetups,
   };
 }
