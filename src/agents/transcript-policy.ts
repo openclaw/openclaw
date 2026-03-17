@@ -57,10 +57,50 @@ function isAnthropicApi(modelApi?: string | null, provider?: string | null): boo
   return isAnthropicProviderFamily(provider);
 }
 
+function historyHasSignedThinkingBlocks(
+  messages?: Array<{ role: string; content?: unknown }>,
+): boolean {
+  if (!messages) {
+    return false;
+  }
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    if (message.role !== "assistant") {
+      continue;
+    }
+    if (!Array.isArray(message.content)) {
+      continue;
+    }
+    if (
+      message.content.some((block: unknown) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const typedBlock = block as Record<string, unknown>;
+        const blockType = typedBlock.type;
+        return (
+          (blockType === "thinking" || blockType === "redacted_thinking") &&
+          Boolean(typedBlock.thinkingSignature)
+        );
+      })
+    ) {
+      return true;
+    }
+    // continue scanning earlier assistant messages
+  }
+
+  return false;
+}
+
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  messages?: Array<{ role: string; content?: unknown }>;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
   const modelId = params.modelId ?? "";
@@ -115,7 +155,9 @@ export function resolveTranscriptPolicy(params: {
       (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
     toolCallIdMode,
     repairToolUseResultPairing,
-    preserveSignatures: isAnthropic && preservesAnthropicThinkingSignatures(provider),
+    preserveSignatures:
+      preservesAnthropicThinkingSignatures(provider) &&
+      (isAnthropic || historyHasSignedThinkingBlocks(params.messages)),
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures: false,
     dropThinkingBlocks,
