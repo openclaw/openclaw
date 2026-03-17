@@ -132,6 +132,8 @@ describe("plugin runtime command execution", () => {
 
     setGatewaySubagentRuntime({
       run,
+      enqueue: vi.fn(),
+      abort: vi.fn(),
       waitForRun: vi.fn(),
       getSessionMessages: vi.fn(),
       getSession: vi.fn(),

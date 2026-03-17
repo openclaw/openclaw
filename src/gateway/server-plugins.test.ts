@@ -624,7 +624,8 @@ describe("loadGatewayPlugins", () => {
 
   test("mints idempotency keys for plugin subagent requests when absent", async () => {
     const serverPlugins = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(serverPlugins);
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("idempotency-generated"));
 
     await runtime.run({ sessionKey: "s-run", message: "hello" });
     const runRequest = getLastDispatchedRequest();
@@ -653,7 +654,8 @@ describe("loadGatewayPlugins", () => {
 
   test("preserves caller-provided idempotency keys for plugin subagent requests", async () => {
     const serverPlugins = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(serverPlugins);
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("idempotency-preserved"));
 
     await runtime.run({
       sessionKey: "s-run",
