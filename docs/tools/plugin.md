@@ -200,7 +200,7 @@ If the provider needs a fully custom wire protocol or custom request executor,
 that is a different class of extension. These hooks are for provider behavior
 that still runs on OpenClaw's normal inference loop.
 
-### Example
+### Example: Registering a provider
 
 ```ts
 api.registerProvider({
