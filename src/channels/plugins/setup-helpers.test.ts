@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-import { applySetupAccountConfigPatch, createPatchedAccountSetupAdapter } from "./setup-helpers.js";
+import {
+  applySetupAccountConfigPatch,
+  createPatchedAccountSetupAdapter,
+  prepareScopedSetupConfig,
+} from "./setup-helpers.js";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -155,5 +159,45 @@ describe("createPatchedAccountSetupAdapter", () => {
     });
     expect(next.channels?.whatsapp).not.toHaveProperty("enabled");
     expect(next.channels?.whatsapp).not.toHaveProperty("authDir");
+  });
+});
+
+describe("prepareScopedSetupConfig", () => {
+  it("stores the name and migrates it for named accounts when requested", () => {
+    const next = prepareScopedSetupConfig({
+      cfg: asConfig({
+        channels: {
+          bluebubbles: {
+            name: "Personal",
+          },
+        },
+      }),
+      channelKey: "bluebubbles",
+      accountId: "Work Team",
+      name: "Work",
+      migrateBaseName: true,
+    });
+
+    expect(next.channels?.bluebubbles).toMatchObject({
+      accounts: {
+        default: { name: "Personal" },
+        "work-team": { name: "Work" },
+      },
+    });
+    expect(next.channels?.bluebubbles).not.toHaveProperty("name");
+  });
+
+  it("keeps the base shape for the default account when migration is disabled", () => {
+    const next = prepareScopedSetupConfig({
+      cfg: asConfig({ channels: { irc: { enabled: true } } }),
+      channelKey: "irc",
+      accountId: DEFAULT_ACCOUNT_ID,
+      name: "Libera",
+    });
+
+    expect(next.channels?.irc).toMatchObject({
+      enabled: true,
+      name: "Libera",
+    });
   });
 });
