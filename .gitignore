@@ -99,3 +99,8 @@ package-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
+
+# Security Fix #132 - 2026-03-17
+.env.sandbox
+.env.*
+!.env.example

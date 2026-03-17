@@ -1,0 +1,84 @@
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    container_name: openclaw-gateway
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      PATH: /home/node/.npm-global/bin:/home/node/.local/bin:/home/node/.go-cache/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin
+      GOPATH: /home/node/.go-cache
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+      GITHUB_TOKEN: ${GH_TOKEN:-}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-/home/cmdshadow/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-/home/cmdshadow/.openclaw/workspace}:/home/node/.openclaw/workspace
+      - /usr/local/go:/usr/local/go:ro
+      - openclaw-tools:/home/node/.npm-global
+      - openclaw-go-cache:/home/node/.go-cache
+      - openclaw-local-bin:/home/node/.local
+    ports:
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "10.8.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+    networks:
+      - openclaw_isolated
+    init: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "1000:1000"
+    mem_limit: 4g
+    cpus: 2.0
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "lan",
+        "--port",
+        "18789",
+      ]
+
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      BROWSER: echo
+      PATH: /home/node/.npm-global/bin:/home/node/.local/bin:/home/node/.go-cache/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin
+      GOPATH: /home/node/.go-cache
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-/home/cmdshadow/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-/home/cmdshadow/.openclaw/workspace}:/home/node/.openclaw/workspace
+      - /usr/local/go:/usr/local/go:ro
+      - openclaw-tools:/home/node/.npm-global
+      - openclaw-go-cache:/home/node/.go-cache
+      - openclaw-local-bin:/home/node/.local
+    networks:
+      - openclaw_isolated
+    stdin_open: true
+    tty: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    user: "1000:1000"
+    entrypoint: ["node", "dist/index.js"]
+
+volumes:
+  openclaw-tools:
+  openclaw-go-cache:
+  openclaw-local-bin:
+
+networks:
+  openclaw_isolated:
+    external: true
