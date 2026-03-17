@@ -1,5 +1,6 @@
 export type {
   AnyAgentTool,
+  MediaUnderstandingProviderPlugin,
   OpenClawPluginConfigSchema,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
@@ -21,6 +22,7 @@ export type {
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
+  SpeechProviderPlugin,
   ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
   OpenClawPluginService,
@@ -37,14 +39,12 @@ export type {
   UsageProviderId,
   UsageWindow,
 } from "../infra/provider-usage.types.js";
-export type {
-  ChannelMessageActionContext,
-  ChannelPlugin,
-  OpenClawPluginApi,
-  PluginRuntime,
-} from "./channel-plugin-common.js";
+export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
+export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export type { OpenClawPluginApi } from "../plugins/types.js";
+export type { PluginRuntime } from "../plugins/runtime/types.js";
 
-export { emptyPluginConfigSchema } from "./channel-plugin-common.js";
+export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   DEFAULT_SECRET_FILE_MAX_BYTES,
@@ -67,6 +67,6 @@ export {
   type RoutePeer,
   type RoutePeerKind,
 } from "../routing/resolve-route.js";
+export { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+export { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 export { resolveThreadSessionKeys } from "../routing/session-key.js";
-export { runPassiveAccountLifecycle } from "./channel-lifecycle.js";
-export { createLoggerBackedRuntime } from "./runtime.js";

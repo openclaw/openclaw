@@ -1,7 +1,7 @@
-import type { ReplyToMode } from "../../../src/config/config.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.telegram.js";
-import { danger } from "../../../src/globals.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,

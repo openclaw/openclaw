@@ -1,16 +1,17 @@
+import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { buildGoogleImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import {
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+  applyGoogleGeminiModelDefault,
+} from "openclaw/plugin-sdk/provider-models";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
   setScopedCredentialValue,
-} from "../../src/agents/tools/web-search-plugin-factory.js";
-import {
-  GOOGLE_GEMINI_DEFAULT_MODEL,
-  applyGoogleGeminiModelDefault,
-} from "../../src/commands/google-gemini-model-default.js";
-import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/provider-web-search";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { googleMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 
 const googlePlugin = {
@@ -51,6 +52,8 @@ const googlePlugin = {
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
     registerGoogleGeminiCliProvider(api);
+    api.registerImageGenerationProvider(buildGoogleImageGenerationProvider());
+    api.registerMediaUnderstandingProvider(googleMediaUnderstandingProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "gemini",

@@ -420,6 +420,116 @@ describe("bundle plugins", () => {
     ).toBe(false);
   });
 
+  it("treats bundle MCP as a supported bundle surface", () => {
+    const workspaceDir = makeTempDir();
+    const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-mcp");
+    mkdirSafe(path.join(bundleRoot, ".claude-plugin"));
+    fs.writeFileSync(
+      path.join(bundleRoot, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude MCP",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(bundleRoot, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          probe: {
+            command: "node",
+            args: ["./probe.mjs"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            "claude-mcp": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      cache: false,
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "claude-mcp");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.bundleFormat).toBe("claude");
+    expect(plugin?.bundleCapabilities).toEqual(expect.arrayContaining(["mcpServers"]));
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "claude-mcp" &&
+          diag.message.includes("bundle capability detected but not wired"),
+      ),
+    ).toBe(false);
+  });
+
+  it("warns when bundle MCP only declares unsupported non-stdio transports", () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
+    const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-mcp-url");
+    fs.mkdirSync(path.join(bundleRoot, ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(bundleRoot, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude MCP URL",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(bundleRoot, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          remoteProbe: {
+            url: "http://127.0.0.1:8787/mcp",
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const registry = withEnv(
+      {
+        OPENCLAW_HOME: stateDir,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      () =>
+        loadOpenClawPlugins({
+          workspaceDir,
+          config: {
+            plugins: {
+              entries: {
+                "claude-mcp-url": {
+                  enabled: true,
+                },
+              },
+            },
+          },
+          cache: false,
+        }),
+    );
+
+    const plugin = registry.plugins.find((entry) => entry.id === "claude-mcp-url");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.bundleCapabilities).toEqual(expect.arrayContaining(["mcpServers"]));
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "claude-mcp-url" &&
+          diag.message.includes("stdio only today") &&
+          diag.message.includes("remoteProbe"),
+      ),
+    ).toBe(true);
+  });
+
   it("treats Cursor command roots as supported bundle skill surfaces", () => {
     useNoBundledPlugins();
     const workspaceDir = makeTempDir();
@@ -711,6 +821,68 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(getActivePluginRegistry()).toBe(previousRegistry);
     expect(getActivePluginRegistryKey()).toBe("existing-registry");
     expect(getGlobalHookRunner()).toBeNull();
+  });
+
+  it("only publishes plugin commands to the global registry during activating loads", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "command-plugin",
+      filename: "command-plugin.cjs",
+      body: `module.exports = {
+        id: "command-plugin",
+        register(api) {
+          api.registerCommand({
+            name: "pair",
+            description: "Pair device",
+            acceptsArgs: true,
+            handler: async ({ args }) => ({ text: \`paired:\${args ?? ""}\` }),
+          });
+        },
+      };`,
+    });
+    const { clearPluginCommands, getPluginCommandSpecs } = await import("./commands.js");
+
+    clearPluginCommands();
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["command-plugin"],
+        },
+      },
+      onlyPluginIds: ["command-plugin"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
+    expect(scoped.commands.map((entry) => entry.command.name)).toEqual(["pair"]);
+    expect(getPluginCommandSpecs("telegram")).toEqual([]);
+
+    const active = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["command-plugin"],
+        },
+      },
+      onlyPluginIds: ["command-plugin"],
+    });
+
+    expect(active.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
+    expect(getPluginCommandSpecs("telegram")).toEqual([
+      {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+      },
+    ]);
+
+    clearPluginCommands();
   });
 
   it("throws when activate:false is used without cache:false", () => {
@@ -3211,6 +3383,16 @@ module.exports = {
     expect(resolved).toBe(distFile);
   });
 
+  it("configures the plugin loader jiti boundary to prefer native dist modules", () => {
+    const options = __testing.buildPluginLoaderJitiOptions({});
+
+    expect(options.tryNative).toBe(true);
+    expect(options.interopDefault).toBe(true);
+    expect(options.extensions).toContain(".js");
+    expect(options.extensions).toContain(".ts");
+    expect("alias" in options).toBe(false);
+  });
+
   it("prefers src root-alias shim when loader runs from src in non-production", () => {
     const { root, srcFile } = createPluginSdkAliasFixture({
       srcFile: "root-alias.cjs",
@@ -3241,6 +3423,15 @@ module.exports = {
       }),
     );
     expect(resolved).toBe(srcFile);
+  });
+
+  it("prefers dist plugin runtime module when loader runs from dist", () => {
+    const { root, distFile } = createPluginRuntimeAliasFixture();
+
+    const resolved = __testing.resolvePluginRuntimeModulePath({
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
   });
 
   it("resolves plugin runtime module from package root when loader runs from transpiler cache path", () => {
