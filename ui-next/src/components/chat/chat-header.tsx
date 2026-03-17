@@ -278,10 +278,18 @@ export function ChatHeader({
     [models, activeSession?.model],
   );
   // When there's no active session, show the pending model selection (or the first available model).
-  const pendingModel = useMemo(
-    () => models.find((m) => m.id === pendingModelId) ?? models[0] ?? null,
-    [models, pendingModelId],
-  );
+  // pendingModelId may be provider-prefixed (e.g. "zai/glm-5-turbo") while ModelEntry.id is bare ("glm-5-turbo")
+  const pendingModel = useMemo(() => {
+    if (!pendingModelId) {
+      return models[0] ?? null;
+    }
+    return (
+      models.find((m) => m.id === pendingModelId) ??
+      models.find((m) => `${m.provider}/${m.id}` === pendingModelId) ??
+      models[0] ??
+      null
+    );
+  }, [models, pendingModelId]);
   const displayModel = activeModel ?? pendingModel ?? null;
 
   const filteredModels = models;

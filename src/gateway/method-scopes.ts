@@ -130,6 +130,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "personas.expand",
     "onboarding.status",
     "onboarding.validatePath",
+    "onboarding.healthCheck",
     "state.info",
     "state.tables",
     "state.schema",

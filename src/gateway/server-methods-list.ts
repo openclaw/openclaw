@@ -216,6 +216,7 @@ const BASE_METHODS = [
   "onboarding.skip",
   "onboarding.reset",
   "onboarding.validatePath",
+  "onboarding.healthCheck",
   // State DB introspection
   "state.info",
   "state.tables",
