@@ -1,5 +1,4 @@
 import util from "node:util";
-import type { TelegramAccountConfig, TelegramActionConfig } from "openclaw/plugin-sdk/telegram";
 import { createAccountActionGate } from "../../../src/channels/plugins/account-action-gate.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { isTruthyEnvValue } from "../../../src/infra/env.js";
@@ -7,7 +6,11 @@ import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 import {
   listConfiguredAccountIds as listConfiguredAccountIdsFromSection,
   resolveAccountWithDefaultFallback,
-} from "../../../src/plugin-sdk/account-resolution.js";
+} from "../../../src/plugin-sdk-internal/accounts.js";
+import type {
+  TelegramAccountConfig,
+  TelegramActionConfig,
+} from "../../../src/plugin-sdk-internal/telegram.js";
 import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
 import {
   listBoundAccountIds,
