@@ -1,22 +1,9 @@
-import type { OpenClawConfig, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/zalo";
+import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/zalo";
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import { createTestWizardPrompter, type WizardPrompter } from "../../test-utils/setup-wizard.js";
 import { zaloPlugin } from "./channel.js";
-
-function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
-  return {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select: vi.fn(async () => "plaintext") as WizardPrompter["select"],
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => "") as WizardPrompter["text"],
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    ...overrides,
-  };
-}
 
 const zaloConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: zaloPlugin,
@@ -25,7 +12,8 @@ const zaloConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
 
 describe("zalo setup wizard", () => {
   it("configures a polling token flow", async () => {
-    const prompter = createPrompter({
+    const prompter = createTestWizardPrompter({
+      select: vi.fn(async () => "plaintext") as WizardPrompter["select"],
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "Enter Zalo bot token") {
           return "12345689:abc-xyz";
