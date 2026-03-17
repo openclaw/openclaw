@@ -1,10 +1,13 @@
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-runtime";
 import {
+  applyAccountNameToChannelSection,
+  applySetupAccountConfigPatch,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
+  migrateBaseNameToDefaultAccount,
+  normalizeAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/mattermost";
-import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
 import { resolveMattermostAccount, type ResolvedMattermostAccount } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 
@@ -24,8 +27,15 @@ export function resolveMattermostAccountWithSecrets(cfg: OpenClawConfig, account
   });
 }
 
-export const mattermostSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
-  channelKey: channel,
+export const mattermostSetupAdapter: ChannelSetupAdapter = {
+  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  applyAccountName: ({ cfg, accountId, name }) =>
+    applyAccountNameToChannelSection({
+      cfg,
+      channelKey: channel,
+      accountId,
+      name,
+    }),
   validateInput: ({ accountId, input }) => {
     const token = input.botToken ?? input.token;
     const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
@@ -40,14 +50,32 @@ export const mattermostSetupAdapter: ChannelSetupAdapter = createPatchedAccountS
     }
     return null;
   },
-  buildPatch: (input) => {
+  applyAccountConfig: ({ cfg, accountId, input }) => {
     const token = input.botToken ?? input.token;
     const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
-    return input.useEnv
-      ? {}
-      : {
-          ...(token ? { botToken: token } : {}),
-          ...(baseUrl ? { baseUrl } : {}),
-        };
+    const namedConfig = applyAccountNameToChannelSection({
+      cfg,
+      channelKey: channel,
+      accountId,
+      name: input.name,
+    });
+    const next =
+      accountId !== DEFAULT_ACCOUNT_ID
+        ? migrateBaseNameToDefaultAccount({
+            cfg: namedConfig,
+            channelKey: channel,
+          })
+        : namedConfig;
+    return applySetupAccountConfigPatch({
+      cfg: next,
+      channelKey: channel,
+      accountId,
+      patch: input.useEnv
+        ? {}
+        : {
+            ...(token ? { botToken: token } : {}),
+            ...(baseUrl ? { baseUrl } : {}),
+          },
+    });
   },
-});
+};

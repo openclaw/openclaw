@@ -1,12 +1,12 @@
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
-} from "../../../src/channels/plugins/actions/shared.js";
+} from "openclaw/plugin-sdk/channel-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-} from "../../../src/channels/plugins/types.js";
-import type { DiscordActionConfig } from "../../../src/config/types.discord.js";
+} from "openclaw/plugin-sdk/channel-runtime";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createDiscordActionGate, listEnabledDiscordAccounts } from "./accounts.js";
 import { handleDiscordMessageAction } from "./actions/handle-action.js";
 

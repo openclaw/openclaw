@@ -1,9 +1,9 @@
-import { reduceInteractiveReply } from "../../../src/channels/plugins/outbound/interactive.js";
+import { reduceInteractiveReply } from "openclaw/plugin-sdk/channel-runtime";
 import {
   normalizeInteractiveReply,
   type InteractiveReply,
   type InteractiveReplyButton,
-} from "../../../src/interactive/payload.js";
+} from "openclaw/plugin-sdk/channel-runtime";
 
 export type TelegramButtonStyle = "danger" | "success" | "primary";
 

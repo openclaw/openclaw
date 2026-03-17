@@ -1,10 +1,10 @@
 import {
-  type OpenClawConfig,
   createAccountListHelpers,
   normalizeAccountId,
   resolveAccountEntry,
-} from "../../../src/plugin-sdk-internal/accounts.js";
-import type { SignalAccountConfig } from "../../../src/plugin-sdk-internal/signal.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
+import type { SignalAccountConfig } from "openclaw/plugin-sdk/signal";
 
 export type ResolvedSignalAccount = {
   accountId: string;

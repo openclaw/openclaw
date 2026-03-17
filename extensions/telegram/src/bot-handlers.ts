@@ -1,47 +1,47 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../../src/agents/agent-scope.js";
-import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../../src/auto-reply/inbound-debounce.js";
-import { buildCommandsPaginationKeyboard } from "../../../src/auto-reply/reply/commands-info.js";
-import {
-  buildModelsProviderData,
-  formatModelsAvailableHeader,
-} from "../../../src/auto-reply/reply/commands-models.js";
-import { resolveStoredModelOverride } from "../../../src/auto-reply/reply/model-selection.js";
-import { listSkillCommandsForAgents } from "../../../src/auto-reply/skill-commands.js";
-import { buildCommandsMessagePaginated } from "../../../src/auto-reply/status.js";
-import { shouldDebounceTextInbound } from "../../../src/channels/inbound-debounce-policy.js";
-import { resolveChannelConfigWrites } from "../../../src/channels/plugins/config-writes.js";
-import { loadConfig } from "../../../src/config/config.js";
-import { writeConfigFile } from "../../../src/config/io.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
   resolveStorePath,
   updateSessionStore,
-} from "../../../src/config/sessions.js";
-import type { DmPolicy } from "../../../src/config/types.base.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "../../../src/config/types.js";
-import { danger, logVerbose, warn } from "../../../src/globals.js";
-import { enqueueSystemEvent } from "../../../src/infra/system-events.js";
-import { MediaFetchError } from "../../../src/media/fetch.js";
-import { readChannelAllowFromStore } from "../../../src/pairing/pairing-store.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/config-runtime";
+import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
-} from "../../../src/plugins/conversation-binding.js";
-import { dispatchPluginInteractiveHandler } from "../../../src/plugins/interactive.js";
-import { resolveAgentRoute } from "../../../src/routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
-import { applyModelOverrideToSessionEntry } from "../../../src/sessions/model-overrides.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { buildCommandsPaginationKeyboard } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  buildModelsProviderData,
+  formatModelsAvailableHeader,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { resolveStoredModelOverride } from "openclaw/plugin-sdk/reply-runtime";
+import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/reply-runtime";
+import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,

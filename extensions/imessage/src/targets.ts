@@ -1,4 +1,4 @@
-import { normalizeE164 } from "../../../src/utils.js";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import {
   createAllowedChatSenderMatcher,
   type ChatSenderAllowParams,

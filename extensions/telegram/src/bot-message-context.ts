@@ -1,17 +1,17 @@
-import { ensureConfiguredAcpRouteReady } from "../../../src/acp/persistent-bindings.route.js";
-import { resolveAckReaction } from "../../../src/agents/identity.js";
-import { shouldAckReaction as shouldAckReactionGate } from "../../../src/channels/ack-reactions.js";
-import { logInboundDrop } from "../../../src/channels/logging.js";
+import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
+import { shouldAckReaction as shouldAckReactionGate } from "openclaw/plugin-sdk/channel-runtime";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-runtime";
 import {
   createStatusReactionController,
   type StatusReactionController,
-} from "../../../src/channels/status-reactions.js";
-import { loadConfig } from "../../../src/config/config.js";
-import type { TelegramDirectConfig, TelegramGroupConfig } from "../../../src/config/types.js";
-import { logVerbose } from "../../../src/globals.js";
-import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
-import { buildAgentSessionKey, deriveLastRoutePolicy } from "../../../src/routing/resolve-route.js";
-import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../../../src/routing/session-key.js";
+} from "openclaw/plugin-sdk/channel-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
+import { ensureConfiguredAcpRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
+import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { buildAgentSessionKey, deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
+import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";

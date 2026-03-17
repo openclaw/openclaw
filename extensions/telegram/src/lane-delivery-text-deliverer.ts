@@ -1,4 +1,4 @@
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import {

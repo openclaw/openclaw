@@ -5,7 +5,7 @@ import {
   hasAnyGuildPermissionDiscord,
   kickMemberDiscord,
   timeoutMemberDiscord,
-} from "../../plugin-sdk-internal/discord.js";
+} from "../../plugin-sdk/discord.js";
 import { type ActionGate, jsonResult, readStringParam } from "./common.js";
 import {
   isDiscordModerationAction,

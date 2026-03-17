@@ -1,5 +1,7 @@
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
+export type { OpenClawConfig } from "../config/config.js";
 export type { SignalAccountConfig } from "../config/types.js";
+export type { ResolvedSignalAccount } from "../../extensions/signal/src/accounts.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -40,3 +42,16 @@ export {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
+
+export {
+  listEnabledSignalAccounts,
+  listSignalAccountIds,
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+} from "../../extensions/signal/src/accounts.js";
+export { resolveSignalReactionLevel } from "../../extensions/signal/src/reaction-level.js";
+export {
+  removeReactionSignal,
+  sendReactionSignal,
+} from "../../extensions/signal/src/send-reactions.js";
+export { sendMessageSignal } from "../../extensions/signal/src/send.js";

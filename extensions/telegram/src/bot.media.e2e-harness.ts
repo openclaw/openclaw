@@ -1,5 +1,5 @@
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi, type Mock } from "vitest";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
 
 export const useSpy: Mock = vi.fn();
 export const middlewareUseSpy: Mock = vi.fn();
@@ -92,8 +92,8 @@ vi.mock("undici", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/media/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/media/store.js")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   const mockModule = Object.create(null) as Record<string, unknown>;
   Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
   Object.defineProperty(mockModule, "saveMediaBuffer", {
@@ -105,8 +105,8 @@ vi.mock("../../../src/media/store.js", async (importOriginal) => {
   return mockModule;
 });
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig: () => ({
@@ -115,15 +115,15 @@ vi.mock("../../../src/config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     updateLastRoute: vi.fn(async () => undefined),
   };
 });
 
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore: vi.fn(async () => [] as string[]),
   upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
@@ -131,7 +131,7 @@ vi.mock("../../../src/pairing/pairing-store.js", () => ({
   })),
 }));
 
-vi.mock("../../../src/auto-reply/reply.js", () => {
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => {
   const replySpy = vi.fn(async (_ctx, opts) => {
     await opts?.onReplyStart?.();
     return undefined;

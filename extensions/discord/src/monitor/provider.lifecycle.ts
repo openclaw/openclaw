@@ -1,9 +1,9 @@
 import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
-import { createArmableStallWatchdog } from "../../../../src/channels/transport/stall-watchdog.js";
-import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
-import { danger } from "../../../../src/globals.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-runtime";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";

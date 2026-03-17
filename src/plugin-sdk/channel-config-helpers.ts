@@ -2,6 +2,13 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
+import {
+  collectAllowlistProviderGroupPolicyWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
+  collectOpenGroupPolicyConfiguredRouteWarnings,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
+  collectOpenProviderGroupPolicyWarnings,
+} from "../channels/plugins/group-policy-warnings.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
@@ -148,6 +155,15 @@ export function createScopedDmSecurityResolver<
       normalizeEntry: params.normalizeEntry,
     });
 }
+
+export { buildAccountScopedDmSecurityPolicy };
+export {
+  collectAllowlistProviderGroupPolicyWarnings,
+  collectAllowlistProviderRestrictSendersWarnings,
+  collectOpenGroupPolicyConfiguredRouteWarnings,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
+  collectOpenProviderGroupPolicyWarnings,
+};
 
 /** Read the effective WhatsApp allowlist through the active plugin contract. */
 export function resolveWhatsAppConfigAllowFrom(params: {

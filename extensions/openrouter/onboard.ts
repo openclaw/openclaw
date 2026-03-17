@@ -1,5 +1,7 @@
-import { applyAgentDefaultModelPrimary } from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+import {
+  applyAgentDefaultModelPrimary,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 

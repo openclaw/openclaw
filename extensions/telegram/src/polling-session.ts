@@ -1,7 +1,7 @@
 import { type RunOptions, run } from "@grammyjs/runner";
-import { computeBackoff, sleepWithAbort } from "../../../src/infra/backoff.js";
-import { formatErrorMessage } from "../../../src/infra/errors.js";
-import { formatDurationPrecise } from "../../../src/infra/format-time/format-duration.ts";
+import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { formatDurationPrecise } from "openclaw/plugin-sdk/infra-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";

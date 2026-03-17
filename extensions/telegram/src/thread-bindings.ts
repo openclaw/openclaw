@@ -1,19 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveThreadBindingConversationIdFromBindingId } from "../../../src/channels/thread-binding-id.js";
-import { formatThreadBindingDurationLabel } from "../../../src/channels/thread-bindings-messages.js";
-import { resolveStateDir } from "../../../src/config/paths.js";
-import { logVerbose } from "../../../src/globals.js";
-import { writeJsonAtomic } from "../../../src/infra/json-files.js";
+import { resolveThreadBindingConversationIdFromBindingId } from "openclaw/plugin-sdk/channel-runtime";
+import { formatThreadBindingDurationLabel } from "openclaw/plugin-sdk/channel-runtime";
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingRecord,
-} from "../../../src/infra/outbound/session-binding-service.js";
-import { normalizeAccountId } from "../../../src/routing/session-key.js";
-import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { writeJsonAtomic } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;

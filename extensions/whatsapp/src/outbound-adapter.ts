@@ -1,9 +1,9 @@
-import { chunkText } from "../../../src/auto-reply/chunk.js";
-import { sendTextMediaPayload } from "../../../src/channels/plugins/outbound/direct-text-media.js";
-import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
-import { shouldLogVerbose } from "../../../src/globals.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
-import { resolveWhatsAppOutboundTarget } from "../../../src/whatsapp/resolve-outbound-target.js";
+import { sendTextMediaPayload } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
+import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveWhatsAppOutboundTarget } from "openclaw/plugin-sdk/whatsapp";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
 function trimLeadingWhitespace(text: string | undefined): string {

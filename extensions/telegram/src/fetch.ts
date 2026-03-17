@@ -1,10 +1,10 @@
 import * as dns from "node:dns";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveFetch } from "openclaw/plugin-sdk/infra-runtime";
+import { hasEnvHttpProxyConfigured } from "openclaw/plugin-sdk/infra-runtime";
+import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
-import type { TelegramNetworkConfig } from "../../../src/config/types.telegram.js";
-import { resolveFetch } from "../../../src/infra/fetch.js";
-import { hasEnvHttpProxyConfigured } from "../../../src/infra/net/proxy-env.js";
-import type { PinnedDispatcherPolicy } from "../../../src/infra/net/ssrf.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,

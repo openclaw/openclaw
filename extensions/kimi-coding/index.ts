@@ -1,69 +1,47 @@
-import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
-  type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { findNormalizedProviderValue, normalizeProviderId } from "../../src/agents/provider-id.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import { isRecord } from "../../src/utils.js";
-import { applyKimiCodeConfig, KIMI_DEFAULT_MODEL_REF } from "./onboard.js";
-import {
-  buildKimiProvider,
-  KIMI_DEFAULT_MODEL_ID,
-  KIMI_LEGACY_MODEL_ID,
-  KIMI_UPSTREAM_MODEL_ID,
-} from "./provider-catalog.js";
+import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
+import { buildKimiCodingProvider } from "./provider-catalog.js";
 
-const PROVIDER_ID = "kimi";
-const KIMI_TRANSPORT_MODEL_IDS = new Set([KIMI_DEFAULT_MODEL_ID, KIMI_LEGACY_MODEL_ID]);
-
-function normalizeKimiTransportModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  if (!KIMI_TRANSPORT_MODEL_IDS.has(model.id)) {
-    return model;
-  }
-  return {
-    ...model,
-    id: KIMI_UPSTREAM_MODEL_ID,
-    name: "Kimi Code",
-  };
-}
+const PROVIDER_ID = "kimi-coding";
 
 const kimiCodingPlugin = {
   id: PROVIDER_ID,
-  name: "Kimi Code Provider",
-  description: "Bundled Kimi Code provider plugin",
+  name: "Kimi Provider",
+  description: "Bundled Kimi provider plugin",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: PROVIDER_ID,
-      label: "Kimi Code",
-      aliases: ["kimi-code", "kimi-coding"],
+      label: "Kimi",
+      aliases: ["kimi", "kimi-code"],
       docsPath: "/providers/moonshot",
       envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key",
-          label: "Kimi Code API key",
-          hint: "Dedicated coding endpoint",
+          label: "Kimi API key (subscription)",
+          hint: "Kimi K2.5 + Kimi",
           optionKey: "kimiCodeApiKey",
           flagName: "--kimi-code-api-key",
           envVar: "KIMI_API_KEY",
-          promptMessage: "Enter Kimi Code API key",
-          defaultModel: KIMI_DEFAULT_MODEL_REF,
+          promptMessage: "Enter Kimi API key",
+          defaultModel: KIMI_CODING_MODEL_REF,
           expectedProviders: ["kimi", "kimi-code", "kimi-coding"],
           applyConfig: (cfg) => applyKimiCodeConfig(cfg),
           noteMessage: [
-            "Kimi Code uses a dedicated coding endpoint and API key.",
+            "Kimi uses a dedicated coding endpoint and API key.",
             "Get your API key at: https://www.kimi.com/code/en",
           ].join("\n"),
-          noteTitle: "Kimi Code",
+          noteTitle: "Kimi",
           wizard: {
             choiceId: "kimi-code-api-key",
-            choiceLabel: "Kimi Code API key",
-            groupId: "kimi-code",
-            groupLabel: "Kimi Code",
-            groupHint: "Dedicated coding endpoint",
+            choiceLabel: "Kimi API key (subscription)",
+            groupId: "moonshot",
+            groupLabel: "Moonshot AI (Kimi K2.5)",
+            groupHint: "Kimi K2.5 + Kimi",
           },
         }),
       ],
@@ -74,11 +52,8 @@ const kimiCodingPlugin = {
           if (!apiKey) {
             return null;
           }
-          const explicitProvider = findNormalizedProviderValue(
-            ctx.config.models?.providers,
-            PROVIDER_ID,
-          );
-          const builtInProvider = buildKimiProvider();
+          const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
+          const builtInProvider = buildKimiCodingProvider();
           const explicitBaseUrl =
             typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
           const explicitHeaders = isRecord(explicitProvider?.headers)
@@ -103,12 +78,6 @@ const kimiCodingPlugin = {
       },
       capabilities: {
         preserveAnthropicThinkingSignatures: false,
-      },
-      normalizeResolvedModel: (ctx) => {
-        if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
-          return undefined;
-        }
-        return normalizeKimiTransportModel(ctx.model);
       },
     });
   },

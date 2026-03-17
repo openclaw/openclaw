@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { isRecord } from "../../../src/utils.js";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { createSlackWebClient } from "./client.js";
 
 export type SlackScopesResult = {

@@ -1,9 +1,9 @@
-import { createActionGate } from "../../../src/agents/tools/common.js";
+import { createActionGate } from "openclaw/plugin-sdk/agent-runtime";
 import type {
   ChannelMessageActionName,
   ChannelToolSend,
-} from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+} from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { listEnabledSlackAccounts } from "./accounts.js";
 
 export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {

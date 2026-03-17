@@ -1,18 +1,18 @@
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
   splitSetupEntries,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup";
+import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-bus.js";
 import { resolveNostrAccount } from "./types.js";

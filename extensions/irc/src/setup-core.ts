@@ -1,15 +1,15 @@
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-runtime";
+import type { DmPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
+  applyAccountNameToChannelSection,
   patchScopedAccountConfig,
-  prepareScopedSetupConfig,
-} from "../../../src/channels/plugins/setup-helpers.js";
+} from "openclaw/plugin-sdk/setup";
 import {
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { ChannelSetupInput } from "../../../src/channels/plugins/types.core.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { normalizeAccountId } from "../../../src/routing/session-key.js";
+} from "openclaw/plugin-sdk/setup";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const channel = "irc" as const;
@@ -100,7 +100,7 @@ export function setIrcGroupAccess(
 export const ircSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
-    prepareScopedSetupConfig({
+    applyAccountNameToChannelSection({
       cfg,
       channelKey: channel,
       accountId,
@@ -118,7 +118,7 @@ export const ircSetupAdapter: ChannelSetupAdapter = {
   },
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const setupInput = input as IrcSetupInput;
-    const namedConfig = prepareScopedSetupConfig({
+    const namedConfig = applyAccountNameToChannelSection({
       cfg,
       channelKey: channel,
       accountId,

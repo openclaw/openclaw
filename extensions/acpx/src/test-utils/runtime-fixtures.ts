@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
 import type { ResolvedAcpxPluginConfig } from "../config.js";
 import { ACPX_PINNED_VERSION } from "../config.js";
 import { AcpxRuntime } from "../runtime.js";

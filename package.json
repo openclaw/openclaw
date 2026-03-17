@@ -70,9 +70,81 @@
       "types": "./dist/plugin-sdk/routing.d.ts",
       "default": "./dist/plugin-sdk/routing.js"
     },
+    "./plugin-sdk/runtime": {
+      "types": "./dist/plugin-sdk/runtime.d.ts",
+      "default": "./dist/plugin-sdk/runtime.js"
+    },
+    "./plugin-sdk/runtime-env": {
+      "types": "./dist/plugin-sdk/runtime-env.d.ts",
+      "default": "./dist/plugin-sdk/runtime-env.js"
+    },
     "./plugin-sdk/setup": {
       "types": "./dist/plugin-sdk/setup.d.ts",
       "default": "./dist/plugin-sdk/setup.js"
+    },
+    "./plugin-sdk/config-runtime": {
+      "types": "./dist/plugin-sdk/config-runtime.d.ts",
+      "default": "./dist/plugin-sdk/config-runtime.js"
+    },
+    "./plugin-sdk/reply-runtime": {
+      "types": "./dist/plugin-sdk/reply-runtime.d.ts",
+      "default": "./dist/plugin-sdk/reply-runtime.js"
+    },
+    "./plugin-sdk/channel-runtime": {
+      "types": "./dist/plugin-sdk/channel-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-runtime.js"
+    },
+    "./plugin-sdk/infra-runtime": {
+      "types": "./dist/plugin-sdk/infra-runtime.d.ts",
+      "default": "./dist/plugin-sdk/infra-runtime.js"
+    },
+    "./plugin-sdk/media-runtime": {
+      "types": "./dist/plugin-sdk/media-runtime.d.ts",
+      "default": "./dist/plugin-sdk/media-runtime.js"
+    },
+    "./plugin-sdk/conversation-runtime": {
+      "types": "./dist/plugin-sdk/conversation-runtime.d.ts",
+      "default": "./dist/plugin-sdk/conversation-runtime.js"
+    },
+    "./plugin-sdk/text-runtime": {
+      "types": "./dist/plugin-sdk/text-runtime.d.ts",
+      "default": "./dist/plugin-sdk/text-runtime.js"
+    },
+    "./plugin-sdk/agent-runtime": {
+      "types": "./dist/plugin-sdk/agent-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-runtime.js"
+    },
+    "./plugin-sdk/plugin-runtime": {
+      "types": "./dist/plugin-sdk/plugin-runtime.d.ts",
+      "default": "./dist/plugin-sdk/plugin-runtime.js"
+    },
+    "./plugin-sdk/security-runtime": {
+      "types": "./dist/plugin-sdk/security-runtime.d.ts",
+      "default": "./dist/plugin-sdk/security-runtime.js"
+    },
+    "./plugin-sdk/gateway-runtime": {
+      "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
+      "default": "./dist/plugin-sdk/gateway-runtime.js"
+    },
+    "./plugin-sdk/cli-runtime": {
+      "types": "./dist/plugin-sdk/cli-runtime.d.ts",
+      "default": "./dist/plugin-sdk/cli-runtime.js"
+    },
+    "./plugin-sdk/hook-runtime": {
+      "types": "./dist/plugin-sdk/hook-runtime.d.ts",
+      "default": "./dist/plugin-sdk/hook-runtime.js"
+    },
+    "./plugin-sdk/process-runtime": {
+      "types": "./dist/plugin-sdk/process-runtime.d.ts",
+      "default": "./dist/plugin-sdk/process-runtime.js"
+    },
+    "./plugin-sdk/acp-runtime": {
+      "types": "./dist/plugin-sdk/acp-runtime.d.ts",
+      "default": "./dist/plugin-sdk/acp-runtime.js"
+    },
+    "./plugin-sdk/zai": {
+      "types": "./dist/plugin-sdk/zai.d.ts",
+      "default": "./dist/plugin-sdk/zai.js"
     },
     "./plugin-sdk/telegram": {
       "types": "./dist/plugin-sdk/telegram.d.ts",
@@ -230,9 +302,17 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
+    "./plugin-sdk/account-resolution": {
+      "types": "./dist/plugin-sdk/account-resolution.d.ts",
+      "default": "./dist/plugin-sdk/account-resolution.js"
+    },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
+    },
+    "./plugin-sdk/allowlist-config-edit": {
+      "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
+      "default": "./dist/plugin-sdk/allowlist-config-edit.js"
     },
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
@@ -254,9 +334,49 @@
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
+    "./plugin-sdk/provider-auth": {
+      "types": "./dist/plugin-sdk/provider-auth.d.ts",
+      "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-models": {
+      "types": "./dist/plugin-sdk/provider-models.d.ts",
+      "default": "./dist/plugin-sdk/provider-models.js"
+    },
+    "./plugin-sdk/provider-onboard": {
+      "types": "./dist/plugin-sdk/provider-onboard.d.ts",
+      "default": "./dist/plugin-sdk/provider-onboard.js"
+    },
+    "./plugin-sdk/provider-stream": {
+      "types": "./dist/plugin-sdk/provider-stream.d.ts",
+      "default": "./dist/plugin-sdk/provider-stream.js"
+    },
+    "./plugin-sdk/provider-usage": {
+      "types": "./dist/plugin-sdk/provider-usage.d.ts",
+      "default": "./dist/plugin-sdk/provider-usage.js"
+    },
+    "./plugin-sdk/provider-web-search": {
+      "types": "./dist/plugin-sdk/provider-web-search.d.ts",
+      "default": "./dist/plugin-sdk/provider-web-search.js"
+    },
     "./plugin-sdk/request-url": {
       "types": "./dist/plugin-sdk/request-url.d.ts",
       "default": "./dist/plugin-sdk/request-url.js"
+    },
+    "./plugin-sdk/runtime-store": {
+      "types": "./dist/plugin-sdk/runtime-store.d.ts",
+      "default": "./dist/plugin-sdk/runtime-store.js"
+    },
+    "./plugin-sdk/speech": {
+      "types": "./dist/plugin-sdk/speech.d.ts",
+      "default": "./dist/plugin-sdk/speech.js"
+    },
+    "./plugin-sdk/state-paths": {
+      "types": "./dist/plugin-sdk/state-paths.d.ts",
+      "default": "./dist/plugin-sdk/state-paths.js"
+    },
+    "./plugin-sdk/tool-send": {
+      "types": "./dist/plugin-sdk/tool-send.d.ts",
+      "default": "./dist/plugin-sdk/tool-send.js"
     },
     "./cli-entry": "./openclaw.mjs"
   },

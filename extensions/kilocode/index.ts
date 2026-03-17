@@ -1,9 +1,9 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   createKilocodeWrapper,
   isProxyReasoningUnsupported,
-} from "../../src/agents/pi-embedded-runner/proxy-stream-wrappers.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+} from "openclaw/plugin-sdk/provider-stream";
 import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
 import { buildKilocodeProviderWithDiscovery } from "./provider-catalog.js";

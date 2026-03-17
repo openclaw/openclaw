@@ -1,16 +1,15 @@
 import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithDefaultModel,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
-import {
   buildXaiModelDefinition,
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
-  XAI_DEFAULT_MODEL_REF,
-} from "./model-definitions.js";
+} from "openclaw/plugin-sdk/provider-models";
+import {
+  applyAgentDefaultModelPrimary,
+  applyProviderConfigWithDefaultModel,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
-export { XAI_DEFAULT_MODEL_REF };
+export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
 
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };

@@ -1,14 +1,14 @@
 import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
-  type ProviderAuthMethodNonInteractiveContext,
-} from "openclaw/plugin-sdk/core";
-import {
   VLLM_DEFAULT_API_KEY_ENV_VAR,
   VLLM_DEFAULT_BASE_URL,
   VLLM_MODEL_PLACEHOLDER,
   VLLM_PROVIDER_LABEL,
-} from "../../src/agents/vllm-defaults.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import {
+  emptyPluginConfigSchema,
+  type OpenClawPluginApi,
+  type ProviderAuthMethodNonInteractiveContext,
+} from "openclaw/plugin-sdk/core";
 
 const PROVIDER_ID = "vllm";
 

@@ -1,6 +1,8 @@
-import type { AnyAgentTool } from "../../src/agents/tools/common.js";
-import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import {
+  emptyPluginConfigSchema,
+  type AnyAgentTool,
+  type OpenClawPluginApi,
+} from "openclaw/plugin-sdk/core";
 import { createFirecrawlScrapeTool } from "./src/firecrawl-scrape-tool.js";
 import { createFirecrawlWebSearchProvider } from "./src/firecrawl-search-provider.js";
 import { createFirecrawlSearchTool } from "./src/firecrawl-search-tool.js";

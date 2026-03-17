@@ -1,13 +1,13 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import { formatLocationText, type NormalizedLocation } from "../../../../src/channels/location.js";
-import { resolveTelegramPreviewStreamMode } from "../../../../src/config/discord-preview-streaming.js";
+import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveTelegramPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "../../../../src/config/types.js";
-import { readChannelAllowFromStore } from "../../../../src/pairing/pairing-store.js";
-import { normalizeAccountId } from "../../../../src/routing/session-key.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import type { TelegramStreamMode } from "./types.js";
 

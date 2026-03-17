@@ -1,7 +1,7 @@
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
-} from "../../../../src/channels/inbound-debounce-policy.js";
+} from "openclaw/plugin-sdk/channel-runtime";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";

@@ -2,12 +2,12 @@ import {
   buildCloudflareAiGatewayModelDefinition,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   resolveCloudflareAiGatewayBaseUrl,
-} from "../../src/agents/cloudflare-ai-gateway.js";
+} from "openclaw/plugin-sdk/provider-models";
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF };
 

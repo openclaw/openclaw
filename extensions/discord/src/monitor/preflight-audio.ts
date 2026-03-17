@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { logVerbose } from "../../../../src/globals.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 
 type DiscordAudioAttachment = {
   content_type?: string;
@@ -50,8 +50,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
       };
     }
     try {
-      const { transcribeFirstAudio } =
-        await import("../../../../src/media-understanding/audio-preflight.js");
+      const { transcribeFirstAudio } = await import("openclaw/plugin-sdk/media-runtime");
       if (params.abortSignal?.aborted) {
         return {
           hasAudioAttachment,

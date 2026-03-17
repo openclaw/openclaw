@@ -1,9 +1,9 @@
-import type { BaseTokenResolution } from "../../../src/channels/plugins/types.core.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { normalizeResolvedSecretInputString } from "../../../src/config/types.secrets.js";
-import { tryReadSecretFileSync } from "../../../src/infra/secret-file.js";
-import type { TelegramAccountConfig } from "../../../src/plugin-sdk-internal/telegram.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/config-runtime";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/telegram";
 
 export type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 

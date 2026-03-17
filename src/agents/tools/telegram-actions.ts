@@ -1,17 +1,15 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import {
   createTelegramActionGate,
   resolveTelegramPollActionGateState,
-} from "../../plugin-sdk-internal/telegram.js";
-import type {
-  TelegramButtonStyle,
-  TelegramInlineButtons,
-} from "../../plugin-sdk-internal/telegram.js";
+} from "../../plugin-sdk/telegram.js";
+import type { TelegramButtonStyle, TelegramInlineButtons } from "../../plugin-sdk/telegram.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramTargetChatType,
-} from "../../plugin-sdk-internal/telegram.js";
+} from "../../plugin-sdk/telegram.js";
 import {
   createForumTopicTelegram,
   deleteMessageTelegram,
@@ -21,14 +19,13 @@ import {
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
-} from "../../plugin-sdk-internal/telegram.js";
+} from "../../plugin-sdk/telegram.js";
 import {
   getCacheStats,
   resolveTelegramReactionLevel,
   resolveTelegramToken,
   searchStickers,
-} from "../../plugin-sdk-internal/telegram.js";
-import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
+} from "../../plugin-sdk/telegram.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import {
   jsonResult,

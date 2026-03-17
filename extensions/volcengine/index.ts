@@ -1,7 +1,6 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { ensureModelAllowlistEntry } from "../../src/commands/model-allowlist.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import { buildPairedProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
 import { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "volcengine";
@@ -46,15 +45,18 @@ const volcenginePlugin = {
       ],
       catalog: {
         order: "paired",
-        run: (ctx) =>
-          buildPairedProviderApiKeyCatalog({
-            ctx,
-            providerId: PROVIDER_ID,
-            buildProviders: () => ({
-              volcengine: buildDoubaoProvider(),
-              "volcengine-plan": buildDoubaoCodingProvider(),
-            }),
-          }),
+        run: async (ctx) => {
+          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+          return {
+            providers: {
+              volcengine: { ...buildDoubaoProvider(), apiKey },
+              "volcengine-plan": { ...buildDoubaoCodingProvider(), apiKey },
+            },
+          };
+        },
       },
     });
   },

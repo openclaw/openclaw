@@ -3,12 +3,12 @@ import {
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
   SYNTHETIC_MODEL_CATALOG,
-} from "../../src/agents/synthetic-models.js";
+} from "openclaw/plugin-sdk/provider-models";
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalog,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export { SYNTHETIC_DEFAULT_MODEL_REF };
 

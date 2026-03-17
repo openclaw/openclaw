@@ -1,12 +1,12 @@
-import type { HistoryEntry } from "../../../../src/auto-reply/reply/history.js";
-import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   DmPolicy,
   GroupPolicy,
   SignalReactionNotificationMode,
-} from "../../../../src/config/types.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SignalSender } from "../identity.js";
 
 export type SignalEnvelope = {

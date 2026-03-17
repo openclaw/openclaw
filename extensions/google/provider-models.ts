@@ -1,8 +1,8 @@
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/core";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
 
 const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";

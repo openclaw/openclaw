@@ -1,6 +1,6 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { OPENCODE_ZEN_DEFAULT_MODEL } from "../../src/commands/opencode-zen-model-default.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { OPENCODE_ZEN_DEFAULT_MODEL } from "openclaw/plugin-sdk/provider-models";
 import { applyOpencodeZenConfig } from "./onboard.js";
 
 const PROVIDER_ID = "opencode";

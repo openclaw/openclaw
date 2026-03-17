@@ -1,9 +1,9 @@
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModels,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
-import type { ModelApi } from "../../src/config/types.models.js";
+  type ModelApi,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildQianfanProvider,
   QIANFAN_BASE_URL,

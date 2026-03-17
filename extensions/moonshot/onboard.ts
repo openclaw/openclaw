@@ -1,8 +1,8 @@
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildMoonshotProvider,
   MOONSHOT_BASE_URL,

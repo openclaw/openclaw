@@ -1,33 +1,33 @@
 import type { Bot } from "grammy";
-import { resolveAgentDir } from "../../../src/agents/agent-scope.js";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
-} from "../../../src/agents/model-catalog.js";
-import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
-import { resolveChunkMode } from "../../../src/auto-reply/chunk.js";
-import { clearHistoryEntriesIfEnabled } from "../../../src/auto-reply/reply/history.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../../src/auto-reply/reply/provider-dispatcher.js";
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import { removeAckReactionAfterReply } from "../../../src/channels/ack-reactions.js";
-import { logAckFailure, logTypingFailure } from "../../../src/channels/logging.js";
-import { createReplyPrefixOptions } from "../../../src/channels/reply-prefix.js";
-import { createTypingCallbacks } from "../../../src/channels/typing.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { removeAckReactionAfterReply } from "openclaw/plugin-sdk/channel-runtime";
+import { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
+import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
   resolveStorePath,
-} from "../../../src/config/sessions.js";
+} from "openclaw/plugin-sdk/config-runtime";
 import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
-} from "../../../src/config/types.js";
-import { danger, logVerbose } from "../../../src/globals.js";
-import { getAgentScopedMediaLocalRoots } from "../../../src/media/local-roots.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";

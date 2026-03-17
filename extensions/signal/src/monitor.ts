@@ -1,27 +1,24 @@
-import {
-  chunkTextWithMode,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "../../../src/auto-reply/chunk.js";
-import {
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  type HistoryEntry,
-} from "../../../src/auto-reply/reply/history.js";
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { loadConfig } from "../../../src/config/config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "../../../src/config/runtime-group-policy.js";
-import type { SignalReactionNotificationMode } from "../../../src/config/types.js";
-import type { BackoffPolicy } from "../../../src/infra/backoff.js";
-import { waitForTransportReady } from "../../../src/infra/transport-ready.js";
-import { saveMediaBuffer } from "../../../src/media/store.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../../../src/runtime.js";
-import { normalizeStringEntries } from "../../../src/shared/string-normalization.js";
-import { normalizeE164 } from "../../../src/utils.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
+import type { BackoffPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import {
+  chunkTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
