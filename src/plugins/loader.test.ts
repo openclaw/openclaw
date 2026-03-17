@@ -238,6 +238,22 @@ function loadRegistryFromSinglePlugin(params: {
   });
 }
 
+function loadRegistryFromAllowedPlugins(
+  plugins: TempPlugin[],
+  options?: Omit<Parameters<typeof loadOpenClawPlugins>[0], "cache" | "config">,
+) {
+  return loadOpenClawPlugins({
+    cache: false,
+    ...options,
+    config: {
+      plugins: {
+        load: { paths: plugins.map((plugin) => plugin.file) },
+        allow: plugins.map((plugin) => plugin.id),
+      },
+    },
+  });
+}
+
 function createWarningLogger(warnings: string[]) {
   return {
     info: () => {},
@@ -1705,84 +1721,84 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(httpPlugin?.httpRoutes).toBe(1);
   });
 
-  it("rejects duplicate plugin-visible hook names", () => {
+  it("rejects duplicate plugin registrations", () => {
     useNoBundledPlugins();
-    const first = writePlugin({
-      id: "hook-owner-a",
-      filename: "hook-owner-a.cjs",
-      body: `module.exports = { id: "hook-owner-a", register(api) {
+    const scenarios = [
+      {
+        label: "plugin-visible hook names",
+        ownerA: "hook-owner-a",
+        ownerB: "hook-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
   api.registerHook("gateway:startup", () => {}, { name: "shared-hook" });
 } };`,
-    });
-    const second = writePlugin({
-      id: "hook-owner-b",
-      filename: "hook-owner-b.cjs",
-      body: `module.exports = { id: "hook-owner-b", register(api) {
-  api.registerHook("gateway:startup", () => {}, { name: "shared-hook" });
-} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [first.file, second.file] },
-          allow: ["hook-owner-a", "hook-owner-b"],
-        },
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.hooks.filter((entry) => entry.entry.hook.name === "shared-hook").length,
+        duplicateMessage: "hook already registered: shared-hook (hook-owner-a)",
       },
-    });
-
-    expect(registry.hooks.filter((entry) => entry.entry.hook.name === "shared-hook")).toHaveLength(
-      1,
-    );
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.level === "error" &&
-          diag.pluginId === "hook-owner-b" &&
-          diag.message === "hook already registered: shared-hook (hook-owner-a)",
-      ),
-    ).toBe(true);
-  });
-
-  it("rejects duplicate plugin service ids", () => {
-    useNoBundledPlugins();
-    const first = writePlugin({
-      id: "service-owner-a",
-      filename: "service-owner-a.cjs",
-      body: `module.exports = { id: "service-owner-a", register(api) {
+      {
+        label: "plugin service ids",
+        ownerA: "service-owner-a",
+        ownerB: "service-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
   api.registerService({ id: "shared-service", start() {} });
 } };`,
-    });
-    const second = writePlugin({
-      id: "service-owner-b",
-      filename: "service-owner-b.cjs",
-      body: `module.exports = { id: "service-owner-b", register(api) {
-  api.registerService({ id: "shared-service", start() {} });
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.services.filter((entry) => entry.service.id === "shared-service").length,
+        duplicateMessage: "service already registered: shared-service (service-owner-a)",
+      },
+      {
+        label: "plugin context engine ids",
+        ownerA: "context-engine-owner-a",
+        ownerB: "context-engine-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
+  api.registerContextEngine("shared-context-engine-loader-test", () => ({}));
 } };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [first.file, second.file] },
-          allow: ["service-owner-a", "service-owner-b"],
+        selectCount: () => 1,
+        duplicateMessage:
+          "context engine already registered: shared-context-engine-loader-test (plugin:context-engine-owner-a)",
+      },
+      {
+        label: "plugin CLI command roots",
+        ownerA: "cli-owner-a",
+        ownerB: "cli-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
+  api.registerCli(() => {}, { commands: ["shared-cli"] });
+} };`,
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.cliRegistrars.length,
+        duplicateMessage: "cli command already registered: shared-cli (cli-owner-a)",
+        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
         },
       },
-    });
+    ] as const;
 
-    expect(registry.services.filter((entry) => entry.service.id === "shared-service")).toHaveLength(
-      1,
-    );
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.level === "error" &&
-          diag.pluginId === "service-owner-b" &&
-          diag.message === "service already registered: shared-service (service-owner-a)",
-      ),
-    ).toBe(true);
+    for (const scenario of scenarios) {
+      const first = writePlugin({
+        id: scenario.ownerA,
+        filename: `${scenario.ownerA}.cjs`,
+        body: scenario.buildBody(scenario.ownerA),
+      });
+      const second = writePlugin({
+        id: scenario.ownerB,
+        filename: `${scenario.ownerB}.cjs`,
+        body: scenario.buildBody(scenario.ownerB),
+      });
+
+      const registry = loadRegistryFromAllowedPlugins([first, second]);
+
+      expect(scenario.selectCount(registry), scenario.label).toBe(1);
+      scenario.assertPrimaryOwner?.(registry);
+      expect(
+        registry.diagnostics.some(
+          (diag) =>
+            diag.level === "error" &&
+            diag.pluginId === scenario.ownerB &&
+            diag.message === scenario.duplicateMessage,
+        ),
+        scenario.label,
+      ).toBe(true);
+    }
   });
 
   it("rejects plugin context engine ids reserved by core", () => {
@@ -1812,44 +1828,6 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     ).toBe(true);
   });
 
-  it("rejects duplicate plugin context engine ids", () => {
-    useNoBundledPlugins();
-    const first = writePlugin({
-      id: "context-engine-owner-a",
-      filename: "context-engine-owner-a.cjs",
-      body: `module.exports = { id: "context-engine-owner-a", register(api) {
-  api.registerContextEngine("shared-context-engine-loader-test", () => ({}));
-} };`,
-    });
-    const second = writePlugin({
-      id: "context-engine-owner-b",
-      filename: "context-engine-owner-b.cjs",
-      body: `module.exports = { id: "context-engine-owner-b", register(api) {
-  api.registerContextEngine("shared-context-engine-loader-test", () => ({}));
-} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [first.file, second.file] },
-          allow: ["context-engine-owner-a", "context-engine-owner-b"],
-        },
-      },
-    });
-
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.level === "error" &&
-          diag.pluginId === "context-engine-owner-b" &&
-          diag.message ===
-            "context engine already registered: shared-context-engine-loader-test (plugin:context-engine-owner-a)",
-      ),
-    ).toBe(true);
-  });
-
   it("requires plugin CLI registrars to declare explicit command roots", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -1874,45 +1852,6 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
           diag.level === "error" &&
           diag.pluginId === "cli-missing-metadata" &&
           diag.message === "cli registration missing explicit commands metadata",
-      ),
-    ).toBe(true);
-  });
-
-  it("rejects duplicate plugin CLI command roots", () => {
-    useNoBundledPlugins();
-    const first = writePlugin({
-      id: "cli-owner-a",
-      filename: "cli-owner-a.cjs",
-      body: `module.exports = { id: "cli-owner-a", register(api) {
-  api.registerCli(() => {}, { commands: ["shared-cli"] });
-} };`,
-    });
-    const second = writePlugin({
-      id: "cli-owner-b",
-      filename: "cli-owner-b.cjs",
-      body: `module.exports = { id: "cli-owner-b", register(api) {
-  api.registerCli(() => {}, { commands: ["shared-cli"] });
-} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [first.file, second.file] },
-          allow: ["cli-owner-a", "cli-owner-b"],
-        },
-      },
-    });
-
-    expect(registry.cliRegistrars).toHaveLength(1);
-    expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.level === "error" &&
-          diag.pluginId === "cli-owner-b" &&
-          diag.message === "cli command already registered: shared-cli (cli-owner-a)",
       ),
     ).toBe(true);
   });
