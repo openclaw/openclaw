@@ -3054,57 +3054,6 @@ description: test skill
     );
   });
 
-  it("flags extensions without plugins.allow", async () => {
-    const prevDiscordToken = process.env.DISCORD_BOT_TOKEN;
-    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    const prevSlackBotToken = process.env.SLACK_BOT_TOKEN;
-    const prevSlackAppToken = process.env.SLACK_APP_TOKEN;
-    delete process.env.DISCORD_BOT_TOKEN;
-    delete process.env.TELEGRAM_BOT_TOKEN;
-    delete process.env.SLACK_BOT_TOKEN;
-    delete process.env.SLACK_APP_TOKEN;
-    const stateDir = sharedExtensionsStateDir;
-
-    try {
-      const cfg: OpenClawConfig = {};
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: true,
-        includeChannelSecurity: false,
-        stateDir,
-        configPath: path.join(stateDir, "openclaw.json"),
-        execDockerRawFn: execDockerRawUnavailable,
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ checkId: "plugins.extensions_no_allowlist", severity: "warn" }),
-        ]),
-      );
-    } finally {
-      if (prevDiscordToken == null) {
-        delete process.env.DISCORD_BOT_TOKEN;
-      } else {
-        process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
-      }
-      if (prevTelegramToken == null) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      }
-      if (prevSlackBotToken == null) {
-        delete process.env.SLACK_BOT_TOKEN;
-      } else {
-        process.env.SLACK_BOT_TOKEN = prevSlackBotToken;
-      }
-      if (prevSlackAppToken == null) {
-        delete process.env.SLACK_APP_TOKEN;
-      } else {
-        process.env.SLACK_APP_TOKEN = prevSlackAppToken;
-      }
-    }
-  });
-
   it.each([
     {
       name: "warns on unpinned npm install specs and missing integrity metadata",
@@ -3228,6 +3177,20 @@ description: test skill
   it("evaluates extension tool reachability findings", async () => {
     const cases = [
       {
+        name: "flags extensions without plugins.allow",
+        cfg: {} satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(res.findings).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                checkId: "plugins.extensions_no_allowlist",
+                severity: "warn",
+              }),
+            ]),
+          );
+        },
+      },
+      {
         name: "flags enabled extensions when tool policy can expose plugin tools",
         cfg: {
           plugins: { allow: ["some-plugin"] },
@@ -3300,14 +3263,22 @@ description: test skill
       },
     ] as const;
 
-    await withEnvAsync({ DISCORD_BOT_TOKEN: undefined }, async () => {
-      await Promise.all(
-        cases.map(async (testCase) => {
-          const res = await runSharedExtensionsAudit(testCase.cfg);
-          testCase.assert(res);
-        }),
-      );
-    });
+    await withEnvAsync(
+      {
+        DISCORD_BOT_TOKEN: undefined,
+        TELEGRAM_BOT_TOKEN: undefined,
+        SLACK_BOT_TOKEN: undefined,
+        SLACK_APP_TOKEN: undefined,
+      },
+      async () => {
+        await Promise.all(
+          cases.map(async (testCase) => {
+            const res = await runSharedExtensionsAudit(testCase.cfg);
+            testCase.assert(res);
+          }),
+        );
+      },
+    );
   });
 
   it("does not scan plugin code safety findings when deep audit is disabled", async () => {
