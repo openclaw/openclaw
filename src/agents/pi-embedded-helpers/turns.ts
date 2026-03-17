@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 type AnthropicContentBlock = {
-  type: "text" | "toolCall" | "toolResult";
+  type: "text" | "toolCall" | "toolUse" | "toolResult";
   text?: string;
   id?: string;
   name?: string;
@@ -9,7 +9,7 @@ type AnthropicContentBlock = {
 };
 
 /**
- * Strips dangling tool_use blocks from assistant messages when the immediately
+ * Strips dangling toolCall/toolUse blocks from assistant messages when the immediately
  * following user message does not contain a matching tool_result block.
  * This fixes the "tool_use ids found without tool_result blocks" error from Anthropic.
  */
@@ -59,16 +59,16 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       }
     }
 
-    // Filter out tool_use blocks that don't have matching tool_result
+    // Filter out tool call blocks that don't have matching tool_result
     const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
     const filteredContent = originalContent.filter((block) => {
       if (!block) {
         return false;
       }
-      if (block.type !== "toolCall") {
+      if (block.type !== "toolCall" && block.type !== "toolUse") {
         return true;
       }
-      // Keep tool_use if its id is in the valid set
+      // Keep tool call block if its id is in the valid set
       return validToolUseIds.has(block.id || "");
     });
 
