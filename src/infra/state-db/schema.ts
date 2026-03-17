@@ -1152,6 +1152,32 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+
+  // ── v17: Onboarding wizard state ──────────────────────────────────────────
+  {
+    version: 17,
+    description: "Onboarding wizard state",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_onboarding (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          status TEXT NOT NULL DEFAULT 'pending',
+          current_step INTEGER NOT NULL DEFAULT 1,
+          steps_completed_json TEXT DEFAULT '[]',
+          steps_skipped_json TEXT DEFAULT '[]',
+          config_snapshot_json TEXT DEFAULT '{}',
+          started_at INTEGER,
+          completed_at INTEGER,
+          updated_at INTEGER DEFAULT (unixepoch())
+        )
+      `);
+      // Seed the singleton row
+      db.exec(`
+        INSERT OR IGNORE INTO op1_onboarding (id, status, current_step)
+        VALUES (1, 'pending', 1)
+      `);
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

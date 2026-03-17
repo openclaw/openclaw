@@ -80,6 +80,9 @@ const VisualizePage = lazy(() =>
 const ProjectsPage = lazy(() =>
   import("@/pages/projects").then((m) => ({ default: m.ProjectsPage })),
 );
+const OnboardingPage = lazy(() =>
+  import("@/pages/onboarding").then((m) => ({ default: m.OnboardingPage })),
+);
 const HubPage = lazy(() => import("@/pages/hub").then((m) => ({ default: m.HubPage })));
 const DocsPage = lazy(() => import("@/pages/docs").then((m) => ({ default: m.DocsPage })));
 const OpenClawDocsPage = lazy(() =>
@@ -372,6 +375,14 @@ export function App() {
               element={
                 <Suspense fallback={<PageLoader />}>
                   <OpenClawDocsPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/onboarding"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <OnboardingPage />
                 </Suspense>
               }
             />

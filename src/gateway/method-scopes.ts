@@ -128,6 +128,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "personas.categories",
     "personas.search",
     "personas.expand",
+    "onboarding.status",
+    "onboarding.validatePath",
     "state.info",
     "state.tables",
     "state.schema",
@@ -242,6 +244,10 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "commands.delete",
     "personas.apply",
     "state.settings.set",
+    "onboarding.update",
+    "onboarding.complete",
+    "onboarding.skip",
+    "onboarding.reset",
   ],
 };
 

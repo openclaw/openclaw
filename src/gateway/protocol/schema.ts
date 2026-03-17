@@ -18,3 +18,4 @@ export * from "./schema/types.js";
 export * from "./schema/state.js";
 export * from "./schema/teams.js";
 export * from "./schema/wizard.js";
+export * from "./schema/onboarding.js";
