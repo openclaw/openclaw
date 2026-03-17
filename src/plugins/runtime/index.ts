@@ -4,7 +4,12 @@ import {
   resolveApiKeyForProvider as resolveApiKeyForProviderRaw,
 } from "../../agents/model-auth.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
+import {
+  describeImageFile,
+  describeVideoFile,
+  runMediaUnderstandingFile,
+  transcribeAudioFile,
+} from "../../media-understanding/runtime.js";
 import { listSpeechVoices, textToSpeech, textToSpeechTelephony } from "../../tts/tts.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -136,6 +141,12 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     tts: { textToSpeech, textToSpeechTelephony, listVoices: listSpeechVoices },
+    mediaUnderstanding: {
+      runFile: runMediaUnderstandingFile,
+      describeImageFile,
+      describeVideoFile,
+      transcribeAudioFile,
+    },
     stt: { transcribeAudioFile },
     tools: createRuntimeTools(),
     channel: createRuntimeChannel(),
