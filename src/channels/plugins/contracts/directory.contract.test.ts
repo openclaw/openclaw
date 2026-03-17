@@ -6,7 +6,9 @@ for (const entry of directoryContractRegistry) {
   describe(`${entry.id} directory contract`, () => {
     installChannelDirectoryContractSuite({
       plugin: entry.plugin,
-      invokeLookups: entry.invokeLookups,
+      coverage: entry.coverage,
+      cfg: entry.cfg,
+      accountId: entry.accountId,
     });
   });
 }

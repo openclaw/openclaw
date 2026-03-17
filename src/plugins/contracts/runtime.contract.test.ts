@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderRuntimeModel } from "../types.js";
+import { requireProviderContractProvider } from "./registry.js";
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
 const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
@@ -16,16 +17,6 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
 vi.mock("../../providers/qwen-portal-oauth.js", () => ({
   refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
 }));
-
-const { providerContractRegistry } = await import("./registry.js");
-
-function requireProvider(providerId: string) {
-  const entry = providerContractRegistry.find((candidate) => candidate.provider.id === providerId);
-  if (!entry) {
-    throw new Error(`provider contract entry missing for ${providerId}`);
-  }
-  return entry.provider;
-}
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
@@ -45,7 +36,7 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
 describe("provider runtime contract", () => {
   describe("anthropic", () => {
     it("owns anthropic 4.6 forward-compat resolution", () => {
-      const provider = requireProvider("anthropic");
+      const provider = requireProviderContractProvider("anthropic");
       const model = provider.resolveDynamicModel?.({
         provider: "anthropic",
         modelId: "claude-sonnet-4.6-20260219",
@@ -71,7 +62,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns usage auth resolution", async () => {
-      const provider = requireProvider("anthropic");
+      const provider = requireProviderContractProvider("anthropic");
       await expect(
         provider.resolveUsageAuth?.({
           config: {} as never,
@@ -88,7 +79,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns auth doctor hint generation", () => {
-      const provider = requireProvider("anthropic");
+      const provider = requireProviderContractProvider("anthropic");
       const hint = provider.buildAuthDoctorHint?.({
         provider: "anthropic",
         profileId: "anthropic:default",
@@ -121,7 +112,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns usage snapshot fetching", async () => {
-      const provider = requireProvider("anthropic");
+      const provider = requireProviderContractProvider("anthropic");
       const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("api.anthropic.com/api/oauth/usage")) {
           return makeResponse(200, {
@@ -154,7 +145,7 @@ describe("provider runtime contract", () => {
 
   describe("github-copilot", () => {
     it("owns Copilot-specific forward-compat fallbacks", () => {
-      const provider = requireProvider("github-copilot");
+      const provider = requireProviderContractProvider("github-copilot");
       const model = provider.resolveDynamicModel?.({
         provider: "github-copilot",
         modelId: "gpt-5.3-codex",
@@ -181,7 +172,7 @@ describe("provider runtime contract", () => {
 
   describe("google", () => {
     it("owns google direct gemini 3.1 forward-compat resolution", () => {
-      const provider = requireProvider("google");
+      const provider = requireProviderContractProvider("google");
       const model = provider.resolveDynamicModel?.({
         provider: "google",
         modelId: "gemini-3.1-pro-preview",
@@ -213,7 +204,7 @@ describe("provider runtime contract", () => {
 
   describe("google-gemini-cli", () => {
     it("owns gemini cli 3.1 forward-compat resolution", () => {
-      const provider = requireProvider("google-gemini-cli");
+      const provider = requireProviderContractProvider("google-gemini-cli");
       const model = provider.resolveDynamicModel?.({
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-pro-preview",
@@ -241,7 +232,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns usage-token parsing", async () => {
-      const provider = requireProvider("google-gemini-cli");
+      const provider = requireProviderContractProvider("google-gemini-cli");
       await expect(
         provider.resolveUsageAuth?.({
           config: {} as never,
@@ -260,7 +251,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns OAuth auth-profile formatting", () => {
-      const provider = requireProvider("google-gemini-cli");
+      const provider = requireProviderContractProvider("google-gemini-cli");
 
       expect(
         provider.formatApiKey?.({
@@ -275,7 +266,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns usage snapshot fetching", async () => {
-      const provider = requireProvider("google-gemini-cli");
+      const provider = requireProviderContractProvider("google-gemini-cli");
       const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")) {
           return makeResponse(200, {
@@ -309,7 +300,7 @@ describe("provider runtime contract", () => {
 
   describe("openai", () => {
     it("owns openai gpt-5.4 forward-compat resolution", () => {
-      const provider = requireProvider("openai");
+      const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
         modelId: "gpt-5.4-pro",
@@ -337,7 +328,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns direct openai transport normalization", () => {
-      const provider = requireProvider("openai");
+      const provider = requireProviderContractProvider("openai");
       expect(
         provider.normalizeResolvedModel?.({
           provider: "openai",
@@ -360,7 +351,7 @@ describe("provider runtime contract", () => {
 
   describe("openai-codex", () => {
     it("owns refresh fallback for accountId extraction failures", async () => {
-      const provider = requireProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai-codex");
       const credential = {
         type: "oauth" as const,
         provider: "openai-codex",
@@ -376,7 +367,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns forward-compat codex models", () => {
-      const provider = requireProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai-codex");
       const model = provider.resolveDynamicModel?.({
         provider: "openai-codex",
         modelId: "gpt-5.4",
@@ -403,7 +394,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns codex transport defaults", () => {
-      const provider = requireProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai-codex");
       expect(
         provider.prepareExtraParams?.({
           provider: "openai-codex",
@@ -417,7 +408,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns usage snapshot fetching", async () => {
-      const provider = requireProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai-codex");
       const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("chatgpt.com/backend-api/wham/usage")) {
           return makeResponse(200, {
@@ -455,7 +446,7 @@ describe("provider runtime contract", () => {
 
   describe("qwen-portal", () => {
     it("owns OAuth refresh", async () => {
-      const provider = requireProvider("qwen-portal");
+      const provider = requireProviderContractProvider("qwen-portal");
       const credential = {
         type: "oauth" as const,
         provider: "qwen-portal",
@@ -478,7 +469,7 @@ describe("provider runtime contract", () => {
 
   describe("zai", () => {
     it("owns glm-5 forward-compat resolution", () => {
-      const provider = requireProvider("zai");
+      const provider = requireProviderContractProvider("zai");
       const model = provider.resolveDynamicModel?.({
         provider: "zai",
         modelId: "glm-5",
@@ -507,7 +498,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns usage auth resolution", async () => {
-      const provider = requireProvider("zai");
+      const provider = requireProviderContractProvider("zai");
       await expect(
         provider.resolveUsageAuth?.({
           config: {} as never,
@@ -524,7 +515,7 @@ describe("provider runtime contract", () => {
     });
 
     it("owns usage snapshot fetching", async () => {
-      const provider = requireProvider("zai");
+      const provider = requireProviderContractProvider("zai");
       const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("api.z.ai/api/monitor/usage/quota/limit")) {
           return makeResponse(200, {
