@@ -3,12 +3,14 @@ import bravePlugin from "../../../extensions/brave/index.js";
 import byteplusPlugin from "../../../extensions/byteplus/index.js";
 import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
 import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
+import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
 import firecrawlPlugin from "../../../extensions/firecrawl/index.js";
 import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import googlePlugin from "../../../extensions/google/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
 import kilocodePlugin from "../../../extensions/kilocode/index.js";
 import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
+import microsoftPlugin from "../../../extensions/microsoft/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
 import modelStudioPlugin from "../../../extensions/modelstudio/index.js";
@@ -33,27 +35,38 @@ import xaiPlugin from "../../../extensions/xai/index.js";
 import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
-import type { ProviderPlugin, WebSearchProviderPlugin } from "../types.js";
+import type {
+  MediaUnderstandingProviderPlugin,
+  ProviderPlugin,
+  SpeechProviderPlugin,
+  WebSearchProviderPlugin,
+} from "../types.js";
 
 type RegistrablePlugin = {
   id: string;
   register: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
 };
 
-type ProviderContractEntry = {
+type CapabilityContractEntry<T> = {
   pluginId: string;
-  provider: ProviderPlugin;
+  provider: T;
 };
 
-type WebSearchProviderContractEntry = {
-  pluginId: string;
-  provider: WebSearchProviderPlugin;
+type ProviderContractEntry = CapabilityContractEntry<ProviderPlugin>;
+
+type WebSearchProviderContractEntry = CapabilityContractEntry<WebSearchProviderPlugin> & {
   credentialValue: unknown;
 };
+
+type SpeechProviderContractEntry = CapabilityContractEntry<SpeechProviderPlugin>;
+type MediaUnderstandingProviderContractEntry =
+  CapabilityContractEntry<MediaUnderstandingProviderPlugin>;
 
 type PluginRegistrationContractEntry = {
   pluginId: string;
   providerIds: string[];
+  speechProviderIds: string[];
+  mediaUnderstandingProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
@@ -101,21 +114,41 @@ const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unkn
   { ...xaiPlugin, credentialValue: "xai-test" },
 ];
 
+const bundledSpeechPlugins: RegistrablePlugin[] = [elevenLabsPlugin, microsoftPlugin, openAIPlugin];
+
+const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [
+  anthropicPlugin,
+  googlePlugin,
+  minimaxPlugin,
+  mistralPlugin,
+  moonshotPlugin,
+  openAIPlugin,
+  zaiPlugin,
+];
+
 function captureRegistrations(plugin: RegistrablePlugin) {
   const captured = createCapturedPluginRegistration();
   plugin.register(captured.api);
   return captured;
 }
 
-export const providerContractRegistry: ProviderContractEntry[] = bundledProviderPlugins.flatMap(
-  (plugin) => {
+function buildCapabilityContractRegistry<T>(params: {
+  plugins: RegistrablePlugin[];
+  select: (captured: ReturnType<typeof createCapturedPluginRegistration>) => T[];
+}): CapabilityContractEntry<T>[] {
+  return params.plugins.flatMap((plugin) => {
     const captured = captureRegistrations(plugin);
-    return captured.providers.map((provider) => ({
+    return params.select(captured).map((provider) => ({
       pluginId: plugin.id,
       provider,
     }));
-  },
-);
+  });
+}
+
+export const providerContractRegistry: ProviderContractEntry[] = buildCapabilityContractRegistry({
+  plugins: bundledProviderPlugins,
+  select: (captured) => captured.providers,
+});
 
 export const webSearchProviderContractRegistry: WebSearchProviderContractEntry[] =
   bundledWebSearchPlugins.flatMap((plugin) => {
@@ -127,9 +160,26 @@ export const webSearchProviderContractRegistry: WebSearchProviderContractEntry[]
     }));
   });
 
+export const speechProviderContractRegistry: SpeechProviderContractEntry[] =
+  buildCapabilityContractRegistry({
+    plugins: bundledSpeechPlugins,
+    select: (captured) => captured.speechProviders,
+  });
+
+export const mediaUnderstandingProviderContractRegistry: MediaUnderstandingProviderContractEntry[] =
+  buildCapabilityContractRegistry({
+    plugins: bundledMediaUnderstandingPlugins,
+    select: (captured) => captured.mediaUnderstandingProviders,
+  });
+
 const bundledPluginRegistrationList = [
   ...new Map(
-    [...bundledProviderPlugins, ...bundledWebSearchPlugins].map((plugin) => [plugin.id, plugin]),
+    [
+      ...bundledProviderPlugins,
+      ...bundledSpeechPlugins,
+      ...bundledMediaUnderstandingPlugins,
+      ...bundledWebSearchPlugins,
+    ].map((plugin) => [plugin.id, plugin]),
   ).values(),
 ];
 
@@ -139,6 +189,10 @@ export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry
     return {
       pluginId: plugin.id,
       providerIds: captured.providers.map((provider) => provider.id),
+      speechProviderIds: captured.speechProviders.map((provider) => provider.id),
+      mediaUnderstandingProviderIds: captured.mediaUnderstandingProviders.map(
+        (provider) => provider.id,
+      ),
       webSearchProviderIds: captured.webSearchProviders.map((provider) => provider.id),
       toolNames: captured.tools.map((tool) => tool.name),
     };

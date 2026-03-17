@@ -600,6 +600,7 @@ describe("/compact command", () => {
       expect.objectContaining({
         sessionId: "session-1",
         sessionKey: "agent:main:main",
+        allowGatewaySubagentBinding: true,
         trigger: "manual",
         customInstructions: "focus on decisions",
         messageChannel: "whatsapp",

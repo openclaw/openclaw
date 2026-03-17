@@ -1,35 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
+import { __testing as providerTesting } from "../providers.js";
+import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
 import { providerContractRegistry, webSearchProviderContractRegistry } from "./registry.js";
-
-const loadOpenClawPluginsMock = vi.fn();
-
-vi.mock("../loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
-}));
-
-const { resolvePluginProviders } = await import("../providers.js");
-const { resolvePluginWebSearchProviders } = await import("../web-search-providers.js");
 
 function uniqueSortedPluginIds(values: string[]) {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
+function normalizeProviderContractPluginId(pluginId: string) {
+  return pluginId === "kimi-coding" ? "kimi" : pluginId;
+}
+
 describe("plugin loader contract", () => {
   beforeEach(() => {
-    loadOpenClawPluginsMock.mockReset();
-    loadOpenClawPluginsMock.mockReturnValue({
-      providers: [],
-      webSearchProviders: [],
-    });
+    vi.restoreAllMocks();
   });
 
   it("keeps bundled provider compatibility wired to the provider registry", () => {
     const providerPluginIds = uniqueSortedPluginIds(
-      providerContractRegistry.map((entry) => entry.pluginId),
+      providerContractRegistry.map((entry) => normalizeProviderContractPluginId(entry.pluginId)),
     );
-
-    resolvePluginProviders({
-      bundledProviderAllowlistCompat: true,
+    const compatPluginIds = providerTesting.resolveBundledProviderCompatPluginIds({
       config: {
         plugins: {
           allow: ["openrouter"],
@@ -37,37 +29,35 @@ describe("plugin loader contract", () => {
       },
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: expect.arrayContaining(providerPluginIds),
-          }),
-        }),
-      }),
+    const compatConfig = withBundledPluginAllowlistCompat({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      pluginIds: compatPluginIds,
+    });
+
+    expect(uniqueSortedPluginIds(compatPluginIds)).toEqual(
+      expect.arrayContaining(providerPluginIds),
     );
+    expect(compatConfig?.plugins?.allow).toEqual(expect.arrayContaining(providerPluginIds));
   });
 
   it("keeps vitest bundled provider enablement wired to the provider registry", () => {
     const providerPluginIds = uniqueSortedPluginIds(
-      providerContractRegistry.map((entry) => entry.pluginId),
+      providerContractRegistry.map((entry) => normalizeProviderContractPluginId(entry.pluginId)),
     );
-
-    resolvePluginProviders({
-      bundledProviderVitestCompat: true,
+    const compatConfig = providerTesting.withBundledProviderVitestCompat({
+      config: undefined,
+      pluginIds: providerPluginIds,
       env: { VITEST: "1" } as NodeJS.ProcessEnv,
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            enabled: true,
-            allow: expect.arrayContaining(providerPluginIds),
-          }),
-        }),
-      }),
-    );
+    expect(compatConfig?.plugins).toMatchObject({
+      enabled: true,
+      allow: expect.arrayContaining(providerPluginIds),
+    });
   });
 
   it("keeps bundled web search loading scoped to the web search registry", () => {
@@ -75,14 +65,10 @@ describe("plugin loader contract", () => {
       webSearchProviderContractRegistry.map((entry) => entry.pluginId),
     );
 
-    resolvePluginWebSearchProviders({});
+    const providers = resolvePluginWebSearchProviders({});
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: webSearchPluginIds,
-        activate: false,
-        cache: false,
-      }),
+    expect(uniqueSortedPluginIds(providers.map((provider) => provider.pluginId))).toEqual(
+      webSearchPluginIds,
     );
   });
 
@@ -91,7 +77,7 @@ describe("plugin loader contract", () => {
       webSearchProviderContractRegistry.map((entry) => entry.pluginId),
     );
 
-    resolvePluginWebSearchProviders({
+    const providers = resolvePluginWebSearchProviders({
       bundledAllowlistCompat: true,
       config: {
         plugins: {
@@ -100,15 +86,8 @@ describe("plugin loader contract", () => {
       },
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: expect.arrayContaining(webSearchPluginIds),
-          }),
-        }),
-        onlyPluginIds: webSearchPluginIds,
-      }),
+    expect(uniqueSortedPluginIds(providers.map((provider) => provider.pluginId))).toEqual(
+      webSearchPluginIds,
     );
   });
 });

@@ -17,7 +17,7 @@ export type SlackSendTestClient = WebClient & {
 };
 
 export function installSlackBlockTestMocks() {
-  vi.mock("../../../src/config/config.js", () => ({
+  vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
     loadConfig: () => ({}),
   }));
 
