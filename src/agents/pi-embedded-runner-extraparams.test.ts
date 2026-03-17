@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
@@ -1106,6 +1109,186 @@ describe("applyExtraParamsToAgent", () => {
       mimeType: "image/png",
       data: "ZmFrZQ==",
     });
+  });
+
+  it("inlines local @audio refs into Google inlineData payload parts", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const tmpDir = mkdtempSync(path.join(process.cwd(), ".openclaw-google-audio-"));
+    const relativeDir = path.relative(process.cwd(), tmpDir);
+    const audioPath = path.join(tmpDir, "sample.ogg");
+    const audioBuffer = Buffer.from("OggSfake-audio");
+    writeFileSync(audioPath, audioBuffer);
+
+    try {
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: `Please transcribe @${path.join(relativeDir, "sample.ogg")} now` }],
+            },
+          ],
+        };
+        options?.onPayload?.(payload, _model);
+        payloads.push(payload);
+        return {} as ReturnType<StreamFn>;
+      };
+      const agent = { streamFn: baseStreamFn };
+
+      applyExtraParamsToAgent(agent, undefined, "google-gemini-cli", "gemini-3-pro", undefined);
+
+      const model = {
+        api: "google-generative-ai",
+        provider: "google-gemini-cli",
+        id: "gemini-3-pro",
+      } as Model<"google-generative-ai">;
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(model, context, {});
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.contents).toEqual([
+        {
+          role: "user",
+          parts: [
+            { text: "Please transcribe " },
+            {
+              inlineData: {
+                mimeType: "audio/ogg",
+                data: audioBuffer.toString("base64"),
+              },
+            },
+            { text: " now" },
+          ],
+        },
+      ]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps missing local @audio refs as plain text for Google payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const missingPath = path.join(os.tmpdir(), "does-not-exist-audio.ogg");
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: `Please transcribe @${missingPath} now` }],
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "google-gemini-cli", "gemini-3-pro", undefined);
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google-gemini-cli",
+      id: "gemini-3-pro",
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.contents).toEqual([
+      {
+        role: "user",
+        parts: [{ text: `Please transcribe @${missingPath} now` }],
+      },
+    ]);
+  });
+
+  it("keeps absolute @audio refs as plain text for Google payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const absolutePath = path.join(os.tmpdir(), "absolute-audio.ogg");
+    writeFileSync(absolutePath, Buffer.from("OggSfake-audio"));
+    try {
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: `Please transcribe @${absolutePath} now` }],
+            },
+          ],
+        };
+        options?.onPayload?.(payload, _model);
+        payloads.push(payload);
+        return {} as ReturnType<StreamFn>;
+      };
+      const agent = { streamFn: baseStreamFn };
+
+      applyExtraParamsToAgent(agent, undefined, "google-gemini-cli", "gemini-3-pro", undefined);
+
+      const model = {
+        api: "google-generative-ai",
+        provider: "google-gemini-cli",
+        id: "gemini-3-pro",
+      } as Model<"google-generative-ai">;
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(model, context, {});
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.contents).toEqual([
+        {
+          role: "user",
+          parts: [{ text: `Please transcribe @${absolutePath} now` }],
+        },
+      ]);
+    } finally {
+      rmSync(absolutePath, { force: true });
+    }
+  });
+
+  it("keeps oversized @audio refs as plain text for Google payloads", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const tmpDir = mkdtempSync(path.join(process.cwd(), ".openclaw-google-audio-"));
+    const relativeDir = path.relative(process.cwd(), tmpDir);
+    const audioPath = path.join(tmpDir, "large.ogg");
+    writeFileSync(audioPath, Buffer.from("OggS"));
+    truncateSync(audioPath, 20 * 1024 * 1024 + 1);
+
+    try {
+      const baseStreamFn: StreamFn = (_model, _context, options) => {
+        const payload: Record<string, unknown> = {
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: `Please transcribe @${path.join(relativeDir, "large.ogg")} now` }],
+            },
+          ],
+        };
+        options?.onPayload?.(payload, _model);
+        payloads.push(payload);
+        return {} as ReturnType<StreamFn>;
+      };
+      const agent = { streamFn: baseStreamFn };
+
+      applyExtraParamsToAgent(agent, undefined, "google-gemini-cli", "gemini-3-pro", undefined);
+
+      const model = {
+        api: "google-generative-ai",
+        provider: "google-gemini-cli",
+        id: "gemini-3-pro",
+      } as Model<"google-generative-ai">;
+      const context: Context = { messages: [] };
+      void agent.streamFn?.(model, context, {});
+
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.contents).toEqual([
+        {
+          role: "user",
+          parts: [{ text: `Please transcribe @${path.join(relativeDir, "large.ogg")} now` }],
+        },
+      ]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps valid Google thinkingBudget unchanged", () => {
