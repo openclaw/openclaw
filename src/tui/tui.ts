@@ -21,6 +21,7 @@ import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
+import { loadTuiAliases } from "./tui-aliases.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
@@ -321,6 +322,7 @@ export function resolveCtrlCAction(params: {
 
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
+  let tuiAliases = await loadTuiAliases();
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
@@ -450,6 +452,12 @@ export async function runTui(opts: TuiOptions) {
     set showThinking(value) {
       showThinking = value;
     },
+    get tuiAliases() {
+      return tuiAliases;
+    },
+    set tuiAliases(value) {
+      tuiAliases = value;
+    },
     get connectionStatus() {
       return connectionStatus;
     },
@@ -556,6 +564,7 @@ export async function runTui(opts: TuiOptions) {
           cfg: config,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
+          aliases: tuiAliases,
         }),
         process.cwd(),
       ),
@@ -887,6 +896,7 @@ export async function runTui(opts: TuiOptions) {
       forgetLocalRunId,
       forgetLocalBtwRunId,
       requestExit,
+      refreshAutocomplete: updateAutocompleteProvider,
     });
 
   const { runLocalShellLine } = createLocalShellRunner({
