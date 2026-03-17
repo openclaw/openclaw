@@ -35,7 +35,7 @@ describe("handleCommands /plugins", () => {
     await workspaceHarness.cleanupWorkspaces();
   });
 
-  it("lists discovered plugins and shows plugin details", async () => {
+  it("lists discovered plugins and inspects plugin details", async () => {
     await withTempHome("openclaw-command-plugins-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
       await createClaudeBundlePlugin({ workspaceDir, pluginId: "superpowers" });
@@ -49,13 +49,19 @@ describe("handleCommands /plugins", () => {
       expect(listResult.reply?.text).toContain("superpowers");
       expect(listResult.reply?.text).toContain("[disabled]");
 
-      const showParams = buildCommandTestParams("/plugin show superpowers", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const showParams = buildCommandTestParams(
+        "/plugins inspect superpowers",
+        buildCfg(),
+        undefined,
+        {
+          workspaceDir,
+        },
+      );
       showParams.command.senderIsOwner = true;
       const showResult = await handleCommands(showParams);
       expect(showResult.reply?.text).toContain('"id": "superpowers"');
       expect(showResult.reply?.text).toContain('"bundleFormat": "claude"');
+      expect(showResult.reply?.text).toContain('"shape":');
     });
   });
 
