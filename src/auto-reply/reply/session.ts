@@ -28,7 +28,9 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { parseGatewayTuiOriginTarget } from "../../gateway/client-affinity.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
+import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -187,6 +189,190 @@ function resolveBoundAcpSessionForReset(params: {
   });
 }
 
+type ShortReplyIntent = "confirmation" | "continue" | "choice";
+
+const ORPHAN_SHORT_REPLY_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const SHORT_CONFIRMATION_REPLIES = new Set([
+  "yes",
+  "y",
+  "ok",
+  "okay",
+  "sure",
+  "好的",
+  "行",
+  "同意",
+  "是",
+]);
+const SHORT_CONTINUE_REPLIES = new Set(["continue", "继续", "开始", "按这个", "做"]);
+const SHORT_CHOICE_REPLIES = new Set(["both", "都做", "两个都做"]);
+
+function normalizeReplyIntentToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?,;:()[\]{}"'`~]+/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function classifyShortReplyIntent(raw: string): ShortReplyIntent | undefined {
+  if (raw.length > 24 || raw.includes("\n")) {
+    return undefined;
+  }
+  const normalized = normalizeReplyIntentToken(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if (SHORT_CHOICE_REPLIES.has(normalized)) {
+    return "choice";
+  }
+  if (SHORT_CONTINUE_REPLIES.has(normalized)) {
+    return "continue";
+  }
+  if (SHORT_CONFIRMATION_REPLIES.has(normalized)) {
+    return "confirmation";
+  }
+  return undefined;
+}
+
+function extractTranscriptText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const record = message as {
+    content?: unknown;
+    text?: unknown;
+    role?: unknown;
+  };
+  if (typeof record.text === "string" && record.text.trim()) {
+    return record.text.trim();
+  }
+  if (typeof record.content === "string" && record.content.trim()) {
+    return record.content.trim();
+  }
+  if (Array.isArray(record.content)) {
+    const text = record.content
+      .map((entry) =>
+        entry && typeof entry === "object" && typeof (entry as { text?: unknown }).text === "string"
+          ? ((entry as { text: string }).text ?? "").trim()
+          : "",
+      )
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    return text || undefined;
+  }
+  return undefined;
+}
+
+function classifyAwaitingReplyIntent(text: string): ShortReplyIntent | "followup" | undefined {
+  const normalized = text.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const lowered = normalized.toLowerCase();
+  if (
+    /\b(which|choose|pick|option|a\/b|a or b|1 or 2|one or both|both)\b/i.test(normalized) ||
+    /\b(both)\b/i.test(normalized)
+  ) {
+    return "choice";
+  }
+  if (
+    /\b(do you want me to|want me to|should i|would you like me to|reply with yes|say yes|confirm|continue\??|proceed\??)\b/i.test(
+      normalized,
+    )
+  ) {
+    return "confirmation";
+  }
+  if (lowered.endsWith("?")) {
+    return "followup";
+  }
+  return undefined;
+}
+
+function resolveGatewayTuiAffinityKey(ctx: MsgContext): string | undefined {
+  return parseGatewayTuiOriginTarget(
+    typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : undefined,
+  );
+}
+
+function resolveStoredGatewayTuiAffinityKey(entry: SessionEntry | undefined): string | undefined {
+  return (
+    parseGatewayTuiOriginTarget(entry?.origin?.to) ??
+    parseGatewayTuiOriginTarget(entry?.deliveryContext?.to) ??
+    parseGatewayTuiOriginTarget(entry?.lastTo)
+  );
+}
+
+function matchesAwaitingReplyIntent(
+  replyIntent: ShortReplyIntent,
+  awaitingIntent: ShortReplyIntent | "followup",
+): boolean {
+  if (replyIntent === "choice") {
+    return awaitingIntent === "choice";
+  }
+  if (replyIntent === "continue") {
+    return awaitingIntent === "confirmation" || awaitingIntent === "followup";
+  }
+  return awaitingIntent === "confirmation" || awaitingIntent === "followup";
+}
+
+function findOrphanShortReplyCandidate(params: {
+  ctx: MsgContext;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  now: number;
+}): { key: string; entry: SessionEntry } | undefined {
+  const replyIntent = classifyShortReplyIntent(
+    params.ctx.BodyForCommands ?? params.ctx.RawBody ?? params.ctx.Body ?? "",
+  );
+  if (!replyIntent) {
+    return undefined;
+  }
+  const affinityKey = resolveGatewayTuiAffinityKey(params.ctx);
+  if (!affinityKey) {
+    return undefined;
+  }
+
+  const candidates = Object.entries(params.sessionStore)
+    .filter(([key, entry]) => {
+      if (!entry?.sessionId || key === params.sessionKey) {
+        return false;
+      }
+      if (params.now - (entry.updatedAt ?? 0) > ORPHAN_SHORT_REPLY_MAX_AGE_MS) {
+        return false;
+      }
+      return resolveStoredGatewayTuiAffinityKey(entry) === affinityKey;
+    })
+    .toSorted((a, b) => (b[1].updatedAt ?? 0) - (a[1].updatedAt ?? 0))
+    .slice(0, 8);
+
+  for (const [key, entry] of candidates) {
+    const messages = readSessionMessages(entry.sessionId, params.storePath, entry.sessionFile);
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index] as { role?: unknown } | undefined;
+      const role = typeof message?.role === "string" ? message.role : undefined;
+      if (role === "user") {
+        break;
+      }
+      if (role !== "assistant") {
+        continue;
+      }
+      const text = extractTranscriptText(message);
+      if (!text) {
+        break;
+      }
+      const awaitingIntent = classifyAwaitingReplyIntent(text);
+      if (awaitingIntent && matchesAwaitingReplyIntent(replyIntent, awaitingIntent)) {
+        return { key, entry };
+      }
+      break;
+    }
+  }
+
+  return undefined;
+}
+
 export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -224,6 +410,8 @@ export async function initSessionState(params: {
   });
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
+  let entry: SessionEntry | undefined;
+  let orphanShortReplyReattached = false;
 
   let sessionId: string | undefined;
   let isNewSession = false;
@@ -316,6 +504,21 @@ export async function initSessionState(params: {
   }
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+  entry = sessionStore[sessionKey];
+  if (!resetTriggered && !entry) {
+    const orphanCandidate = findOrphanShortReplyCandidate({
+      ctx: sessionCtxForState,
+      sessionKey,
+      sessionStore,
+      storePath,
+      now: Date.now(),
+    });
+    if (orphanCandidate) {
+      sessionKey = orphanCandidate.key;
+      entry = orphanCandidate.entry;
+      orphanShortReplyReattached = true;
+    }
+  }
   const retiredLegacyMainDelivery = maybeRetireLegacyMainDeliveryRoute({
     sessionCfg,
     sessionKey,
@@ -328,7 +531,6 @@ export async function initSessionState(params: {
   if (retiredLegacyMainDelivery) {
     sessionStore[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
   }
-  const entry = sessionStore[sessionKey];
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -352,7 +554,8 @@ export async function initSessionState(params: {
     resetOverride: channelReset,
   });
   const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+    ? orphanShortReplyReattached ||
+      evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
@@ -576,6 +779,7 @@ export async function initSessionState(params: {
 
   const sessionCtx: TemplateContext = {
     ...ctx,
+    SessionKey: sessionKey,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
     BodyStripped: normalizeInboundTextNewlines(

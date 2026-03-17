@@ -25,6 +25,7 @@ export type GatewayConnectionOptions = {
   url?: string;
   token?: string;
   password?: string;
+  instanceId?: string;
 };
 
 export type ChatSendOptions = {
@@ -141,7 +142,7 @@ export class GatewayChatClient {
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 
-  constructor(connection: ResolvedGatewayConnection) {
+  constructor(connection: ResolvedGatewayConnection, instanceId?: string) {
     this.connection = connection;
 
     this.readyPromise = new Promise((resolve) => {
@@ -158,7 +159,7 @@ export class GatewayChatClient {
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
       caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
-      instanceId: randomUUID(),
+      instanceId: instanceId?.trim() || randomUUID(),
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       onHelloOk: (hello) => {
@@ -188,7 +189,7 @@ export class GatewayChatClient {
 
   static async connect(opts: GatewayConnectionOptions): Promise<GatewayChatClient> {
     const connection = await resolveGatewayConnection(opts);
-    return new GatewayChatClient(connection);
+    return new GatewayChatClient(connection, opts.instanceId);
   }
 
   start() {

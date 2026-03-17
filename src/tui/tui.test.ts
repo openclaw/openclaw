@@ -63,7 +63,8 @@ describe("resolveTuiSessionKey", () => {
         raw: "",
         sessionScope: "global",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
+        clientInstanceId: "tui-client-1",
       }),
     ).toBe("global");
     expect(
@@ -71,9 +72,31 @@ describe("resolveTuiSessionKey", () => {
         raw: "test123",
         sessionScope: "global",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
+        clientInstanceId: "tui-client-1",
       }),
     ).toBe("agent:main:test123");
+  });
+
+  it("maps the default main session to a stable client affinity key", () => {
+    expect(
+      resolveTuiSessionKey({
+        raw: "",
+        sessionScope: "per-sender",
+        currentAgentId: "main",
+        sessionMainKey: "main",
+        clientInstanceId: "tui-client-1",
+      }),
+    ).toBe("agent:main:tui:main:tui-client-1");
+    expect(
+      resolveTuiSessionKey({
+        raw: "main",
+        sessionScope: "per-sender",
+        currentAgentId: "main",
+        sessionMainKey: "main",
+        clientInstanceId: "tui-client-1",
+      }),
+    ).toBe("agent:main:tui:main:tui-client-1");
   });
 
   it("keeps explicit agent-prefixed keys unchanged", () => {
@@ -82,7 +105,8 @@ describe("resolveTuiSessionKey", () => {
         raw: "agent:ops:incident",
         sessionScope: "global",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
+        clientInstanceId: "tui-client-1",
       }),
     ).toBe("agent:ops:incident");
   });
@@ -94,7 +118,8 @@ describe("resolveTuiSessionKey", () => {
         raw: "agent:main:Test1",
         sessionScope: "global",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
+        clientInstanceId: "tui-client-1",
       }),
     ).toBe("agent:main:test1");
     // Uppercase in bare form (prefixed by currentAgentId)
@@ -103,7 +128,8 @@ describe("resolveTuiSessionKey", () => {
         raw: "Test1",
         sessionScope: "global",
         currentAgentId: "main",
-        sessionMainKey: "agent:main:main",
+        sessionMainKey: "main",
+        clientInstanceId: "tui-client-1",
       }),
     ).toBe("agent:main:test1");
   });

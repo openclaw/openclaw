@@ -21,6 +21,7 @@ import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
+import { loadOrCreateTuiInstanceId, resolveDefaultTuiSessionKey } from "./tui-client-instance.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
@@ -188,24 +189,42 @@ export function resolveTuiSessionKey(params: {
   sessionScope: SessionScope;
   currentAgentId: string;
   sessionMainKey: string;
+  clientInstanceId: string;
 }) {
   const trimmed = (params.raw ?? "").trim();
   if (!trimmed) {
     if (params.sessionScope === "global") {
       return "global";
     }
-    return buildAgentMainSessionKey({
-      agentId: params.currentAgentId,
-      mainKey: params.sessionMainKey,
+    return resolveDefaultTuiSessionKey({
+      currentAgentId: params.currentAgentId,
+      sessionMainKey: params.sessionMainKey,
+      clientInstanceId: params.clientInstanceId,
     });
   }
   if (trimmed === "global" || trimmed === "unknown") {
-    return trimmed;
-  }
-  if (trimmed.startsWith("agent:")) {
     return trimmed.toLowerCase();
   }
-  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
+  const lowered = trimmed.toLowerCase();
+  const explicitMainKey = buildAgentMainSessionKey({
+    agentId: params.currentAgentId,
+    mainKey: params.sessionMainKey,
+  }).toLowerCase();
+  if (
+    lowered === "main" ||
+    lowered === params.sessionMainKey.trim().toLowerCase() ||
+    lowered === explicitMainKey
+  ) {
+    return resolveDefaultTuiSessionKey({
+      currentAgentId: params.currentAgentId,
+      sessionMainKey: params.sessionMainKey,
+      clientInstanceId: params.clientInstanceId,
+    });
+  }
+  if (trimmed.startsWith("agent:")) {
+    return lowered;
+  }
+  return `agent:${params.currentAgentId}:${lowered}`;
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -331,6 +350,7 @@ export async function runTui(opts: TuiOptions) {
     initialSessionInput,
     cwd: process.cwd(),
   });
+  const clientInstanceId = loadOrCreateTuiInstanceId();
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
@@ -502,6 +522,7 @@ export async function runTui(opts: TuiOptions) {
     url: opts.url,
     token: opts.token,
     password: opts.password,
+    instanceId: clientInstanceId,
   });
 
   const tui = new TUI(new ProcessTerminal());
@@ -546,7 +567,12 @@ export async function runTui(opts: TuiOptions) {
       return key;
     }
     const parsed = parseAgentSessionKey(key);
-    return parsed?.rest ?? key;
+    const rest = parsed?.rest ?? key;
+    const parts = rest.split(":").filter(Boolean);
+    if (parts[0] === "tui" && parts[1] === sessionMainKey) {
+      return sessionMainKey;
+    }
+    return rest;
   };
 
   const formatAgentLabel = (id: string) => {
@@ -560,6 +586,7 @@ export async function runTui(opts: TuiOptions) {
       sessionScope,
       currentAgentId,
       sessionMainKey,
+      clientInstanceId,
     });
   };
 

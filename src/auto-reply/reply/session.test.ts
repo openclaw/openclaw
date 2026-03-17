@@ -1076,6 +1076,157 @@ describe("initSessionState reset policy", () => {
   });
 });
 
+describe("initSessionState orphan short replies", () => {
+  async function writeTranscript(params: {
+    transcriptPath: string;
+    sessionId: string;
+    userText: string;
+    assistantText: string;
+  }) {
+    await fs.mkdir(path.dirname(params.transcriptPath), { recursive: true });
+    const header = {
+      type: "session",
+      version: 3,
+      id: params.sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    const userMessage = {
+      type: "message",
+      id: "m1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: params.userText },
+    };
+    const assistantMessage = {
+      type: "message",
+      id: "m2",
+      parentId: "m1",
+      timestamp: new Date().toISOString(),
+      message: { role: "assistant", content: params.assistantText },
+    };
+    await fs.writeFile(
+      params.transcriptPath,
+      `${JSON.stringify(header)}\n${JSON.stringify(userMessage)}\n${JSON.stringify(assistantMessage)}\n`,
+      "utf-8",
+    );
+  }
+
+  it("reattaches short confirmation replies to the latest awaiting TUI session", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-17T09:00:00.000Z"));
+
+    const root = await makeCaseDir("openclaw-orphan-short-reply-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionsDir = path.join(root, "sessions");
+    const resumedSessionId = "tui-session-resume";
+    const resumedTranscript = path.join(sessionsDir, `${resumedSessionId}.jsonl`);
+    const resumedSessionKey = "agent:main:tui:main:tui-pane-1";
+
+    await writeTranscript({
+      transcriptPath: resumedTranscript,
+      sessionId: resumedSessionId,
+      userText: "Should we ship this now?",
+      assistantText: "Do you want me to continue with the current plan? Reply yes to continue.",
+    });
+
+    await writeSessionStoreFast(storePath, {
+      [resumedSessionKey]: {
+        sessionId: resumedSessionId,
+        sessionFile: resumedTranscript,
+        updatedAt: Date.now() - 8 * 60 * 60 * 1000,
+        origin: {
+          provider: "webchat",
+          to: "session:tui:tui-pane-1",
+        },
+        deliveryContext: {
+          channel: "webchat",
+          to: "session:tui:tui-pane-1",
+        },
+        lastChannel: "webchat",
+        lastTo: "session:tui:tui-pane-1",
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "yes",
+        RawBody: "yes",
+        BodyForCommands: "yes",
+        SessionKey: "agent:main:fresh-confirmation",
+        Surface: "webchat",
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+        OriginatingTo: "session:tui:tui-pane-1",
+        SenderId: "gateway-client",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe(resumedSessionKey);
+    expect(result.sessionEntry.sessionId).toBe(resumedSessionId);
+    expect(result.isNewSession).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("does not hijack short replies when the candidate belongs to a different TUI route", async () => {
+    const root = await makeCaseDir("openclaw-orphan-short-reply-other-route-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionsDir = path.join(root, "sessions");
+    const resumedSessionId = "tui-session-other";
+    const resumedTranscript = path.join(sessionsDir, `${resumedSessionId}.jsonl`);
+
+    await writeTranscript({
+      transcriptPath: resumedTranscript,
+      sessionId: resumedSessionId,
+      userText: "Should we ship this now?",
+      assistantText: "Do you want me to continue with the current plan? Reply yes to continue.",
+    });
+
+    await writeSessionStoreFast(storePath, {
+      "agent:main:tui:main:tui-pane-2": {
+        sessionId: resumedSessionId,
+        sessionFile: resumedTranscript,
+        updatedAt: Date.now(),
+        lastChannel: "webchat",
+        lastTo: "session:tui:tui-pane-2",
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "yes",
+        RawBody: "yes",
+        BodyForCommands: "yes",
+        SessionKey: "agent:main:fresh-confirmation",
+        Surface: "webchat",
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+        OriginatingTo: "session:tui:tui-pane-1",
+        SenderId: "gateway-client",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionKey).toBe("agent:main:fresh-confirmation");
+    expect(result.isNewSession).toBe(true);
+  });
+});
+
 describe("initSessionState channel reset overrides", () => {
   it("uses channel-specific reset policy when configured", async () => {
     const root = await makeCaseDir("openclaw-channel-idle-");

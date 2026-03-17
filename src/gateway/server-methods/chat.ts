@@ -33,6 +33,7 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { buildGatewayTuiOriginTarget } from "../client-affinity.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -131,7 +132,7 @@ type ChatSendOriginatingRoute = {
 };
 
 function resolveChatSendOriginatingRoute(params: {
-  client?: { mode?: string | null; id?: string | null } | null;
+  client?: { mode?: string | null; id?: string | null; instanceId?: string | null } | null;
   deliver?: boolean;
   entry?: ChatSendDeliveryEntry;
   hasConnectedClient?: boolean;
@@ -1234,7 +1235,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const clientInfo = client?.connect?.client;
       const {
         originatingChannel,
-        originatingTo,
+        originatingTo: resolvedOriginatingTo,
         accountId,
         messageThreadId,
         explicitDeliverRoute,
@@ -1246,6 +1247,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         mainKey: cfg.session?.mainKey,
         sessionKey,
       });
+      const originatingTo =
+        resolvedOriginatingTo ??
+        (clientInfo?.mode === GATEWAY_CLIENT_MODES.UI &&
+        clientInfo?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+          ? buildGatewayTuiOriginTarget(clientInfo.instanceId)
+          : undefined);
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
