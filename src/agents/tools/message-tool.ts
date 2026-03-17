@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type, type TSchema } from "@sinclair/typebox";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
@@ -82,7 +82,7 @@ const interactiveMessageSchema = Type.Object(
 );
 
 function buildSendSchema(options: { includeInteractive: boolean }) {
-  const props: Record<string, unknown> = {
+  const props: Record<string, TSchema> = {
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
       Type.String({
@@ -167,7 +167,7 @@ function buildFetchSchema() {
 }
 
 function buildPollSchema() {
-  const props: Record<string, unknown> = {
+  const props: Record<string, TSchema> = {
     pollId: Type.Optional(Type.String()),
     pollOptionId: Type.Optional(
       Type.String({
@@ -346,7 +346,7 @@ function buildChannelManagementSchema() {
 
 function buildMessageToolSchemaProps(options: {
   includeInteractive: boolean;
-  extraProperties?: Record<string, unknown>;
+  extraProperties?: Record<string, TSchema>;
 }) {
   return {
     ...buildRoutingSchema(),
@@ -370,7 +370,7 @@ function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: {
     includeInteractive: boolean;
-    extraProperties?: Record<string, unknown>;
+    extraProperties?: Record<string, TSchema>;
   },
 ) {
   const props = buildMessageToolSchemaProps(options);
@@ -547,34 +547,39 @@ function buildMessageToolDescription(options?: {
   requesterSenderId?: string;
 }): string {
   const baseDescription = "Send, delete, and manage messages via channel plugins.";
+  const resolvedOptions = options ?? {};
+  const currentChannel = normalizeMessageChannel(resolvedOptions.currentChannel);
 
   // If we have a current channel, show its actions and list other configured channels
-  if (options?.currentChannel) {
+  if (currentChannel) {
     const channelActions = listChannelSupportedActions({
-      cfg: options.config,
-      channel: options.currentChannel,
-      currentChannelId: options.currentChannelId,
-      currentThreadTs: options.currentThreadTs,
-      currentMessageId: options.currentMessageId,
-      accountId: options.currentAccountId,
-      sessionKey: options.sessionKey,
-      sessionId: options.sessionId,
-      agentId: options.agentId,
-      requesterSenderId: options.requesterSenderId,
+      cfg: resolvedOptions.config,
+      channel: currentChannel,
+      currentChannelId: resolvedOptions.currentChannelId,
+      currentThreadTs: resolvedOptions.currentThreadTs,
+      currentMessageId: resolvedOptions.currentMessageId,
+      accountId: resolvedOptions.currentAccountId,
+      sessionKey: resolvedOptions.sessionKey,
+      sessionId: resolvedOptions.sessionId,
+      agentId: resolvedOptions.agentId,
+      requesterSenderId: resolvedOptions.requesterSenderId,
     });
     if (channelActions.length > 0) {
       // Always include "send" as a base action
       const allActions = new Set(["send", ...channelActions]);
       const actionList = Array.from(allActions).toSorted().join(", ");
-      let desc = `${baseDescription} Current channel (${options.currentChannel}) supports: ${actionList}.`;
+      let desc = `${baseDescription} Current channel (${currentChannel}) supports: ${actionList}.`;
 
       // Include other configured channels so cron/isolated agents can discover them
       const otherChannels: string[] = [];
       for (const plugin of listChannelPlugins()) {
-        if (plugin.id === options.currentChannel) {
+        if (plugin.id === currentChannel) {
           continue;
         }
-        const actions = listChannelSupportedActions({ cfg: options.config, channel: plugin.id });
+        const actions = listChannelSupportedActions({
+          cfg: resolvedOptions.config,
+          channel: plugin.id,
+        });
         if (actions.length > 0) {
           const all = new Set(["send", ...actions]);
           otherChannels.push(`${plugin.id} (${Array.from(all).toSorted().join(", ")})`);
@@ -589,8 +594,8 @@ function buildMessageToolDescription(options?: {
   }
 
   // Fallback to generic description with all configured actions
-  if (options?.config) {
-    const actions = listChannelMessageActions(options.config);
+  if (resolvedOptions.config) {
+    const actions = listChannelMessageActions(resolvedOptions.config);
     if (actions.length > 0) {
       return `${baseDescription} Supports actions: ${actions.join(", ")}.`;
     }
