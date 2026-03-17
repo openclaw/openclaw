@@ -140,6 +140,20 @@ export function resolvePreferredOpenClawTmpDir(
     return fallbackPath;
   };
 
+  // Allow overriding the temporary directory via environment variable
+  // This must be checked BEFORE the default logic to ensure the override is respected
+  // even if the default directory already exists.
+  if (process.env.OPENCLAW_TMP_DIR) {
+    const overridePath = process.env.OPENCLAW_TMP_DIR;
+    try {
+      mkdirSync(overridePath, { recursive: true, mode: 0o700 });
+      chmodSync(overridePath, 0o700);
+      return overridePath;
+    } catch {
+      // Fall through to default logic if override path is invalid/unwritable
+    }
+  }
+
   const existingPreferredState = resolveDirState(POSIX_OPENCLAW_TMP_DIR);
   if (existingPreferredState === "available") {
     return POSIX_OPENCLAW_TMP_DIR;
@@ -152,14 +166,6 @@ export function resolvePreferredOpenClawTmpDir(
   }
 
   try {
-    // Allow overriding the temporary directory via environment variable
-    if (process.env.OPENCLAW_TMP_DIR) {
-      const overridePath = process.env.OPENCLAW_TMP_DIR;
-      mkdirSync(overridePath, { recursive: true, mode: 0o700 });
-      chmodSync(overridePath, 0o700);
-      return overridePath;
-    }
-
     accessSync("/tmp", TMP_DIR_ACCESS_MODE);
     // Create with a safe default; subsequent callers expect it exists.
     mkdirSync(POSIX_OPENCLAW_TMP_DIR, { recursive: true, mode: 0o700 });
