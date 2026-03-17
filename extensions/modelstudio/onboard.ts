@@ -2,12 +2,12 @@ import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalog,
 } from "../../src/commands/onboard-auth.config-shared.js";
+import type { OpenClawConfig } from "../../src/config/config.js";
 import {
   MODELSTUDIO_CN_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_REF,
   MODELSTUDIO_GLOBAL_BASE_URL,
-} from "../../src/commands/onboard-auth.models.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+} from "./model-definitions.js";
 import { buildModelStudioProvider } from "./provider-catalog.js";
 
 export { MODELSTUDIO_CN_BASE_URL, MODELSTUDIO_DEFAULT_MODEL_REF, MODELSTUDIO_GLOBAL_BASE_URL };
