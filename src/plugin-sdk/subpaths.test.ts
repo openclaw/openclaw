@@ -41,6 +41,19 @@ const bundledExtensionSubpathLoaders = pluginSdkSubpaths.map((id: string) => ({
 }));
 
 const asExports = (mod: object) => mod as Record<string, unknown>;
+const ircSdk = await import("openclaw/plugin-sdk/irc");
+const feishuSdk = await import("openclaw/plugin-sdk/feishu");
+const googlechatSdk = await import("openclaw/plugin-sdk/googlechat");
+const zaloSdk = await import("openclaw/plugin-sdk/zalo");
+const synologyChatSdk = await import("openclaw/plugin-sdk/synology-chat");
+const zalouserSdk = await import("openclaw/plugin-sdk/zalouser");
+const tlonSdk = await import("openclaw/plugin-sdk/tlon");
+const acpxSdk = await import("openclaw/plugin-sdk/acpx");
+const bluebubblesSdk = await import("openclaw/plugin-sdk/bluebubbles");
+const matrixSdk = await import("openclaw/plugin-sdk/matrix");
+const mattermostSdk = await import("openclaw/plugin-sdk/mattermost");
+const nextcloudTalkSdk = await import("openclaw/plugin-sdk/nextcloud-talk");
+const twitchSdk = await import("openclaw/plugin-sdk/twitch");
 
 describe("plugin-sdk subpath exports", () => {
   it("exports compat helpers", () => {
@@ -162,7 +175,6 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports IRC helpers", async () => {
-    const ircSdk = await import("openclaw/plugin-sdk/irc");
     expect(typeof ircSdk.resolveIrcAccount).toBe("function");
     expect(typeof ircSdk.ircSetupWizard).toBe("object");
     expect(typeof ircSdk.ircSetupAdapter).toBe("object");
@@ -177,7 +189,6 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports Feishu helpers", async () => {
-    const feishuSdk = await import("openclaw/plugin-sdk/feishu");
     expect(typeof feishuSdk.feishuSetupWizard).toBe("object");
     expect(typeof feishuSdk.feishuSetupAdapter).toBe("object");
   });
@@ -202,38 +213,32 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports Google Chat helpers", async () => {
-    const googlechatSdk = await import("openclaw/plugin-sdk/googlechat");
     expect(typeof googlechatSdk.googlechatSetupWizard).toBe("object");
     expect(typeof googlechatSdk.googlechatSetupAdapter).toBe("object");
   });
 
   it("exports Zalo helpers", async () => {
-    const zaloSdk = await import("openclaw/plugin-sdk/zalo");
     expect(typeof zaloSdk.zaloSetupWizard).toBe("object");
     expect(typeof zaloSdk.zaloSetupAdapter).toBe("object");
   });
 
   it("exports Synology Chat helpers", async () => {
-    const synologyChatSdk = await import("openclaw/plugin-sdk/synology-chat");
     expect(typeof synologyChatSdk.synologyChatSetupWizard).toBe("object");
     expect(typeof synologyChatSdk.synologyChatSetupAdapter).toBe("object");
   });
 
   it("exports Zalouser helpers", async () => {
-    const zalouserSdk = await import("openclaw/plugin-sdk/zalouser");
     expect(typeof zalouserSdk.zalouserSetupWizard).toBe("object");
     expect(typeof zalouserSdk.zalouserSetupAdapter).toBe("object");
   });
 
   it("exports Tlon helpers", async () => {
-    const tlonSdk = await import("openclaw/plugin-sdk/tlon");
     expect(typeof tlonSdk.fetchWithSsrFGuard).toBe("function");
     expect(typeof tlonSdk.tlonSetupWizard).toBe("object");
     expect(typeof tlonSdk.tlonSetupAdapter).toBe("object");
   });
 
   it("exports acpx helpers", async () => {
-    const acpxSdk = await import("openclaw/plugin-sdk/acpx");
     expect(typeof acpxSdk.listKnownProviderAuthEnvVarNames).toBe("function");
     expect(typeof acpxSdk.omitEnvKeysCaseInsensitive).toBe("function");
   });
@@ -247,26 +252,15 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps the newly added bundled plugin-sdk contracts available", async () => {
-    const bluebubbles = await import("openclaw/plugin-sdk/bluebubbles");
-    expect(typeof bluebubbles.parseFiniteNumber).toBe("function");
-
-    const matrix = await import("openclaw/plugin-sdk/matrix");
-    expect(typeof matrix.matrixSetupWizard).toBe("object");
-    expect(typeof matrix.matrixSetupAdapter).toBe("object");
-
-    const mattermost = await import("openclaw/plugin-sdk/mattermost");
-    expect(typeof mattermost.parseStrictPositiveInteger).toBe("function");
-
-    const nextcloudTalk = await import("openclaw/plugin-sdk/nextcloud-talk");
-    expect(typeof nextcloudTalk.waitForAbortSignal).toBe("function");
-
-    const twitch = await import("openclaw/plugin-sdk/twitch");
-    expect(typeof twitch.DEFAULT_ACCOUNT_ID).toBe("string");
-    expect(typeof twitch.normalizeAccountId).toBe("function");
-    expect(typeof twitch.twitchSetupWizard).toBe("object");
-    expect(typeof twitch.twitchSetupAdapter).toBe("object");
-
-    const zalo = await import("openclaw/plugin-sdk/zalo");
-    expect(typeof zalo.resolveClientIp).toBe("function");
+    expect(typeof bluebubblesSdk.parseFiniteNumber).toBe("function");
+    expect(typeof matrixSdk.matrixSetupWizard).toBe("object");
+    expect(typeof matrixSdk.matrixSetupAdapter).toBe("object");
+    expect(typeof mattermostSdk.parseStrictPositiveInteger).toBe("function");
+    expect(typeof nextcloudTalkSdk.waitForAbortSignal).toBe("function");
+    expect(typeof twitchSdk.DEFAULT_ACCOUNT_ID).toBe("string");
+    expect(typeof twitchSdk.normalizeAccountId).toBe("function");
+    expect(typeof twitchSdk.twitchSetupWizard).toBe("object");
+    expect(typeof twitchSdk.twitchSetupAdapter).toBe("object");
+    expect(typeof zaloSdk.resolveClientIp).toBe("function");
   });
 });
