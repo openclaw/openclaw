@@ -38,6 +38,7 @@ Every request must include the hook token. Prefer headers:
 - `Authorization: Bearer <token>` (recommended)
 - `x-openclaw-token: <token>`
 - Query-string tokens are rejected (`?token=...` returns `400`).
+- Treat `hooks.token` holders as full-trust callers for the hook ingress surface on that gateway. Hook payload content is still untrusted, but this is not a separate non-owner auth boundary.
 
 ## Endpoints
 
@@ -205,6 +206,7 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 
 - Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 - Use a dedicated hook token; do not reuse gateway auth tokens.
+- Prefer a dedicated hook agent with strict `tools.profile` and sandboxing so hook ingress has a narrower blast radius.
 - Repeated auth failures are rate-limited per client address to slow brute-force attempts.
 - If you use multi-agent routing, set `hooks.allowedAgentIds` to limit explicit `agentId` selection.
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.
