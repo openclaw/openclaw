@@ -10,10 +10,10 @@ import {
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channels/command-gating.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
-import type { DiscordAccountConfig } from "../../../../src/config/types.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatMention } from "../mentions.js";
 import {
   isDiscordGroupAllowedByPolicy,

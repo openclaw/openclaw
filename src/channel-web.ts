@@ -7,15 +7,11 @@ export {
   monitorWebChannel,
   resolveHeartbeatRecipients,
   runWebHeartbeatOnce,
-} from "./plugin-sdk-internal/whatsapp.js";
-export {
-  extractMediaPlaceholder,
-  extractText,
-  monitorWebInbox,
-} from "./plugin-sdk-internal/whatsapp.js";
-export { loginWeb } from "./plugin-sdk-internal/whatsapp.js";
-export { loadWebMedia, optimizeImageToJpeg } from "./plugin-sdk-internal/whatsapp.js";
-export { sendMessageWhatsApp } from "./plugin-sdk-internal/whatsapp.js";
+} from "./plugin-sdk/whatsapp.js";
+export { extractMediaPlaceholder, extractText, monitorWebInbox } from "./plugin-sdk/whatsapp.js";
+export { loginWeb } from "./plugin-sdk/whatsapp.js";
+export { loadWebMedia, optimizeImageToJpeg } from "./plugin-sdk/whatsapp.js";
+export { sendMessageWhatsApp } from "./plugin-sdk/whatsapp.js";
 export {
   createWaSocket,
   formatError,
@@ -26,4 +22,4 @@ export {
   WA_WEB_AUTH_DIR,
   waitForWaConnection,
   webAuthExists,
-} from "./plugin-sdk-internal/whatsapp.js";
+} from "./plugin-sdk/whatsapp.js";

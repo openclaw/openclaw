@@ -1,7 +1,5 @@
-import {
-  createPluginRuntimeStore,
-  type PluginRuntime,
-} from "../../../src/plugin-sdk-internal/core.js";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
 const { setRuntime: setSignalRuntime, getRuntime: getSignalRuntime } =
   createPluginRuntimeStore<PluginRuntime>("Signal runtime not initialized");

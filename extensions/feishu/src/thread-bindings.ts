@@ -1,20 +1,17 @@
-import { resolveThreadBindingConversationIdFromBindingId } from "../../../src/channels/thread-binding-id.js";
+import { resolveThreadBindingConversationIdFromBindingId } from "openclaw/plugin-sdk/channel-runtime";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
-} from "../../../src/channels/thread-bindings-policy.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+} from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingRecord,
-} from "../../../src/infra/outbound/session-binding-service.js";
-import {
-  normalizeAccountId,
-  resolveAgentIdFromSessionKey,
-} from "../../../src/routing/session-key.js";
-import { resolveGlobalSingleton } from "../../../src/shared/global-singleton.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 
 type FeishuBindingTargetKind = "subagent" | "acp";
 

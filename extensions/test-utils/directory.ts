@@ -1,4 +1,4 @@
-import type { ChannelDirectoryAdapter } from "../../src/channels/plugins/types.js";
+import type { ChannelDirectoryAdapter } from "openclaw/plugin-sdk/channel-runtime";
 
 export function createDirectoryTestRuntime() {
   return {

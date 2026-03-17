@@ -1,9 +1,9 @@
-import { chunkTextWithMode, resolveChunkMode } from "../../../../src/auto-reply/chunk.js";
-import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import { resolveMarkdownTableMode } from "../../../../src/config/markdown-tables.js";
-import { convertMarkdownTables } from "../../../../src/markdown/tables.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { chunkTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import type { createIMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
 import type { SentMessageCache } from "./echo-cache.js";

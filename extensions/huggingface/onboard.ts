@@ -2,12 +2,12 @@ import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
-} from "../../src/agents/huggingface-models.js";
+} from "openclaw/plugin-sdk/provider-models";
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalog,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
 

@@ -1,4 +1,4 @@
-import { type ChannelPlugin } from "../../../src/plugin-sdk-internal/imessage.js";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/imessage";
 import { type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 

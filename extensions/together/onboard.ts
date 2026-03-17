@@ -2,12 +2,12 @@ import {
   buildTogetherModelDefinition,
   TOGETHER_BASE_URL,
   TOGETHER_MODEL_CATALOG,
-} from "../../src/agents/together-models.js";
+} from "openclaw/plugin-sdk/provider-models";
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalog,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 

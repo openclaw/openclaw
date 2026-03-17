@@ -1,5 +1,5 @@
-import { isRecord } from "../../../src/utils.js";
-import { fetchWithTimeout } from "../../../src/utils/fetch-timeout.js";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
 import type {
   AuditTelegramGroupMembershipParams,
   TelegramGroupMembershipAudit,

@@ -1,6 +1,6 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { OPENCODE_GO_DEFAULT_MODEL_REF } from "../../src/commands/opencode-go-model-default.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { OPENCODE_GO_DEFAULT_MODEL_REF } from "openclaw/plugin-sdk/provider-models";
 import { applyOpencodeGoConfig } from "./onboard.js";
 
 const PROVIDER_ID = "opencode-go";

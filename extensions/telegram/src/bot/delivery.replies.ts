@@ -1,25 +1,22 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "../../../../src/auto-reply/chunk.js";
-import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
-import type { ReplyToMode } from "../../../../src/config/config.js";
-import type { MarkdownTableMode } from "../../../../src/config/types.base.js";
-import { danger, logVerbose } from "../../../../src/globals.js";
-import { fireAndForgetHook } from "../../../../src/hooks/fire-and-forget.js";
-import {
-  createInternalHookEvent,
-  triggerInternalHook,
-} from "../../../../src/hooks/internal-hooks.js";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
+import { createInternalHookEvent, triggerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import {
   buildCanonicalSentMessageHookContext,
   toInternalMessageSentContext,
   toPluginMessageContext,
   toPluginMessageSentEvent,
-} from "../../../../src/hooks/message-hook-mappers.js";
-import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { buildOutboundMediaLoadOptions } from "../../../../src/media/load-options.js";
-import { isGifMedia, kindFromMime } from "../../../../src/media/mime.js";
-import { getGlobalHookRunner } from "../../../../src/plugins/hook-runner-global.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+} from "openclaw/plugin-sdk/hook-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMedia } from "../../../whatsapp/src/media.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";

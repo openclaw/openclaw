@@ -3,4 +3,4 @@ export {
   resolveThreadBindingFarewellText,
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
-} from "../../../../src/channels/thread-bindings-messages.js";
+} from "openclaw/plugin-sdk/channel-runtime";

@@ -3,12 +3,12 @@ import {
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
-} from "../../src/agents/venice-models.js";
+} from "openclaw/plugin-sdk/provider-models";
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalog,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export { VENICE_DEFAULT_MODEL_REF };
 

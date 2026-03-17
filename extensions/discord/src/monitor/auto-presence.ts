@@ -6,12 +6,12 @@ import {
   resolveProfilesUnavailableReason,
   type AuthProfileFailureReason,
   type AuthProfileStore,
-} from "../../../../src/agents/auth-profiles.js";
+} from "openclaw/plugin-sdk/agent-runtime";
 import type {
   DiscordAccountConfig,
   DiscordAutoPresenceConfig,
-} from "../../../../src/config/config.js";
-import { warn } from "../../../../src/globals.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
 const DEFAULT_CUSTOM_ACTIVITY_TYPE = 4;

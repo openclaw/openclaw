@@ -4,4 +4,4 @@ export {
   listNativeCommandSpecsForConfig,
   parseCommandArgs,
   resolveCommandArgMenu,
-} from "../../../../src/auto-reply/commands-registry.js";
+} from "openclaw/plugin-sdk/reply-runtime";

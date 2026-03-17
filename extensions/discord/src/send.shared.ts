@@ -9,15 +9,15 @@ import {
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
-import type { ChunkMode } from "../../../src/auto-reply/chunk.js";
-import { loadConfig, type OpenClawConfig } from "../../../src/config/config.js";
-import type { RetryRunner } from "../../../src/infra/retry-policy.js";
-import { buildOutboundMediaLoadOptions } from "../../../src/media/load-options.js";
+import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { RetryRunner } from "openclaw/plugin-sdk/infra-runtime";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizePollDurationHours,
   normalizePollInput,
   type PollInput,
-} from "../../../src/polls.js";
+} from "openclaw/plugin-sdk/media-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { loadWebMedia } from "../../whatsapp/src/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";

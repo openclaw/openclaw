@@ -4,8 +4,8 @@ import {
   hasConfiguredSecretInput,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/mattermost";
-import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup";
 import { listMattermostAccountIds } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {

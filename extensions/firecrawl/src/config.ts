@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { normalizeResolvedSecretInputString } from "../../../src/config/types.secrets.js";
-import { normalizeSecretInput } from "../../../src/utils/normalize-secret-input.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeSecretInput } from "openclaw/plugin-sdk/provider-auth";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 export const DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS = 30;

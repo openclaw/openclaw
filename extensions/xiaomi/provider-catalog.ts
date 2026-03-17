@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
 
 const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/anthropic";
 export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";

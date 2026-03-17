@@ -1,6 +1,8 @@
-import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../../src/agents/opencode-zen-models.js";
-import { applyAgentDefaultModelPrimary } from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "openclaw/plugin-sdk/provider-models";
+import {
+  applyAgentDefaultModelPrimary,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export { OPENCODE_ZEN_DEFAULT_MODEL_REF };
 

@@ -9,7 +9,7 @@ import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-} from "../../../src/line/accounts.js";
+} from "openclaw/plugin-sdk/line";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 

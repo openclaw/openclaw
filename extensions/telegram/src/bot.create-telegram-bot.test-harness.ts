@@ -1,9 +1,9 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { MockFn } from "openclaw/plugin-sdk/test-utils";
 import { beforeEach, vi } from "vitest";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
-import type { MsgContext } from "../../../src/auto-reply/templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../../../src/auto-reply/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
@@ -31,16 +31,16 @@ const { loadConfig } = vi.hoisted((): { loadConfig: AnyMock } => ({
 export function getLoadConfigMock(): AnyMock {
   return loadConfig;
 }
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig,
   };
 });
 
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     resolveStorePath: vi.fn((storePath) => storePath ?? sessionStorePath),
@@ -68,7 +68,7 @@ export function getUpsertChannelPairingRequestMock(): AnyAsyncMock {
   return upsertChannelPairingRequest;
 }
 
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 }));
@@ -78,7 +78,7 @@ const skillCommandsHoisted = vi.hoisted(() => ({
 }));
 export const listSkillCommandsForAgents = skillCommandsHoisted.listSkillCommandsForAgents;
 
-vi.mock("../../../src/auto-reply/skill-commands.js", () => ({
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   listSkillCommandsForAgents,
 }));
 
@@ -87,7 +87,7 @@ const systemEventsHoisted = vi.hoisted(() => ({
 }));
 export const enqueueSystemEventSpy: AnyMock = systemEventsHoisted.enqueueSystemEventSpy;
 
-vi.mock("../../../src/infra/system-events.js", () => ({
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
   enqueueSystemEvent: enqueueSystemEventSpy,
 }));
 
@@ -209,7 +209,7 @@ export const replySpy: MockFn<
   return undefined;
 });
 
-vi.mock("../../../src/auto-reply/reply.js", () => ({
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   getReplyFromConfig: replySpy,
   __replySpy: replySpy,
 }));

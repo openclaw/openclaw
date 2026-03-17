@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import type { WebSearchProviderPlugin } from "../../../src/plugins/types.js";
+import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/plugin-runtime";
 import { runFirecrawlSearch } from "./firecrawl-client.js";
 
 const GenericFirecrawlSearchSchema = Type.Object(

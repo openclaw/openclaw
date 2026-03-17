@@ -1,15 +1,15 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
-} from "../../../../src/agents/tools/common.js";
-import { readDiscordParentIdParam } from "../../../../src/agents/tools/discord-actions-shared.js";
-import { handleDiscordAction } from "../../../../src/agents/tools/discord-actions.js";
-import { resolveReactionMessageId } from "../../../../src/channels/plugins/actions/reaction-message-id.js";
-import type { ChannelMessageActionContext } from "../../../../src/channels/plugins/types.js";
-import { normalizeInteractiveReply } from "../../../../src/interactive/payload.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import { readDiscordParentIdParam } from "openclaw/plugin-sdk/agent-runtime";
+import { handleDiscordAction } from "openclaw/plugin-sdk/agent-runtime";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-runtime";
+import { normalizeInteractiveReply } from "openclaw/plugin-sdk/channel-runtime";
 import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";

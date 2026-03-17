@@ -12,32 +12,32 @@ const mocks = vi.hoisted(() => ({
   resolveStorePathMock: vi.fn(),
 }));
 
-vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchReplyWithDispatcher: (...args: unknown[]) => mocks.dispatchMock(...args),
 }));
 
-vi.mock("../../../../src/pairing/pairing-store.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore: (...args: unknown[]) => mocks.readAllowFromStoreMock(...args),
   upsertChannelPairingRequest: (...args: unknown[]) => mocks.upsertPairingRequestMock(...args),
 }));
 
-vi.mock("../../../../src/routing/resolve-route.js", () => ({
+vi.mock("openclaw/plugin-sdk/routing", () => ({
   resolveAgentRoute: (...args: unknown[]) => mocks.resolveAgentRouteMock(...args),
 }));
 
-vi.mock("../../../../src/auto-reply/reply/inbound-context.js", () => ({
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   finalizeInboundContext: (...args: unknown[]) => mocks.finalizeInboundContextMock(...args),
 }));
 
-vi.mock("../../../../src/channels/conversation-label.js", () => ({
+vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
   resolveConversationLabel: (...args: unknown[]) => mocks.resolveConversationLabelMock(...args),
 }));
 
-vi.mock("../../../../src/channels/reply-prefix.js", () => ({
+vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
   createReplyPrefixOptions: (...args: unknown[]) => mocks.createReplyPrefixOptionsMock(...args),
 }));
 
-vi.mock("../../../../src/config/sessions.js", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   recordSessionMetaFromInbound: (...args: unknown[]) =>
     mocks.recordSessionMetaFromInboundMock(...args),
   resolveStorePath: (...args: unknown[]) => mocks.resolveStorePathMock(...args),

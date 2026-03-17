@@ -1,30 +1,30 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import SlackBolt, * as SlackBoltNamespace from "@slack/bolt";
-import { resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../../../src/auto-reply/reply/history.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   mergeAllowlist,
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
-} from "../../../../src/channels/allowlists/resolve-utils.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
+} from "openclaw/plugin-sdk/channel-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "../../../../src/config/runtime-group-policy.js";
-import type { SessionScope } from "../../../../src/config/sessions.js";
-import { normalizeResolvedSecretInputString } from "../../../../src/config/types.secrets.js";
-import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
-import { warn } from "../../../../src/globals.js";
-import { computeBackoff, sleepWithAbort } from "../../../../src/infra/backoff.js";
-import { installRequestBodyLimitGuard } from "../../../../src/infra/http-body.js";
-import { normalizeMainKey } from "../../../../src/routing/session-key.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
-import { normalizeStringEntries } from "../../../../src/shared/string-normalization.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/config-runtime";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
+import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
+import { warn } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";

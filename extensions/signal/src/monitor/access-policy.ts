@@ -1,9 +1,9 @@
-import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
-import { upsertChannelPairingRequest } from "../../../../src/pairing/pairing-store.js";
+import { issuePairingChallenge } from "openclaw/plugin-sdk/conversation-runtime";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
-} from "../../../../src/security/dm-policy-shared.js";
+} from "openclaw/plugin-sdk/security-runtime";
 import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
 
 type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";

@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "../../../src/plugin-sdk-internal/core.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
   autoBindSpawnedDiscordSubagent,

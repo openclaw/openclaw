@@ -1,5 +1,5 @@
 import { Routes } from "discord-api-types/v10";
-import { loadConfig } from "../../../src/config/config.js";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildReactionIdentifier,
   createDiscordClient,

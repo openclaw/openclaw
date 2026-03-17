@@ -1,6 +1,6 @@
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
-import { isAbortRequestText } from "../../../src/auto-reply/reply/abort.js";
-import { isBtwRequestText } from "../../../src/auto-reply/reply/btw-command.js";
+import { isAbortRequestText } from "openclaw/plugin-sdk/reply-runtime";
+import { isBtwRequestText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 
 export type TelegramSequentialKeyContext = {

@@ -4,13 +4,13 @@ import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
-} from "../../../../src/agents/tools/common.js";
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
-} from "../../../../src/agents/tools/discord-actions-moderation-shared.js";
-import { handleDiscordAction } from "../../../../src/agents/tools/discord-actions.js";
-import type { ChannelMessageActionContext } from "../../../../src/channels/plugins/types.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import { handleDiscordAction } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-runtime";
 
 type Ctx = Pick<
   ChannelMessageActionContext,

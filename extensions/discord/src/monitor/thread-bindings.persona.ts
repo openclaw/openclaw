@@ -1,4 +1,4 @@
-import { SYSTEM_MARK } from "../../../../src/infra/system-message.js";
+import { SYSTEM_MARK } from "openclaw/plugin-sdk/infra-runtime";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const THREAD_BINDING_PERSONA_MAX_CHARS = 80;

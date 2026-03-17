@@ -29,7 +29,7 @@ import {
   listTelegramAccountIds,
   normalizeTelegramAllowFromEntry,
   resolveTelegramAccount,
-} from "../plugin-sdk-internal/telegram.js";
+} from "../plugin-sdk/telegram.js";
 import {
   formatChannelAccountsDefaultPath,
   formatSetExplicitDefaultInstruction,
