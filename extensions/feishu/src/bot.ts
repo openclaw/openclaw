@@ -1677,7 +1677,32 @@ export async function handleFeishuMessage(params: {
           }))
         : undefined;
 
-<<<<<<< HEAD
+    const topicThreadId = isGroup
+      ? ctx.rootId?.trim() || ctx.threadId?.trim() || undefined
+      : undefined;
+    const isTopicScopedSession =
+      isGroup &&
+      (groupSession?.groupSessionScope === "group_topic" ||
+        groupSession?.groupSessionScope === "group_topic_sender");
+    const topicLabel =
+      isTopicScopedSession && ctx.rootId
+        ? await resolveFeishuTopicLabel({
+            cfg,
+            account,
+            topicRootId: ctx.rootId,
+            log,
+          })
+        : undefined;
+    const topicThreadLabel =
+      isTopicScopedSession && topicThreadId
+        ? buildFeishuTopicThreadLabel({
+            groupDisplayName,
+            chatId: ctx.chatId,
+            topicLabel,
+            topicThreadId,
+          })
+        : undefined;
+
     const threadContextBySessionKey = new Map<
       string,
       {
@@ -1722,10 +1747,7 @@ export async function handleFeishuMessage(params: {
         threadHistoryBody?: string;
         threadLabel?: string;
       } = {
-        threadLabel:
-          (ctx.rootId || ctx.threadId) && isTopicSessionForThread
-            ? `Feishu thread in ${ctx.chatId}`
-            : undefined,
+        threadLabel: topicThreadLabel,
       };
 
       if (!(ctx.rootId || ctx.threadId) || !isTopicSessionForThread) {
@@ -1801,7 +1823,9 @@ export async function handleFeishuMessage(params: {
 
         threadContext.threadStarterBody = threadStarterBody;
         threadContext.threadHistoryBody =
-          historyParts.length > 0 ? historyParts.join("\n\n") : undefined;
+          historyParts.length > 0 ? historyParts.join("
+
+") : undefined;
         log(
           `feishu[${account.accountId}]: populated thread bootstrap with starter=${threadStarterBody ? "yes" : "no"} history=${historyMessages.length}`,
         );
@@ -1812,33 +1836,6 @@ export async function handleFeishuMessage(params: {
       threadContextBySessionKey.set(agentSessionKey, threadContext);
       return threadContext;
     };
-=======
-    const topicThreadId = isGroup
-      ? ctx.rootId?.trim() || ctx.threadId?.trim() || undefined
-      : undefined;
-    const isTopicScopedSession =
-      isGroup &&
-      (groupSession?.groupSessionScope === "group_topic" ||
-        groupSession?.groupSessionScope === "group_topic_sender");
-    const topicLabel =
-      isTopicScopedSession && ctx.rootId
-        ? await resolveFeishuTopicLabel({
-            cfg,
-            account,
-            topicRootId: ctx.rootId,
-            log,
-          })
-        : undefined;
-    const topicThreadLabel =
-      isTopicScopedSession && topicThreadId
-        ? buildFeishuTopicThreadLabel({
-            groupDisplayName,
-            chatId: ctx.chatId,
-            topicLabel,
-            topicThreadId,
-          })
-        : undefined;
->>>>>>> 526f0a4100 (feat(feishu): 恢复群名与话题标签显示)
 
     // --- Shared context builder for dispatch ---
     const buildCtxPayloadForAgent = async (
@@ -1862,8 +1859,6 @@ export async function handleFeishuMessage(params: {
         AccountId: agentAccountId,
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? groupDisplayName : undefined,
-        ThreadLabel: topicThreadLabel,
-        MessageThreadId: topicThreadId,
         SenderName: ctx.senderName ?? ctx.senderOpenId,
         SenderId: ctx.senderOpenId,
         Provider: "feishu" as const,
