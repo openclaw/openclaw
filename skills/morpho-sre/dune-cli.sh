@@ -242,7 +242,8 @@ case "${1:-}" in
     exit 0
     ;;
   docs)
-    # docs search does not require auth
+    # docs search does not require auth but still validate args
+    validate_args "$@"
     exec "$DUNE_CLI_BIN" "$@"
     ;;
 esac
