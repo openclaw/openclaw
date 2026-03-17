@@ -30,7 +30,7 @@ Docs: https://docs.openclaw.ai
 - secrets: harden read-only SecretRef command paths and diagnostics. (#47794) Thanks @joshavant.
 - Browser/existing-session: support `browser.profiles.<name>.userDataDir` so Chrome DevTools MCP can attach to Brave, Edge, and other Chromium-based browsers through their own user data directories. (#48170) Thanks @velvet-shark.
 - Skills/prompt budget: preserve all registered skills via a compact catalog fallback before dropping entries when the full prompt format exceeds `maxSkillsPromptChars`. (#47553) Thanks @snese.
-- Skills/gitlawb: add bundled gitlawb skill for decentralized git operations via `gl` CLI, covering repos, pull requests, issues, agent task delegation, and Base L2 name registry.
+- Skills/gitlawb: add bundled gitlawb skill for decentralized git operations via `gl` CLI, covering repos, pull requests, issues, agent task delegation, and Base L2 name registry. (#48451) Thanks @kevincodex1.
 
 ### Breaking
 
