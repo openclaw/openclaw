@@ -250,6 +250,15 @@ export async function preflightDiscordMessage(
     return null;
   }
 
+  message = await hydrateDiscordMessageIfEmpty({
+    client: params.client,
+    message,
+    messageChannelId,
+  });
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+
   const pluralkitConfig = params.discordConfig?.pluralkit;
   const webhookId = resolveDiscordWebhookId(message);
   const shouldCheckPluralKit = Boolean(pluralkitConfig?.enabled) && !webhookId;
@@ -287,14 +296,6 @@ export async function preflightDiscordMessage(
   }
   const isDirectMessage = channelInfo?.type === ChannelType.DM;
   const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
-  message = await hydrateDiscordMessageIfEmpty({
-    client: params.client,
-    message,
-    messageChannelId,
-  });
-  if (isPreflightAborted(params.abortSignal)) {
-    return null;
-  }
   const data = message === params.data.message ? params.data : { ...params.data, message };
   logDebug(
     `[discord-preflight] channelId=${messageChannelId} guild_id=${params.data.guild_id} channelType=${channelInfo?.type} isGuild=${isGuildMessage} isDM=${isDirectMessage} isGroupDm=${isGroupDm}`,

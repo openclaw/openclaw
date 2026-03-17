@@ -201,10 +201,10 @@ async function fetchDiscordGatewayInfoWithTimeout(params: {
   }
 }
 
-function resolveGatewayInfoWithFallback(params: {
-  runtime?: RuntimeEnv;
-  error: unknown;
-}): APIGatewayBotInfo {
+function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; error: unknown }): {
+  info: APIGatewayBotInfo;
+  usedFallback: boolean;
+} {
   if (!isTransientGatewayMetadataError(params.error)) {
     throw params.error;
   }
@@ -212,7 +212,10 @@ function resolveGatewayInfoWithFallback(params: {
   params.runtime?.log?.(
     `discord: gateway metadata lookup failed transiently; using default gateway url (${message})`,
   );
-  return createDefaultGatewayInfo();
+  return {
+    info: createDefaultGatewayInfo(),
+    usedFallback: true,
+  };
 }
 
 function createGatewayPlugin(params: {
@@ -227,17 +230,26 @@ function createGatewayPlugin(params: {
   runtime?: RuntimeEnv;
 }): GatewayPlugin {
   class SafeGatewayPlugin extends GatewayPlugin {
+    private gatewayInfoUsedFallback = false;
+
     constructor() {
       super(params.options);
     }
 
     override async registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
-      if (!this.gatewayInfo) {
-        this.gatewayInfo = await fetchDiscordGatewayInfoWithTimeout({
+      if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {
+        const resolved = await fetchDiscordGatewayInfoWithTimeout({
           token: client.options.token,
           fetchImpl: params.fetchImpl,
           fetchInit: params.fetchInit,
-        }).catch((error) => resolveGatewayInfoWithFallback({ runtime: params.runtime, error }));
+        })
+          .then((info) => ({
+            info,
+            usedFallback: false,
+          }))
+          .catch((error) => resolveGatewayInfoWithFallback({ runtime: params.runtime, error }));
+        this.gatewayInfo = resolved.info;
+        this.gatewayInfoUsedFallback = resolved.usedFallback;
       }
       return super.registerClient(client);
     }

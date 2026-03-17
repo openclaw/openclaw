@@ -313,4 +313,46 @@ describe("createDiscordGatewayPlugin", () => {
       expect.stringContaining("discord: gateway metadata lookup failed transiently"),
     );
   });
+
+  it("refreshes fallback gateway metadata on the next register attempt", async () => {
+    const runtime = createRuntime();
+    globalFetchMock
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () =>
+          "upstream connect error or disconnect/reset before headers. reset reason: overflow",
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            url: "wss://gateway.discord.gg/?v=10",
+            shards: 8,
+            session_start_limit: {
+              total: 1000,
+              remaining: 999,
+              reset_after: 120_000,
+              max_concurrency: 16,
+            },
+          }),
+      } as Response);
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    await registerGatewayClient(plugin);
+    await registerGatewayClient(plugin);
+
+    expect(globalFetchMock).toHaveBeenCalledTimes(2);
+    expect(baseRegisterClientSpy).toHaveBeenCalledTimes(2);
+    expect(
+      (plugin as unknown as { gatewayInfo?: { url?: string; shards?: number } }).gatewayInfo,
+    ).toMatchObject({
+      url: "wss://gateway.discord.gg/?v=10",
+      shards: 8,
+    });
+  });
 });
