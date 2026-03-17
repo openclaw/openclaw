@@ -1,16 +1,14 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
-  createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
+  createScopedAccountConfigAccessors,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
-  buildChannelConfigSchema,
   getChatChannelMeta,
   normalizeAccountId,
-  TelegramConfigSchema,
-  type ChannelPlugin,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/telegram";
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/core";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
@@ -73,6 +71,7 @@ export const telegramConfigBase = createScopedChannelConfigBase<ResolvedTelegram
 });
 
 export function createTelegramPluginBase(params: {
+  configSchema: Pick<ChannelPlugin<ResolvedTelegramAccount>, "configSchema">["configSchema"];
   setupWizard: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setup"]>;
 }): Pick<
@@ -96,7 +95,7 @@ export function createTelegramPluginBase(params: {
       blockStreaming: true,
     },
     reload: { configPrefixes: ["channels.telegram"] },
-    configSchema: buildChannelConfigSchema(TelegramConfigSchema),
+    configSchema: params.configSchema,
     config: {
       ...telegramConfigBase,
       isConfigured: (account, cfg) => {

@@ -1,19 +1,19 @@
 import {
+  formatTrimmedAllowFromEntries,
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
-  buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  formatTrimmedAllowFromEntries,
   getChatChannelMeta,
-  IMessageConfigSchema,
-  resolveIMessageConfigAllowFrom,
-  resolveIMessageConfigDefaultTo,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/imessage";
+} from "openclaw/plugin-sdk/core";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
@@ -33,6 +33,7 @@ export const imessageSetupWizard = createIMessageSetupWizardProxy(async () => ({
 }));
 
 export function createIMessagePluginBase(params: {
+  configSchema: Pick<ChannelPlugin<ResolvedIMessageAccount>, "configSchema">["configSchema"];
   setupWizard?: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setup"]>;
 }): Pick<
@@ -60,7 +61,7 @@ export function createIMessagePluginBase(params: {
       media: true,
     },
     reload: { configPrefixes: ["channels.imessage"] },
-    configSchema: buildChannelConfigSchema(IMessageConfigSchema),
+    configSchema: params.configSchema,
     config: {
       listAccountIds: (cfg) => listIMessageAccountIds(cfg),
       resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
