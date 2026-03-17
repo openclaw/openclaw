@@ -832,115 +832,126 @@ describe("handleCommands /config configWrites gating", () => {
     expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
   });
 
-  it("blocks /config set from gateway clients without operator.admin", async () => {
-    const cfg = {
+  it("enforces gateway client permissions for /config commands", async () => {
+    const baseCfg = {
       commands: { config: true, text: true },
     } as OpenClawConfig;
-    const params = buildParams('/config set messages.ackReaction=":)"', cfg, {
-      Provider: INTERNAL_MESSAGE_CHANNEL,
-      Surface: INTERNAL_MESSAGE_CHANNEL,
-      GatewayClientScopes: ["operator.write"],
-    });
-    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("requires operator.admin");
-  });
-
-  it("keeps /config show available to gateway operator.write clients", async () => {
-    const cfg = {
-      commands: { config: true, text: true },
-    } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: { messages: { ackReaction: ":)" } },
-    });
-    const params = buildParams("/config show messages.ackReaction", cfg, {
-      Provider: INTERNAL_MESSAGE_CHANNEL,
-      Surface: INTERNAL_MESSAGE_CHANNEL,
-      GatewayClientScopes: ["operator.write"],
-    });
-    params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-    params.command.senderIsOwner = false;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Config messages.ackReaction");
-  });
-
-  it("keeps /config set working for gateway operator.admin clients", async () => {
-    await withTempConfigPath({ messages: { ackReaction: ":)" } }, async (configPath) => {
-      const cfg = {
-        commands: { config: true, text: true },
-      } as OpenClawConfig;
-      readConfigFileSnapshotMock.mockResolvedValueOnce({
-        valid: true,
-        parsed: { messages: { ackReaction: ":)" } },
-      });
-      validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
-        ok: true,
-        config,
-      }));
-      const params = buildParams('/config set messages.ackReaction=":D"', cfg, {
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
-        GatewayClientScopes: ["operator.write", "operator.admin"],
-      });
-      params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-      params.command.senderIsOwner = true;
-      const result = await handleCommands(params);
-      expect(result.shouldContinue).toBe(false);
-      expect(result.reply?.text).toContain("Config updated");
-      const written = await readJsonFile<OpenClawConfig>(configPath);
-      expect(written.messages?.ackReaction).toBe(":D");
-    });
-  });
-
-  it("keeps /config set working for gateway operator.admin on protected account paths", async () => {
-    const initialConfig = {
-      channels: {
-        telegram: {
-          accounts: {
-            work: { enabled: true, configWrites: false },
-          },
+    const cases = [
+      {
+        name: "blocks /config set from gateway clients without operator.admin",
+        run: async () => {
+          const params = buildParams('/config set messages.ackReaction=":)"', baseCfg, {
+            Provider: INTERNAL_MESSAGE_CHANNEL,
+            Surface: INTERNAL_MESSAGE_CHANNEL,
+            GatewayClientScopes: ["operator.write"],
+          });
+          params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+          params.command.senderIsOwner = true;
+          const result = await handleCommands(params);
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply?.text).toContain("requires operator.admin");
         },
       },
-    };
-    await withTempConfigPath(initialConfig, async (configPath) => {
-      readConfigFileSnapshotMock.mockResolvedValueOnce({
-        valid: true,
-        parsed: structuredClone(initialConfig),
-      });
-      validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
-        ok: true,
-        config,
-      }));
-      const params = buildParams(
-        "/config set channels.telegram.accounts.work.enabled=false",
-        {
-          commands: { config: true, text: true },
-          channels: {
-            telegram: {
-              accounts: {
-                work: { enabled: true, configWrites: false },
+      {
+        name: "keeps /config show available to gateway operator.write clients",
+        run: async () => {
+          readConfigFileSnapshotMock.mockResolvedValueOnce({
+            valid: true,
+            parsed: { messages: { ackReaction: ":)" } },
+          });
+          const params = buildParams("/config show messages.ackReaction", baseCfg, {
+            Provider: INTERNAL_MESSAGE_CHANNEL,
+            Surface: INTERNAL_MESSAGE_CHANNEL,
+            GatewayClientScopes: ["operator.write"],
+          });
+          params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+          params.command.senderIsOwner = false;
+          const result = await handleCommands(params);
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply?.text).toContain("Config messages.ackReaction");
+        },
+      },
+      {
+        name: "keeps /config set working for gateway operator.admin clients",
+        run: async () => {
+          await withTempConfigPath({ messages: { ackReaction: ":)" } }, async (configPath) => {
+            readConfigFileSnapshotMock.mockResolvedValueOnce({
+              valid: true,
+              parsed: { messages: { ackReaction: ":)" } },
+            });
+            validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+              ok: true,
+              config,
+            }));
+            const params = buildParams('/config set messages.ackReaction=":D"', baseCfg, {
+              Provider: INTERNAL_MESSAGE_CHANNEL,
+              Surface: INTERNAL_MESSAGE_CHANNEL,
+              GatewayClientScopes: ["operator.write", "operator.admin"],
+            });
+            params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+            params.command.senderIsOwner = true;
+            const result = await handleCommands(params);
+            expect(result.shouldContinue).toBe(false);
+            expect(result.reply?.text).toContain("Config updated");
+            const written = await readJsonFile<OpenClawConfig>(configPath);
+            expect(written.messages?.ackReaction).toBe(":D");
+          });
+        },
+      },
+      {
+        name: "keeps /config set working for gateway operator.admin on protected account paths",
+        run: async () => {
+          const initialConfig = {
+            channels: {
+              telegram: {
+                accounts: {
+                  work: { enabled: true, configWrites: false },
+                },
               },
             },
-          },
-        } as OpenClawConfig,
-        {
-          Provider: INTERNAL_MESSAGE_CHANNEL,
-          Surface: INTERNAL_MESSAGE_CHANNEL,
-          GatewayClientScopes: ["operator.write", "operator.admin"],
+          };
+          await withTempConfigPath(initialConfig, async (configPath) => {
+            readConfigFileSnapshotMock.mockResolvedValueOnce({
+              valid: true,
+              parsed: structuredClone(initialConfig),
+            });
+            validateConfigObjectWithPluginsMock.mockImplementation((config: unknown) => ({
+              ok: true,
+              config,
+            }));
+            const params = buildParams(
+              "/config set channels.telegram.accounts.work.enabled=false",
+              {
+                commands: { config: true, text: true },
+                channels: {
+                  telegram: {
+                    accounts: {
+                      work: { enabled: true, configWrites: false },
+                    },
+                  },
+                },
+              } as OpenClawConfig,
+              {
+                Provider: INTERNAL_MESSAGE_CHANNEL,
+                Surface: INTERNAL_MESSAGE_CHANNEL,
+                GatewayClientScopes: ["operator.write", "operator.admin"],
+              },
+            );
+            params.command.channel = INTERNAL_MESSAGE_CHANNEL;
+            params.command.senderIsOwner = true;
+            const result = await handleCommands(params);
+            expect(result.shouldContinue).toBe(false);
+            expect(result.reply?.text).toContain("Config updated");
+            const written = await readJsonFile<OpenClawConfig>(configPath);
+            expect(written.channels?.telegram?.accounts?.work?.enabled).toBe(false);
+          });
         },
-      );
-      params.command.channel = INTERNAL_MESSAGE_CHANNEL;
-      params.command.senderIsOwner = true;
-      const result = await handleCommands(params);
-      expect(result.shouldContinue).toBe(false);
-      expect(result.reply?.text).toContain("Config updated");
-      const written = await readJsonFile<OpenClawConfig>(configPath);
-      expect(written.channels?.telegram?.accounts?.work?.enabled).toBe(false);
-    });
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await testCase.run();
+    }
   });
 });
 
