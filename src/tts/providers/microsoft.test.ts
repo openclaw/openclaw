@@ -35,7 +35,10 @@ describe("listMicrosoftVoices", () => {
         id: "en-US-AvaNeural",
         name: "Microsoft Ava Online (Natural) - English (United States)",
         category: "General",
-        description: "en-US · Female · Friendly, Positive",
+        description: "Friendly, Positive",
+        locale: "en-US",
+        gender: "Female",
+        personalities: ["Friendly", "Positive"],
       },
     ]);
     expect(globalThis.fetch).toHaveBeenCalledWith(
