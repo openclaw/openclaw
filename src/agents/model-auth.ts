@@ -356,6 +356,22 @@ export async function resolveApiKeyForProvider(params: {
     return { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" };
   }
 
+  // Fix for #43945: Handle custom-named Ollama providers with "ollama-local" marker
+  // When resolveUsableCustomProviderApiKey returns null due to "ollama-local" being
+  // classified as non-secret marker, but the provider uses api: "ollama", synthesize
+  // the auth key directly
+  const providerConfig = resolveProviderConfig(cfg, provider);
+  if (!customKey && providerConfig?.api === "ollama") {
+    const rawApiKey = getCustomProviderApiKey(cfg, provider);
+    if (rawApiKey === OLLAMA_LOCAL_AUTH_MARKER) {
+      return {
+        apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+        source: `models.providers.${provider} (ollama-local marker)`,
+        mode: "api-key",
+      };
+    }
+  }
+
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
