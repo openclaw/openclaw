@@ -83,6 +83,10 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     releasePinnedPluginHttpRouteRegistry();
   });
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    releasePinnedPluginHttpRouteRegistry();
+  });
 
   it("carries forward httpRoutes when new registry has none", () => {
     const oldRegistry = createEmptyPluginRegistry();
@@ -117,5 +121,53 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(registry);
     setActivePluginRegistry(registry);
     expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+  });
+
+  it("carries forward when cacheKey is the same", () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    const carriedRoute = makeRoute("/same-key");
+    oldRegistry.httpRoutes.push(carriedRoute);
+    setActivePluginRegistry(oldRegistry, "shared-key");
+
+    const newRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(newRegistry, "shared-key");
+
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+    expect(getActivePluginRegistry()?.httpRoutes[0]).toBe(carriedRoute);
+  });
+
+  it("does not carry forward when cacheKey is different", () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    oldRegistry.httpRoutes.push(makeRoute("/old-key"));
+    setActivePluginRegistry(oldRegistry, "key-a");
+
+    const newRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(newRegistry, "key-b");
+
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(0);
+  });
+
+  it("treats omitted/undefined cacheKey as null and carries forward", () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    const carriedRoute = makeRoute("/null-key");
+    oldRegistry.httpRoutes.push(carriedRoute);
+    setActivePluginRegistry(oldRegistry);
+
+    const newRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(newRegistry, undefined);
+
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
+    expect(getActivePluginRegistry()?.httpRoutes[0]).toBe(carriedRoute);
+  });
+
+  it("does not carry forward when previous key is null and next key is explicit", () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    oldRegistry.httpRoutes.push(makeRoute("/null-to-explicit"));
+    setActivePluginRegistry(oldRegistry);
+
+    const newRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(newRegistry, "k1");
+
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(0);
   });
 });
