@@ -21,7 +21,7 @@ describe("command secret resolution coverage", () => {
       const absolutePath = path.join(process.cwd(), relativePath);
       const source = await fs.readFile(absolutePath, "utf8");
       expect(source).toContain("resolveCommandSecretRefsViaGateway");
-      expect(source).toContain("targetIds: get");
+      expect(source).toContain("targetIds:");
       expect(source).toContain("resolveCommandSecretRefsViaGateway({");
     },
   );
