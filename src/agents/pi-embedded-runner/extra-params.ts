@@ -1,10 +1,12 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { kindFromMime, normalizeMimeType } from "../../media/mime.js";
+import { toRelativeWorkspacePath } from "../path-policy.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -221,15 +223,67 @@ function sanitizeGoogleThinkingPayload(params: {
 }
 
 const GOOGLE_INLINE_AUDIO_EXTENSIONS = new Set([".ogg", ".opus", ".mp3", ".wav", ".m4a"]);
-const GOOGLE_INLINE_AUDIO_MIME_TYPES: Record<string, string> = {
-  ".ogg": "audio/ogg",
-  ".opus": "audio/ogg",
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".m4a": "audio/mp4",
-};
 const GOOGLE_AUDIO_FILE_REF_REGEX =
   /(^|\s)@((?:\.\/?|\.\.\/|\/)?[^\s@]+\.(?:ogg|opus|mp3|wav|m4a))(?=\s|$)/gi;
+const GOOGLE_INLINE_AUDIO_MAX_BYTES = 20 * 1024 * 1024;
+const GOOGLE_INLINE_AUDIO_MP4_BRANDS = new Set(["m4a ", "m4b ", "m4p ", "m4r ", "f4a ", "f4b "]);
+
+function sniffGoogleInlineAudioMime(buffer: Buffer): string | undefined {
+  if (
+    buffer.length >= 4 &&
+    buffer[0] === 0x4f &&
+    buffer[1] === 0x67 &&
+    buffer[2] === 0x67 &&
+    buffer[3] === 0x53
+  ) {
+    return buffer.subarray(0, 64).includes(Buffer.from("OpusHead")) ? "audio/opus" : "audio/ogg";
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x41 &&
+    buffer[10] === 0x56 &&
+    buffer[11] === 0x45
+  ) {
+    return "audio/wav";
+  }
+  if (buffer.length >= 3 && buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) {
+    return "audio/mpeg";
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) {
+    return "audio/mpeg";
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer[4] === 0x66 &&
+    buffer[5] === 0x74 &&
+    buffer[6] === 0x79 &&
+    buffer[7] === 0x70
+  ) {
+    const majorBrand = buffer.toString("ascii", 8, 12).toLowerCase();
+    if (GOOGLE_INLINE_AUDIO_MP4_BRANDS.has(majorBrand)) {
+      return "audio/mp4";
+    }
+  }
+  return undefined;
+}
+
+function resolveGoogleInlineAudioPath(rawPath: string): string | undefined {
+  const workspaceRoot = process.cwd();
+  try {
+    const relativePath = toRelativeWorkspacePath(workspaceRoot, rawPath);
+    const workspacePath = path.resolve(workspaceRoot, relativePath);
+    const realPath = realpathSync.native(workspacePath);
+    toRelativeWorkspacePath(workspaceRoot, realPath);
+    return realPath;
+  } catch {
+    return undefined;
+  }
+}
 
 function inlineGoogleAudioFileRefs(payload: unknown): void {
   if (!payload || typeof payload !== "object") {
@@ -242,6 +296,10 @@ function inlineGoogleAudioFileRefs(payload: unknown): void {
 
   for (const content of contents) {
     if (!content || typeof content !== "object") {
+      continue;
+    }
+    const role = (content as { role?: unknown }).role;
+    if (role !== "user") {
       continue;
     }
     const parts = (content as { parts?: unknown }).parts;
@@ -263,26 +321,35 @@ function inlineGoogleAudioFileRefs(payload: unknown): void {
       const text = (part as { text: string }).text;
       let lastIndex = 0;
       let matchFound = false;
-      GOOGLE_AUDIO_FILE_REF_REGEX.lastIndex = 0;
       for (const match of text.matchAll(GOOGLE_AUDIO_FILE_REF_REGEX)) {
         const full = match[0];
         const prefix = match[1] ?? "";
         const rawPath = match[2];
         const start = match.index ?? 0;
         const atIndex = start + prefix.length;
-        const resolvedPath = path.resolve(rawPath);
+        const resolvedPath = resolveGoogleInlineAudioPath(rawPath);
+        if (!resolvedPath) {
+          continue;
+        }
         const ext = path.extname(resolvedPath).toLowerCase();
         if (!GOOGLE_INLINE_AUDIO_EXTENSIONS.has(ext)) {
           continue;
         }
         try {
-          const data = readFileSync(resolvedPath).toString("base64");
-          const mimeType = GOOGLE_INLINE_AUDIO_MIME_TYPES[ext] ?? "application/octet-stream";
+          const stats = statSync(resolvedPath);
+          if (!stats.isFile() || stats.size > GOOGLE_INLINE_AUDIO_MAX_BYTES) {
+            continue;
+          }
+          const fileBuffer = readFileSync(resolvedPath);
+          const mimeType = normalizeMimeType(sniffGoogleInlineAudioMime(fileBuffer));
+          if (!mimeType || kindFromMime(mimeType) !== "audio") {
+            continue;
+          }
           const before = text.slice(lastIndex, atIndex);
           if (before) {
             nextParts.push({ text: before });
           }
-          nextParts.push({ inlineData: { mimeType, data } });
+          nextParts.push({ inlineData: { mimeType, data: fileBuffer.toString("base64") } });
           lastIndex = atIndex + full.length - prefix.length;
           matchFound = true;
           touched = true;
