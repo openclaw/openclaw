@@ -175,4 +175,133 @@ describe("onboarding handlers", () => {
     expect(snapshot.apiKey).not.toBe("sk-test123456");
     expect(snapshot.apiKey).toContain("*");
   });
+
+  // ── onboarding.update with configSnapshot ────────────────────────────────
+  it("onboarding.update stores configSnapshot and returns it via status", () => {
+    const { respond: updateRespond, invoke: updateInvoke } = createInvokeParams(
+      "onboarding.update",
+      {
+        configSnapshot: { provider: "anthropic" },
+      },
+    );
+    void updateInvoke();
+    const updateCall = updateRespond.mock.calls[0] as RespondCall;
+    expect(updateCall[0]).toBe(true);
+
+    // Verify via status that configSnapshot is persisted (stripped)
+    const { respond: statusRespond, invoke: statusInvoke } =
+      createInvokeParams("onboarding.status");
+    void statusInvoke();
+    const statusCall = statusRespond.mock.calls[0] as RespondCall;
+    expect(statusCall[0]).toBe(true);
+    const payload = statusCall[1] as Record<string, unknown>;
+    const snapshot = payload.configSnapshot as Record<string, unknown>;
+    expect(snapshot.provider).toBe("anthropic");
+  });
+
+  // ── onboarding.update with all fields ────────────────────────────────────
+  it("onboarding.update with all fields returns all correctly", () => {
+    const { respond, invoke } = createInvokeParams("onboarding.update", {
+      currentStep: 4,
+      stepsCompleted: [1, 2, 3],
+      stepsSkipped: [5],
+      configSnapshot: { model: "claude-3" },
+    });
+    void invoke();
+    const call = respond.mock.calls[0] as RespondCall;
+    expect(call[0]).toBe(true);
+    const payload = call[1] as Record<string, unknown>;
+    expect(payload.status).toBe("in_progress");
+    expect(payload.currentStep).toBe(4);
+    expect(payload.stepsCompleted).toEqual([1, 2, 3]);
+    expect(payload.stepsSkipped).toEqual([5]);
+  });
+
+  // ── onboarding.reset after skip ──────────────────────────────────────────
+  it("onboarding.reset after skip returns to pending", () => {
+    void createInvokeParams("onboarding.skip").invoke();
+
+    const { respond, invoke } = createInvokeParams("onboarding.reset");
+    void invoke();
+    const call = respond.mock.calls[0] as RespondCall;
+    expect(call[0]).toBe(true);
+    const payload = call[1] as Record<string, unknown>;
+    expect(payload.status).toBe("pending");
+    expect(payload.currentStep).toBe(1);
+  });
+
+  // ── onboarding.validatePath with tilde ───────────────────────────────────
+  it("onboarding.validatePath expands tilde to home directory", () => {
+    const { respond, invoke } = createInvokeParams("onboarding.validatePath", {
+      path: "~/",
+    });
+    void invoke();
+    const call = respond.mock.calls[0] as RespondCall;
+    expect(call[0]).toBe(true);
+    const payload = call[1] as Record<string, unknown>;
+    expect(payload.exists).toBe(true);
+    expect(payload.isDirectory).toBe(true);
+    expect(payload.writable).toBe(true);
+    expect(payload.valid).toBe(true);
+    // Path should be expanded, not contain tilde
+    expect(String(payload.path)).not.toContain("~");
+  });
+
+  // ── onboarding.status after multiple updates ─────────────────────────────
+  it("onboarding.status reflects latest step after multiple updates", () => {
+    void createInvokeParams("onboarding.update", { currentStep: 2 }).invoke();
+    void createInvokeParams("onboarding.update", { currentStep: 3 }).invoke();
+    void createInvokeParams("onboarding.update", { currentStep: 4 }).invoke();
+
+    const { respond, invoke } = createInvokeParams("onboarding.status");
+    void invoke();
+    const call = respond.mock.calls[0] as RespondCall;
+    expect(call[0]).toBe(true);
+    const payload = call[1] as Record<string, unknown>;
+    expect(payload.currentStep).toBe(4);
+    expect(payload.status).toBe("in_progress");
+  });
+
+  // ── onboarding.complete after updates preserves config ───────────────────
+  it("onboarding.complete after updates preserves configSnapshot", () => {
+    void createInvokeParams("onboarding.update", {
+      currentStep: 3,
+      configSnapshot: { provider: "openai", model: "gpt-4" },
+    }).invoke();
+
+    const { respond: completeRespond, invoke: completeInvoke } =
+      createInvokeParams("onboarding.complete");
+    void completeInvoke();
+    const completeCall = completeRespond.mock.calls[0] as RespondCall;
+    expect(completeCall[0]).toBe(true);
+    const completePayload = completeCall[1] as Record<string, unknown>;
+    expect(completePayload.status).toBe("completed");
+    expect(completePayload.completedAt).toBeTypeOf("number");
+
+    // Verify configSnapshot is still there via status
+    const { respond: statusRespond, invoke: statusInvoke } =
+      createInvokeParams("onboarding.status");
+    void statusInvoke();
+    const statusCall = statusRespond.mock.calls[0] as RespondCall;
+    expect(statusCall[0]).toBe(true);
+    const statusPayload = statusCall[1] as Record<string, unknown>;
+    expect(statusPayload.status).toBe("completed");
+    const snapshot = statusPayload.configSnapshot as Record<string, unknown>;
+    // Values are stripped but keys preserved
+    expect(snapshot).toHaveProperty("provider");
+    expect(snapshot).toHaveProperty("model");
+  });
+
+  // ── onboarding.validatePath with non-writable path ───────────────────────
+  it("onboarding.validatePath reports non-writable for restricted path", () => {
+    const { respond, invoke } = createInvokeParams("onboarding.validatePath", {
+      path: "/root/nonexistent-" + Date.now(),
+    });
+    void invoke();
+    const call = respond.mock.calls[0] as RespondCall;
+    expect(call[0]).toBe(true);
+    const payload = call[1] as Record<string, unknown>;
+    // /root typically not writable for non-root users
+    expect(payload.valid).toBe(false);
+  });
 });
