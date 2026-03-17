@@ -156,11 +156,13 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   prepend.push(path.join(homeDir, ".local", "share", "pnpm"));
   prepend.push(path.join(homeDir, ".bun", "bin"));
   prepend.push(path.join(homeDir, ".yarn", "bin"));
-  prepend.push("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin");
-
   // Ingest /etc/paths and /etc/paths.d/* so launchd/GUI environments see the same
   // directories that path_helper(8) would provide in a login shell.
+  // These come before hardcoded fallbacks to match path_helper(8) precedence:
+  // /etc/paths entries first, then /etc/paths.d/*, then our fallback defaults.
   prepend.push(...readEtcPaths(platform));
+
+  prepend.push("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin");
 
   return { prepend: prepend.filter(isDirectory), append: append.filter(isDirectory) };
 }

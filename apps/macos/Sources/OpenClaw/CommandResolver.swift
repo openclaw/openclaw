@@ -80,10 +80,6 @@ enum CommandResolver {
     static func preferredPaths(home: URL, current: [String], projectRoot: URL) -> [String] {
         var extras = [
             home.appendingPathComponent("Library/pnpm").path,
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
         ]
         #if DEBUG
         // Dev-only convenience. Avoid project-local PATH hijacking in release builds.
@@ -97,7 +93,17 @@ enum CommandResolver {
 
         // Ingest /etc/paths and /etc/paths.d/* so GUI apps see the same directories
         // that path_helper(8) would provide in a login shell.
+        // These come before hardcoded fallbacks to match path_helper(8) precedence:
+        // /etc/paths entries first, then /etc/paths.d/*, then our fallback defaults.
         extras.append(contentsOf: self.readEtcPaths())
+
+        // Hardcoded fallbacks after /etc/paths so admin-configured paths take precedence.
+        extras.append(contentsOf: [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+        ])
 
         var seen = Set<String>()
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
