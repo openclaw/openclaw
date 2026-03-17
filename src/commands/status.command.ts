@@ -16,6 +16,7 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { isScopeLimitedProbeFailure } from "./gateway-status/helpers.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { statusAllCommand } from "./status-all.js";
@@ -355,6 +356,9 @@ export async function statusCommand(
       return warn("unavailable");
     }
     if (!lastHeartbeat) {
+      if (gatewayProbe && isScopeLimitedProbeFailure(gatewayProbe)) {
+        return muted("N/A (scope-limited)");
+      }
       return muted("none");
     }
     const age = formatTimeAgo(Date.now() - lastHeartbeat.ts);
