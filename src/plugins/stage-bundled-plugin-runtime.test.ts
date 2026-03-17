@@ -32,15 +32,6 @@ function writeSkill(filePath: string, name: string, description: string): void {
   );
 }
 
-function writeMarkdownSkill(filePath: string, name: string, description: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(
-    filePath,
-    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,
-    "utf8",
-  );
-}
-
 function expectRuntimeFileCopied(filePath: string): void {
   expect(fs.lstatSync(filePath).isSymbolicLink()).toBe(false);
   expect(fs.realpathSync(filePath)).toBe(filePath);
@@ -392,7 +383,7 @@ describe("stageBundledPluginRuntime", () => {
       "default-skill",
       "Default Claude skill",
     );
-    writeMarkdownSkill(
+    writeSkill(
       path.join(distPluginDir, "commands", "default-review.md"),
       "default-review",
       "Default Claude command skill",
@@ -402,7 +393,7 @@ describe("stageBundledPluginRuntime", () => {
       "custom-skill",
       "Declared Claude skill",
     );
-    writeMarkdownSkill(
+    writeSkill(
       path.join(distPluginDir, "extra-commands", "custom-review.md"),
       "custom-review",
       "Declared Claude command skill",
@@ -453,7 +444,7 @@ describe("stageBundledPluginRuntime", () => {
       "default-skill",
       "Default Cursor skill",
     );
-    writeMarkdownSkill(
+    writeSkill(
       path.join(distPluginDir, ".cursor", "commands", "default-review.md"),
       "default-review",
       "Default Cursor command skill",
@@ -463,7 +454,7 @@ describe("stageBundledPluginRuntime", () => {
       "custom-skill",
       "Declared Cursor skill",
     );
-    writeMarkdownSkill(
+    writeSkill(
       path.join(distPluginDir, "extra-commands", "custom-review.md"),
       "custom-review",
       "Declared Cursor command skill",
@@ -678,26 +669,11 @@ describe("stageBundledPluginRuntime", () => {
 
     stageBundledPluginRuntime({ repoRoot });
 
-    const snapshot = withEnv(
-      {
-        HOME: workspaceDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: runtimeExtensionsDir,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
-      },
-      () =>
-        buildWorkspaceSkillSnapshot(workspaceDir, {
-          bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-          config: {
-            plugins: {
-              entries: {
-                acpx: { enabled: true },
-              },
-            },
-          },
-          managedSkillsDir: path.join(workspaceDir, ".managed"),
-        }),
-    );
+    const snapshot = buildBundledRuntimeSkillSnapshot({
+      workspaceDir,
+      runtimeExtensionsDir,
+      enabledPluginId: "acpx",
+    });
 
     expect(snapshot.skills.map((skill) => skill.name)).toContain("acp-router");
     expect(snapshot.prompt).toContain("acp-router");
