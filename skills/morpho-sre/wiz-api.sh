@@ -369,6 +369,312 @@ cmd_issues() {
   paginated_query "$query" "$vars_json" '.data.issuesV2' "$max_pages"
 }
 
+cmd_vulns() {
+  local first=50 max_pages="$WIZ_API_MAX_PAGES"
+  local severity="" image="" cve="" has_fix=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --severity)  severity="$2"; shift 2 ;;
+      --image)     image="$2"; shift 2 ;;
+      --cve)       cve="$2"; shift 2 ;;
+      --has-fix)   has_fix="true"; shift ;;
+      --first)     first="$2"; shift 2 ;;
+      --max-pages) max_pages="$2"; shift 2 ;;
+      *) die "unknown vulns flag: $1" ;;
+    esac
+  done
+
+  local filter_parts=()
+  if [[ -n "$severity" ]]; then
+    filter_parts+=("severity: [$(printf '%s' "$severity" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+  fi
+  if [[ -n "$image" ]]; then
+    filter_parts+=("imageName: \"${image}\"")
+  fi
+  if [[ -n "$cve" ]]; then
+    filter_parts+=("name: \"${cve}\"")
+  fi
+  if [[ "$has_fix" == "true" ]]; then
+    filter_parts+=("hasFix: true")
+  fi
+
+  local filter_clause=""
+  if [[ "${#filter_parts[@]}" -gt 0 ]]; then
+    filter_clause="filterBy: { $(IFS=', '; printf '%s' "${filter_parts[*]}") },"
+  fi
+
+  local query
+  query="query(\$first: Int, \$after: String) {
+    vulnerabilityFindings(first: \$first, after: \$after, ${filter_clause} orderBy: { field: SEVERITY, direction: DESC }) {
+      nodes {
+        id
+        name
+        severity
+        score
+        hasFix
+        fixedVersion
+        detailedName
+        version
+        vulnerableAsset { id name type }
+        firstDetectedAt
+        lastDetectedAt
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }"
+
+  local vars_json
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  paginated_query "$query" "$vars_json" '.data.vulnerabilityFindings' "$max_pages"
+}
+
+cmd_inventory() {
+  local first=50 max_pages="$WIZ_API_MAX_PAGES"
+  local res_type="" subscription="" search=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --type)         res_type="$2"; shift 2 ;;
+      --subscription) subscription="$2"; shift 2 ;;
+      --search)       search="$2"; shift 2 ;;
+      --first)        first="$2"; shift 2 ;;
+      --max-pages)    max_pages="$2"; shift 2 ;;
+      *) die "unknown inventory flag: $1" ;;
+    esac
+  done
+
+  local where_parts=()
+  if [[ -n "$res_type" ]]; then
+    where_parts+=("{type: {equals: [\"${res_type}\"]}}")
+  fi
+  if [[ -n "$subscription" ]]; then
+    where_parts+=("{subscription: {equals: [\"${subscription}\"]}}")
+  fi
+  if [[ -n "$search" ]]; then
+    where_parts+=("{name: {contains: \"${search}\"}}")
+  fi
+
+  local where_clause="[]"
+  if [[ "${#where_parts[@]}" -gt 0 ]]; then
+    where_clause="[$(IFS=','; printf '%s' "${where_parts[*]}")]"
+  fi
+
+  local query
+  query="query(\$first: Int, \$after: String, \$where: [GraphEntityQueryInput!]) {
+    graphSearch(first: \$first, after: \$after, query: { type: [\"CLOUD_RESOURCE\"], where: { AND: \$where } }) {
+      nodes {
+        entities {
+          id
+          name
+          type
+          properties
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }"
+
+  local vars_json
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson where "$where_clause" '{ first: $first, where: $where }')"
+  paginated_query "$query" "$vars_json" '.data.graphSearch' "$max_pages"
+}
+
+cmd_cloud_config() {
+  local first=50 max_pages="$WIZ_API_MAX_PAGES"
+  local severity="" rule="" status=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --severity)  severity="$2"; shift 2 ;;
+      --rule)      rule="$2"; shift 2 ;;
+      --status)    status="$2"; shift 2 ;;
+      --first)     first="$2"; shift 2 ;;
+      --max-pages) max_pages="$2"; shift 2 ;;
+      *) die "unknown cloud-config flag: $1" ;;
+    esac
+  done
+
+  local filter_parts=()
+  if [[ -n "$severity" ]]; then
+    filter_parts+=("severity: [$(printf '%s' "$severity" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+  fi
+  if [[ -n "$rule" ]]; then
+    filter_parts+=("rule: \"${rule}\"")
+  fi
+  if [[ -n "$status" ]]; then
+    filter_parts+=("status: [$(printf '%s' "$status" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+  fi
+
+  local filter_clause=""
+  if [[ "${#filter_parts[@]}" -gt 0 ]]; then
+    filter_clause="filterBy: { $(IFS=', '; printf '%s' "${filter_parts[*]}") },"
+  fi
+
+  local query
+  query="query(\$first: Int, \$after: String) {
+    configurationFindings(first: \$first, after: \$after, ${filter_clause} orderBy: { field: SEVERITY, direction: DESC }) {
+      nodes {
+        id
+        severity
+        status
+        result
+        rule { name description severity }
+        resource { id name type }
+        analyzedAt
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }"
+
+  local vars_json
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  paginated_query "$query" "$vars_json" '.data.configurationFindings' "$max_pages"
+}
+
+cmd_k8s() {
+  local first=20 max_pages="$WIZ_API_MAX_PAGES"
+  local cluster=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --cluster)   cluster="$2"; shift 2 ;;
+      --first)     first="$2"; shift 2 ;;
+      --max-pages) max_pages="$2"; shift 2 ;;
+      *) die "unknown k8s flag: $1" ;;
+    esac
+  done
+
+  local filter_clause=""
+  if [[ -n "$cluster" ]]; then
+    filter_clause="filterBy: { search: \"${cluster}\" },"
+  fi
+
+  local query
+  query="query(\$first: Int, \$after: String) {
+    kubernetesClusterQueries {
+      clusters(first: \$first, after: \$after, ${filter_clause}) {
+        nodes {
+          id
+          name
+          cloudAccount { name }
+          issueAnalytics { criticalCount highCount mediumCount lowCount informationalCount }
+          podCount
+          serviceCount
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }"
+
+  local vars_json
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  paginated_query "$query" "$vars_json" '.data.kubernetesClusterQueries.clusters' "$max_pages"
+}
+
+cmd_runtime() {
+  local first=50 max_pages="$WIZ_API_MAX_PAGES"
+  local severity=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --severity)  severity="$2"; shift 2 ;;
+      --first)     first="$2"; shift 2 ;;
+      --max-pages) max_pages="$2"; shift 2 ;;
+      *) die "unknown runtime flag: $1" ;;
+    esac
+  done
+
+  local filter_parts=()
+  if [[ -n "$severity" ]]; then
+    filter_parts+=("severity: [$(printf '%s' "$severity" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+  fi
+
+  local filter_clause=""
+  if [[ "${#filter_parts[@]}" -gt 0 ]]; then
+    filter_clause="filterBy: { $(IFS=', '; printf '%s' "${filter_parts[*]}") },"
+  fi
+
+  local query
+  query="query(\$first: Int, \$after: String) {
+    securityEvents(first: \$first, after: \$after, ${filter_clause} orderBy: { field: CREATED_AT, direction: DESC }) {
+      nodes {
+        id
+        severity
+        type
+        description
+        sourceResource { id name type }
+        createdAt
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }"
+
+  local vars_json
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  paginated_query "$query" "$vars_json" '.data.securityEvents' "$max_pages"
+}
+
+cmd_summary() {
+  local issues_query='query {
+    issueAnalytics {
+      criticalCount
+      highCount
+      mediumCount
+      lowCount
+      informationalCount
+    }
+  }'
+
+  local vulns_query='query {
+    vulnerabilityFindingAggregates {
+      criticalCount
+      highCount
+      mediumCount
+      lowCount
+    }
+  }'
+
+  local config_query='query {
+    configurationFindingAggregates {
+      criticalCount
+      highCount
+      mediumCount
+      lowCount
+    }
+  }'
+
+  local issues_resp vulns_resp config_resp timestamp
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  issues_resp="$(wiz_graphql_with_retry "$issues_query" "{}")"
+  vulns_resp="$(wiz_graphql_with_retry "$vulns_query" "{}")"
+  config_resp="$(wiz_graphql_with_retry "$config_query" "{}")"
+
+  "$WIZ_API_JQ_BIN" -nc \
+    --argjson issues "$issues_resp" \
+    --argjson vulns "$vulns_resp" \
+    --argjson config "$config_resp" \
+    --arg timestamp "$timestamp" \
+    '{
+      issues: {
+        critical: ($issues.data.issueAnalytics.criticalCount // 0),
+        high: ($issues.data.issueAnalytics.highCount // 0),
+        medium: ($issues.data.issueAnalytics.mediumCount // 0),
+        low: ($issues.data.issueAnalytics.lowCount // 0),
+        informational: ($issues.data.issueAnalytics.informationalCount // 0)
+      },
+      vulnerabilities: {
+        critical: ($vulns.data.vulnerabilityFindingAggregates.criticalCount // 0),
+        high: ($vulns.data.vulnerabilityFindingAggregates.highCount // 0),
+        medium: ($vulns.data.vulnerabilityFindingAggregates.mediumCount // 0),
+        low: ($vulns.data.vulnerabilityFindingAggregates.lowCount // 0)
+      },
+      configurationFindings: {
+        critical: ($config.data.configurationFindingAggregates.criticalCount // 0),
+        high: ($config.data.configurationFindingAggregates.highCount // 0),
+        medium: ($config.data.configurationFindingAggregates.mediumCount // 0),
+        low: ($config.data.configurationFindingAggregates.lowCount // 0)
+      },
+      timestamp: $timestamp
+    }'
+}
+
 usage() {
   cat <<'EOF'
 Usage:

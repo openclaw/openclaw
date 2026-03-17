@@ -96,16 +96,30 @@ printf '\n=== test-wiz-api: OAuth2 auth + token caching ===\n'
 cat >"${TMP}/mock-curl-auth.sh" <<'CURL_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-for arg in "$@"; do
-  case "$arg" in
+output_file=""
+args=("$@")
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+  case "${args[$i]}" in
     */oauth/token)
       printf '{"access_token":"test-bearer-abc","expires_in":3600,"token_type":"Bearer"}\n'
       exit 0
       ;;
+    -o)
+      i=$((i + 1))
+      output_file="${args[$i]}"
+      ;;
   esac
+  i=$((i + 1))
 done
 # GraphQL endpoint — echo back for inspection
-printf '{"data":{"ok":true}}\n'
+response='{"data":{"ok":true}}'
+if [[ -n "$output_file" ]]; then
+  printf '%s' "$response" >"$output_file"
+  printf '200'
+else
+  printf '%s\n' "$response"
+fi
 CURL_EOF
 chmod +x "${TMP}/mock-curl-auth.sh"
 
@@ -245,6 +259,154 @@ assert_ok "pagination: first node is iss-1" \
   "printf '%s' '$paginated_result' | jq -e '.[0].id == \"iss-1\"' >/dev/null"
 assert_ok "pagination: second node is iss-2" \
   "printf '%s' '$paginated_result' | jq -e '.[1].id == \"iss-2\"' >/dev/null"
+
+printf '\n=== test-wiz-api: subcommands ===\n'
+
+# --- mock curl that echoes back the request payload ---
+cat >"${TMP}/mock-curl-echo.sh" <<'CURL_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output_file=""
+data_payload=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    -o) output_file="$arg" ;;
+    --data) data_payload="$arg" ;;
+  esac
+  prev="$arg"
+done
+for arg in "$@"; do
+  case "$arg" in
+    */oauth/token)
+      printf '{"access_token":"echo-token","expires_in":3600}\n'
+      exit 0
+      ;;
+  esac
+done
+# Return the query payload as data so tests can inspect it
+response="{\"data\":{\"vulnerabilityFindings\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"issues\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"graphSearch\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"configurationFindings\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"kubernetesClusterQueries\":{\"clusters\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}}},\"securityEvents\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"_query\":$(printf '%s' "$data_payload" | jq -c '.query // ""')}}"
+if [[ -n "$output_file" ]]; then
+  printf '%s' "$response" >"$output_file"
+  printf '200'
+else
+  printf '%s\n' "$response"
+fi
+CURL_EOF
+chmod +x "${TMP}/mock-curl-echo.sh"
+
+run_subcmd() {
+  export WIZ_API_SKIP_VAULT=1
+  export WIZ_CLIENT_ID='sub-test-id'
+  export WIZ_CLIENT_SECRET='sub-test-secret'
+  export WIZ_API_CURL_BIN="${TMP}/mock-curl-echo.sh"
+  export WIZ_API_JQ_BIN='jq'
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-sub-$1.json"
+  "${SCRIPT_PATH}" "$@" 2>/dev/null
+}
+
+# Each subcommand should return a JSON array
+for subcmd in vulns issues inventory cloud-config k8s runtime; do
+  result="$(run_subcmd "$subcmd")"
+  assert_ok "${subcmd}: returns JSON array" \
+    "printf '%s' '$result' | jq -e 'type == \"array\"' >/dev/null"
+done
+
+# Summary returns an object
+summary_result="$(run_subcmd summary)"
+assert_ok "summary: returns JSON object" \
+  "printf '%s' '$summary_result' | jq -e 'type == \"object\"' >/dev/null"
+assert_ok "summary: has timestamp" \
+  "printf '%s' '$summary_result' | jq -e '.timestamp' >/dev/null"
+
+printf '\n=== test-wiz-api: 401 retry ===\n'
+
+# --- mock curl that returns 401 first, then 200 on retry ---
+cat >"${TMP}/mock-curl-401.sh" <<'CURL_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output_file=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    -o) output_file="$arg" ;;
+  esac
+  prev="$arg"
+done
+for arg in "$@"; do
+  case "$arg" in
+    */oauth/token)
+      printf '{"access_token":"retry-token-%s","expires_in":3600}\n' "$(date +%s%N)"
+      exit 0
+      ;;
+  esac
+done
+# Track call count via file
+count_file="/tmp/wiz-api-401-count"
+count=0
+if [[ -f "$count_file" ]]; then count="$(cat "$count_file")"; fi
+count=$((count + 1))
+printf '%s' "$count" >"$count_file"
+if [[ "$count" -eq 1 ]]; then
+  if [[ -n "$output_file" ]]; then
+    printf '{"error":"unauthorized"}' >"$output_file"
+    printf '401'
+  fi
+else
+  if [[ -n "$output_file" ]]; then
+    printf '{"data":{"test":true}}' >"$output_file"
+    printf '200'
+  fi
+fi
+CURL_EOF
+chmod +x "${TMP}/mock-curl-401.sh"
+
+rm -f /tmp/wiz-api-401-count
+retry_result="$(
+  export WIZ_API_SKIP_VAULT=1
+  export WIZ_CLIENT_ID='retry-id'
+  export WIZ_CLIENT_SECRET='retry-secret'
+  export WIZ_API_CURL_BIN="${TMP}/mock-curl-401.sh"
+  export WIZ_API_JQ_BIN='jq'
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-retry.json"
+  "${SCRIPT_PATH}" query '{ test }' 2>/dev/null
+)"
+rm -f /tmp/wiz-api-401-count
+
+assert_ok "401 retry: returns data after retry" \
+  "printf '%s' '$retry_result' | jq -e '.data.test == true' >/dev/null"
+
+printf '\n=== test-wiz-api: query @file ===\n'
+
+printf '{ fileTest(first: 1) { nodes { id } } }' >"${TMP}/test-query.graphql"
+file_result="$(
+  export WIZ_API_SKIP_VAULT=1
+  export WIZ_CLIENT_ID='file-test-id'
+  export WIZ_CLIENT_SECRET='file-test-secret'
+  export WIZ_API_CURL_BIN="${TMP}/mock-curl-auth.sh"
+  export WIZ_API_JQ_BIN='jq'
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-file.json"
+  "${SCRIPT_PATH}" query "@${TMP}/test-query.graphql" 2>/dev/null
+)"
+
+assert_ok "query @file: returns data" \
+  "printf '%s' '$file_result' | jq -e '.data' >/dev/null"
+
+printf '\n=== test-wiz-api: max-pages limit ===\n'
+
+# Using the pagination mock — with --max-pages 1, should only get 1 node even though hasNextPage=true
+maxpages_result="$(
+  export WIZ_API_SKIP_VAULT=1
+  export WIZ_CLIENT_ID='maxpages-id'
+  export WIZ_CLIENT_SECRET='maxpages-secret'
+  export WIZ_API_CURL_BIN="${TMP}/mock-curl-paginate.sh"
+  export WIZ_API_JQ_BIN='jq'
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-maxpages.json"
+  "${SCRIPT_PATH}" issues --first 1 --max-pages 1 2>/dev/null
+)"
+
+assert_ok "max-pages: returns only 1 node with --max-pages 1" \
+  "printf '%s' '$maxpages_result' | jq -e 'length == 1' >/dev/null"
 
 printf '\n=== Results: %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
