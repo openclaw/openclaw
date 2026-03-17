@@ -9,47 +9,6 @@ import {
 
 const channel = "line" as const;
 
-function cloneLineAccountEntry(
-  lineConfig: LineConfig,
-  accountId: string,
-): Record<string, unknown> | undefined {
-  const entry = lineConfig.accounts?.[accountId];
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  return { ...entry } as Record<string, unknown>;
-}
-
-function clearPatchedFields(
-  target: Record<string, unknown> | undefined,
-  clearFields: string[],
-): void {
-  if (!target) {
-    return;
-  }
-  for (const field of clearFields) {
-    delete target[field];
-  }
-}
-
-function patchExistingDefaultLineAccount(params: {
-  lineConfig: LineConfig;
-  clearFields: string[];
-  enabled?: boolean;
-  patch: Record<string, unknown>;
-}): Record<string, unknown> | undefined {
-  const nextDefaultAccount = cloneLineAccountEntry(params.lineConfig, DEFAULT_ACCOUNT_ID);
-  clearPatchedFields(nextDefaultAccount, params.clearFields);
-  if (!nextDefaultAccount) {
-    return undefined;
-  }
-  if (params.enabled) {
-    nextDefaultAccount.enabled = true;
-  }
-  Object.assign(nextDefaultAccount, params.patch);
-  return nextDefaultAccount;
-}
-
 export function patchLineAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -63,13 +22,21 @@ export function patchLineAccountConfig(params: {
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
     const nextLine = { ...lineConfig } as Record<string, unknown>;
-    clearPatchedFields(nextLine, clearFields);
-    const nextDefaultAccount = patchExistingDefaultLineAccount({
-      lineConfig,
-      clearFields,
-      enabled: params.enabled,
-      patch: params.patch,
-    });
+    const nextDefaultAccount =
+      lineConfig.accounts?.[DEFAULT_ACCOUNT_ID] &&
+      typeof lineConfig.accounts[DEFAULT_ACCOUNT_ID] === "object"
+        ? ({ ...lineConfig.accounts[DEFAULT_ACCOUNT_ID] } as Record<string, unknown>)
+        : undefined;
+    for (const field of clearFields) {
+      delete nextLine[field];
+      delete nextDefaultAccount?.[field];
+    }
+    if (nextDefaultAccount) {
+      if (params.enabled) {
+        nextDefaultAccount.enabled = true;
+      }
+      Object.assign(nextDefaultAccount, params.patch);
+    }
     return {
       ...params.cfg,
       channels: {
