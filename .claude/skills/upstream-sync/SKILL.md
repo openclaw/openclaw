@@ -1,15 +1,23 @@
 ---
 name: upstream-sync
-description: Selectively cherry-pick fixes and features from upstream OpenClaw into operator1. Use when the user says "sync upstream", "cherry-sync", "pick upstream", "sync to v2026.x.x", or wants to review what's new upstream. Orchestrates sync-lead, code-guard, and qa-runner agents following the selective cherry-pick pipeline with per-category phased PRs.
+description: Selectively cherry-pick fixes and features from upstream repositories into operator1. Supports multiple upstreams — OpenClaw (primary) and Paperclip (UI patterns for onboarding). Use when the user says "sync upstream", "cherry-sync", "pick upstream", "sync to v2026.x.x", "sync paperclip", or wants to review what's new upstream. Orchestrates sync-lead, code-guard, and qa-runner agents following the selective cherry-pick pipeline with per-category phased PRs.
 ---
 
 # Upstream Cherry-Pick Sync
 
-Selectively cherry-pick upstream OpenClaw changes into operator1 using the process defined in `Project-tasks/upstream-selective-sync-process.md`.
+Selectively cherry-pick changes from upstream repositories into operator1. Supports multiple upstream sources, each with their own phase categories, scope filters, and adaptation rules.
+
+## Supported Upstreams
+
+| Source                 | Remote                                | Tracking                          | Phase model                                                                   | Scope              |
+| ---------------------- | ------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------- | ------------------ |
+| **openclaw** (default) | `upstream` → `openclaw/openclaw`      | Tag-based (`v2026.x.x`)           | 6-phase (security → bugfixes → features → provider → review → ui-inspiration) | Full codebase      |
+| **paperclip**          | `paperclip` → `paperclipai/paperclip` | Commit-based (no formal releases) | 3-phase (onboarding → forms → ui)                                             | UI components only |
 
 ## Usage
 
 ```
+# OpenClaw (default — same as before)
 /upstream-sync [target-tag]
 /upstream-sync --review              ← just identify & classify, don't pick
 /upstream-sync --phase <name>        ← run a specific phase (security, bugfixes, features, etc.)
@@ -17,19 +25,26 @@ Selectively cherry-pick upstream OpenClaw changes into operator1 using the proce
 /upstream-sync --resume              ← continue from last incomplete phase
 /upstream-sync --full-merge          ← escape hatch: full git merge (rare, see §8)
 
+# Paperclip (UI patterns for onboarding)
+/upstream-sync --source paperclip                    ← sync latest from Paperclip main
+/upstream-sync --source paperclip <commit-sha>       ← sync up to specific commit
+/upstream-sync --source paperclip --review           ← classify only, don't pick
+/upstream-sync --source paperclip --phase onboarding ← run specific phase
+
 Examples:
-  /upstream-sync v2026.3.12
-  /upstream-sync                     ← sync-lead will check upstream and ask
-  /upstream-sync --review            ← dry-run: show what's new, classify, stop
-  /upstream-sync --phase security    ← cherry-pick only security fixes
-  /upstream-sync --phase next        ← pick up where we left off
+  /upstream-sync v2026.3.12                          ← OpenClaw sync (default)
+  /upstream-sync                                     ← sync-lead checks upstream and asks
+  /upstream-sync --source paperclip                  ← Paperclip UI sync
+  /upstream-sync --source paperclip --review         ← dry-run: classify Paperclip changes
+  /upstream-sync --phase security                    ← OpenClaw: cherry-pick security fixes
+  /upstream-sync --source paperclip --phase forms    ← Paperclip: cherry-pick form patterns
 ```
 
 ## Phased PR Workflow
 
 Each upstream sync is broken into **per-category phases**, each with its own branch and PR. This keeps PRs focused, reviewable, and independently mergeable.
 
-### Phases (in order)
+### OpenClaw Phases (6-phase model)
 
 | Phase | Category          | Branch Pattern                 | Priority                                  |
 | ----- | ----------------- | ------------------------------ | ----------------------------------------- |
@@ -40,21 +55,43 @@ Each upstream sync is broken into **per-category phases**, each with its own bra
 | 5     | Review Items      | `sync/<tag>-review`            | Triaged during Phase 2 approval           |
 | 6     | UI Inspiration    | `sync/<tag>-ui-inspiration`    | Reference — draft PR                      |
 
+### Paperclip Phases (3-phase model)
+
+| Phase | Category      | Branch Pattern                    | Priority                          |
+| ----- | ------------- | --------------------------------- | --------------------------------- |
+| 1     | Onboarding UI | `sync/paperclip-<sha>-onboarding` | High — wizard shell & steps       |
+| 2     | Form Patterns | `sync/paperclip-<sha>-forms`      | Medium — validation & dirty state |
+| 3     | UI Components | `sync/paperclip-<sha>-ui`         | Low — shared shadcn/ui updates    |
+
 ### Sequencing
 
 Each phase branches from `main` AFTER the prior phase's PR is merged:
 
 ```
+# OpenClaw
 main ── P1 (security) ──merge── P2 (bugfixes) ──merge── P3 (features) ──merge── P4 (provider) ──merge── P5 (review) ──merge── P6 (ui-insp, draft)
+
+# Paperclip
+main ── P1 (onboarding) ──merge── P2 (forms) ──merge── P3 (ui)
 ```
 
 ## How It Works
 
+### Source Selection
+
+When `--source` is specified, sync-lead uses the corresponding remote, phase model, scope filter, and adaptation rules. Default is `openclaw`.
+
+- **openclaw:** `git fetch upstream --tags` → tag-based release detection → 6-phase model → full-scope conflict strategies
+- **paperclip:** `git fetch paperclip` → commit-based range → 3-phase model → UI-only scope filter → adaptation rules (React Query → sendRpc, remove REST/Drizzle/multi-tenant)
+
+### Flow
+
 ```
-You: "/upstream-sync v2026.3.12"
+You: "/upstream-sync v2026.3.12"                    ← openclaw (default)
+You: "/upstream-sync --source paperclip"             ← paperclip UI sync
          │
     sync-lead (sonnet)
-    ├── Phase 0: Fetch upstream, identify next release candidate
+    ├── Phase 0: Fetch <source> remote, identify next release candidate (tag or commit)
     ├── Phase 1: Diff changelog, list commits
     ├── Phase 2: Classify into 6 category buckets, present plan to user
     │            ← YOU APPROVE: "adopt these, skip those"
@@ -122,12 +159,13 @@ You: "/upstream-sync v2026.3.12"
 
 The agents read these automatically:
 
-| File                                                    | Purpose                                      |
-| ------------------------------------------------------- | -------------------------------------------- |
-| `Project-tasks/upstream-selective-sync-process.md`      | Full process doc (§1-10)                     |
-| `.claude/skills/upstream-sync/state/protected-files.md` | Operator1 files that must survive            |
-| `.claude/skills/upstream-sync/state/sync-state.json`    | Last synced tag, per-phase progress, history |
-| `CLAUDE.md`                                             | Build commands, project conventions          |
+| File                                                    | Purpose                                                 |
+| ------------------------------------------------------- | ------------------------------------------------------- |
+| `Project-tasks/upstream-selective-sync-process.md`      | Full process doc for OpenClaw sync (§1-10)              |
+| `Project-tasks/onboarding-gui-implementation.md` §2.5   | Paperclip sync strategy, scope filter, adaptation rules |
+| `.claude/skills/upstream-sync/state/protected-files.md` | Operator1 files that must survive                       |
+| `.claude/skills/upstream-sync/state/sync-state.json`    | Last synced tag/commit, per-phase progress, history     |
+| `CLAUDE.md`                                             | Build commands, project conventions                     |
 
 ## Current Sync State
 
@@ -148,10 +186,20 @@ The `--full-merge` flag triggers the old `git merge upstream/main` approach. Use
 
 ## Invoke
 
-Spawn the sync-lead agent to begin the cherry-pick sync process:
+Spawn the sync-lead agent to begin the cherry-pick sync process.
+
+**Parse the `--source` argument** to determine which upstream to sync from:
+
+- `--source openclaw` (default if omitted): OpenClaw upstream sync
+- `--source paperclip`: Paperclip UI patterns sync
+
+Pass the source to sync-lead so it uses the correct remote, phase model, scope filter, and state key.
+
+**Other flags:**
 
 - Default: runs Phase 0-2 (identify + classify), then loops through phases with user approval gates
 - `--review`: stops after Phase 2 (classification) without cherry-picking
 - `--phase <name>`: runs only the specified phase (assumes classification is already done)
 - `--phase next`: auto-picks the next pending phase from `currentSync.phases`
 - `--resume`: same as `--phase next`
+- `--full-merge`: (OpenClaw only) escape hatch for full git merge

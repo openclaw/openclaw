@@ -5,6 +5,12 @@
   "backupTag": "backup/pre-sync-v2026.3.13-1-20260316",
   "cumulativeSkipped": 0,
   "currentSync": null,
+  "paperclip": {
+    "lastSyncedCommit": null,
+    "lastSyncedAt": null,
+    "currentSync": null,
+    "history": []
+  },
   "history": [
     {
       "type": "inclusive-phased",
