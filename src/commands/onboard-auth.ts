@@ -1,4 +1,8 @@
 export {
+  FIREWORKS_DEFAULT_MODEL_ID,
+  FIREWORKS_DEFAULT_MODEL_REF,
+} from "../agents/fireworks-models.js";
+export {
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
 } from "../agents/synthetic-models.js";
@@ -7,6 +11,8 @@ export {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
+  applyFireworksConfig,
+  applyFireworksProviderConfig,
   applyHuggingfaceConfig,
   applyHuggingfaceProviderConfig,
   applyKilocodeConfig,
@@ -67,6 +73,7 @@ export {
   OPENROUTER_DEFAULT_MODEL_REF,
   setOpenaiApiKey,
   setAnthropicApiKey,
+  setFireworksApiKey,
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,

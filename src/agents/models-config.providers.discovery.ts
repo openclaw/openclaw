@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
+import { discoverFireworksModels, FIREWORKS_BASE_URL } from "./fireworks-models.js";
 import {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
@@ -149,6 +150,15 @@ export async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
   return {
     baseUrl: VENICE_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
+export function buildFireworksProvider(): ProviderConfig {
+  const models = discoverFireworksModels();
+  return {
+    baseUrl: FIREWORKS_BASE_URL,
     api: "openai-completions",
     models,
   };

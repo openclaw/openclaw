@@ -226,6 +226,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/device-pair/**"
+"extensions: fireworks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fireworks/**"
 "extensions: acpx":
   - changed-files:
       - any-glob-to-any-file:

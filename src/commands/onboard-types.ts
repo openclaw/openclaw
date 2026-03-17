@@ -21,6 +21,7 @@ export type BuiltInAuthChoice =
   | "kimi-code-api-key"
   | "synthetic-api-key"
   | "venice-api-key"
+  | "fireworks-api-key"
   | "together-api-key"
   | "huggingface-api-key"
   | "codex-cli"
@@ -71,6 +72,7 @@ export type BuiltInAuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
+  | "fireworks"
   | "mistral"
   | "qwen"
   | "together"
@@ -131,6 +133,7 @@ export type OnboardOptions = {
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;
+  fireworksApiKey?: string;
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;

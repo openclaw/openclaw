@@ -4,6 +4,7 @@ import byteplusPlugin from "../../../extensions/byteplus/index.js";
 import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
 import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
 import firecrawlPlugin from "../../../extensions/firecrawl/index.js";
+import fireworksPlugin from "../../../extensions/fireworks/index.js";
 import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import googlePlugin from "../../../extensions/google/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
@@ -63,6 +64,7 @@ const bundledProviderPlugins: RegistrablePlugin[] = [
   byteplusPlugin,
   cloudflareAiGatewayPlugin,
   copilotProxyPlugin,
+  fireworksPlugin,
   githubCopilotPlugin,
   googlePlugin,
   huggingFacePlugin,

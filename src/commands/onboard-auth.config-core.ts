@@ -1,4 +1,10 @@
 import {
+  buildFireworksModelDefinition,
+  FIREWORKS_BASE_URL,
+  FIREWORKS_DEFAULT_MODEL_REF,
+  FIREWORKS_MODEL_CATALOG,
+} from "../agents/fireworks-models.js";
+import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
@@ -344,6 +350,36 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVeniceProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, VENICE_DEFAULT_MODEL_REF);
+}
+
+/**
+ * Apply Fireworks provider configuration without changing the default model.
+ * Registers Fireworks models and sets up the provider, but preserves existing model selection.
+ */
+export function applyFireworksProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[FIREWORKS_DEFAULT_MODEL_REF] = {
+    ...models[FIREWORKS_DEFAULT_MODEL_REF],
+    alias: models[FIREWORKS_DEFAULT_MODEL_REF]?.alias ?? "DeepSeek V3.2",
+  };
+
+  const fireworksModels = FIREWORKS_MODEL_CATALOG.map(buildFireworksModelDefinition);
+  return applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: models,
+    providerId: "fireworks",
+    api: "openai-completions",
+    baseUrl: FIREWORKS_BASE_URL,
+    catalogModels: fireworksModels,
+  });
+}
+
+/**
+ * Apply Fireworks provider configuration AND set Fireworks as the default model.
+ * Use this when Fireworks is the primary provider choice during setup.
+ */
+export function applyFireworksConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyFireworksProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, FIREWORKS_DEFAULT_MODEL_REF);
 }
 
 /**
