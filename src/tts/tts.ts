@@ -30,6 +30,7 @@ import {
   listSpeechProviders,
   normalizeSpeechProviderId,
 } from "./provider-registry.js";
+import type { SpeechVoiceOption } from "./provider-types.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
   isValidOpenAIModel,
@@ -721,6 +722,36 @@ export async function textToSpeechTelephony(params: {
   }
 
   return buildTtsFailureResult(errors);
+}
+
+export async function listSpeechVoices(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  config?: ResolvedTtsConfig;
+  apiKey?: string;
+  baseUrl?: string;
+}): Promise<SpeechVoiceOption[]> {
+  const provider = normalizeSpeechProviderId(params.provider);
+  if (!provider) {
+    throw new Error("speech provider id is required");
+  }
+  const config = params.config ?? (params.cfg ? resolveTtsConfig(params.cfg) : undefined);
+  if (!config) {
+    throw new Error(`speech provider ${provider} requires cfg or resolved config`);
+  }
+  const resolvedProvider = getSpeechProvider(provider, params.cfg);
+  if (!resolvedProvider) {
+    throw new Error(`speech provider ${provider} is not registered`);
+  }
+  if (!resolvedProvider.listVoices) {
+    throw new Error(`speech provider ${provider} does not support voice listing`);
+  }
+  return await resolvedProvider.listVoices({
+    cfg: params.cfg,
+    config,
+    apiKey: params.apiKey,
+    baseUrl: params.baseUrl,
+  });
 }
 
 export async function maybeApplyTtsToPayload(params: {

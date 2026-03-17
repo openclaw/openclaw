@@ -7,6 +7,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     label: "OpenAI",
     models: OPENAI_TTS_MODELS,
     voices: OPENAI_TTS_VOICES,
+    listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ config }) => Boolean(config.openai.apiKey || process.env.OPENAI_API_KEY),
     synthesize: async (req) => {
       const apiKey = req.config.openai.apiKey || process.env.OPENAI_API_KEY;
