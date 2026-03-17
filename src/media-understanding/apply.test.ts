@@ -515,6 +515,51 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
+  it("injects a placeholder transcript when local-path audio is too small", async () => {
+    const ctx = await createAudioCtx({
+      fileName: "tiny.ogg",
+      mediaType: "audio/ogg",
+      content: Buffer.alloc(100),
+    });
+    const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            maxBytes: 1024 * 1024,
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: { id: "groq", transcribeAudio },
+      },
+    });
+
+    expect(transcribeAudio).not.toHaveBeenCalled();
+    expect(result.appliedAudio).toBe(true);
+    expect(result.outputs).toEqual([
+      expect.objectContaining({
+        kind: "audio.transcription",
+        text: "[Voice note was empty or contained only silence — no speech detected]",
+        provider: "openclaw",
+        model: "synthetic-empty-audio",
+      }),
+    ]);
+    expect(ctx.Transcript).toBe(
+      "[Voice note was empty or contained only silence — no speech detected]",
+    );
+    expect(ctx.Body).toBe(
+      "[Audio]\nTranscript:\n[Voice note was empty or contained only silence — no speech detected]",
+    );
+  });
+
   it("skips audio transcription when attachment exceeds maxBytes", async () => {
     const ctx = await createAudioCtx({
       fileName: "large.wav",

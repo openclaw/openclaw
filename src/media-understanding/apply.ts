@@ -316,10 +316,10 @@ function buildSyntheticSkippedAudioOutputs(
     return [];
   }
   return audioDecision.attachments.flatMap((attachment) => {
-    const reason = attachment.attempts
-      .map((attempt) => attempt.reason?.trim())
-      .find((value): value is string => Boolean(value));
-    if (!reason?.startsWith("tooSmall")) {
+    const hasTooSmallAttempt = attachment.attempts.some((attempt) =>
+      attempt.reason?.trim().startsWith("tooSmall"),
+    );
+    if (!hasTooSmallAttempt) {
       return [];
     }
     return [
@@ -555,9 +555,15 @@ export async function applyMediaUnderstanding(params: {
       decisions.push(entry.decision);
     }
 
-    if (!outputs.some((output) => output.kind === "audio.transcription")) {
-      outputs.push(...buildSyntheticSkippedAudioOutputs(decisions));
-    }
+    const audioOutputAttachmentIndexes = new Set(
+      outputs
+        .filter((output) => output.kind === "audio.transcription")
+        .map((output) => output.attachmentIndex),
+    );
+    const syntheticSkippedAudioOutputs = buildSyntheticSkippedAudioOutputs(decisions).filter(
+      (output) => !audioOutputAttachmentIndexes.has(output.attachmentIndex),
+    );
+    outputs.push(...syntheticSkippedAudioOutputs);
 
     if (decisions.length > 0) {
       ctx.MediaUnderstandingDecisions = [...(ctx.MediaUnderstandingDecisions ?? []), ...decisions];
