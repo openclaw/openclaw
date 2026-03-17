@@ -612,6 +612,7 @@
     "long": "^5.3.2",
     "markdown-it": "^14.1.1",
     "node-edge-tts": "^1.2.10",
+    "nostr-tools": "^2.23.3",
     "opusscript": "^0.1.1",
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.5.207",
