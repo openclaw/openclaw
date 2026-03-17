@@ -821,15 +821,18 @@ export const agentHandlers: GatewayRequestHandlers = {
           snapshot = mergeAgentWaitStructuredMetadata(snapshot, immediateDedupeMetadata);
         }
         if (isMissingAgentWaitStructuredMetadata(snapshot)) {
+          let graceTimer: ReturnType<typeof setTimeout> | null = null;
           const dedupeMetadata =
             (await Promise.race([
-              dedupePromise,
+              dedupePromise.finally(() => {
+                if (graceTimer != null) clearTimeout(graceTimer);
+              }),
               new Promise<null>((resolve) => {
-                const timer = setTimeout(
+                graceTimer = setTimeout(
                   () => resolve(null),
                   Math.max(1, Math.min(timeoutMs, 2_147_483_647)),
                 );
-                timer.unref?.();
+                graceTimer.unref?.();
               }),
             ])) ?? null;
           snapshot = mergeAgentWaitStructuredMetadata(snapshot, dedupeMetadata);
