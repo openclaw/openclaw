@@ -249,6 +249,26 @@ describe("slack channel incidentBotAllowPrefix", () => {
       );
     }
   });
+
+  it("rejects a whitespace-only bot allow prefix", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          channels: {
+            "#platform-monitoring": {
+              incidentBotAllowPrefix: "   ",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe(
+        "channels.slack.channels.#platform-monitoring.incidentBotAllowPrefix",
+      );
+    }
+  });
 });
 
 describe("cron webhook schema", () => {

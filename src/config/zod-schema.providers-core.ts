@@ -805,7 +805,11 @@ export const SlackChannelSchema = z
     allowHumanThreadFollowups: z.boolean().optional(),
     incidentIgnoreResolved: z.boolean().optional(),
     incidentDedupeWindowSeconds: z.number().int().min(0).optional(),
-    incidentBotAllowPrefix: z.string().min(1).optional(),
+    incidentBotAllowPrefix: z
+      .string()
+      .min(1)
+      .refine((value) => value.trim().length > 0, "Prefix cannot be only whitespace")
+      .optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     allowBots: z.boolean().optional(),
