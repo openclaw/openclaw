@@ -504,6 +504,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.bashForegroundMs": "Bash Foreground Window (ms)",
   "commands.config": "Allow /config",
   "commands.mcp": "Allow /mcp",
+  "commands.plugins": "Allow /plugins",
   "commands.debug": "Allow /debug",
   "commands.restart": "Allow Restart",
   "commands.useAccessGroups": "Use Access Groups",

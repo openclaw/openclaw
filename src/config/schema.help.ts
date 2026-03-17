@@ -1095,6 +1095,8 @@ export const FIELD_HELP: Record<string, string> = {
   "commands.config": "Allow /config chat command to read/write config on disk (default: false).",
   "commands.mcp":
     "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
+  "commands.plugins":
+    "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart": "Allow /restart and gateway restart tool actions (default: true).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",

@@ -25,6 +25,7 @@ import {
 import { handleMcpCommand } from "./commands-mcp.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { handlePluginsCommand } from "./commands-plugins.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -196,6 +197,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleSubagentsCommand,
       handleAcpCommand,
       handleMcpCommand,
+      handlePluginsCommand,
       handleConfigCommand,
       handleDebugCommand,
       handleModelsCommand,
