@@ -1,4 +1,3 @@
-import { formatDocsLink } from "openclaw/plugin-sdk/discord";
 import {
   type OpenClawConfig,
   promptLegacyChannelAllowFrom,
@@ -6,6 +5,7 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultDiscordAccountId, resolveDiscordAccount } from "./accounts.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import {

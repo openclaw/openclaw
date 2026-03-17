@@ -1,5 +1,4 @@
 import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-runtime";
-import { formatDocsLink } from "openclaw/plugin-sdk/discord";
 import {
   DEFAULT_ACCOUNT_ID,
   createEnvPatchedAccountSetupAdapter,
@@ -17,6 +16,7 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 

@@ -1,4 +1,3 @@
-import { formatDocsLink } from "openclaw/plugin-sdk/imessage";
 import {
   createPatchedAccountSetupAdapter,
   parseSetupEntriesAllowingWildcard,
@@ -14,6 +13,7 @@ import type {
   ChannelSetupWizard,
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
