@@ -1,0 +1,4 @@
+const DEFAULT_WEB_MEDIA_BYTES = 5 * 1024 * 1024;
+export {
+  DEFAULT_WEB_MEDIA_BYTES
+};

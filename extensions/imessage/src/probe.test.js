@@ -1,0 +1,34 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { probeIMessage } from "./probe.js";
+const detectBinaryMock = vi.hoisted(() => vi.fn());
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
+const createIMessageRpcClientMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../src/commands/onboard-helpers.js", () => ({
+  detectBinary: (...args) => detectBinaryMock(...args)
+}));
+vi.mock("../../../src/process/exec.js", () => ({
+  runCommandWithTimeout: (...args) => runCommandWithTimeoutMock(...args)
+}));
+vi.mock("./client.js", () => ({
+  createIMessageRpcClient: (...args) => createIMessageRpcClientMock(...args)
+}));
+beforeEach(() => {
+  detectBinaryMock.mockClear().mockResolvedValue(true);
+  runCommandWithTimeoutMock.mockClear().mockResolvedValue({
+    stdout: "",
+    stderr: 'unknown command "rpc" for "imsg"',
+    code: 1,
+    signal: null,
+    killed: false
+  });
+  createIMessageRpcClientMock.mockClear();
+});
+describe("probeIMessage", () => {
+  it("marks unknown rpc subcommand as fatal", async () => {
+    const result = await probeIMessage(1e3, { cliPath: "imsg" });
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toMatch(/rpc/i);
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+});

@@ -1,0 +1,356 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveSlackChannelConfig } from "./channel-config.js";
+import { createSlackMonitorContext, normalizeSlackChannelType } from "./context.js";
+import { resetSlackThreadStarterCacheForTest, resolveSlackThreadStarter } from "./media.js";
+import { createSlackThreadTsResolver } from "./thread-resolution.js";
+describe("resolveSlackChannelConfig", () => {
+  it("uses defaultRequireMention when channels config is empty", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: {},
+      defaultRequireMention: false
+    });
+    expect(res).toEqual({ allowed: true, requireMention: false });
+  });
+  it("defaults defaultRequireMention to true when not provided", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: {}
+    });
+    expect(res).toEqual({ allowed: true, requireMention: true });
+  });
+  it("prefers explicit channel/fallback requireMention over defaultRequireMention", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { "*": { requireMention: true } },
+      defaultRequireMention: false
+    });
+    expect(res).toMatchObject({ requireMention: true });
+  });
+  it("uses wildcard entries when no direct channel config exists", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { "*": { allow: true, requireMention: false } },
+      defaultRequireMention: true
+    });
+    expect(res).toMatchObject({
+      allowed: true,
+      requireMention: false,
+      matchKey: "*",
+      matchSource: "wildcard"
+    });
+  });
+  it("uses direct match metadata when channel config exists", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channels: { C1: { allow: true, requireMention: false } },
+      defaultRequireMention: true
+    });
+    expect(res).toMatchObject({
+      matchKey: "C1",
+      matchSource: "direct"
+    });
+  });
+  it("matches channel config key stored in lowercase when Slack delivers uppercase channel ID", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C0ABC12345",
+      // pragma: allowlist secret
+      channels: { c0abc12345: { allow: true, requireMention: false } },
+      defaultRequireMention: true
+    });
+    expect(res).toMatchObject({ allowed: true, requireMention: false });
+  });
+  it("matches channel config key stored in uppercase when user types lowercase channel ID", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "c0abc12345",
+      // pragma: allowlist secret
+      channels: { C0ABC12345: { allow: true, requireMention: false } },
+      defaultRequireMention: true
+    });
+    expect(res).toMatchObject({ allowed: true, requireMention: false });
+  });
+  it("blocks channel-name route matches by default", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channelName: "ops-room",
+      channels: { "ops-room": { allow: true, requireMention: false } },
+      defaultRequireMention: true
+    });
+    expect(res).toMatchObject({ allowed: false, requireMention: true });
+  });
+  it("allows channel-name route matches when dangerous name matching is enabled", () => {
+    const res = resolveSlackChannelConfig({
+      channelId: "C1",
+      channelName: "ops-room",
+      channels: { "ops-room": { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+      allowNameMatching: true
+    });
+    expect(res).toMatchObject({
+      allowed: true,
+      requireMention: false,
+      matchKey: "ops-room",
+      matchSource: "direct"
+    });
+  });
+});
+const baseParams = () => ({
+  cfg: {},
+  accountId: "default",
+  botToken: "token",
+  app: { client: {} },
+  runtime: {},
+  botUserId: "B1",
+  teamId: "T1",
+  apiAppId: "A1",
+  historyLimit: 0,
+  sessionScope: "per-sender",
+  mainKey: "main",
+  dmEnabled: true,
+  dmPolicy: "open",
+  allowFrom: [],
+  allowNameMatching: false,
+  groupDmEnabled: true,
+  groupDmChannels: [],
+  defaultRequireMention: true,
+  groupPolicy: "open",
+  useAccessGroups: false,
+  reactionMode: "off",
+  reactionAllowlist: [],
+  replyToMode: "off",
+  slashCommand: {
+    enabled: false,
+    name: "openclaw",
+    sessionPrefix: "slack:slash",
+    ephemeral: true
+  },
+  textLimit: 4e3,
+  ackReactionScope: "group-mentions",
+  typingReaction: "",
+  mediaMaxBytes: 1,
+  threadHistoryScope: "thread",
+  threadInheritParent: false,
+  removeAckAfterReply: false
+});
+function createThreadStarterRepliesClient(response = {
+  messages: [{ text: "root message", user: "U1", ts: "1000.1" }]
+}) {
+  const replies = vi.fn(async () => response);
+  const client = {
+    conversations: { replies }
+  };
+  return { replies, client };
+}
+function createListedChannelsContext(groupPolicy) {
+  return createSlackMonitorContext({
+    ...baseParams(),
+    groupPolicy,
+    channelsConfig: {
+      C_LISTED: { requireMention: true }
+    }
+  });
+}
+describe("normalizeSlackChannelType", () => {
+  it("infers channel types from ids when missing", () => {
+    expect(normalizeSlackChannelType(void 0, "C123")).toBe("channel");
+    expect(normalizeSlackChannelType(void 0, "D123")).toBe("im");
+    expect(normalizeSlackChannelType(void 0, "G123")).toBe("group");
+  });
+  it("prefers explicit channel_type values", () => {
+    expect(normalizeSlackChannelType("mpim", "C123")).toBe("mpim");
+  });
+  it("overrides wrong channel_type for D-prefix DM channels", () => {
+    expect(normalizeSlackChannelType("channel", "D123")).toBe("im");
+    expect(normalizeSlackChannelType("group", "D456")).toBe("im");
+    expect(normalizeSlackChannelType("mpim", "D789")).toBe("im");
+  });
+  it("preserves correct channel_type for D-prefix DM channels", () => {
+    expect(normalizeSlackChannelType("im", "D123")).toBe("im");
+  });
+  it("does not override G-prefix channel_type (ambiguous prefix)", () => {
+    expect(normalizeSlackChannelType("group", "G123")).toBe("group");
+    expect(normalizeSlackChannelType("mpim", "G456")).toBe("mpim");
+  });
+});
+describe("resolveSlackSystemEventSessionKey", () => {
+  it("defaults missing channel_type to channel sessions", () => {
+    const ctx = createSlackMonitorContext(baseParams());
+    expect(ctx.resolveSlackSystemEventSessionKey({ channelId: "C123" })).toBe(
+      "agent:main:slack:channel:c123"
+    );
+  });
+  it("routes channel system events through account bindings", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      accountId: "work",
+      cfg: {
+        bindings: [
+          {
+            agentId: "ops",
+            match: {
+              channel: "slack",
+              accountId: "work"
+            }
+          }
+        ]
+      }
+    });
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({ channelId: "C123", channelType: "channel" })
+    ).toBe("agent:ops:slack:channel:c123");
+  });
+  it("routes DM system events through direct-peer bindings when sender is known", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      accountId: "work",
+      cfg: {
+        bindings: [
+          {
+            agentId: "ops-dm",
+            match: {
+              channel: "slack",
+              accountId: "work",
+              peer: { kind: "direct", id: "U123" }
+            }
+          }
+        ]
+      }
+    });
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "D123",
+        channelType: "im",
+        senderId: "U123"
+      })
+    ).toBe("agent:ops-dm:main");
+  });
+});
+describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
+  it("allows unlisted channels when groupPolicy is open even with channelsConfig entries", () => {
+    const ctx = createListedChannelsContext("open");
+    expect(ctx.isChannelAllowed({ channelId: "C_LISTED", channelType: "channel" })).toBe(true);
+    expect(ctx.isChannelAllowed({ channelId: "C_UNLISTED", channelType: "channel" })).toBe(true);
+  });
+  it("blocks unlisted channels when groupPolicy is allowlist", () => {
+    const ctx = createListedChannelsContext("allowlist");
+    expect(ctx.isChannelAllowed({ channelId: "C_LISTED", channelType: "channel" })).toBe(true);
+    expect(ctx.isChannelAllowed({ channelId: "C_UNLISTED", channelType: "channel" })).toBe(false);
+  });
+  it("blocks explicitly denied channels even when groupPolicy is open", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      groupPolicy: "open",
+      channelsConfig: {
+        C_ALLOWED: { allow: true },
+        C_DENIED: { allow: false }
+      }
+    });
+    expect(ctx.isChannelAllowed({ channelId: "C_ALLOWED", channelType: "channel" })).toBe(true);
+    expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+    expect(ctx.isChannelAllowed({ channelId: "C_UNLISTED", channelType: "channel" })).toBe(true);
+  });
+  it("allows all channels when groupPolicy is open and channelsConfig is empty", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      groupPolicy: "open",
+      channelsConfig: void 0
+    });
+    expect(ctx.isChannelAllowed({ channelId: "C_ANY", channelType: "channel" })).toBe(true);
+  });
+});
+describe("resolveSlackThreadStarter cache", () => {
+  afterEach(() => {
+    resetSlackThreadStarterCacheForTest();
+    vi.useRealTimers();
+  });
+  it("returns cached thread starter without refetching within ttl", async () => {
+    const { replies, client } = createThreadStarterRepliesClient();
+    const first = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client
+    });
+    const second = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client
+    });
+    expect(first).toEqual(second);
+    expect(replies).toHaveBeenCalledTimes(1);
+  });
+  it("expires stale cache entries and refetches after ttl", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(/* @__PURE__ */ new Date("2026-01-01T00:00:00.000Z"));
+    const { replies, client } = createThreadStarterRepliesClient();
+    await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client
+    });
+    vi.setSystemTime(/* @__PURE__ */ new Date("2026-01-01T07:00:00.000Z"));
+    await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client
+    });
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+  it("does not cache empty starter text", async () => {
+    const { replies, client } = createThreadStarterRepliesClient({
+      messages: [{ text: "   ", user: "U1", ts: "1000.1" }]
+    });
+    const first = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client
+    });
+    const second = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client
+    });
+    expect(first).toBeNull();
+    expect(second).toBeNull();
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+  it("evicts oldest entries once cache exceeds bounded size", async () => {
+    const { replies, client } = createThreadStarterRepliesClient();
+    for (let i = 0; i <= 2e3; i += 1) {
+      await resolveSlackThreadStarter({
+        channelId: "C1",
+        threadTs: `1000.${i}`,
+        client
+      });
+    }
+    const callsAfterFill = replies.mock.calls.length;
+    await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.0",
+      client
+    });
+    expect(replies.mock.calls.length).toBe(callsAfterFill + 1);
+  });
+});
+describe("createSlackThreadTsResolver", () => {
+  it("caches resolved thread_ts lookups", async () => {
+    const historyMock = vi.fn().mockResolvedValue({
+      messages: [{ ts: "1", thread_ts: "9" }]
+    });
+    const resolver = createSlackThreadTsResolver({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      client: { conversations: { history: historyMock } },
+      cacheTtlMs: 6e4,
+      maxSize: 5
+    });
+    const message = {
+      channel: "C1",
+      parent_user_id: "U2",
+      ts: "1"
+    };
+    const first = await resolver.resolve({ message, source: "message" });
+    const second = await resolver.resolve({ message, source: "message" });
+    expect(first.thread_ts).toBe("9");
+    expect(second.thread_ts).toBe("9");
+    expect(historyMock).toHaveBeenCalledTimes(1);
+  });
+});

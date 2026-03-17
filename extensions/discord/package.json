@@ -5,7 +5,7 @@
   "type": "module",
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./index.js"
     ]
   }
 }

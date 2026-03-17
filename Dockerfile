@@ -91,7 +91,7 @@ RUN pnpm canvas:a2ui:bundle || \
 RUN pnpm build:docker
 # Pre-compile extension TypeScript to JavaScript so Jiti loads plain JS at runtime.
 # Without this, Jiti compiles every .ts file on first import (~5-10 min on shared-cpu).
-RUN node scripts/precompile-extensions.mjs && \
+RUN node scripts/precompile-extensions.cjs && \
     ls extensions/whatsapp/index.js && echo "PRECOMPILE_OK"
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1

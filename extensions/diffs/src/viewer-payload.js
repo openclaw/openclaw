@@ -1,0 +1,79 @@
+import { DIFF_INDICATORS, DIFF_LAYOUTS, DIFF_THEMES } from "./types.js";
+const OVERFLOW_VALUES = ["scroll", "wrap"];
+function parseViewerPayloadJson(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Diff payload is not valid JSON.");
+  }
+  if (!isDiffViewerPayload(parsed)) {
+    throw new Error("Diff payload has invalid shape.");
+  }
+  return parsed;
+}
+function isDiffViewerPayload(value) {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (typeof value.prerenderedHTML !== "string") {
+    return false;
+  }
+  if (!Array.isArray(value.langs) || !value.langs.every((lang) => typeof lang === "string")) {
+    return false;
+  }
+  if (!isViewerOptions(value.options)) {
+    return false;
+  }
+  const hasFileDiff = isRecord(value.fileDiff);
+  const hasBeforeAfterFiles = isRecord(value.oldFile) && isRecord(value.newFile);
+  if (!hasFileDiff && !hasBeforeAfterFiles) {
+    return false;
+  }
+  return true;
+}
+function isViewerOptions(value) {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (!isRecord(value.theme)) {
+    return false;
+  }
+  if (value.theme.light !== "pierre-light" || value.theme.dark !== "pierre-dark") {
+    return false;
+  }
+  if (!includesValue(DIFF_LAYOUTS, value.diffStyle)) {
+    return false;
+  }
+  if (!includesValue(DIFF_INDICATORS, value.diffIndicators)) {
+    return false;
+  }
+  if (!includesValue(DIFF_THEMES, value.themeType)) {
+    return false;
+  }
+  if (!includesValue(OVERFLOW_VALUES, value.overflow)) {
+    return false;
+  }
+  if (typeof value.disableLineNumbers !== "boolean") {
+    return false;
+  }
+  if (typeof value.expandUnchanged !== "boolean") {
+    return false;
+  }
+  if (typeof value.backgroundEnabled !== "boolean") {
+    return false;
+  }
+  if (typeof value.unsafeCSS !== "string") {
+    return false;
+  }
+  return true;
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+function includesValue(values, value) {
+  return typeof value === "string" && values.includes(value);
+}
+export {
+  parseViewerPayloadJson
+};

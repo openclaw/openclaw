@@ -13,7 +13,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./index.js"
     ],
     "channel": {
       "id": "matrix",

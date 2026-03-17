@@ -8,7 +8,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./index.js"
     ],
     "channel": {
       "id": "nextcloud-talk",

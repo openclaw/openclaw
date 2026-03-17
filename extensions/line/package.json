@@ -6,7 +6,7 @@
   "type": "module",
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./index.js"
     ],
     "channel": {
       "id": "line",

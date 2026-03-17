@@ -1,0 +1,16 @@
+import { jidToE164, normalizeE164 } from "../../../../../src/utils.js";
+function resolvePeerId(msg) {
+  if (msg.chatType === "group") {
+    return msg.conversationId ?? msg.from;
+  }
+  if (msg.senderE164) {
+    return normalizeE164(msg.senderE164) ?? msg.senderE164;
+  }
+  if (msg.from.includes("@")) {
+    return jidToE164(msg.from) ?? msg.from;
+  }
+  return normalizeE164(msg.from) ?? msg.from;
+}
+export {
+  resolvePeerId
+};

@@ -1,0 +1,391 @@
+import { hasControlCommand } from "../../../../src/auto-reply/command-detection.js";
+import { resolveInboundDebounceMs } from "../../../../src/auto-reply/inbound-debounce.js";
+import { getReplyFromConfig } from "../../../../src/auto-reply/reply.js";
+import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../../../src/auto-reply/reply/history.js";
+import { formatCliCommand } from "../../../../src/cli/command-format.js";
+import { waitForever } from "../../../../src/cli/wait.js";
+import { loadConfig } from "../../../../src/config/config.js";
+import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
+import { logVerbose } from "../../../../src/globals.js";
+import { formatDurationPrecise } from "../../../../src/infra/format-time/format-duration.ts";
+import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
+import { registerUnhandledRejectionHandler } from "../../../../src/infra/unhandled-rejections.js";
+import { getChildLogger } from "../../../../src/logging.js";
+import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
+import { defaultRuntime } from "../../../../src/runtime.js";
+import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
+import { setActiveWebListener } from "../active-listener.js";
+import { monitorWebInbox } from "../inbound.js";
+import {
+  computeBackoff,
+  newConnectionId,
+  resolveHeartbeatSeconds,
+  resolveReconnectPolicy,
+  sleepWithAbort
+} from "../reconnect.js";
+import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
+import { buildMentionConfig } from "./mentions.js";
+import { createEchoTracker } from "./monitor/echo.js";
+import { createWebOnMessageHandler } from "./monitor/on-message.js";
+import { isLikelyWhatsAppCryptoError } from "./util.js";
+function isNonRetryableWebCloseStatus(statusCode) {
+  return statusCode === 440;
+}
+async function monitorWebChannel(verbose, listenerFactory = monitorWebInbox, keepAlive = true, replyResolver = getReplyFromConfig, runtime = defaultRuntime, abortSignal, tuning = {}) {
+  const runId = newConnectionId();
+  const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
+  const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
+  const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
+  const status = {
+    running: true,
+    connected: false,
+    reconnectAttempts: 0,
+    lastConnectedAt: null,
+    lastDisconnect: null,
+    lastMessageAt: null,
+    lastEventAt: null,
+    lastError: null
+  };
+  const emitStatus = () => {
+    tuning.statusSink?.({
+      ...status,
+      lastDisconnect: status.lastDisconnect ? { ...status.lastDisconnect } : null
+    });
+  };
+  emitStatus();
+  const baseCfg = loadConfig();
+  const account = resolveWhatsAppAccount({
+    cfg: baseCfg,
+    accountId: tuning.accountId
+  });
+  const cfg = {
+    ...baseCfg,
+    channels: {
+      ...baseCfg.channels,
+      whatsapp: {
+        ...baseCfg.channels?.whatsapp,
+        ackReaction: account.ackReaction,
+        messagePrefix: account.messagePrefix,
+        allowFrom: account.allowFrom,
+        groupAllowFrom: account.groupAllowFrom,
+        groupPolicy: account.groupPolicy,
+        textChunkLimit: account.textChunkLimit,
+        chunkMode: account.chunkMode,
+        mediaMaxMb: account.mediaMaxMb,
+        blockStreaming: account.blockStreaming,
+        groups: account.groups
+      }
+    }
+  };
+  const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
+  const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
+  const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+  const baseMentionConfig = buildMentionConfig(cfg);
+  const groupHistoryLimit = cfg.channels?.whatsapp?.accounts?.[tuning.accountId ?? ""]?.historyLimit ?? cfg.channels?.whatsapp?.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+  const groupHistories = /* @__PURE__ */ new Map();
+  const groupMemberNames = /* @__PURE__ */ new Map();
+  const echoTracker = createEchoTracker({ maxItems: 100, logVerbose });
+  const sleep = tuning.sleep ?? ((ms, signal) => sleepWithAbort(ms, signal ?? abortSignal));
+  const stopRequested = () => abortSignal?.aborted === true;
+  const abortPromise = abortSignal && new Promise(
+    (resolve) => abortSignal.addEventListener("abort", () => resolve("aborted"), {
+      once: true
+    })
+  );
+  const currentMaxListeners = process.getMaxListeners?.() ?? 10;
+  if (process.setMaxListeners && currentMaxListeners < 50) {
+    process.setMaxListeners(50);
+  }
+  let sigintStop = false;
+  const handleSigint = () => {
+    sigintStop = true;
+  };
+  process.once("SIGINT", handleSigint);
+  let reconnectAttempts = 0;
+  while (true) {
+    if (stopRequested()) {
+      break;
+    }
+    const connectionId = newConnectionId();
+    const startedAt = Date.now();
+    let heartbeat = null;
+    let watchdogTimer = null;
+    let lastMessageAt = null;
+    let handledMessages = 0;
+    let _lastInboundMsg = null;
+    let unregisterUnhandled = null;
+    const MESSAGE_TIMEOUT_MS = tuning.messageTimeoutMs ?? 30 * 60 * 1e3;
+    const WATCHDOG_CHECK_MS = tuning.watchdogCheckMs ?? 60 * 1e3;
+    const backgroundTasks = /* @__PURE__ */ new Set();
+    const onMessage = createWebOnMessageHandler({
+      cfg,
+      verbose,
+      connectionId,
+      maxMediaBytes,
+      groupHistoryLimit,
+      groupHistories,
+      groupMemberNames,
+      echoTracker,
+      backgroundTasks,
+      replyResolver: replyResolver ?? getReplyFromConfig,
+      replyLogger,
+      baseMentionConfig,
+      account
+    });
+    const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "whatsapp" });
+    const shouldDebounce = (msg) => {
+      if (msg.mediaPath || msg.mediaType) {
+        return false;
+      }
+      if (msg.location) {
+        return false;
+      }
+      if (msg.replyToId || msg.replyToBody) {
+        return false;
+      }
+      return !hasControlCommand(msg.body, cfg);
+    };
+    const listener = await (listenerFactory ?? monitorWebInbox)({
+      verbose,
+      accountId: account.accountId,
+      authDir: account.authDir,
+      mediaMaxMb: account.mediaMaxMb,
+      sendReadReceipts: account.sendReadReceipts,
+      debounceMs: inboundDebounceMs,
+      shouldDebounce,
+      onMessage: async (msg) => {
+        handledMessages += 1;
+        lastMessageAt = Date.now();
+        status.lastMessageAt = lastMessageAt;
+        status.lastEventAt = lastMessageAt;
+        emitStatus();
+        _lastInboundMsg = msg;
+        await onMessage(msg);
+      }
+    });
+    Object.assign(status, createConnectedChannelStatusPatch());
+    status.lastError = null;
+    emitStatus();
+    const { e164: selfE164 } = readWebSelfId(account.authDir);
+    const connectRoute = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: account.accountId
+    });
+    enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
+      sessionKey: connectRoute.sessionKey
+    });
+    setActiveWebListener(account.accountId, listener);
+    unregisterUnhandled = registerUnhandledRejectionHandler((reason2) => {
+      if (!isLikelyWhatsAppCryptoError(reason2)) {
+        return false;
+      }
+      const errorStr2 = formatError(reason2);
+      reconnectLogger.warn(
+        { connectionId, error: errorStr2 },
+        "web reconnect: unhandled rejection from WhatsApp socket; forcing reconnect"
+      );
+      listener.signalClose?.({
+        status: 499,
+        isLoggedOut: false,
+        error: reason2
+      });
+      return true;
+    });
+    const closeListener = async () => {
+      setActiveWebListener(account.accountId, null);
+      if (unregisterUnhandled) {
+        unregisterUnhandled();
+        unregisterUnhandled = null;
+      }
+      if (heartbeat) {
+        clearInterval(heartbeat);
+      }
+      if (watchdogTimer) {
+        clearInterval(watchdogTimer);
+      }
+      if (backgroundTasks.size > 0) {
+        await Promise.allSettled(backgroundTasks);
+        backgroundTasks.clear();
+      }
+      try {
+        await listener.close();
+      } catch (err) {
+        logVerbose(`Socket close failed: ${formatError(err)}`);
+      }
+    };
+    if (keepAlive) {
+      heartbeat = setInterval(() => {
+        const authAgeMs = getWebAuthAgeMs(account.authDir);
+        const minutesSinceLastMessage = lastMessageAt ? Math.floor((Date.now() - lastMessageAt) / 6e4) : null;
+        const logData = {
+          connectionId,
+          reconnectAttempts,
+          messagesHandled: handledMessages,
+          lastMessageAt,
+          authAgeMs,
+          uptimeMs: Date.now() - startedAt,
+          ...minutesSinceLastMessage !== null && minutesSinceLastMessage > 30 ? { minutesSinceLastMessage } : {}
+        };
+        if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
+          heartbeatLogger.warn(logData, "\u26A0\uFE0F web gateway heartbeat - no messages in 30+ minutes");
+        } else {
+          heartbeatLogger.info(logData, "web gateway heartbeat");
+        }
+      }, heartbeatSeconds * 1e3);
+      watchdogTimer = setInterval(() => {
+        if (!lastMessageAt) {
+          return;
+        }
+        const timeSinceLastMessage = Date.now() - lastMessageAt;
+        if (timeSinceLastMessage <= MESSAGE_TIMEOUT_MS) {
+          return;
+        }
+        const minutesSinceLastMessage = Math.floor(timeSinceLastMessage / 6e4);
+        heartbeatLogger.warn(
+          {
+            connectionId,
+            minutesSinceLastMessage,
+            lastMessageAt: new Date(lastMessageAt),
+            messagesHandled: handledMessages
+          },
+          "Message timeout detected - forcing reconnect"
+        );
+        whatsappHeartbeatLog.warn(
+          `No messages received in ${minutesSinceLastMessage}m - restarting connection`
+        );
+        void closeListener().catch((err) => {
+          logVerbose(`Close listener failed: ${formatError(err)}`);
+        });
+        listener.signalClose?.({
+          status: 499,
+          isLoggedOut: false,
+          error: "watchdog-timeout"
+        });
+      }, WATCHDOG_CHECK_MS);
+    }
+    whatsappLog.info("Listening for personal WhatsApp inbound messages.");
+    if (process.stdout.isTTY || process.stderr.isTTY) {
+      whatsappLog.raw("Ctrl+C to stop.");
+    }
+    if (!keepAlive) {
+      await closeListener();
+      process.removeListener("SIGINT", handleSigint);
+      return;
+    }
+    const reason = await Promise.race([
+      listener.onClose?.catch((err) => {
+        reconnectLogger.error({ error: formatError(err) }, "listener.onClose rejected");
+        return { status: 500, isLoggedOut: false, error: err };
+      }) ?? waitForever(),
+      abortPromise ?? waitForever()
+    ]);
+    const uptimeMs = Date.now() - startedAt;
+    if (uptimeMs > heartbeatSeconds * 1e3) {
+      reconnectAttempts = 0;
+    }
+    status.reconnectAttempts = reconnectAttempts;
+    emitStatus();
+    if (stopRequested() || sigintStop || reason === "aborted") {
+      await closeListener();
+      break;
+    }
+    const statusCode = (typeof reason === "object" && reason && "status" in reason ? reason.status : void 0) ?? "unknown";
+    const loggedOut = typeof reason === "object" && reason && "isLoggedOut" in reason && reason.isLoggedOut;
+    const errorStr = formatError(reason);
+    status.connected = false;
+    status.lastEventAt = Date.now();
+    status.lastDisconnect = {
+      at: status.lastEventAt,
+      status: typeof statusCode === "number" ? statusCode : void 0,
+      error: errorStr,
+      loggedOut: Boolean(loggedOut)
+    };
+    status.lastError = errorStr;
+    status.reconnectAttempts = reconnectAttempts;
+    emitStatus();
+    reconnectLogger.info(
+      {
+        connectionId,
+        status: statusCode,
+        loggedOut,
+        reconnectAttempts,
+        error: errorStr
+      },
+      "web reconnect: connection closed"
+    );
+    enqueueSystemEvent(`WhatsApp gateway disconnected (status ${statusCode ?? "unknown"})`, {
+      sessionKey: connectRoute.sessionKey
+    });
+    if (loggedOut) {
+      runtime.error(
+        `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`
+      );
+      await closeListener();
+      break;
+    }
+    if (isNonRetryableWebCloseStatus(statusCode)) {
+      reconnectLogger.warn(
+        {
+          connectionId,
+          status: statusCode,
+          error: errorStr
+        },
+        "web reconnect: non-retryable close status; stopping monitor"
+      );
+      runtime.error(
+        `WhatsApp Web connection closed (status ${statusCode}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel web")}\`. Stopping web monitoring.`
+      );
+      await closeListener();
+      break;
+    }
+    reconnectAttempts += 1;
+    status.reconnectAttempts = reconnectAttempts;
+    emitStatus();
+    if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
+      reconnectLogger.warn(
+        {
+          connectionId,
+          status: statusCode,
+          reconnectAttempts,
+          maxAttempts: reconnectPolicy.maxAttempts
+        },
+        "web reconnect: max attempts reached; continuing in degraded mode"
+      );
+      runtime.error(
+        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping web monitoring.`
+      );
+      await closeListener();
+      break;
+    }
+    const delay = computeBackoff(reconnectPolicy, reconnectAttempts);
+    reconnectLogger.info(
+      {
+        connectionId,
+        status: statusCode,
+        reconnectAttempts,
+        maxAttempts: reconnectPolicy.maxAttempts || "unlimited",
+        delayMs: delay
+      },
+      "web reconnect: scheduling retry"
+    );
+    runtime.error(
+      `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "\u221E"} in ${formatDurationPrecise(delay)}\u2026 (${errorStr})`
+    );
+    await closeListener();
+    try {
+      await sleep(delay, abortSignal);
+    } catch {
+      break;
+    }
+  }
+  status.running = false;
+  status.connected = false;
+  status.lastEventAt = Date.now();
+  emitStatus();
+  process.removeListener("SIGINT", handleSigint);
+}
+export {
+  monitorWebChannel
+};
