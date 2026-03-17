@@ -15,6 +15,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/matrix";
+import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
@@ -38,9 +39,12 @@ import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
-async function loadMatrixChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
+type MatrixChannelRuntime = typeof import("./channel.runtime.js").matrixChannelRuntime;
+
+const loadMatrixChannelRuntime = createLazyRuntimeSurface(
+  () => import("./channel.runtime.js"),
+  ({ matrixChannelRuntime }) => matrixChannelRuntime,
+);
 
 const meta = {
   id: "matrix",

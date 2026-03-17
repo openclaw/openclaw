@@ -4,14 +4,15 @@ import type {
   OpenClawConfig,
 } from "openclaw/plugin-sdk/zalo";
 import { extractToolSend, jsonResult, readStringParam } from "openclaw/plugin-sdk/zalo";
+import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import { listEnabledZaloAccounts } from "./accounts.js";
 
-let zaloActionsRuntimePromise: Promise<typeof import("./actions.runtime.js")> | null = null;
+type ZaloActionsRuntime = typeof import("./actions.runtime.js").zaloActionsRuntime;
 
-async function loadZaloActionsRuntime() {
-  zaloActionsRuntimePromise ??= import("./actions.runtime.js");
-  return zaloActionsRuntimePromise;
-}
+const loadZaloActionsRuntime = createLazyRuntimeSurface(
+  () => import("./actions.runtime.js"),
+  ({ zaloActionsRuntime }) => zaloActionsRuntime,
+);
 
 const providerId = "zalo";
 
