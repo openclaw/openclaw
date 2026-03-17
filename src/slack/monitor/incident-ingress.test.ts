@@ -493,6 +493,44 @@ describe("resolveSlackIncidentIngressDrop", () => {
     expect(res).toEqual({ shouldDrop: false });
   });
 
+  it("allows bot messages with leading whitespace before incidentBotAllowPrefix", () => {
+    const res = resolveSlackIncidentIngressDrop({
+      accountId: "default",
+      channelConfig: { ...baseConfig, incidentBotAllowPrefix: "New incident" },
+      channelId: "C1",
+      dedupeStore: new Map(),
+      message: {
+        channel: "C1",
+        channel_type: "channel",
+        text: "   New incident: API down",
+        ts: "1",
+        bot_id: "B1",
+        type: "message",
+      },
+      rawBody: "   New incident: API down",
+    });
+    expect(res).toEqual({ shouldDrop: false });
+  });
+
+  it("treats incidentBotAllowPrefix matching as case-sensitive", () => {
+    const res = resolveSlackIncidentIngressDrop({
+      accountId: "default",
+      channelConfig: { ...baseConfig, incidentBotAllowPrefix: "New incident" },
+      channelId: "C1",
+      dedupeStore: new Map(),
+      message: {
+        channel: "C1",
+        channel_type: "channel",
+        text: "New Incident: API down",
+        ts: "1",
+        bot_id: "B1",
+        type: "message",
+      },
+      rawBody: "New Incident: API down",
+    });
+    expect(res).toEqual({ shouldDrop: true, reason: "incident-bot-prefix-mismatch" });
+  });
+
   it("does not apply incidentBotAllowPrefix to human messages", () => {
     const res = resolveSlackIncidentIngressDrop({
       accountId: "default",

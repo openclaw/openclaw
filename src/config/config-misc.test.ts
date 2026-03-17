@@ -214,6 +214,43 @@ describe("gateway.channelHealthCheckMinutes", () => {
   });
 });
 
+describe("slack channel incidentBotAllowPrefix", () => {
+  it("accepts a non-empty bot allow prefix", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          channels: {
+            "#platform-monitoring": {
+              incidentBotAllowPrefix: "New incident",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects an empty bot allow prefix", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          channels: {
+            "#platform-monitoring": {
+              incidentBotAllowPrefix: "",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe(
+        "channels.slack.channels.#platform-monitoring.incidentBotAllowPrefix",
+      );
+    }
+  });
+});
+
 describe("cron webhook schema", () => {
   it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({
