@@ -1,6 +1,5 @@
 import {
   DEFAULT_ACCOUNT_ID,
-  formatDocsLink,
   hasConfiguredSecretInput,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -20,6 +19,7 @@ import type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
 } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
