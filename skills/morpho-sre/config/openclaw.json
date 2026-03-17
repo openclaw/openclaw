@@ -513,9 +513,6 @@
             "posthog-prd-vmv1": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
               "args": ["prd", "--project-key", "vmv1"]
-            },
-            "wiz": {
-              "command": "/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh"
             }
           }
         }

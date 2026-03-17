@@ -81,10 +81,10 @@ investigation.
 - `erpc-context.sh`
   Builds a local eRPC context bundle: redacted Vault config, upstream repo/docs,
   metrics catalog, and Morpho local references.
-- `wiz-mcp.sh`
-  Vault-aware Wiz MCP launcher. Resolves current Wiz credentials from
-  `secret/wiz/api-token`, then starts `mcp-remote` without putting secrets in
-  process args.
+- `wiz-api.sh`
+  Direct Wiz GraphQL API client. OAuth2 auth with file-based token caching.
+  Queries vulnerabilities, issues, cloud config, Kubernetes posture, runtime
+  events, and resource inventory.
 - `single-vault-graphql-evidence.sh`
   GraphQL exact-query replay and same-chain control helper for single-entity API
   incidents.

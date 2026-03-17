@@ -102,7 +102,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - eRPC API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/erpc-api.sh`
 - Sentry API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentry-api.sh`
 - Sentry CLI wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentry-cli.sh`
-- Wiz MCP launcher: `/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh`
+- Wiz API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh`
 - DB target helper: `/home/node/.openclaw/skills/morpho-sre/scripts/lib-db-target.sh`
 - DB evidence wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/db-evidence.sh`
 - Single-vault GraphQL evidence helper: `/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh`
@@ -135,7 +135,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Helper scripts that support RCA and eRPC investigation:
   - `erpc-context.sh`
   - `single-vault-graphql-evidence.sh`
-  - `wiz-mcp.sh`
+  - `wiz-api.sh`
   - `rca-provider-codex.sh`
   - `rca-provider-claude.sh`
   - `rca-provider-openclaw-agent.sh`
@@ -144,34 +144,51 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Use `references/dune/dataset-discovery.md` when searching for decoded contract
   tables or spellbook datasets.
 
-## Wiz MCP
-
-- ACP is enabled with `dispatch.enabled=false`, so `/acp` commands are available
-  without switching normal thread execution over to ACP.
-- ACPX is seeded with a `wiz` MCP server definition that runs
-  `/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh`.
-- `wiz-mcp.sh` prefers Vault path `secret/wiz/api-token` over
-  `WIZ_CLIENT_ID` / `WIZ_CLIENT_SECRET`, because the runtime env secret may lag
-  behind the canonical Wiz Vault entry.
-- The launcher keeps Wiz secrets out of process args by passing header
-  placeholders to `mcp-remote` and resolving the real values through
-  environment variables in the child process.
-- Manual checks:
-
-```bash
-# Show the redacted launch plan
-/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh --print-plan | jq
-
-# Probe current Vault-backed Wiz MCP credentials
-/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh --probe-auth | jq
-```
-
 - Prefer existing repo docs over inventing parallel guidance:
   - `morpho-infra/docs/operations/incident-response.md`
   - `morpho-infra/docs/guides/ai-agents-incident-troubleshooting.md`
   - `morpho-infra/docs/operations/erpc-operations.md`
   - `morpho-infra/docs/guides/observability-stack-onboarding.md`
   - `morpho-infra/docs/services/api-endpoints.md`
+
+## Wiz API (Direct GraphQL)
+
+- `wiz-api.sh` authenticates via OAuth2 client credentials and queries the Wiz
+  GraphQL API directly at `https://api.eu26.app.wiz.io/graphql`.
+- Credential resolution: Vault `secret/data/wiz/api-token` (KV v2 API path) > `WIZ_CLIENT_ID`/`WIZ_CLIENT_SECRET`.
+- Token is cached at `/tmp/wiz-api-token.json` (chmod 600) and auto-refreshed.
+- Pre-built subcommands auto-paginate (default max 10 pages).
+- Raw `query` subcommand does not auto-paginate.
+- Manual checks:
+
+```bash
+# Probe auth
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh --probe-auth | jq
+
+# Show config (redacted)
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh --print-plan | jq
+
+# Raw GraphQL query
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh query '{ issues(first: 5) { nodes { id severity } } }'
+
+# Vulnerabilities - critical + high, with known fix
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh vulns --severity CRITICAL,HIGH --has-fix
+
+# Issues - open critical
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh issues --severity CRITICAL --status OPEN
+
+# Cloud config findings
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh cloud-config --severity CRITICAL,HIGH
+
+# Kubernetes cluster posture
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh k8s
+
+# Runtime security events
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh runtime --severity CRITICAL,HIGH
+
+# Full posture summary (counts by severity)
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh summary | jq
+```
 
 ## Dune CLI
 
