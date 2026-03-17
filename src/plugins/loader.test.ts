@@ -575,6 +575,53 @@ function expectEscapingEntryRejected(params: {
   return registry;
 }
 
+function resolvePluginSdkAlias(params: {
+  root: string;
+  srcFile: string;
+  distFile: string;
+  modulePath: string;
+  argv1?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const run = () =>
+    __testing.resolvePluginSdkAliasFile({
+      srcFile: params.srcFile,
+      distFile: params.distFile,
+      modulePath: params.modulePath,
+      argv1: params.argv1,
+    });
+  return params.env ? withEnv(params.env, run) : run();
+}
+
+function listPluginSdkAliasCandidates(params: {
+  root: string;
+  srcFile: string;
+  distFile: string;
+  modulePath: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const run = () =>
+    __testing.listPluginSdkAliasCandidates({
+      srcFile: params.srcFile,
+      distFile: params.distFile,
+      modulePath: params.modulePath,
+    });
+  return params.env ? withEnv(params.env, run) : run();
+}
+
+function resolvePluginRuntimeModule(params: {
+  modulePath: string;
+  argv1?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  const run = () =>
+    __testing.resolvePluginRuntimeModulePath({
+      modulePath: params.modulePath,
+      argv1: params.argv1,
+    });
+  return params.env ? withEnv(params.env, run) : run();
+}
+
 afterEach(() => {
   clearPluginLoaderCache();
   if (prevBundledDir === undefined) {
@@ -3088,56 +3135,112 @@ module.exports = {
     });
   });
 
-  it("prefers dist plugin-sdk alias when loader runs from dist", () => {
-    const { root, distFile } = createPluginSdkAliasFixture();
-
-    const resolved = __testing.resolvePluginSdkAliasFile({
+  it.each([
+    {
+      name: "prefers dist plugin-sdk alias when loader runs from dist",
+      buildFixture: () => createPluginSdkAliasFixture(),
+      modulePath: (root: string) => path.join(root, "dist", "plugins", "loader.js"),
       srcFile: "index.ts",
       distFile: "index.js",
-      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+      expected: "dist" as const,
+    },
+    {
+      name: "prefers src plugin-sdk alias when loader runs from src in non-production",
+      buildFixture: () => createPluginSdkAliasFixture(),
+      modulePath: (root: string) => path.join(root, "src", "plugins", "loader.ts"),
+      srcFile: "index.ts",
+      distFile: "index.js",
+      env: { NODE_ENV: undefined },
+      expected: "src" as const,
+    },
+    {
+      name: "falls back to src plugin-sdk alias when dist is missing in production",
+      buildFixture: () => {
+        const fixture = createPluginSdkAliasFixture();
+        fs.rmSync(fixture.distFile);
+        return fixture;
+      },
+      modulePath: (root: string) => path.join(root, "src", "plugins", "loader.ts"),
+      srcFile: "index.ts",
+      distFile: "index.js",
+      env: { NODE_ENV: "production", VITEST: undefined },
+      expected: "src" as const,
+    },
+    {
+      name: "prefers dist root-alias shim when loader runs from dist",
+      buildFixture: () =>
+        createPluginSdkAliasFixture({
+          srcFile: "root-alias.cjs",
+          distFile: "root-alias.cjs",
+          srcBody: "module.exports = {};\n",
+          distBody: "module.exports = {};\n",
+        }),
+      modulePath: (root: string) => path.join(root, "dist", "plugins", "loader.js"),
+      srcFile: "root-alias.cjs",
+      distFile: "root-alias.cjs",
+      expected: "dist" as const,
+    },
+    {
+      name: "prefers src root-alias shim when loader runs from src in non-production",
+      buildFixture: () =>
+        createPluginSdkAliasFixture({
+          srcFile: "root-alias.cjs",
+          distFile: "root-alias.cjs",
+          srcBody: "module.exports = {};\n",
+          distBody: "module.exports = {};\n",
+        }),
+      modulePath: (root: string) => path.join(root, "src", "plugins", "loader.ts"),
+      srcFile: "root-alias.cjs",
+      distFile: "root-alias.cjs",
+      env: { NODE_ENV: undefined },
+      expected: "src" as const,
+    },
+    {
+      name: "resolves plugin-sdk alias from package root when loader runs from transpiler cache path",
+      buildFixture: () => createPluginSdkAliasFixture(),
+      modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
+      argv1: (root: string) => path.join(root, "openclaw.mjs"),
+      srcFile: "index.ts",
+      distFile: "index.js",
+      env: { NODE_ENV: undefined },
+      expected: "src" as const,
+    },
+  ])("$name", ({ buildFixture, modulePath, argv1, srcFile, distFile, env, expected }) => {
+    const fixture = buildFixture();
+    const resolved = resolvePluginSdkAlias({
+      root: fixture.root,
+      srcFile,
+      distFile,
+      modulePath: modulePath(fixture.root),
+      argv1: argv1?.(fixture.root),
+      env,
     });
-    expect(resolved).toBe(distFile);
+    expect(resolved).toBe(expected === "dist" ? fixture.distFile : fixture.srcFile);
   });
 
-  it("prefers dist candidates first for production src runtime", () => {
-    const { root, srcFile, distFile } = createPluginSdkAliasFixture();
-
-    const candidates = withEnv({ NODE_ENV: "production", VITEST: undefined }, () =>
-      __testing.listPluginSdkAliasCandidates({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-
-    expect(candidates.indexOf(distFile)).toBeLessThan(candidates.indexOf(srcFile));
-  });
-
-  it("prefers src plugin-sdk alias when loader runs from src in non-production", () => {
-    const { root, srcFile } = createPluginSdkAliasFixture();
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolvePluginSdkAliasFile({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
-  it("prefers src candidates first for non-production src runtime", () => {
-    const { root, srcFile, distFile } = createPluginSdkAliasFixture();
-
-    const candidates = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.listPluginSdkAliasCandidates({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-
-    expect(candidates.indexOf(srcFile)).toBeLessThan(candidates.indexOf(distFile));
+  it.each([
+    {
+      name: "prefers dist candidates first for production src runtime",
+      env: { NODE_ENV: "production", VITEST: undefined },
+      expectedFirst: "dist" as const,
+    },
+    {
+      name: "prefers src candidates first for non-production src runtime",
+      env: { NODE_ENV: undefined },
+      expectedFirst: "src" as const,
+    },
+  ])("$name", ({ env, expectedFirst }) => {
+    const fixture = createPluginSdkAliasFixture();
+    const candidates = listPluginSdkAliasCandidates({
+      root: fixture.root,
+      srcFile: "index.ts",
+      distFile: "index.js",
+      modulePath: path.join(fixture.root, "src", "plugins", "loader.ts"),
+      env,
+    });
+    const first = expectedFirst === "dist" ? fixture.distFile : fixture.srcFile;
+    const second = expectedFirst === "dist" ? fixture.srcFile : fixture.distFile;
+    expect(candidates.indexOf(first)).toBeLessThan(candidates.indexOf(second));
   });
 
   it("derives plugin-sdk subpaths from package exports", () => {
@@ -3145,36 +3248,6 @@ module.exports = {
     expect(subpaths).toContain("compat");
     expect(subpaths).toContain("telegram");
     expect(subpaths).not.toContain("root-alias");
-  });
-
-  it("falls back to src plugin-sdk alias when dist is missing in production", () => {
-    const { root, srcFile, distFile } = createPluginSdkAliasFixture();
-    fs.rmSync(distFile);
-
-    const resolved = withEnv({ NODE_ENV: "production", VITEST: undefined }, () =>
-      __testing.resolvePluginSdkAliasFile({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
-  it("prefers dist root-alias shim when loader runs from dist", () => {
-    const { root, distFile } = createPluginSdkAliasFixture({
-      srcFile: "root-alias.cjs",
-      distFile: "root-alias.cjs",
-      srcBody: "module.exports = {};\n",
-      distBody: "module.exports = {};\n",
-    });
-
-    const resolved = __testing.resolvePluginSdkAliasFile({
-      srcFile: "root-alias.cjs",
-      distFile: "root-alias.cjs",
-      modulePath: path.join(root, "dist", "plugins", "loader.js"),
-    });
-    expect(resolved).toBe(distFile);
   });
 
   it("configures the plugin loader jiti boundary to prefer native dist modules", () => {
@@ -3187,56 +3260,26 @@ module.exports = {
     expect("alias" in options).toBe(false);
   });
 
-  it("prefers src root-alias shim when loader runs from src in non-production", () => {
-    const { root, srcFile } = createPluginSdkAliasFixture({
-      srcFile: "root-alias.cjs",
-      distFile: "root-alias.cjs",
-      srcBody: "module.exports = {};\n",
-      distBody: "module.exports = {};\n",
+  it.each([
+    {
+      name: "prefers dist plugin runtime module when loader runs from dist",
+      modulePath: (root: string) => path.join(root, "dist", "plugins", "loader.js"),
+      expected: "dist" as const,
+    },
+    {
+      name: "resolves plugin runtime module from package root when loader runs from transpiler cache path",
+      modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
+      argv1: (root: string) => path.join(root, "openclaw.mjs"),
+      env: { NODE_ENV: undefined },
+      expected: "src" as const,
+    },
+  ])("$name", ({ modulePath, argv1, env, expected }) => {
+    const fixture = createPluginRuntimeAliasFixture();
+    const resolved = resolvePluginRuntimeModule({
+      modulePath: modulePath(fixture.root),
+      argv1: argv1?.(fixture.root),
+      env,
     });
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolvePluginSdkAliasFile({
-        srcFile: "root-alias.cjs",
-        distFile: "root-alias.cjs",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
-  it("resolves plugin-sdk alias from package root when loader runs from transpiler cache path", () => {
-    const { root, srcFile } = createPluginSdkAliasFixture();
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolvePluginSdkAliasFile({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
-        argv1: path.join(root, "openclaw.mjs"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
-  it("prefers dist plugin runtime module when loader runs from dist", () => {
-    const { root, distFile } = createPluginRuntimeAliasFixture();
-
-    const resolved = __testing.resolvePluginRuntimeModulePath({
-      modulePath: path.join(root, "dist", "plugins", "loader.js"),
-    });
-    expect(resolved).toBe(distFile);
-  });
-
-  it("resolves plugin runtime module from package root when loader runs from transpiler cache path", () => {
-    const { root, srcFile } = createPluginRuntimeAliasFixture();
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolvePluginRuntimeModulePath({
-        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
-        argv1: path.join(root, "openclaw.mjs"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
+    expect(resolved).toBe(expected === "dist" ? fixture.distFile : fixture.srcFile);
   });
 });
