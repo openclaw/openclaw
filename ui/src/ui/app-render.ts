@@ -1395,6 +1395,13 @@ export function renderApp(state: AppViewState) {
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+                onCreateThread: async (input) => {
+                  const created = await state.handleCreateThread(input);
+                  if (!created) {
+                    throw new Error(state.lastError ?? "Failed to create thread.");
+                  }
+                  return created;
+                },
                 onClearHistory: async () => {
                   if (!state.client || !state.connected) {
                     return;
