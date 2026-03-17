@@ -111,6 +111,16 @@ function makeCtx(
   };
 }
 
+/**
+ * Re-export the real MediaFetchError so tests throw instances that pass the
+ * `instanceof` check inside `isRetryableDownloadError`.  The vi.mock above
+ * preserves the original class via `...actual`, so both sides reference the
+ * same constructor.
+ */
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic import after mock registration
+const { MediaFetchError: MockMediaFetchError } =
+  await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>("openclaw/plugin-sdk/media-runtime");
+
 function setupTransientGetFileRetry() {
   const getFile = vi
     .fn()
