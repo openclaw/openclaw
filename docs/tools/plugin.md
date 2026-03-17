@@ -747,10 +747,26 @@ Notes:
 - If OpenClaw adds a new capability such as video generation later, define the
   core capability contract first, then let vendor plugins register against it.
 
-For STT/transcription, plugins can call:
+For media-understanding runtime helpers, plugins can call:
 
 ```ts
-const { text } = await api.runtime.stt.transcribeAudioFile({
+const image = await api.runtime.mediaUnderstanding.describeImageFile({
+  filePath: "/tmp/inbound-photo.jpg",
+  cfg: api.config,
+  agentDir: "/tmp/agent",
+});
+
+const video = await api.runtime.mediaUnderstanding.describeVideoFile({
+  filePath: "/tmp/inbound-video.mp4",
+  cfg: api.config,
+});
+```
+
+For audio transcription, plugins can use either the media-understanding runtime
+or the older STT alias:
+
+```ts
+const { text } = await api.runtime.mediaUnderstanding.transcribeAudioFile({
   filePath: "/tmp/inbound-audio.ogg",
   cfg: api.config,
   // Optional when MIME cannot be inferred reliably:
@@ -760,8 +776,11 @@ const { text } = await api.runtime.stt.transcribeAudioFile({
 
 Notes:
 
+- `api.runtime.mediaUnderstanding.*` is the preferred shared surface for
+  image/audio/video understanding.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
+- `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
 ## Gateway HTTP routes
 
