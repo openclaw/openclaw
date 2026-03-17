@@ -11,7 +11,6 @@ import { resolveOsSummary } from "../infra/os-summary.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
 import {
@@ -19,6 +18,7 @@ import {
   pickGatewaySelfPresence,
   resolveGatewayProbeSnapshot,
   resolveMemoryPluginStatus,
+  resolveStatusTailscaleDns,
   resolveSharedMemoryStatusSnapshot,
   type GatewayProbeSnapshot,
   type MemoryPluginStatus,
@@ -33,8 +33,6 @@ let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.j
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
-
-const STATUS_TAILSCALE_TIMEOUT_MS = 1500;
 
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
@@ -65,21 +63,6 @@ function unwrapDeferredResult<T>(result: DeferredResult<T>): T {
   return result.value;
 }
 
-async function resolveStatusTailscaleDns(tailscaleMode: string): Promise<string | null> {
-  if (tailscaleMode === "off") {
-    return null;
-  }
-  return await withTimeout(
-    loadStatusScanDepsRuntimeModule()
-      .then(({ getTailnetHostname }) =>
-        getTailnetHostname((cmd, args) =>
-          runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
-        ),
-      )
-      .catch(() => null),
-    STATUS_TAILSCALE_TIMEOUT_MS,
-  ).catch(() => null);
-}
 async function resolveChannelsStatus(params: {
   cfg: OpenClawConfig;
   gatewayReachable: boolean;
@@ -169,7 +152,12 @@ async function scanStatusJsonFast(opts: {
   const agentStatusPromise = getAgentLocalStatuses(cfg);
   const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
 
-  const tailscaleDnsPromise = resolveStatusTailscaleDns(tailscaleMode);
+  const tailscaleDnsPromise = resolveStatusTailscaleDns(tailscaleMode, async () => {
+    const { getTailnetHostname } = await loadStatusScanDepsRuntimeModule();
+    return await getTailnetHostname((cmd, args) =>
+      runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+    );
+  });
 
   const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
 
@@ -257,7 +245,12 @@ export async function scanStatus(
         });
       const osSummary = resolveOsSummary();
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-      const tailscaleDnsPromise = resolveStatusTailscaleDns(tailscaleMode);
+      const tailscaleDnsPromise = resolveStatusTailscaleDns(tailscaleMode, async () => {
+        const { getTailnetHostname } = await loadStatusScanDepsRuntimeModule();
+        return await getTailnetHostname((cmd, args) =>
+          runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+        );
+      });
       const updateTimeoutMs = opts.all ? 6500 : 2500;
       const updatePromise = deferResult(
         getUpdateCheckResult({

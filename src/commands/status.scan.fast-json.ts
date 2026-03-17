@@ -14,6 +14,7 @@ import {
   pickGatewaySelfPresence,
   resolveGatewayProbeSnapshot,
   resolveMemoryPluginStatus,
+  resolveStatusTailscaleDns,
   resolveSharedMemoryStatusSnapshot,
   type MemoryPluginStatus,
   type MemoryStatusSnapshot,
@@ -145,16 +146,12 @@ export async function scanStatusJsonFast(
   const agentStatusPromise = getAgentLocalStatuses(cfg);
   const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
 
-  const tailscaleDnsPromise =
-    tailscaleMode === "off"
-      ? Promise.resolve<string | null>(null)
-      : loadStatusScanDepsRuntimeModule()
-          .then(({ getTailnetHostname }) =>
-            getTailnetHostname((cmd, args) =>
-              runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
-            ),
-          )
-          .catch(() => null);
+  const tailscaleDnsPromise = resolveStatusTailscaleDns(tailscaleMode, async () => {
+    const { getTailnetHostname } = await loadStatusScanDepsRuntimeModule();
+    return await getTailnetHostname((cmd, args) =>
+      runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+    );
+  });
 
   const gatewayProbePromise = resolveGatewayProbeSnapshot({ cfg, opts });
 

@@ -4,6 +4,7 @@ import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
+import { withTimeout } from "../utils/with-timeout.js";
 import {
   pickGatewaySelfPresence,
   resolveGatewayProbeAuthResolution,
@@ -30,6 +31,8 @@ export type GatewayProbeSnapshot = {
   gatewayProbeAuthWarning?: string;
   gatewayProbe: Awaited<ReturnType<typeof probeGateway>> | null;
 };
+
+export const STATUS_TAILSCALE_TIMEOUT_MS = 1500;
 
 export function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
   if (
@@ -90,6 +93,19 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayProbeAuthWarning,
     gatewayProbe,
   };
+}
+
+export async function resolveStatusTailscaleDns(
+  tailscaleMode: string,
+  resolveDns: () => Promise<string | null>,
+): Promise<string | null> {
+  if (tailscaleMode === "off") {
+    return null;
+  }
+  return await withTimeout(
+    resolveDns().catch(() => null),
+    STATUS_TAILSCALE_TIMEOUT_MS,
+  ).catch(() => null);
 }
 
 export function buildTailscaleHttpsUrl(params: {
