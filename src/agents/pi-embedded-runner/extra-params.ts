@@ -493,6 +493,39 @@ export function createTurnIdWrapper(
 }
 
 /**
+ * Wraps the stream function to inject `skill_names` into every outgoing
+ * LLM request payload. The donut-backend LLM proxy reads this field for
+ * per-skill token attribution analytics.
+ *
+ * Note: `feature_context` is inferred server-side by the LLM proxy from
+ * the messages array, so it does not need to be injected here.
+ */
+function createSkillNamesWrapper(
+  baseStreamFn: StreamFn | undefined,
+  skillNames?: string[],
+): StreamFn {
+  if (!skillNames || skillNames.length === 0) {
+    return baseStreamFn ?? streamSimple;
+  }
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const p = payload as Record<string, unknown>;
+          if (!p.skill_names) {
+            p.skill_names = skillNames;
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also applies verified provider-specific request wrappers, such as OpenRouter attribution.
  *
@@ -509,6 +542,7 @@ export function applyExtraParamsToAgent(
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
   agentDir?: string,
+  skillNames?: string[],
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -569,6 +603,10 @@ export function applyExtraParamsToAgent(
     ...wrapperContext,
     providerWrapperHandled,
   });
+
+  // Inject skill_names into every LLM request payload so the donut-backend
+  // LLM proxy can attribute token usage per skill.
+  agent.streamFn = createSkillNamesWrapper(agent.streamFn, skillNames);
 
   return { effectiveExtraParams };
 }

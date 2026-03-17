@@ -603,6 +603,13 @@ export async function runEmbeddedAttempt(
       model: params.model,
     });
 
+    // Extract active skill names for per-skill token attribution in the LLM proxy.
+    const activeSkillNames: string[] = params.skillsSnapshot?.skills?.length
+      ? params.skillsSnapshot.skills.map((s) => s.name)
+      : skillEntries?.length
+        ? skillEntries.map((e) => e.skill.name)
+        : [];
+
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
@@ -1085,6 +1092,7 @@ export async function runEmbeddedAttempt(
         effectiveWorkspace,
         params.model,
         agentDir,
+        activeSkillNames.length > 0 ? activeSkillNames : undefined,
       );
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
