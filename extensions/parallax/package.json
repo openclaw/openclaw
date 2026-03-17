@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/parallax-provider",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw Parallax provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

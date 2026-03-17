@@ -1,0 +1,24 @@
+{
+  "id": "parallax",
+  "providers": ["parallax"],
+  "providerAuthEnvVars": {
+    "parallax": ["PARALLAX_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "parallax",
+      "method": "custom",
+      "choiceId": "parallax",
+      "choiceLabel": "Parallax",
+      "choiceHint": "OpenAI-compatible inference endpoint",
+      "groupId": "parallax",
+      "groupLabel": "Parallax",
+      "groupHint": "Local or proxied Parallax endpoint"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -18,6 +18,7 @@ export {
 } from "../plugins/provider-self-hosted-setup.js";
 
 export {
+  buildParallaxProvider,
   buildSglangProvider,
   buildVllmProvider,
 } from "../agents/models-config.providers.discovery.js";

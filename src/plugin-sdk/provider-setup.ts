@@ -32,6 +32,7 @@ export {
 } from "../plugins/provider-vllm-setup.js";
 export {
   buildOllamaProvider,
+  buildParallaxProvider,
   buildSglangProvider,
   buildVllmProvider,
 } from "../agents/models-config.providers.discovery.js";
