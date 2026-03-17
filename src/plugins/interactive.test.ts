@@ -16,6 +16,20 @@ let getCurrentPluginConversationBindingMock: MockInstance<
   typeof conversationBinding.getCurrentPluginConversationBinding
 >;
 
+async function expectDedupedInteractiveDispatch(params: {
+  baseParams: Parameters<typeof dispatchPluginInteractiveHandler>[0];
+  handler: ReturnType<typeof vi.fn>;
+  expectedCall: unknown;
+}) {
+  const first = await dispatchPluginInteractiveHandler(params.baseParams);
+  const duplicate = await dispatchPluginInteractiveHandler(params.baseParams);
+
+  expect(first).toEqual({ matched: true, handled: true, duplicate: false });
+  expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
+  expect(params.handler).toHaveBeenCalledTimes(1);
+  expect(params.handler).toHaveBeenCalledWith(expect.objectContaining(params.expectedCall));
+}
+
 describe("plugin interactive handlers", () => {
   beforeEach(() => {
     clearPluginInteractiveHandlers();
@@ -99,14 +113,10 @@ describe("plugin interactive handlers", () => {
       },
     };
 
-    const first = await dispatchPluginInteractiveHandler(baseParams);
-    const duplicate = await dispatchPluginInteractiveHandler(baseParams);
-
-    expect(first).toEqual({ matched: true, handled: true, duplicate: false });
-    expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
+    await expectDedupedInteractiveDispatch({
+      baseParams,
+      handler,
+      expectedCall: {
         channel: "telegram",
         conversationId: "-10099:topic:77",
         callback: expect.objectContaining({
@@ -115,8 +125,8 @@ describe("plugin interactive handlers", () => {
           chatId: "-10099",
           messageId: 55,
         }),
-      }),
-    );
+      },
+    });
   });
 
   it("rejects duplicate namespace registrations", () => {
@@ -176,14 +186,10 @@ describe("plugin interactive handlers", () => {
       },
     };
 
-    const first = await dispatchPluginInteractiveHandler(baseParams);
-    const duplicate = await dispatchPluginInteractiveHandler(baseParams);
-
-    expect(first).toEqual({ matched: true, handled: true, duplicate: false });
-    expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
+    await expectDedupedInteractiveDispatch({
+      baseParams,
+      handler,
+      expectedCall: {
         channel: "discord",
         conversationId: "channel-1",
         interaction: expect.objectContaining({
@@ -192,8 +198,8 @@ describe("plugin interactive handlers", () => {
           messageId: "message-1",
           values: ["allow"],
         }),
-      }),
-    );
+      },
+    });
   });
 
   it("routes Slack interactions by namespace and dedupes interaction ids", async () => {
@@ -241,14 +247,10 @@ describe("plugin interactive handlers", () => {
       },
     };
 
-    const first = await dispatchPluginInteractiveHandler(baseParams);
-    const duplicate = await dispatchPluginInteractiveHandler(baseParams);
-
-    expect(first).toEqual({ matched: true, handled: true, duplicate: false });
-    expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
+    await expectDedupedInteractiveDispatch({
+      baseParams,
+      handler,
+      expectedCall: {
         channel: "slack",
         conversationId: "C123",
         threadId: "1710000000.000100",
@@ -258,8 +260,8 @@ describe("plugin interactive handlers", () => {
           actionId: "codex",
           messageTs: "1710000000.000200",
         }),
-      }),
-    );
+      },
+    });
   });
 
   it("wires Telegram conversation binding helpers with topic context", async () => {
