@@ -15,19 +15,29 @@ import {
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
 import { ApplicationCommandOptionType, ButtonStyle } from "discord-api-types/v10";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/channel-runtime";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import {
   ensureConfiguredAcpRouteReady,
   resolveConfiguredAcpRoute,
-} from "../../../../src/acp/persistent-bindings.route.js";
-import { resolveHumanDelayConfig } from "../../../../src/agents/identity.js";
-import { resolveChunkMode, resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { executePluginCommand, matchPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
   CommandArgValues,
   CommandArgs,
   NativeCommandSpec,
-} from "../../../../src/auto-reply/commands-registry.js";
+} from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -36,25 +46,15 @@ import {
   resolveCommandArgChoices,
   resolveCommandArgMenu,
   serializeCommandArgs,
-} from "../../../../src/auto-reply/commands-registry.js";
-import { resolveStoredModelOverride } from "../../../../src/auto-reply/reply/model-selection.js";
-import { dispatchReplyWithDispatcher } from "../../../../src/auto-reply/reply/provider-dispatcher.js";
-import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channels/command-gating.js";
-import { resolveNativeCommandSessionTargets } from "../../../../src/channels/native-command-session-targets.js";
-import { createReplyPrefixOptions } from "../../../../src/channels/reply-prefix.js";
-import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
-import { resolveOpenProviderRuntimeGroupPolicy } from "../../../../src/config/runtime-group-policy.js";
-import { loadSessionStore, resolveStorePath } from "../../../../src/config/sessions.js";
-import { logVerbose } from "../../../../src/globals.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { getAgentScopedMediaLocalRoots } from "../../../../src/media/local-roots.js";
-import { buildPairingReply } from "../../../../src/pairing/pairing-messages.js";
-import { executePluginCommand, matchPluginCommand } from "../../../../src/plugins/commands.js";
-import type { ResolvedAgentRoute } from "../../../../src/routing/resolve-route.js";
-import { chunkItems } from "../../../../src/utils/chunk-items.js";
-import { withTimeout } from "../../../../src/utils/with-timeout.js";
+} from "openclaw/plugin-sdk/reply-runtime";
+import { resolveStoredModelOverride } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { chunkItems } from "openclaw/plugin-sdk/text-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "../../../whatsapp/src/media.js";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";

@@ -3,7 +3,7 @@ import {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
   expectRuntimeCfgFallback,
-} from "../../test-utils/send-config.js";
+} from "../../../test/helpers/extensions/send-config.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfig: vi.fn(),
