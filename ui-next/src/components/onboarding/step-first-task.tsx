@@ -45,7 +45,7 @@ export function StepFirstTask({ onValidChange }: Props) {
 
   // Mark valid when response is finalized (not still streaming)
   useEffect(() => {
-    onValidChange(sent && !isStreaming && streamContent.length > 0);
+    onValidChange(sent && !isStreaming);
   }, [sent, isStreaming, streamContent, onValidChange]);
 
   const handleSend = useCallback(async () => {
