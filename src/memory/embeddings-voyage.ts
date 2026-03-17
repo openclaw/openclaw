@@ -17,6 +17,7 @@ const VOYAGE_MAX_INPUT_TOKENS: Record<string, number> = {
   "voyage-3": 32000,
   "voyage-3-lite": 16000,
   "voyage-code-3": 32000,
+  "voyage-4-large": 128000,
 };
 
 export function normalizeVoyageModel(model: string): string {
