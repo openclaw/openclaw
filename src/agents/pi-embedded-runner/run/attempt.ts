@@ -1623,6 +1623,13 @@ export async function runEmbeddedAttempt(
       ? listChannelSupportedActions({
           cfg: params.config,
           channel: runtimeChannel,
+          currentChannelId: params.currentChannelId,
+          currentThreadTs: params.currentThreadTs,
+          currentMessageId: params.currentMessageId,
+          accountId: params.agentAccountId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          agentId: sessionAgentId,
         })
       : undefined;
     const messageToolHints = runtimeChannel
