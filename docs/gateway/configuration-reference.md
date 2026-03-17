@@ -2612,6 +2612,8 @@ See [Plugins](/tools/plugin).
   - `gateway.http.endpoints.responses.maxUrlParts`
   - `gateway.http.endpoints.responses.files.urlAllowlist`
   - `gateway.http.endpoints.responses.images.urlAllowlist`
+    Empty allowlists are treated as unset; use `gateway.http.endpoints.responses.files.allowUrl=false`
+    and/or `gateway.http.endpoints.responses.images.allowUrl=false` to disable URL fetching.
 - Optional response hardening header:
   - `gateway.http.securityHeaders.strictTransportSecurity` (set only for HTTPS origins you control; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts))
 
