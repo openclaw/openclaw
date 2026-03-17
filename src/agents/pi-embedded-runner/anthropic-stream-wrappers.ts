@@ -393,20 +393,33 @@ export function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined):
 export function isAnthropicBedrockModel(modelId: string, modelName?: string): boolean {
   const normalized = modelId.toLowerCase();
 
-  // Direct Anthropic Claude model IDs
+  // Direct Anthropic Claude model IDs (e.g., anthropic.claude-sonnet-4-6, global.anthropic.claude-opus-4-6-v1)
   if (normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude")) {
     return true;
   }
 
   // Application Inference Profile ARN — check model name for Claude identification
+  // ARN format: arn:aws:bedrock:<region>:<account>:application-inference-profile/<id>
   if (normalized.startsWith("arn:aws:bedrock:") && normalized.includes(":application-inference-profile/")) {
     return modelName ? modelName.toLowerCase().includes("claude") : false;
   }
 
-  // Short profile IDs or other non-standard IDs — fall back to model name
-  if (modelName && modelName.toLowerCase().includes("claude")) {
-    return true;
+  // Short/opaque inference profile IDs (not matching known provider prefixes) —
+  // fall back to model name, but only if the ID doesn't look like a standard
+  // non-Anthropic model ID (e.g., amazon.nova-*, meta.llama-*, mistral.*)
+  if (modelName && !looksLikeStandardBedrockModelId(normalized)) {
+    return modelName.toLowerCase().includes("claude");
   }
 
   return false;
+}
+
+/** Returns true when the ID matches a known non-Anthropic Bedrock model-ID pattern. */
+function looksLikeStandardBedrockModelId(normalizedId: string): boolean {
+  const knownPrefixes = [
+    "amazon.", "meta.", "mistral.", "cohere.", "ai21.", "stability.",
+    "deepseek.", "luma.", "google.", "nvidia.", "minimax.", "moonshot.",
+    "openai.", "qwen.", "writer.", "zai.",
+  ];
+  return knownPrefixes.some((prefix) => normalizedId.startsWith(prefix));
 }
