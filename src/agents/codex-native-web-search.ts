@@ -295,6 +295,10 @@ export function isCodexNativeWebSearchRelevant(params: {
 export function describeCodexNativeWebSearch(
   config: OpenClawConfig | undefined,
 ): string | undefined {
+  if (config?.tools?.web?.search?.enabled === false) {
+    return undefined;
+  }
+
   const nativeConfig = resolveCodexNativeWebSearchConfig(config);
   if (!nativeConfig.enabled) {
     return undefined;
