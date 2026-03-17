@@ -7,6 +7,51 @@ import {
   runOpenAIOAuthTlsPreflight,
 } from "./provider-openai-codex-oauth-tls.js";
 
+/**
+ * Node.js native fetch() ignores HTTP_PROXY / HTTPS_PROXY env vars.
+ * This helper temporarily patches globalThis.fetch with a proxy-aware
+ * implementation (via undici ProxyAgent) for the duration of `fn()`,
+ * then restores the original fetch.  No-op when no proxy is configured
+ * or undici is unavailable.
+ */
+async function withProxyFetch<T>(fn: () => Promise<T>): Promise<T> {
+  const proxyUrl =
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    process.env.ALL_PROXY ||
+    process.env.all_proxy;
+  if (!proxyUrl) return fn();
+
+  let restore: (() => void) | undefined;
+  try {
+    const { createRequire } = await import("node:module");
+    const require_ = createRequire(import.meta.url);
+    // undici is a transitive dependency of OpenClaw (via Node internals / direct dep)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const undici = require_("undici") as typeof import("undici");
+    const agent = new undici.ProxyAgent(proxyUrl);
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = ((url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+      undici.fetch(url as Parameters<typeof undici.fetch>[0], {
+        ...(init as Parameters<typeof undici.fetch>[1]),
+        dispatcher: agent,
+      })) as typeof fetch;
+    restore = () => {
+      globalThis.fetch = origFetch;
+    };
+  } catch {
+    // undici not available — proceed with unpatched fetch
+  }
+
+  try {
+    return await fn();
+  } finally {
+    restore?.();
+  }
+}
+
 export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -49,11 +94,13 @@ export async function loginOpenAICodexOAuth(params: {
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
     });
 
-    const creds = await loginOpenAICodex({
-      onAuth: baseOnAuth,
-      onPrompt,
-      onProgress: (msg: string) => spin.update(msg),
-    });
+    const creds = await withProxyFetch(() =>
+      loginOpenAICodex({
+        onAuth: baseOnAuth,
+        onPrompt,
+        onProgress: (msg: string) => spin.update(msg),
+      }),
+    );
     spin.stop("OpenAI OAuth complete");
     return creds ?? null;
   } catch (err) {
