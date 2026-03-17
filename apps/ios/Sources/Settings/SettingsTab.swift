@@ -17,6 +17,7 @@ struct SettingsTab: View {
     @Environment(VoiceWakeManager.self) private var voiceWake: VoiceWakeManager
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("appearance.theme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage("node.displayName") private var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
@@ -36,7 +37,6 @@ struct SettingsTab: View {
     @AppStorage("gateway.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
 
-    // Onboarding control (RootCanvas listens to onboarding.requestID and force-opens the wizard).
     @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
     @AppStorage("gateway.onboardingComplete") private var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") private var hasConnectedOnce: Bool = false
@@ -247,6 +247,15 @@ struct SettingsTab: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
+
+                Section("Appearance") {
+                    Picker("Theme", selection: self.$themeRaw) {
+                        ForEach(AppTheme.allCases, id: \.rawValue) { theme in
+                            Text(theme.label).tag(theme.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
                 }
 
                 Section("Device") {

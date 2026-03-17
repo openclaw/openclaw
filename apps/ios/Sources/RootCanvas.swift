@@ -1,6 +1,6 @@
+import OpenClawProtocol
 import SwiftUI
 import UIKit
-import OpenClawProtocol
 
 struct RootCanvas: View {
     @Environment(NodeAppModel.self) private var appModel
@@ -8,6 +8,7 @@ struct RootCanvas: View {
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("appearance.theme") private var themeRaw: String = AppTheme.system.rawValue
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
@@ -84,6 +85,16 @@ struct RootCanvas: View {
         return discoveredGatewayCount > 0
     }
 
+    private var appTheme: AppTheme {
+        AppTheme(rawValue: self.themeRaw) ?? .system
+    }
+
+    private var resolvedColors: MobileColors {
+        self.appTheme.isDark(systemScheme: self.systemColorScheme)
+            ? darkMobileColors()
+            : lightMobileColors()
+    }
+
     var body: some View {
         ZStack {
             CanvasContent(
@@ -99,12 +110,14 @@ struct RootCanvas: View {
                 openSettings: {
                     self.presentedSheet = .settings
                 })
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(self.appTheme.colorScheme)
+                .environment(\.mobileColors, self.resolvedColors)
 
             if self.appModel.cameraFlashNonce != 0 {
                 CameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
             }
         }
+        .environment(\.mobileColors, self.resolvedColors)
         .gatewayTrustPromptAlert()
         .deepLinkAgentPromptAlert()
         .sheet(item: self.$presentedSheet) { sheet in
