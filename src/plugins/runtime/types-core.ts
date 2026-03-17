@@ -57,6 +57,10 @@ export type PluginRuntimeCore = {
     describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
     transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
   };
+  webSearch: {
+    listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
+    search: typeof import("../../web-search/runtime.js").runWebSearch;
+  };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
   };
