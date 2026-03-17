@@ -163,4 +163,102 @@ describe("buildSessionEntry", () => {
       "Assistant: TypeScript generics allow you to write reusable typed code.",
     );
   });
+
+  it("strips multiple metadata blocks followed by actual user text", async () => {
+    // Real-world inbound messages often have several injected blocks stacked:
+    // Conversation info block + Sender info block, then blank line, then actual text.
+    // All injected blocks must be stripped; only the real content is indexed.
+    const senderBlock = [
+      "Sender (untrusted metadata):",
+      "```json",
+      JSON.stringify({ label: "Kebabman (484946046)", id: "484946046", name: "Kebabman" }, null, 2),
+      "```",
+    ].join("\n");
+    const userContent = [makeConvBlock(), "", senderBlock, "", "Show me today's schedule."].join(
+      "\n",
+    );
+    const jsonlLines = [makeUserMessageLine(userContent)];
+    const filePath = path.join(tmpDir, "multi-meta.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+
+    // None of the injected metadata fields should appear in the indexed text
+    expect(entry!.content).not.toContain("Conversation info");
+    expect(entry!.content).not.toContain("Sender (untrusted metadata)");
+    expect(entry!.content).not.toContain("untrusted metadata");
+    expect(entry!.content).not.toContain("message_id");
+    expect(entry!.content).not.toContain("484946046");
+    expect(entry!.content).not.toContain("Kebabman");
+    // The real user message is preserved
+    expect(entry!.content).toContain("Show me today's schedule.");
+  });
+
+  it("produces no indexed entry when message is only a [[reply_to_current]] tag", async () => {
+    // If the entire message content is ONLY an inline directive tag and nothing
+    // else, stripping it must leave an empty result — the entry must not be
+    // indexed at all (the message line is silently skipped).
+    const userContent = "[[reply_to_current]]";
+    const jsonlLines = [makeUserMessageLine(userContent)];
+    const filePath = path.join(tmpDir, "tag-only.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+
+    // No indexable content — the content string should be empty and lineMap empty.
+    expect(entry!.content).toBe("");
+    expect(entry!.lineMap).toEqual([]);
+  });
+
+  it("strips metadata block and mid-text reply tag, preserving surrounding content", async () => {
+    // A user message that has a metadata prefix block AND an inline directive
+    // tag embedded within the actual text body.
+    // Both forms of injection must be stripped; the surrounding real content is kept.
+    const realText =
+      "[[reply_to_current]] Can you summarise the thread? Also, what was the final decision?";
+    const userContent = [makeConvBlock(), "", realText].join("\n");
+    const jsonlLines = [makeUserMessageLine(userContent)];
+    const filePath = path.join(tmpDir, "mixed-meta-tag.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+
+    // Injected noise must be absent
+    expect(entry!.content).not.toContain("Conversation info");
+    expect(entry!.content).not.toContain("untrusted metadata");
+    expect(entry!.content).not.toContain("[[reply_to_current]]");
+    // Both fragments of the real text must be present
+    expect(entry!.content).toContain("Can you summarise the thread?");
+    expect(entry!.content).toContain("what was the final decision?");
+  });
+
+  it("strips [[reply_to_current]] tag from assistant-role messages", async () => {
+    // extractAndStripSessionText is called for both user and assistant roles.
+    // An assistant message that somehow contains a reply directive tag must also
+    // be stripped — the tag must not leak into the indexed transcript.
+    const assistantContent =
+      "[[reply_to_current]] Here is the summary you asked for: three key points.";
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: assistantContent },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "assistant-tag.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+    expect(entry).not.toBeNull();
+
+    // The directive tag must be stripped from the indexed assistant content
+    expect(entry!.content).not.toContain("[[reply_to_current]]");
+    // The actual assistant text is preserved
+    expect(entry!.content).toContain("Here is the summary you asked for: three key points.");
+    // Entry is indexed as assistant content
+    expect(entry!.content).toContain("Assistant:");
+    expect(entry!.lineMap).toEqual([1]);
+  });
 });
