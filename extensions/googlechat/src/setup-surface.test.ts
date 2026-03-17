@@ -2,7 +2,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import { createTestWizardPrompter, type WizardPrompter } from "../../../test/helpers/extensions/setup-wizard.js";
+import {
+  createTestWizardPrompter,
+  type WizardPrompter,
+} from "../../../test/helpers/extensions/setup-wizard.js";
 import { googlechatPlugin } from "./channel.js";
 
 const googlechatConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
