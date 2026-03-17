@@ -420,6 +420,116 @@ describe("bundle plugins", () => {
     ).toBe(false);
   });
 
+  it("treats bundle MCP as a supported bundle surface", () => {
+    const workspaceDir = makeTempDir();
+    const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-mcp");
+    mkdirSafe(path.join(bundleRoot, ".claude-plugin"));
+    fs.writeFileSync(
+      path.join(bundleRoot, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude MCP",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(bundleRoot, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          probe: {
+            command: "node",
+            args: ["./probe.mjs"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            "claude-mcp": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      cache: false,
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "claude-mcp");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.bundleFormat).toBe("claude");
+    expect(plugin?.bundleCapabilities).toEqual(expect.arrayContaining(["mcpServers"]));
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "claude-mcp" &&
+          diag.message.includes("bundle capability detected but not wired"),
+      ),
+    ).toBe(false);
+  });
+
+  it("warns when bundle MCP only declares unsupported non-stdio transports", () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
+    const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-mcp-url");
+    fs.mkdirSync(path.join(bundleRoot, ".claude-plugin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(bundleRoot, ".claude-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Claude MCP URL",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(bundleRoot, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          remoteProbe: {
+            url: "http://127.0.0.1:8787/mcp",
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const registry = withEnv(
+      {
+        OPENCLAW_HOME: stateDir,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      () =>
+        loadOpenClawPlugins({
+          workspaceDir,
+          config: {
+            plugins: {
+              entries: {
+                "claude-mcp-url": {
+                  enabled: true,
+                },
+              },
+            },
+          },
+          cache: false,
+        }),
+    );
+
+    const plugin = registry.plugins.find((entry) => entry.id === "claude-mcp-url");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.bundleCapabilities).toEqual(expect.arrayContaining(["mcpServers"]));
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "claude-mcp-url" &&
+          diag.message.includes("stdio only today") &&
+          diag.message.includes("remoteProbe"),
+      ),
+    ).toBe(true);
+  });
+
   it("treats Cursor command roots as supported bundle skill surfaces", () => {
     useNoBundledPlugins();
     const workspaceDir = makeTempDir();

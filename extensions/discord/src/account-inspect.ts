@@ -1,13 +1,13 @@
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
-} from "../../../src/config/types.secrets.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "../../../src/config/types.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   type OpenClawConfig,
-  type DiscordAccountConfig,
-} from "../../../src/plugin-sdk-internal/discord.js";
+} from "../../../src/plugin-sdk-internal/accounts.js";
 import {
   mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,

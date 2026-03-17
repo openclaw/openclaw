@@ -1,14 +1,19 @@
+import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  buildAccountScopedAllowlistConfigEditor,
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createScopedDmSecurityResolver,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { type OutboundSendDeps, resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { normalizeMessageChannel } from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildAgentSessionKey,
   resolveThreadSessionKeys,
   type RoutePeer,
 } from "openclaw/plugin-sdk/core";
+import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
+import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/infra-runtime";
+import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram";
 import {
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
@@ -20,23 +25,12 @@ import {
   resolveConfiguredFromCredentialStatuses,
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
-  type ChannelMessageActionAdapter,
   type ChannelPlugin,
+  type ChannelMessageActionAdapter,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/telegram";
-import { parseTelegramTopicConversation } from "../../../src/acp/conversation-id.js";
-import { resolveExecApprovalCommandDisplay } from "../../../src/infra/exec-approval-command-display.js";
-import { buildExecApprovalPendingReplyPayload } from "../../../src/infra/exec-approval-reply.js";
-import {
-  type OutboundSendDeps,
-  resolveOutboundSendDep,
-} from "../../../src/infra/outbound/send-deps.js";
-import { normalizeOutboundThreadId } from "../../../src/infra/outbound/thread-id.js";
-import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
-import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
-  resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
@@ -184,6 +178,20 @@ function parseTelegramExplicitTarget(raw: string) {
     threadId: target.messageThreadId,
     chatType: target.chatType === "unknown" ? undefined : target.chatType,
   };
+}
+
+function normalizeOutboundThreadId(value?: string | number | null): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return undefined;
+    }
+    return String(Math.trunc(value));
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function buildTelegramBaseSessionKey(params: {
@@ -487,6 +495,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     listGroups: async (params) => listTelegramDirectoryGroupsFromConfig(params),
   },
   actions: telegramMessageActions,
+  setup: telegramSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getTelegramRuntime().channel.text.chunkMarkdownText(text, limit),

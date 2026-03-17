@@ -1,11 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeProviderId } from "openclaw/plugin-sdk/agent-runtime";
+import { withFileLock } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/infra-runtime";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { normalizeProviderId } from "../../../../src/agents/model-selection.js";
-import { resolveStateDir } from "../../../../src/config/paths.js";
-import { withFileLock } from "../../../../src/infra/file-lock.js";
-import { resolveRequiredHomeDir } from "../../../../src/infra/home-dir.js";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const MODEL_PICKER_PREFERENCES_LOCK_OPTIONS = {
   retries: {

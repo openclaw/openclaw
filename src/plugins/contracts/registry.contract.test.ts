@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
 import {
   mediaUnderstandingProviderContractRegistry,
   pluginRegistrationContractRegistry,
+  providerContractPluginIds,
   providerContractRegistry,
   speechProviderContractRegistry,
   webSearchProviderContractRegistry,
@@ -43,6 +46,16 @@ function findMediaUnderstandingProviderIdsForPlugin(pluginId: string) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function findMediaUnderstandingProviderForPlugin(pluginId: string) {
+  const entry = mediaUnderstandingProviderContractRegistry.find(
+    (candidate) => candidate.pluginId === pluginId,
+  );
+  if (!entry) {
+    throw new Error(`media-understanding provider contract missing for ${pluginId}`);
+  }
+  return entry.provider;
+}
+
 function findRegistrationForPlugin(pluginId: string) {
   const entry = pluginRegistrationContractRegistry.find(
     (candidate) => candidate.pluginId === pluginId,
@@ -72,6 +85,27 @@ describe("plugin contract registry", () => {
   it("does not duplicate bundled media provider ids", () => {
     const ids = mediaUnderstandingProviderContractRegistry.map((entry) => entry.provider.id);
     expect(ids).toEqual([...new Set(ids)]);
+  });
+
+  it("covers every bundled provider plugin discovered from manifests", () => {
+    const bundledProviderPluginIds = loadPluginManifestRegistry({})
+      .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(providerContractPluginIds).toEqual(bundledProviderPluginIds);
+  });
+
+  it("covers every bundled web search plugin from the shared resolver", () => {
+    const bundledWebSearchPluginIds = resolvePluginWebSearchProviders({})
+      .map((provider) => provider.pluginId)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(
+      [...new Set(webSearchProviderContractRegistry.map((entry) => entry.pluginId))].toSorted(
+        (left, right) => left.localeCompare(right),
+      ),
+    ).toEqual(bundledWebSearchPluginIds);
   });
 
   it("keeps multi-provider plugin ownership explicit", () => {
@@ -136,9 +170,47 @@ describe("plugin contract registry", () => {
     });
   });
 
+  it("tracks every provider, speech, media, or web search plugin in the registration registry", () => {
+    const expectedPluginIds = [
+      ...new Set([
+        ...providerContractRegistry.map((entry) => entry.pluginId),
+        ...speechProviderContractRegistry.map((entry) => entry.pluginId),
+        ...mediaUnderstandingProviderContractRegistry.map((entry) => entry.pluginId),
+        ...webSearchProviderContractRegistry.map((entry) => entry.pluginId),
+      ]),
+    ].toSorted((left, right) => left.localeCompare(right));
+
+    expect(
+      pluginRegistrationContractRegistry
+        .map((entry) => entry.pluginId)
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(expectedPluginIds);
+  });
+
   it("keeps bundled speech voice-list support explicit", () => {
     expect(findSpeechProviderForPlugin("openai").listVoices).toEqual(expect.any(Function));
     expect(findSpeechProviderForPlugin("elevenlabs").listVoices).toEqual(expect.any(Function));
     expect(findSpeechProviderForPlugin("microsoft").listVoices).toEqual(expect.any(Function));
+  });
+
+  it("keeps bundled multi-image support explicit", () => {
+    expect(findMediaUnderstandingProviderForPlugin("anthropic").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("google").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("minimax").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("moonshot").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("openai").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("zai").describeImages).toEqual(
+      expect.any(Function),
+    );
   });
 });

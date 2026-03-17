@@ -1,5 +1,5 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildOpenAISpeechProvider } from "../../src/tts/providers/openai.js";
+import { buildOpenAISpeechProvider } from "openclaw/plugin-sdk/speech";
 import { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";

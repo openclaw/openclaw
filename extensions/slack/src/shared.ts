@@ -1,17 +1,15 @@
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  SlackConfigSchema,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/slack";
-import { patchChannelConfigForAccount } from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
-import { formatAllowFromLowercase } from "../../../src/plugin-sdk/allow-from.js";
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
-} from "../../../src/plugin-sdk/channel-config-helpers.js";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
+import { patchChannelConfigForAccount } from "../../../src/channels/plugins/setup-wizard-helpers.js";
+import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
+import { getChatChannelMeta } from "../../../src/channels/registry.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
+import { SlackConfigSchema } from "../../../src/config/zod-schema.providers-core.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
