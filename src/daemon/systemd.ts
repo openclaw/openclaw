@@ -465,10 +465,16 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   if (isSystemctlMissing(detail)) {
     // User-scope systemctl missing — check if system-scope works.
     const systemRes = await execSystemctlSystem(["status"]);
-    if (systemRes.code === 0 || !isSystemctlMissing(readSystemctlDetail(systemRes))) {
+    const systemDetail = readSystemctlDetail(systemRes);
+    if (systemRes.code === 0) {
       return;
     }
-    throw new Error("systemctl not available; systemd services are required on Linux.");
+    // System scope also unusable — report appropriately.
+    if (isSystemctlMissing(systemDetail)) {
+      throw new Error("systemctl not available; systemd services are required on Linux.");
+    }
+    // systemctl exists but systemd itself is not running (e.g. "System has not been booted with systemd").
+    throw new Error(`systemctl unavailable: ${systemDetail || "unknown error"}`.trim());
   }
   if (!detail) {
     throw new Error("systemctl --user unavailable: unknown error");
@@ -584,11 +590,19 @@ async function runSystemdServiceAction(params: {
     params.stdout.write(`${formatLine(params.label, unitName)}\n`);
     return { scope: "user" };
   }
-  // User-scope failed — try system scope before giving up.
-  const systemRes = await execSystemctlSystem([params.action, unitName]);
-  if (systemRes.code === 0) {
-    params.stdout.write(`${formatLine(params.label, unitName)}\n`);
-    return { scope: "system" };
+  // Only fall back to system scope when the user unit is missing/not-loaded.
+  // Operational errors (permission denied, bus failures) should surface immediately.
+  const userDetail = readSystemctlDetail(res);
+  const isUnitMissing =
+    userDetail.toLowerCase().includes("not found") ||
+    userDetail.toLowerCase().includes("not loaded") ||
+    userDetail.toLowerCase().includes("no such unit");
+  if (isUnitMissing) {
+    const systemRes = await execSystemctlSystem([params.action, unitName]);
+    if (systemRes.code === 0) {
+      params.stdout.write(`${formatLine(params.label, unitName)}\n`);
+      return { scope: "system" };
+    }
   }
   throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
 }

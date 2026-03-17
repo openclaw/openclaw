@@ -784,12 +784,6 @@ describe("systemd service control", () => {
         const err = new Error("stop failed") as Error & { code?: number };
         err.code = 1;
         cb(err, "", "permission denied");
-      })
-      // system-scope fallback also fails
-      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
-        const err = new Error("stop failed") as Error & { code?: number };
-        err.code = 1;
-        cb(err, "", "permission denied");
       });
 
     await expect(
