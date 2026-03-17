@@ -102,7 +102,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resizeToJpeg: vi.fn() as unknown as PluginRuntime["media"]["resizeToJpeg"],
     },
     tts: {
+      textToSpeech: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeech"],
       textToSpeechTelephony: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechTelephony"],
+      listVoices: vi.fn() as unknown as PluginRuntime["tts"]["listVoices"],
     },
     stt: {
       transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
