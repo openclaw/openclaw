@@ -40,6 +40,7 @@ export type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
+  requestedEnv?: Record<string, string>;
   pty: boolean;
   timeoutSec?: number;
   defaultTimeoutSec: number;
@@ -152,6 +153,7 @@ export async function processGatewayAllowlist(
       await registerExecApprovalRequestForHostOrThrow({
         approvalId,
         command: params.command,
+        env: params.requestedEnv,
         workdir: params.workdir,
         host: "gateway",
         security: hostSecurity,
