@@ -5,15 +5,11 @@ import {
   imageGenerationProviderContractRegistry,
   mediaUnderstandingProviderContractRegistry,
   pluginRegistrationContractRegistry,
-  providerContractCompatPluginIds,
+  providerContractPluginIds,
   providerContractRegistry,
   speechProviderContractRegistry,
   webSearchProviderContractRegistry,
 } from "./registry.js";
-
-function normalizeBundledProviderPluginId(id: string) {
-  return id === "kimi-coding" ? "kimi" : id;
-}
 
 function findProviderIdsForPlugin(pluginId: string) {
   return providerContractRegistry
@@ -112,11 +108,10 @@ describe("plugin contract registry", () => {
   it("covers every bundled provider plugin discovered from manifests", () => {
     const bundledProviderPluginIds = loadPluginManifestRegistry({})
       .plugins.filter((plugin) => plugin.origin === "bundled" && plugin.providers.length > 0)
-      .map((plugin) => normalizeBundledProviderPluginId(plugin.id))
-      .filter((id, index, all) => all.indexOf(id) === index)
+      .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
 
-    expect(providerContractCompatPluginIds).toEqual(bundledProviderPluginIds);
+    expect(providerContractPluginIds).toEqual(bundledProviderPluginIds);
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {

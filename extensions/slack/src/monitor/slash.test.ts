@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
-vi.mock("./slash-commands.runtime.js", () => {
+vi.mock("../../../../src/auto-reply/commands-registry.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
   const reportCommand = { key: "report", nativeName: "report" };
   const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };

@@ -73,6 +73,28 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: () => config,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+  getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
+}));
+
+vi.mock("./send.js", () => ({
+  sendMessageSignal: (...args: unknown[]) => sendMock(...args),
+  sendTypingSignal: vi.fn().mockResolvedValue(true),
+  sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
+  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
     updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
     readSessionUpdatedAt: vi.fn(() => undefined),
@@ -80,145 +102,23 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+vi.mock("./client.js", () => ({
+  streamSignalEvents: (...args: unknown[]) => streamMock(...args),
+  signalCheck: (...args: unknown[]) => signalCheckMock(...args),
+  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+}));
+
+vi.mock("./daemon.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./daemon.js")>();
   return {
     ...actual,
-    getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
+    spawnSignalDaemon: (...args: unknown[]) => spawnSignalDaemonMock(...args),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
-  return {
-    ...actual,
-    waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
-  };
-});
-
-export function installSignalToolResultModuleMocks() {
-  const runSignalSseLoopMockImpl = async (params: {
-    abortSignal?: AbortSignal;
-    policy?: { initialMs?: number; maxMs?: number; factor?: number };
-    runtime?: { error?: (message: string) => void; log?: (message: string) => void };
-    onEvent: (event: unknown) => void;
-  }) => {
-    const initialMs = Math.max(1, params.policy?.initialMs ?? 1_000);
-    const maxMs = Math.max(initialMs, params.policy?.maxMs ?? 10_000);
-    const factor = Math.max(1, params.policy?.factor ?? 2);
-    let attempt = 0;
-
-    const sleep = async (ms: number) =>
-      await new Promise<void>((resolve) => {
-        if (params.abortSignal?.aborted) {
-          resolve();
-          return;
-        }
-        const timer = setTimeout(() => resolve(), ms);
-        params.abortSignal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            resolve();
-          },
-          { once: true },
-        );
-      });
-
-    while (!params.abortSignal?.aborted) {
-      try {
-        await streamMock({
-          onEvent: params.onEvent,
-          abortSignal: params.abortSignal,
-        });
-        if (params.abortSignal?.aborted) {
-          return;
-        }
-        attempt += 1;
-        const delayMs = Math.min(maxMs, initialMs * factor ** Math.max(0, attempt - 1));
-        await sleep(delayMs);
-      } catch (err) {
-        if (params.abortSignal?.aborted) {
-          return;
-        }
-        params.runtime?.error?.(`Signal SSE stream error: ${String(err)}`);
-        attempt += 1;
-        const delayMs = Math.min(maxMs, initialMs * factor ** Math.max(0, attempt - 1));
-        params.runtime?.log?.(`Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`);
-        await sleep(delayMs);
-      }
-    }
-  };
-
-  vi.doMock("./send.js", () => ({
-    sendMessageSignal: (...args: unknown[]) => sendMock(...args),
-    sendTypingSignal: vi.fn().mockResolvedValue(true),
-    sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
-  }));
-  vi.doMock("./send.ts", () => ({
-    sendMessageSignal: (...args: unknown[]) => sendMock(...args),
-    sendTypingSignal: vi.fn().mockResolvedValue(true),
-    sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
-  }));
-
-  vi.doMock("./client.js", () => ({
-    streamSignalEvents: (...args: unknown[]) => streamMock(...args),
-    signalCheck: (...args: unknown[]) => signalCheckMock(...args),
-    signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
-  }));
-  vi.doMock("./client.ts", () => ({
-    streamSignalEvents: (...args: unknown[]) => streamMock(...args),
-    signalCheck: (...args: unknown[]) => signalCheckMock(...args),
-    signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
-  }));
-
-  vi.doMock("./sse-reconnect.js", () => ({
-    runSignalSseLoop: (...args: unknown[]) =>
-      runSignalSseLoopMockImpl(
-        args[0] as {
-          abortSignal?: AbortSignal;
-          policy?: { initialMs?: number; maxMs?: number; factor?: number };
-          runtime?: { error?: (message: string) => void; log?: (message: string) => void };
-          onEvent: (event: unknown) => void;
-        },
-      ),
-  }));
-  vi.doMock("./sse-reconnect.ts", () => ({
-    runSignalSseLoop: (...args: unknown[]) =>
-      runSignalSseLoopMockImpl(
-        args[0] as {
-          abortSignal?: AbortSignal;
-          policy?: { initialMs?: number; maxMs?: number; factor?: number };
-          runtime?: { error?: (message: string) => void; log?: (message: string) => void };
-          onEvent: (event: unknown) => void;
-        },
-      ),
-  }));
-
-  vi.doMock("./daemon.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./daemon.js")>();
-    return {
-      ...actual,
-      spawnSignalDaemon: (...args: unknown[]) => spawnSignalDaemonMock(...args),
-    };
-  });
-  vi.doMock("./daemon.ts", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./daemon.ts")>();
-    return {
-      ...actual,
-      spawnSignalDaemon: (...args: unknown[]) => spawnSignalDaemonMock(...args),
-    };
-  });
-}
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
+}));
 
 export function installSignalToolResultTestHooks() {
   beforeEach(() => {

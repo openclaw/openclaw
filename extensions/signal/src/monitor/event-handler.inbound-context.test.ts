@@ -1,13 +1,11 @@
-import * as replyRuntimeModule from "openclaw/plugin-sdk/reply-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
+import { createSignalEventHandler } from "./event-handler.js";
 import {
   createBaseSignalEventHandlerDeps,
   createSignalReceiveEvent,
 } from "./event-handler.test-harness.js";
-
-let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
 
 const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock, capture } = vi.hoisted(
   () => {
@@ -22,15 +20,6 @@ const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock, capture
         }) => {
           captureState.ctx = params.ctx;
           await Promise.resolve(params.replyOptions?.onReplyStart?.());
-          if (!params.replyOptions?.onReplyStart && params.ctx.To) {
-            await Promise.resolve(
-              sendTypingMock(params.ctx.To, {
-                baseUrl: "http://localhost",
-                account: undefined,
-                accountId: "default",
-              }),
-            );
-          }
           return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
         },
       ),
@@ -45,31 +34,22 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: sendReadReceiptMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
   return {
     ...actual,
-    readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
-    upsertChannelPairingRequest: vi.fn(),
+    dispatchInboundMessage: dispatchInboundMessageMock,
+    dispatchInboundMessageWithDispatcher: dispatchInboundMessageMock,
+    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessageMock,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
-  return {
-    ...actual,
-    readStoreAllowFromForDmPolicy: vi.fn().mockResolvedValue([]),
-  };
-});
+vi.mock("../../../../src/pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
+  upsertChannelPairingRequest: vi.fn(),
+}));
 
 describe("signal createSignalEventHandler inbound context", () => {
-  beforeAll(async () => {
-    vi.spyOn(replyRuntimeModule, "dispatchInboundMessage").mockImplementation(async (params) => {
-      return await dispatchInboundMessageMock(params);
-    });
-    ({ createSignalEventHandler } = await import("./event-handler.js"));
-  });
-
   beforeEach(() => {
     capture.ctx = undefined;
     sendTypingMock.mockReset().mockResolvedValue(true);
@@ -133,7 +113,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.OriginatingTo).toBe("+15550002222");
   });
 
-  it("processes allowed DMs when read receipts are enabled", async () => {
+  it("sends typing + read receipt for allowed DMs", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: {
@@ -156,7 +136,12 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
+    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
+    expect(sendReadReceiptMock).toHaveBeenCalledWith(
+      "signal:+15550001111",
+      1700000000000,
+      expect.any(Object),
+    );
   });
 
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {

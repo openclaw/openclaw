@@ -3,14 +3,11 @@ import {
   config,
   flush,
   getSignalToolResultTestMocks,
-  installSignalToolResultModuleMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
-vi.resetModules();
-installSignalToolResultModuleMocks();
 
 // Import after the harness registers `vi.mock(...)` for Signal internals.
 const { monitorSignalProvider } = await import("./monitor.js");

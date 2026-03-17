@@ -9,14 +9,11 @@ import {
   config,
   flush,
   getSignalToolResultTestMocks,
-  installSignalToolResultModuleMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
-vi.resetModules();
-installSignalToolResultModuleMocks();
 
 // Import after the harness registers `vi.mock(...)` for Signal internals.
 const { monitorSignalProvider } = await import("./monitor.js");
@@ -292,7 +289,7 @@ describe("monitorSignalProvider tool results", () => {
     ).resolves.toBeUndefined();
   });
 
-  it.skip("skips tool summaries with responsePrefix", async () => {
+  it("skips tool summaries with responsePrefix", async () => {
     replyMock.mockResolvedValue({ text: "final reply" });
 
     await receiveSignalPayloads({
@@ -316,7 +313,7 @@ describe("monitorSignalProvider tool results", () => {
     expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
   });
 
-  it.skip("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
+  it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     setSignalToolResultTestConfig(
       createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
     );
@@ -342,7 +339,7 @@ describe("monitorSignalProvider tool results", () => {
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
   });
 
-  it.skip("ignores reaction-only messages", async () => {
+  it("ignores reaction-only messages", async () => {
     await receiveSingleEnvelope({
       ...makeBaseEnvelope(),
       reactionMessage: {
@@ -371,7 +368,7 @@ describe("monitorSignalProvider tool results", () => {
     expectNoReplyDeliveryOrRouteUpdate();
   });
 
-  it.skip("enqueues system events for reaction notifications", async () => {
+  it("enqueues system events for reaction notifications", async () => {
     setReactionNotificationConfig("all");
     await receiveSingleEnvelope({
       ...makeBaseEnvelope(),
@@ -386,7 +383,7 @@ describe("monitorSignalProvider tool results", () => {
     expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
-  it.skip.each([
+  it.each([
     {
       name: "blocks reaction notifications from unauthorized senders when dmPolicy is allowlist",
       mode: "all" as const,
@@ -429,7 +426,7 @@ describe("monitorSignalProvider tool results", () => {
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
   });
 
-  it.skip("notifies on own reactions when target includes uuid + phone", async () => {
+  it("notifies on own reactions when target includes uuid + phone", async () => {
     setReactionNotificationConfig("own", { account: "+15550002222" });
     await receiveSingleEnvelope({
       ...makeBaseEnvelope(),
@@ -473,7 +470,7 @@ describe("monitorSignalProvider tool results", () => {
     });
   });
 
-  it.skip("does not resend pairing code when a request is already pending", async () => {
+  it("does not resend pairing code when a request is already pending", async () => {
     setSignalToolResultTestConfig(
       createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
     );
