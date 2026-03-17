@@ -306,6 +306,24 @@ function Fail-Install {
     return $false
 }
 
+function Complete-Install {
+    param([bool]$Succeeded)
+
+    if ($Succeeded) {
+        return
+    }
+
+    # `exit` kills the current PowerShell host when the installer is invoked via
+    # `iex`/scriptblock. Keep that behavior only for direct script execution and
+    # use a terminating error otherwise so callers still observe a non-zero
+    # failure without losing their interactive session.
+    if ($PSCommandPath) {
+        exit $script:InstallExitCode
+    }
+
+    throw "OpenClaw installation failed with exit code $($script:InstallExitCode)."
+}
+
 # Main
 function Main {
     Write-Banner
@@ -368,9 +386,4 @@ function Main {
 
 $installSucceeded = Main
 
-# Preserve non-zero exit codes for direct script execution, but avoid terminating
-# an existing interactive PowerShell session when the installer is run via iex
-# or a downloaded scriptblock.
-if (-not $installSucceeded -and $PSCommandPath) {
-    exit $script:InstallExitCode
-}
+Complete-Install -Succeeded:$installSucceeded
