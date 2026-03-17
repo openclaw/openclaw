@@ -61,6 +61,34 @@ afterEach(() => {
 });
 
 describe("runHeartbeatOnce – heartbeat model override", () => {
+  async function runHeartbeatWithSeed(params: {
+    seedSession: (sessionKey: string, input: SeedSessionInput) => Promise<void>;
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    agentId?: string;
+  }) {
+    await params.seedSession(params.sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+    await runHeartbeatOnce({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      deps: {
+        getQueueSize: () => 0,
+        nowMs: () => 0,
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    return {
+      ctx: replySpy.mock.calls[0]?.[0],
+      opts: replySpy.mock.calls[0]?.[1],
+      replySpy,
+    };
+  }
+
   async function runDefaultsHeartbeat(params: {
     model?: string;
     suppressToolErrorWarnings?: boolean;
@@ -86,21 +114,12 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
-      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
-
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      await runHeartbeatOnce({
+      const result = await runHeartbeatWithSeed({
+        seedSession,
         cfg,
-        deps: {
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
+        sessionKey,
       });
-
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      return replySpy.mock.calls[0]?.[1];
+      return result.opts;
     });
   }
 
@@ -152,20 +171,14 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
-      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
-
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      await runHeartbeatOnce({
+      const result = await runHeartbeatWithSeed({
+        seedSession,
         cfg,
-        deps: { getQueueSize: () => 0, nowMs: () => 0 },
+        sessionKey,
       });
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const ctx = replySpy.mock.calls[0]?.[0];
       // Isolated heartbeat runs use a dedicated session key with :heartbeat suffix
-      expect(ctx.SessionKey).toBe(`${sessionKey}:heartbeat`);
+      expect(result.ctx?.SessionKey).toBe(`${sessionKey}:heartbeat`);
     });
   });
 
@@ -185,19 +198,13 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
-      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
-
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      await runHeartbeatOnce({
+      const result = await runHeartbeatWithSeed({
+        seedSession,
         cfg,
-        deps: { getQueueSize: () => 0, nowMs: () => 0 },
+        sessionKey,
       });
 
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const ctx = replySpy.mock.calls[0]?.[0];
-      expect(ctx.SessionKey).toBe(sessionKey);
+      expect(result.ctx?.SessionKey).toBe(sessionKey);
     });
   });
 
@@ -228,21 +235,14 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         session: { store: storePath },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
-      await seedSession(sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
-
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      await runHeartbeatOnce({
+      const result = await runHeartbeatWithSeed({
+        seedSession,
         cfg,
         agentId: "ops",
-        deps: {
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
+        sessionKey,
       });
 
-      expect(replySpy).toHaveBeenCalledWith(
+      expect(result.replySpy).toHaveBeenCalledWith(
         expect.any(Object),
         expect.objectContaining({
           isHeartbeat: true,
