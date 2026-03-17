@@ -8,12 +8,20 @@ import {
 const pinEnqueueMock = vi.hoisted(() => vi.fn());
 const pinAllowMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../../src/infra/system-events.js", () => {
-  return { enqueueSystemEvent: pinEnqueueMock };
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: pinEnqueueMock,
+  };
 });
-vi.mock("../../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: pinAllowMock,
-}));
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: pinAllowMock,
+  };
+});
 
 type PinHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 

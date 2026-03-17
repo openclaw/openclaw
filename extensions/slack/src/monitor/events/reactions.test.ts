@@ -8,15 +8,19 @@ import {
 const reactionQueueMock = vi.fn();
 const reactionAllowMock = vi.fn();
 
-vi.mock("../../../../../src/infra/system-events.js", () => {
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
+    ...actual,
     enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
   };
 });
 
-vi.mock("../../../../../src/pairing/pairing-store.js", () => {
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
   return {
-    readChannelAllowFromStore: (...args: unknown[]) => reactionAllowMock(...args),
+    ...actual,
+    readStoreAllowFromForDmPolicy: (...args: unknown[]) => reactionAllowMock(...args),
   };
 });
 
