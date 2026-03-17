@@ -19,7 +19,7 @@ Today that means three closely related ecosystems:
 - Cursor bundles
 
 OpenClaw shows all of them as `Format: bundle` in `openclaw plugins list`.
-Verbose output and `openclaw plugins info <id>` also show the subtype
+Verbose output and `openclaw plugins inspect <id>` also show the subtype
 (`codex`, `claude`, or `cursor`).
 
 Related:
@@ -141,7 +141,7 @@ diagnostics/info output, but OpenClaw does not run them yet:
 
 ## Capability reporting
 
-`openclaw plugins info <id>` shows bundle capabilities from the normalized
+`openclaw plugins inspect <id>` shows bundle capabilities from the normalized
 bundle record.
 
 Supported capabilities are loaded quietly. Unsupported capabilities produce a
@@ -269,7 +269,7 @@ openclaw plugins install ./my-cursor-bundle
 openclaw plugins install ./my-bundle.tgz
 openclaw plugins marketplace list <marketplace-name>
 openclaw plugins install <plugin-name>@<marketplace-name>
-openclaw plugins info my-bundle
+openclaw plugins inspect my-bundle
 ```
 
 If the directory is a native OpenClaw plugin/package, the native install path
@@ -284,7 +284,7 @@ sources; after resolution, the normal install rules still apply.
 
 ### Bundle is detected but capabilities do not run
 
-Check `openclaw plugins info <id>`.
+Check `openclaw plugins inspect <id>`.
 
 If the capability is listed but OpenClaw says it is not wired yet, that is a
 real product limit, not a broken install.

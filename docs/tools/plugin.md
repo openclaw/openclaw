@@ -110,14 +110,14 @@ conversation, and it runs after core approval handling finishes.
 Capabilities are the public plugin model. Every native OpenClaw plugin
 registers against one or more capability types:
 
-| Capability | Registration method | Example plugins |
-|---|---|---|
-| Text inference | `api.registerProvider(...)` | `openai`, `anthropic` |
-| Speech | `api.registerSpeechProvider(...)` | `elevenlabs`, `microsoft` |
-| Media understanding | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google` |
-| Image generation | `api.registerImageGenerationProvider(...)` | `openai`, `google` |
-| Web search | `api.registerWebSearchProvider(...)` | `google` |
-| Channel / messaging | `api.registerChannel(...)` | `msteams`, `matrix` |
+| Capability          | Registration method                           | Example plugins           |
+| ------------------- | --------------------------------------------- | ------------------------- |
+| Text inference      | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
+| Speech              | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
+| Media understanding | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
+| Image generation    | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
+| Web search          | `api.registerWebSearchProvider(...)`          | `google`                  |
+| Channel / messaging | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
 
 A plugin that registers zero capabilities but provides hooks, tools, or
 services is a **legacy hook-only** plugin. That shape is still fully supported.
@@ -1590,7 +1590,7 @@ Example:
 
 ```bash
 openclaw plugins list
-openclaw plugins info <id>
+openclaw plugins inspect <id>
 openclaw plugins install <path>                 # copy a local file/dir into ~/.openclaw/extensions/<id>
 openclaw plugins install ./extensions/voice-call # relative path ok
 openclaw plugins install ./plugin.tgz           # install from a local tarball
