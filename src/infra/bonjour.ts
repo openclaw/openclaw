@@ -78,6 +78,9 @@ function safeServiceName(name: string) {
   return result;
 }
 
+/** @internal Exported for unit-testing the DNS-label truncation logic. */
+export { safeServiceName as sanitizeForBonjour };
+
 function prettifyInstanceName(name: string) {
   const normalized = name.trim().replace(/\s+/g, " ");
   return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
@@ -415,3 +418,4 @@ export async function startGatewayBonjourAdvertiser(
     },
   };
 }
+
