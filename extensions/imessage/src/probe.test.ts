@@ -13,6 +13,7 @@ beforeEach(() => {
     code: 1,
     signal: null,
     killed: false,
+    termination: "exit",
   });
 });
 

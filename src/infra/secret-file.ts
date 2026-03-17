@@ -22,6 +22,10 @@ export type SecretFileReadResult =
       error?: unknown;
     };
 
+function normalizeSecretReadError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 export function loadSecretFileSync(
   filePath: string,
   label: string,
@@ -39,11 +43,12 @@ export function loadSecretFileSync(
   try {
     previewStat = fs.lstatSync(resolvedPath);
   } catch (error) {
+    const normalized = normalizeSecretReadError(error);
     return {
       ok: false,
       resolvedPath,
-      error,
-      message: `Failed to inspect ${label} file at ${resolvedPath}: ${String(error)}`,
+      error: normalized,
+      message: `Failed to inspect ${label} file at ${resolvedPath}: ${String(normalized)}`,
     };
   }
 
@@ -75,8 +80,9 @@ export function loadSecretFileSync(
     maxBytes,
   });
   if (!opened.ok) {
-    const error =
-      opened.reason === "validation" ? new Error("security validation failed") : opened.error;
+    const error = normalizeSecretReadError(
+      opened.reason === "validation" ? new Error("security validation failed") : opened.error,
+    );
     return {
       ok: false,
       resolvedPath,
@@ -97,11 +103,12 @@ export function loadSecretFileSync(
     }
     return { ok: true, secret, resolvedPath };
   } catch (error) {
+    const normalized = normalizeSecretReadError(error);
     return {
       ok: false,
       resolvedPath,
-      error,
-      message: `Failed to read ${label} file at ${resolvedPath}: ${String(error)}`,
+      error: normalized,
+      message: `Failed to read ${label} file at ${resolvedPath}: ${String(normalized)}`,
     };
   } finally {
     fs.closeSync(opened.fd);

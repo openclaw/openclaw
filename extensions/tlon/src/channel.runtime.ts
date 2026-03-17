@@ -230,7 +230,7 @@ export async function probeTlonAccount(account: ConfiguredTlonAccount) {
 }
 
 export async function startTlonGatewayAccount(
-  ctx: Parameters<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>[0],
+  ctx: Parameters<NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>>[0],
 ) {
   const account = ctx.account;
   ctx.setStatus({

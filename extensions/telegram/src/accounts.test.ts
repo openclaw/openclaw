@@ -37,7 +37,7 @@ beforeEach(() => {
       warn: warnMock,
       child: () => logger,
     };
-    return logger as ReturnType<typeof subsystemModule.createSubsystemLogger>;
+    return logger as unknown as ReturnType<typeof subsystemModule.createSubsystemLogger>;
   });
 });
 

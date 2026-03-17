@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { build } from "tsdown";
 import { describe, expect, it } from "vitest";
 import {
-  buildPluginSdkEntrySources,
   buildPluginSdkPackageExports,
   buildPluginSdkSpecifiers,
   pluginSdkEntrypoints,
@@ -119,24 +117,16 @@ describe("plugin-sdk exports", () => {
   });
 
   it("emits importable bundled subpath entries", { timeout: 240_000 }, async () => {
-    const outDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-build-"));
     const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));
+    const repoDistDir = path.join(process.cwd(), "dist");
 
     try {
-      await build({
-        clean: true,
-        config: false,
-        dts: false,
-        entry: buildPluginSdkEntrySources(),
-        env: { NODE_ENV: "production" },
-        fixedExtension: false,
-        logLevel: "error",
-        outDir,
-        platform: "node",
-      });
+      await expect(fs.access(path.join(repoDistDir, "plugin-sdk"))).resolves.toBeUndefined();
 
       for (const entry of pluginSdkEntrypoints) {
-        const module = await import(pathToFileURL(path.join(outDir, `${entry}.js`)).href);
+        const module = await import(
+          pathToFileURL(path.join(repoDistDir, "plugin-sdk", `${entry}.js`)).href
+        );
         expect(module).toBeTypeOf("object");
       }
 
@@ -144,8 +134,8 @@ describe("plugin-sdk exports", () => {
       const consumerDir = path.join(fixtureDir, "consumer");
       const consumerEntry = path.join(consumerDir, "import-plugin-sdk.mjs");
 
-      await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
-      await fs.symlink(outDir, path.join(packageDir, "dist", "plugin-sdk"), "dir");
+      await fs.mkdir(packageDir, { recursive: true });
+      await fs.symlink(repoDistDir, path.join(packageDir, "dist"), "dir");
       await fs.writeFile(
         path.join(packageDir, "package.json"),
         JSON.stringify(
@@ -178,7 +168,6 @@ describe("plugin-sdk exports", () => {
         Object.fromEntries(pluginSdkSpecifiers.map((specifier: string) => [specifier, "object"])),
       );
     } finally {
-      await fs.rm(outDir, { recursive: true, force: true });
       await fs.rm(fixtureDir, { recursive: true, force: true });
     }
   });
