@@ -139,6 +139,8 @@ export function applySetupAccountConfigPatch(params: {
 export function createPatchedAccountSetupAdapter(params: {
   channelKey: string;
   alwaysUseAccounts?: boolean;
+  ensureChannelEnabled?: boolean;
+  ensureAccountEnabled?: boolean;
   validateInput?: ChannelSetupAdapter["validateInput"];
   buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
 }): ChannelSetupAdapter {
@@ -169,11 +171,16 @@ export function createPatchedAccountSetupAdapter(params: {
               alwaysUseAccounts: params.alwaysUseAccounts,
             })
           : namedConfig;
-      return applySetupAccountConfigPatch({
+      const patch = params.buildPatch(input);
+      return patchScopedAccountConfig({
         cfg: next,
         channelKey: params.channelKey,
         accountId,
-        patch: params.buildPatch(input),
+        patch,
+        accountPatch: patch,
+        ensureChannelEnabled: params.ensureChannelEnabled ?? !params.alwaysUseAccounts,
+        ensureAccountEnabled: params.ensureAccountEnabled ?? true,
+        scopeDefaultToAccounts: params.alwaysUseAccounts,
       });
     },
   };
@@ -187,6 +194,7 @@ export function patchScopedAccountConfig(params: {
   accountPatch?: Record<string, unknown>;
   ensureChannelEnabled?: boolean;
   ensureAccountEnabled?: boolean;
+  scopeDefaultToAccounts?: boolean;
 }): OpenClawConfig {
   const accountId = normalizeAccountId(params.accountId);
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
@@ -201,7 +209,7 @@ export function patchScopedAccountConfig(params: {
   const ensureAccountEnabled = params.ensureAccountEnabled ?? ensureChannelEnabled;
   const patch = params.patch;
   const accountPatch = params.accountPatch ?? patch;
-  if (accountId === DEFAULT_ACCOUNT_ID) {
+  if (accountId === DEFAULT_ACCOUNT_ID && !params.scopeDefaultToAccounts) {
     return {
       ...params.cfg,
       channels: {
