@@ -308,6 +308,97 @@ describe("AcpGatewayStore restart recovery", () => {
     });
   });
 
+  it("keeps prepared synthetic-final recovery state durable across reload", async () => {
+    const { root, store } = await createStore();
+    const now = 1_700_000_175_000;
+
+    await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-prepared-final",
+      requestId: "req-prepared-final",
+      now,
+    });
+    await store.recordRunDeliveryTarget({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-prepared-final",
+      targetId: "primary",
+      channel: "telegram",
+      to: "telegram:thread-prepared",
+      routeMode: "originating",
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+      now: now + 1,
+    });
+    await store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-prepared-final",
+      leaseId: "lease-1",
+      leaseEpoch: 1,
+      seq: 1,
+      event: {
+        type: "text_delta",
+        stream: "output",
+        text: "prepared final replay",
+      },
+      now: now + 2,
+    });
+    await store.resolveTerminal({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-prepared-final",
+      leaseId: "lease-1",
+      leaseEpoch: 1,
+      terminalEventId: "term-prepared",
+      finalSeq: 1,
+      terminal: {
+        kind: "completed",
+        stopReason: "end_turn",
+      },
+      now: now + 3,
+    });
+    await store.recordProjectorCheckpoint({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-prepared-final",
+      targetId: "primary",
+      cursorSeq: 1,
+      deliveredEffectCount: 1,
+      now: now + 4,
+    });
+    await store.recordProjectorPreparedSyntheticFinal({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-prepared-final",
+      targetId: "primary",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
+      payload: {
+        mediaUrl: "https://example.com/prepared-final.mp3",
+        audioAsVoice: true,
+      },
+      now: now + 5,
+    });
+
+    const restarted = new AcpGatewayStore({
+      storePath: path.join(root, "acp", "gateway-node-runtime-store.json"),
+    });
+
+    expect(await restarted.getCheckpoint("projector:run-prepared-final:primary")).toMatchObject({
+      runId: "run-prepared-final",
+      cursorSeq: 1,
+      deliveredEffectCount: 1,
+      preparedSyntheticFinalEffectCount: 2,
+      preparedSyntheticFinalCursorSeq: 1,
+      preparedSyntheticFinalMediaUrl: "https://example.com/prepared-final.mp3",
+      preparedSyntheticFinalAudioAsVoice: true,
+    });
+  });
+
   it("keeps run-owned delivery targets isolated across reload even when a later run replaces the session", async () => {
     const { root, store } = await createStore();
     const now = 1_700_000_200_000;

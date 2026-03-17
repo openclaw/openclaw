@@ -108,6 +108,10 @@ export type AcpGatewayCheckpointRecord = {
   cursorSeq: number;
   targetId?: string;
   deliveredEffectCount?: number;
+  preparedSyntheticFinalEffectCount?: number;
+  preparedSyntheticFinalCursorSeq?: number;
+  preparedSyntheticFinalMediaUrl?: string;
+  preparedSyntheticFinalAudioAsVoice?: boolean;
   pendingSyntheticFinalEffectCount?: number;
   pendingSyntheticFinalCursorSeq?: number;
   updatedAt: number;

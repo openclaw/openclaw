@@ -277,6 +277,23 @@ class AcpDurableProjectionRunner {
     }
 
     if (
+      checkpoint?.preparedSyntheticFinalEffectCount === nextEffectCount &&
+      checkpoint.preparedSyntheticFinalCursorSeq === params.cursorSeq &&
+      checkpoint.preparedSyntheticFinalMediaUrl
+    ) {
+      params.incrementDeliveredEffectCount();
+      params.coordinator.markSyntheticFinalDelivered({
+        cursorSeq: params.cursorSeq,
+        effectCount: params.deliveredEffectCountRef(),
+      });
+      await this.recordSettledSyntheticFinalCheckpoint({
+        cursorSeq: params.cursorSeq,
+        deliveredEffectCount: params.deliveredEffectCountRef(),
+      });
+      return;
+    }
+
+    if (
       params.coordinator.hasDeliveredSyntheticFinal({
         cursorSeq: params.cursorSeq,
         effectCount: nextEffectCount,
@@ -294,11 +311,28 @@ class AcpDurableProjectionRunner {
     if (!syntheticFinalPayload) {
       return;
     }
+    const syntheticFinalMediaUrl = syntheticFinalPayload.mediaUrl;
+    if (!syntheticFinalMediaUrl) {
+      return;
+    }
     params.incrementDeliveredEffectCount();
     if (params.skipRemainingRef() > 0) {
       params.decrementSkipRemaining();
       return;
     }
+    await this.params.store.recordProjectorPreparedSyntheticFinal({
+      sessionKey: this.params.target.sessionKey,
+      runId: this.params.target.runId,
+      targetId: this.params.target.targetId,
+      cursorSeq: params.cursorSeq,
+      deliveredEffectCount: params.deliveredEffectCountRef(),
+      payload: {
+        mediaUrl: syntheticFinalMediaUrl,
+        ...(typeof syntheticFinalPayload.audioAsVoice === "boolean"
+          ? { audioAsVoice: syntheticFinalPayload.audioAsVoice }
+          : {}),
+      },
+    });
     const delivered = await params.coordinator.deliver("final", syntheticFinalPayload);
     if (!delivered) {
       throw new Error("ACP durable final-TTS delivery failed.");

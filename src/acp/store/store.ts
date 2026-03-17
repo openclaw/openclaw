@@ -278,6 +278,10 @@ export class AcpGatewayStore {
     cursorSeq: number;
     targetId?: string;
     deliveredEffectCount?: number;
+    preparedSyntheticFinalEffectCount?: number;
+    preparedSyntheticFinalCursorSeq?: number;
+    preparedSyntheticFinalMediaUrl?: string;
+    preparedSyntheticFinalAudioAsVoice?: boolean;
     pendingSyntheticFinalEffectCount?: number;
     pendingSyntheticFinalCursorSeq?: number;
     now?: number;
@@ -292,6 +296,18 @@ export class AcpGatewayStore {
         ...(params.targetId ? { targetId: params.targetId } : {}),
         ...(typeof params.deliveredEffectCount === "number"
           ? { deliveredEffectCount: params.deliveredEffectCount }
+          : {}),
+        ...(typeof params.preparedSyntheticFinalEffectCount === "number"
+          ? { preparedSyntheticFinalEffectCount: params.preparedSyntheticFinalEffectCount }
+          : {}),
+        ...(typeof params.preparedSyntheticFinalCursorSeq === "number"
+          ? { preparedSyntheticFinalCursorSeq: params.preparedSyntheticFinalCursorSeq }
+          : {}),
+        ...(params.preparedSyntheticFinalMediaUrl
+          ? { preparedSyntheticFinalMediaUrl: params.preparedSyntheticFinalMediaUrl }
+          : {}),
+        ...(typeof params.preparedSyntheticFinalAudioAsVoice === "boolean"
+          ? { preparedSyntheticFinalAudioAsVoice: params.preparedSyntheticFinalAudioAsVoice }
           : {}),
         ...(typeof params.pendingSyntheticFinalEffectCount === "number"
           ? { pendingSyntheticFinalEffectCount: params.pendingSyntheticFinalEffectCount }
@@ -430,6 +446,46 @@ export class AcpGatewayStore {
         : {}),
       pendingSyntheticFinalEffectCount: params.deliveredEffectCount,
       pendingSyntheticFinalCursorSeq: params.cursorSeq,
+      now: params.now,
+    });
+  }
+
+  async recordProjectorPreparedSyntheticFinal(params: {
+    sessionKey: string;
+    runId: string;
+    targetId?: string;
+    cursorSeq: number;
+    deliveredEffectCount: number;
+    payload: {
+      mediaUrl: string;
+      audioAsVoice?: boolean;
+    };
+    now?: number;
+  }): Promise<AcpGatewayCheckpointRecord> {
+    const targetId = params.targetId?.trim() || "primary";
+    const checkpointKey = makeProjectorCheckpointKey(params.runId, targetId);
+    const existing = await this.getCheckpoint(checkpointKey);
+    return await this.recordCheckpoint({
+      checkpointKey,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      cursorSeq: existing?.cursorSeq ?? params.cursorSeq,
+      targetId,
+      ...(typeof existing?.deliveredEffectCount === "number"
+        ? { deliveredEffectCount: existing.deliveredEffectCount }
+        : {}),
+      preparedSyntheticFinalEffectCount: params.deliveredEffectCount,
+      preparedSyntheticFinalCursorSeq: params.cursorSeq,
+      preparedSyntheticFinalMediaUrl: params.payload.mediaUrl,
+      ...(typeof params.payload.audioAsVoice === "boolean"
+        ? { preparedSyntheticFinalAudioAsVoice: params.payload.audioAsVoice }
+        : {}),
+      ...(typeof existing?.pendingSyntheticFinalEffectCount === "number"
+        ? { pendingSyntheticFinalEffectCount: existing.pendingSyntheticFinalEffectCount }
+        : {}),
+      ...(typeof existing?.pendingSyntheticFinalCursorSeq === "number"
+        ? { pendingSyntheticFinalCursorSeq: existing.pendingSyntheticFinalCursorSeq }
+        : {}),
       now: params.now,
     });
   }

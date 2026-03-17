@@ -314,4 +314,47 @@ describe("startAcpNodeProjectionRecovery", () => {
     });
     expect(routeMocks.routeReply).not.toHaveBeenCalled();
   });
+
+  it("converges a durable prepared synthetic final marker on startup without double-emitting output", async () => {
+    const { store } = await createStore();
+    await seedTerminalRun(store, {
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+    });
+    await store.recordProjectorCheckpoint({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "primary",
+      cursorSeq: 1,
+      deliveredEffectCount: 1,
+      now: 20,
+    });
+    await store.recordProjectorPreparedSyntheticFinal({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "primary",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
+      payload: {
+        mediaUrl: "https://example.com/startup-prepared-final.mp3",
+        audioAsVoice: true,
+      },
+      now: 21,
+    });
+
+    const result = await startAcpNodeProjectionRecovery({
+      cfg: createAcpTestConfig(),
+      store,
+    });
+
+    expect(result.started).toContain("run-1:primary");
+    await vi.waitFor(async () => {
+      expect(await store.getCheckpoint("projector:run-1:primary")).toMatchObject({
+        runId: "run-1",
+        cursorSeq: 1,
+        deliveredEffectCount: 2,
+      });
+    });
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
+  });
 });

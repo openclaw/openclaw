@@ -818,4 +818,145 @@ describe("AcpDurableProjectionService", () => {
       deliveredEffectCount: 2,
     });
   });
+
+  it("converges after restart when the final was sent but every post-send durability write was lost", async () => {
+    const liveStore = await createStore();
+    await seedTerminalRun({
+      store: liveStore,
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-restart-prepared-final",
+      channel: "telegram",
+      to: "telegram:thread-restart",
+      text: "restart should converge from prepared final evidence",
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+      now: 10,
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        kind: string;
+        payload: { text?: string };
+      };
+      if (
+        params.kind === "final" &&
+        params.payload.text === "restart should converge from prepared final evidence"
+      ) {
+        return {
+          mediaUrl: "https://example.com/restart-prepared-final.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+
+    const originalRecordProjectorCheckpoint = liveStore.recordProjectorCheckpoint.bind(liveStore);
+    const originalRecordProjectorPendingSyntheticFinal =
+      liveStore.recordProjectorPendingSyntheticFinal.bind(liveStore);
+    vi.spyOn(liveStore, "recordProjectorCheckpoint").mockImplementation(async (params) => {
+      if (params.runId === "run-restart-prepared-final" && params.deliveredEffectCount === 2) {
+        throw new Error("post-send checkpoint write lost");
+      }
+      return await originalRecordProjectorCheckpoint(params);
+    });
+    vi.spyOn(liveStore, "recordProjectorPendingSyntheticFinal").mockImplementation(
+      async (params) => {
+        if (params.runId === "run-restart-prepared-final") {
+          throw new Error("post-send pending marker write lost");
+        }
+        return await originalRecordProjectorPendingSyntheticFinal(params);
+      },
+    );
+
+    const cfg = createAcpTestConfig();
+    const liveService = new AcpDurableProjectionService({
+      store: liveStore,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    const liveProjection = liveService.ensureProjection({
+      cfg,
+      target: (await liveStore.getRunDeliveryTarget("run-restart-prepared-final", "primary"))!,
+      shouldSendToolSummaries: true,
+      restartMode: false,
+      retryDelayMs: 10_000,
+      pollIntervalMs: 1,
+    });
+    await vi.waitFor(() => expect(routeMocks.routeReply).toHaveBeenCalledTimes(2));
+    liveService.stopAll();
+    await liveProjection;
+
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "restart should converge from prepared final evidence",
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/restart-prepared-final.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+    expect(
+      await liveStore.getCheckpoint("projector:run-restart-prepared-final:primary"),
+    ).toMatchObject({
+      runId: "run-restart-prepared-final",
+      cursorSeq: 1,
+      deliveredEffectCount: 1,
+      preparedSyntheticFinalEffectCount: 2,
+      preparedSyntheticFinalCursorSeq: 1,
+      preparedSyntheticFinalMediaUrl: "https://example.com/restart-prepared-final.mp3",
+      preparedSyntheticFinalAudioAsVoice: true,
+    });
+
+    routeMocks.routeReply.mockClear();
+    const restartedStore = new AcpGatewayStore({ storePath: liveStore.storePath });
+    const restartService = new AcpDurableProjectionService({
+      store: restartedStore,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    await restartService.ensureProjection({
+      cfg,
+      target: (await restartedStore.getRunDeliveryTarget("run-restart-prepared-final", "primary"))!,
+      shouldSendToolSummaries: true,
+      restartMode: true,
+      retryDelayMs: 1,
+      pollIntervalMs: 1,
+    });
+
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
+    expect(
+      await restartedStore.getCheckpoint("projector:run-restart-prepared-final:primary"),
+    ).toMatchObject({
+      runId: "run-restart-prepared-final",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
+    });
+  });
 });
