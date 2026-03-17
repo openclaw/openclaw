@@ -330,9 +330,18 @@ export function buildBootstrapPromptWarning(params: {
   };
 }
 
-export function prependBootstrapPromptWarning(prompt: string, warningLines?: string[]): string {
+export function prependBootstrapPromptWarning(
+  prompt: string,
+  warningLines?: string[],
+  options?: {
+    preserveExactPrompt?: string;
+  },
+): string {
   const normalizedLines = (warningLines ?? []).map((line) => line.trim()).filter(Boolean);
   if (normalizedLines.length === 0) {
+    return prompt;
+  }
+  if (options?.preserveExactPrompt && prompt === options.preserveExactPrompt) {
     return prompt;
   }
   const warningBlock = [
@@ -341,8 +350,7 @@ export function prependBootstrapPromptWarning(prompt: string, warningLines?: str
     "Treat Project Context as partial and read the relevant files directly if details seem missing.",
     ...normalizedLines.map((line) => `- ${line}`),
   ].join("\n");
-  const trimmedPrompt = prompt.trim();
-  return trimmedPrompt ? `${warningBlock}\n\n${trimmedPrompt}` : warningBlock;
+  return prompt ? `${warningBlock}\n\n${prompt}` : warningBlock;
 }
 
 export function buildBootstrapTruncationReportMeta(params: {

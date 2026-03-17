@@ -534,16 +534,13 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("does not inject bootstrap truncation warning lines into the system prompt", () => {
+  it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      bootstrapTruncationWarningLines: ["AGENTS.md: 200 raw -> 0 injected"],
       contextFiles: [],
     });
 
     expect(prompt).not.toContain("# Project Context");
-    expect(prompt).not.toContain("⚠ Bootstrap truncation warning:");
-    expect(prompt).not.toContain("AGENTS.md: 200 raw -> 0 injected");
   });
 
   it("summarizes the message tool when available", () => {

@@ -116,6 +116,24 @@ describe("bootstrap prompt warnings", () => {
     expect(prompt).toContain("Please continue.");
   });
 
+  it("preserves raw prompt whitespace when prepending warning details", () => {
+    const prompt = prependBootstrapPromptWarning("  indented\nkeep tail  ", [
+      "AGENTS.md: 200 raw -> 0 injected",
+    ]);
+
+    expect(prompt.endsWith("  indented\nkeep tail  ")).toBe(true);
+  });
+
+  it("preserves exact heartbeat prompts without warning prefixes", () => {
+    const heartbeatPrompt = "Read HEARTBEAT.md. Reply HEARTBEAT_OK.";
+
+    expect(
+      prependBootstrapPromptWarning(heartbeatPrompt, ["AGENTS.md: 200 raw -> 0 injected"], {
+        preserveExactPrompt: heartbeatPrompt,
+      }),
+    ).toBe(heartbeatPrompt);
+  });
+
   it("resolves seen signatures from report history or legacy single signature", () => {
     expect(
       resolveBootstrapWarningSignaturesSeen({
@@ -410,23 +428,11 @@ describe("bootstrap prompt warnings", () => {
   it("improves cache-relevant system prompt stability versus legacy warning injection", () => {
     const contextFiles = [{ path: "AGENTS.md", content: "Follow AGENTS guidance." }];
     const warningLines = ["AGENTS.md: 200 raw -> 0 injected"];
-    const optimizedTurns = [
-      buildAgentSystemPrompt({
-        workspaceDir: "/tmp/openclaw",
-        contextFiles,
-        bootstrapTruncationWarningLines: warningLines,
-      }),
-      buildAgentSystemPrompt({
-        workspaceDir: "/tmp/openclaw",
-        contextFiles,
-        bootstrapTruncationWarningLines: [],
-      }),
-      buildAgentSystemPrompt({
-        workspaceDir: "/tmp/openclaw",
-        contextFiles,
-        bootstrapTruncationWarningLines: warningLines,
-      }),
-    ];
+    const stableSystemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles,
+    });
+    const optimizedTurns = [stableSystemPrompt, stableSystemPrompt, stableSystemPrompt];
     const injectLegacyWarning = (prompt: string, lines: string[]) => {
       const warningBlock = [
         "⚠ Bootstrap truncation warning:",
@@ -441,8 +447,8 @@ describe("bootstrap prompt warnings", () => {
       injectLegacyWarning(optimizedTurns[2] ?? "", warningLines),
     ];
     const cacheHitRate = (turns: string[]) => {
-      const changes = turns.slice(1).filter((turn, index) => turn === turns[index]).length;
-      return changes / Math.max(1, turns.length - 1);
+      const hits = turns.slice(1).filter((turn, index) => turn === turns[index]).length;
+      return hits / Math.max(1, turns.length - 1);
     };
 
     expect(cacheHitRate(legacyTurns)).toBe(0);

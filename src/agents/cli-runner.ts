@@ -155,7 +155,6 @@ export async function runCliAgent(params: {
     docsPath: docsPath ?? undefined,
     tools: [],
     contextFiles,
-    bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
     modelDisplay,
     agentId: sessionAgentId,
   });
@@ -211,7 +210,9 @@ export async function runCliAgent(params: {
 
     let imagePaths: string[] | undefined;
     let cleanupImages: (() => Promise<void>) | undefined;
-    let prompt = prependBootstrapPromptWarning(params.prompt, bootstrapPromptWarning.lines);
+    let prompt = prependBootstrapPromptWarning(params.prompt, bootstrapPromptWarning.lines, {
+      preserveExactPrompt: heartbeatPrompt,
+    });
     if (params.images && params.images.length > 0) {
       const imagePayload = await writeCliImages(params.images);
       imagePaths = imagePayload.paths;
