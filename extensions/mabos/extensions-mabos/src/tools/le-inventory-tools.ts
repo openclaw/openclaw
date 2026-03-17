@@ -222,7 +222,7 @@ export function createLeInventoryTools(api: OpenClawPluginApi): AnyAgentTool[] {
               }
 
               const ed = edData as any;
-              const tagQuery = `tag:limited-edition AND tag:${ed.shopify_tag}`;
+              const tagQuery = `tag:${ed.shopify_tag}`;
               const products: any[] = [];
               let cursor: string | undefined;
 
