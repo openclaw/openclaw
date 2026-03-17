@@ -18,6 +18,11 @@ export type NormalizedPluginsConfig = {
       hooks?: {
         allowPromptInjection?: boolean;
       };
+      subagent?: {
+        allowModelOverride?: boolean;
+        allowedModels?: string[];
+        hasAllowedModelsConfig?: boolean;
+      };
       config?: unknown;
     }
   >;
@@ -123,11 +128,43 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
             allowPromptInjection: hooks.allowPromptInjection,
           }
         : undefined;
+    const subagentRaw = entry.subagent;
+    const subagent =
+      subagentRaw && typeof subagentRaw === "object" && !Array.isArray(subagentRaw)
+        ? {
+            allowModelOverride: (subagentRaw as { allowModelOverride?: unknown })
+              .allowModelOverride,
+            hasAllowedModelsConfig: Array.isArray(
+              (subagentRaw as { allowedModels?: unknown }).allowedModels,
+            ),
+            allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
+              ? ((subagentRaw as { allowedModels?: unknown }).allowedModels as unknown[])
+                  .map((model) => (typeof model === "string" ? model.trim() : ""))
+                  .filter(Boolean)
+              : undefined,
+          }
+        : undefined;
+    const normalizedSubagent =
+      subagent &&
+      (typeof subagent.allowModelOverride === "boolean" ||
+        subagent.hasAllowedModelsConfig ||
+        (Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0))
+        ? {
+            ...(typeof subagent.allowModelOverride === "boolean"
+              ? { allowModelOverride: subagent.allowModelOverride }
+              : {}),
+            ...(subagent.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
+            ...(Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0
+              ? { allowedModels: subagent.allowedModels }
+              : {}),
+          }
+        : undefined;
     normalized[normalizedKey] = {
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
+      subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }
