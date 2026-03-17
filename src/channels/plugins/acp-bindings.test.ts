@@ -122,6 +122,25 @@ describe("configured binding registry", () => {
     expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves configured bindings from legacy acpBindings providers", async () => {
+    const legacyProvider = createDiscordAcpPlugin().bindings;
+    getChannelPluginMock.mockReturnValue({
+      id: "discord",
+      acpBindings: legacyProvider,
+    });
+    const bindingRegistry = await importConfiguredBindings();
+
+    const resolved = bindingRegistry.resolveConfiguredBindingRecord({
+      cfg: createConfig() as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1479098716916023408",
+    });
+
+    expect(resolved?.record.conversation.channel).toBe("discord");
+    expect(legacyProvider?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
+  });
+
   it("resolves configured ACP bindings from canonical conversation refs", async () => {
     const plugin = createDiscordAcpPlugin();
     getChannelPluginMock.mockReturnValue(plugin);

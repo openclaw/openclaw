@@ -3,12 +3,14 @@ import type { ChannelPlugin } from "./types.plugin.js";
 
 export function resolveChannelConfiguredBindingProvider(
   plugin:
-    | Pick<ChannelPlugin, "bindings">
+    | Pick<ChannelPlugin, "bindings" | "acpBindings">
     | {
         bindings?: ChannelConfiguredBindingProvider;
+        acpBindings?: ChannelConfiguredBindingProvider;
       }
     | null
     | undefined,
 ): ChannelConfiguredBindingProvider | undefined {
-  return plugin?.bindings;
+  // Keep older external plugins working while they migrate from `acpBindings`.
+  return plugin?.bindings ?? plugin?.acpBindings;
 }
