@@ -7,12 +7,41 @@ import {
   runOpenAIOAuthTlsPreflight,
 } from "./provider-openai-codex-oauth-tls.js";
 
+/** OpenAI token endpoint host — used for NO_PROXY checks. */
+const TOKEN_HOST = "auth.openai.com";
+
+/**
+ * Returns true when `host` is excluded from proxying by `NO_PROXY` / `no_proxy`.
+ * Supports bare hostnames, dotted-prefix matching (`.openai.com`), and the
+ * wildcard `*` (proxy nothing).  Port and CIDR matching are intentionally
+ * omitted — they are unusual for OAuth token endpoints.
+ */
+function isHostExcludedByNoProxy(host: string): boolean {
+  const noProxy = process.env.NO_PROXY || process.env.no_proxy;
+  if (!noProxy) return false;
+
+  const entries = noProxy.split(",").map((e) => e.trim().toLowerCase());
+  const lowerHost = host.toLowerCase();
+
+  for (const entry of entries) {
+    if (!entry) continue;
+    if (entry === "*") return true;
+    if (lowerHost === entry) return true;
+    // ".openai.com" matches "auth.openai.com"
+    if (entry.startsWith(".") && lowerHost.endsWith(entry)) return true;
+    // "openai.com" also matches "auth.openai.com" (curl convention)
+    if (lowerHost === entry || lowerHost.endsWith(`.${entry}`)) return true;
+  }
+  return false;
+}
+
 /**
  * Node.js native fetch() ignores HTTP_PROXY / HTTPS_PROXY env vars.
  * This helper temporarily patches globalThis.fetch with a proxy-aware
  * implementation (via undici ProxyAgent) for the duration of `fn()`,
- * then restores the original fetch.  No-op when no proxy is configured
- * or undici is unavailable.
+ * then restores the original fetch.  No-op when no proxy is configured,
+ * when the target host is excluded via NO_PROXY, or when undici is
+ * unavailable.
  */
 async function withProxyFetch<T>(fn: () => Promise<T>): Promise<T> {
   const proxyUrl =
@@ -23,23 +52,29 @@ async function withProxyFetch<T>(fn: () => Promise<T>): Promise<T> {
     process.env.ALL_PROXY ||
     process.env.all_proxy;
   if (!proxyUrl) return fn();
+  if (isHostExcludedByNoProxy(TOKEN_HOST)) return fn();
 
   let restore: (() => void) | undefined;
+  let agent: { close(): Promise<void> } | undefined;
   try {
     const { createRequire } = await import("node:module");
     const require_ = createRequire(import.meta.url);
     // undici is a transitive dependency of OpenClaw (via Node internals / direct dep)
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const undici = require_("undici") as typeof import("undici");
-    const agent = new undici.ProxyAgent(proxyUrl);
+    agent = new undici.ProxyAgent(proxyUrl);
     const origFetch = globalThis.fetch;
-    globalThis.fetch = ((url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    const patchedFetch = ((url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
       undici.fetch(url as Parameters<typeof undici.fetch>[0], {
         ...(init as Parameters<typeof undici.fetch>[1]),
-        dispatcher: agent,
+        dispatcher: agent as import("undici").Dispatcher,
       })) as typeof fetch;
+    globalThis.fetch = patchedFetch;
     restore = () => {
-      globalThis.fetch = origFetch;
+      // Only restore if our patch is still in place (concurrency-safe)
+      if (globalThis.fetch === patchedFetch) {
+        globalThis.fetch = origFetch;
+      }
     };
   } catch {
     // undici not available — proceed with unpatched fetch
@@ -49,6 +84,11 @@ async function withProxyFetch<T>(fn: () => Promise<T>): Promise<T> {
     return await fn();
   } finally {
     restore?.();
+    try {
+      await agent?.close();
+    } catch {
+      // ignore close errors
+    }
   }
 }
 
