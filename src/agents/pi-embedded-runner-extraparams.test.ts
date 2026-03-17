@@ -1047,7 +1047,7 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
-  it("removes invalid negative Google thinkingBudget and maps Gemini 3.1 to thinkingLevel", () => {
+  it("removes invalid negative Google thinkingBudget and maps reasoning-capable Gemini models to thinkingLevel", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1084,6 +1084,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "google-generative-ai",
       provider: "atproxy",
       id: "gemini-3.1-pro-high",
+      reasoning: true,
     } as Model<"google-generative-ai">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
@@ -1105,6 +1106,79 @@ describe("applyExtraParamsToAgent", () => {
     ).toEqual({
       mimeType: "image/png",
       data: "ZmFrZQ==",
+    });
+  });
+
+  it("maps Gemini 2.5 Flash to Google thinkingLevel when reasoning is enabled", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: -1,
+          },
+        },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "google", "gemini-2.5-flash", undefined, "low");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google",
+      id: "gemini-2.5-flash",
+      reasoning: true,
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      thinkingConfig: {
+        includeThoughts: true,
+        thinkingLevel: "LOW",
+      },
+    });
+  });
+
+  it("does not inject Google thinkingLevel for non-reasoning models", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: -1,
+          },
+        },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "google", "gemini-2.5-flash-lite", undefined, "low");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "google",
+      id: "gemini-2.5-flash-lite",
+      reasoning: false,
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      thinkingConfig: {
+        includeThoughts: true,
+      },
     });
   });
 
@@ -1131,6 +1205,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "google-generative-ai",
       provider: "atproxy",
       id: "gemini-3.1-pro-high",
+      reasoning: true,
     } as Model<"google-generative-ai">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});

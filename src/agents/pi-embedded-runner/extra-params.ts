@@ -127,11 +127,6 @@ function createStreamFnWithExtraParams(
   return wrappedStreamFn;
 }
 
-function isGemini31Model(modelId: string): boolean {
-  const normalized = modelId.toLowerCase();
-  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
-}
-
 function mapThinkLevelToGoogleThinkingLevel(
   thinkingLevel: ThinkLevel,
 ): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
@@ -153,7 +148,7 @@ function mapThinkLevelToGoogleThinkingLevel(
 
 function sanitizeGoogleThinkingPayload(params: {
   payload: unknown;
-  modelId?: string;
+  modelReasoning?: boolean;
   thinkingLevel?: ThinkLevel;
 }): void {
   if (!params.payload || typeof params.payload !== "object") {
@@ -175,13 +170,13 @@ function sanitizeGoogleThinkingPayload(params: {
     return;
   }
 
-  // pi-ai can emit thinkingBudget=-1 for some Gemini 3.1 IDs; a negative budget
-  // is invalid for Google-compatible backends and can lead to malformed handling.
+  // pi-ai can emit thinkingBudget=-1 for some reasoning-capable Gemini IDs; a
+  // negative budget is invalid for Google-compatible backends and can lead to
+  // malformed handling.
   delete thinkingConfigObj.thinkingBudget;
 
   if (
-    typeof params.modelId === "string" &&
-    isGemini31Model(params.modelId) &&
+    params.modelReasoning === true &&
     params.thinkingLevel &&
     params.thinkingLevel !== "off" &&
     thinkingConfigObj.thinkingLevel === undefined
@@ -206,7 +201,7 @@ function createGoogleThinkingPayloadWrapper(
         if (model.api === "google-generative-ai") {
           sanitizeGoogleThinkingPayload({
             payload,
-            modelId: model.id,
+            modelReasoning: model.reasoning,
             thinkingLevel,
           });
         }
@@ -382,7 +377,7 @@ export function applyExtraParamsToAgent(
   }
 
   // Guard Google payloads against invalid negative thinking budgets emitted by
-  // upstream model-ID heuristics for Gemini 3.1 variants.
+  // upstream model-ID heuristics for reasoning-capable Gemini models.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
   const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
