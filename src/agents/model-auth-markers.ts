@@ -5,6 +5,7 @@ export const CHUTES_OAUTH_MARKER = "chutes-oauth";
 export const MINIMAX_OAUTH_MARKER = "minimax-oauth";
 export const QWEN_OAUTH_MARKER = "qwen-oauth";
 export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
+export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 export const NON_ENV_SECRETREF_MARKER = "secretref-managed"; // pragma: allowlist secret
 export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 
@@ -73,6 +74,7 @@ export function isNonSecretApiKeyMarker(
     trimmed === MINIMAX_OAUTH_MARKER ||
     trimmed === QWEN_OAUTH_MARKER ||
     trimmed === OLLAMA_LOCAL_AUTH_MARKER ||
+    trimmed === CUSTOM_LOCAL_AUTH_MARKER ||
     trimmed === NON_ENV_SECRETREF_MARKER ||
     isAwsSdkAuthMarker(trimmed);
   if (isKnownMarker) {

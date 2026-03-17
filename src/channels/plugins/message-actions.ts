@@ -1,28 +1,70 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { defaultRuntime } from "../../runtime.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
+import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
-
-const trustedRequesterRequiredByChannel: Readonly<
-  Partial<Record<string, ReadonlySet<ChannelMessageActionName>>>
-> = {
-  discord: new Set<ChannelMessageActionName>(["timeout", "kick", "ban"]),
-};
 
 type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
 
 function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boolean {
-  const actions = trustedRequesterRequiredByChannel[ctx.channel];
-  return Boolean(actions?.has(ctx.action) && ctx.toolContext);
+  const plugin = getChannelPlugin(ctx.channel);
+  return Boolean(
+    plugin?.actions?.requiresTrustedRequesterSender?.({
+      action: ctx.action,
+      toolContext: ctx.toolContext,
+    }),
+  );
+}
+
+const loggedMessageActionErrors = new Set<string>();
+
+function logMessageActionError(params: {
+  pluginId: string;
+  operation: "listActions" | "getCapabilities";
+  error: unknown;
+}) {
+  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const key = `${params.pluginId}:${params.operation}:${message}`;
+  if (loggedMessageActionErrors.has(key)) {
+    return;
+  }
+  loggedMessageActionErrors.add(key);
+  const stack = params.error instanceof Error && params.error.stack ? params.error.stack : null;
+  defaultRuntime.error?.(
+    `[message-actions] ${params.pluginId}.actions.${params.operation} failed: ${stack ?? message}`,
+  );
+}
+
+function runListActionsSafely(params: {
+  pluginId: string;
+  cfg: OpenClawConfig;
+  listActions: NonNullable<ChannelActions["listActions"]>;
+}): ChannelMessageActionName[] {
+  try {
+    const listed = params.listActions({ cfg: params.cfg });
+    return Array.isArray(listed) ? listed : [];
+  } catch (error) {
+    logMessageActionError({
+      pluginId: params.pluginId,
+      operation: "listActions",
+      error,
+    });
+    return [];
+  }
 }
 
 export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
-    const list = plugin.actions?.listActions?.({ cfg });
-    if (!list) {
+    if (!plugin.actions?.listActions) {
       continue;
     }
+    const list = runListActionsSafely({
+      pluginId: plugin.id,
+      cfg,
+      listActions: plugin.actions.listActions,
+    });
     for (const action of list) {
       actions.add(action);
     }
@@ -30,58 +72,74 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
-export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
-  return supportsMessageFeature(cfg, (actions) => actions?.supportsButtons?.({ cfg }) === true);
-}
-
-export function supportsChannelMessageButtonsForChannel(params: {
+function listCapabilities(params: {
+  pluginId: string;
+  actions: ChannelActions;
   cfg: OpenClawConfig;
-  channel?: string;
-}): boolean {
-  return supportsMessageFeatureForChannel(
-    params,
-    (actions) => actions.supportsButtons?.(params) === true,
-  );
+}): readonly ChannelMessageCapability[] {
+  try {
+    return params.actions.getCapabilities?.({ cfg: params.cfg }) ?? [];
+  } catch (error) {
+    logMessageActionError({
+      pluginId: params.pluginId,
+      operation: "getCapabilities",
+      error,
+    });
+    return [];
+  }
 }
 
-export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
-  return supportsMessageFeature(cfg, (actions) => actions?.supportsCards?.({ cfg }) === true);
-}
-
-export function supportsChannelMessageCardsForChannel(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-}): boolean {
-  return supportsMessageFeatureForChannel(
-    params,
-    (actions) => actions.supportsCards?.(params) === true,
-  );
-}
-
-function supportsMessageFeature(
-  cfg: OpenClawConfig,
-  check: (actions: ChannelActions) => boolean,
-): boolean {
+export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
+  const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {
-    if (plugin.actions && check(plugin.actions)) {
-      return true;
+    if (!plugin.actions) {
+      continue;
+    }
+    for (const capability of listCapabilities({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      cfg,
+    })) {
+      capabilities.add(capability);
     }
   }
-  return false;
+  return Array.from(capabilities);
 }
 
-function supportsMessageFeatureForChannel(
+export function listChannelMessageCapabilitiesForChannel(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+}): ChannelMessageCapability[] {
+  if (!params.channel) {
+    return [];
+  }
+  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
+  return plugin?.actions
+    ? Array.from(
+        listCapabilities({
+          pluginId: plugin.id,
+          actions: plugin.actions,
+          cfg: params.cfg,
+        }),
+      )
+    : [];
+}
+
+export function channelSupportsMessageCapability(
+  cfg: OpenClawConfig,
+  capability: ChannelMessageCapability,
+): boolean {
+  return listChannelMessageCapabilities(cfg).includes(capability);
+}
+
+export function channelSupportsMessageCapabilityForChannel(
   params: {
     cfg: OpenClawConfig;
     channel?: string;
   },
-  check: (actions: ChannelActions) => boolean,
+  capability: ChannelMessageCapability,
 ): boolean {
-  if (!params.channel) {
-    return false;
-  }
-  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
-  return plugin?.actions ? check(plugin.actions) : false;
+  return listChannelMessageCapabilitiesForChannel(params).includes(capability);
 }
 
 export async function dispatchChannelMessageAction(
@@ -101,3 +159,9 @@ export async function dispatchChannelMessageAction(
   }
   return await plugin.actions.handleAction(ctx);
 }
+
+export const __testing = {
+  resetLoggedMessageActionErrors() {
+    loggedMessageActionErrors.clear();
+  },
+};

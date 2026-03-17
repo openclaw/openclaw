@@ -2,13 +2,127 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
+  resolveOutboundChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
 }));
 
-import { resolveMessageChannelSelection } from "./channel-selection.js";
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+}));
+
+type ChannelSelectionModule = typeof import("./channel-selection.js");
+type RuntimeModule = typeof import("../../runtime.js");
+
+let __testing: ChannelSelectionModule["__testing"];
+let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessageChannels"];
+let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
+let runtimeModule: RuntimeModule;
+
+beforeEach(async () => {
+  vi.resetModules();
+  runtimeModule = await import("../../runtime.js");
+  ({ __testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
+    await import("./channel-selection.js"));
+});
+
+function makePlugin(params: {
+  id: string;
+  accountIds?: string[];
+  resolveAccount?: (accountId: string) => unknown;
+  isEnabled?: (account: unknown) => boolean;
+  isConfigured?: (account: unknown) => boolean | Promise<boolean>;
+}) {
+  return {
+    id: params.id,
+    config: {
+      listAccountIds: () => params.accountIds ?? ["default"],
+      resolveAccount: (_cfg: unknown, accountId: string) =>
+        params.resolveAccount ? params.resolveAccount(accountId) : {},
+      ...(params.isEnabled ? { isEnabled: params.isEnabled } : {}),
+      ...(params.isConfigured ? { isConfigured: params.isConfigured } : {}),
+    },
+  };
+}
+
+describe("listConfiguredMessageChannels", () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(runtimeModule.defaultRuntime, "error").mockImplementation(() => undefined);
+    mocks.listChannelPlugins.mockReset();
+    mocks.listChannelPlugins.mockReturnValue([]);
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
+      id: channel,
+    }));
+    __testing.resetLoggedChannelSelectionErrors();
+    errorSpy.mockClear();
+  });
+
+  it("skips unknown plugin ids and plugins without accounts", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({ id: "not-a-channel" }),
+      makePlugin({ id: "slack", accountIds: [] }),
+    ]);
+
+    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual([]);
+  });
+
+  it("includes plugins without isConfigured when an enabled account exists", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({
+        id: "discord",
+        resolveAccount: () => ({ enabled: true }),
+      }),
+    ]);
+
+    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(["discord"]);
+  });
+
+  it("skips disabled accounts and keeps later configured accounts", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({
+        id: "telegram",
+        accountIds: ["disabled", "enabled"],
+        resolveAccount: (accountId) =>
+          accountId === "disabled" ? { enabled: false } : { enabled: true },
+        isConfigured: (account) => (account as { enabled?: boolean }).enabled === true,
+      }),
+    ]);
+
+    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual(["telegram"]);
+  });
+
+  it("respects custom isEnabled checks", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({
+        id: "signal",
+        resolveAccount: () => ({ token: "x" }),
+        isEnabled: () => false,
+        isConfigured: () => true,
+      }),
+    ]);
+
+    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual([]);
+  });
+
+  it("skips plugin accounts whose resolveAccount throws", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({
+        id: "discord",
+        resolveAccount: () => {
+          throw new Error("boom");
+        },
+      }),
+    ]);
+
+    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("resolveMessageChannelSelection", () => {
   beforeEach(() => {
@@ -58,14 +172,7 @@ describe("resolveMessageChannelSelection", () => {
 
   it("selects single configured channel when no explicit/fallback channel exists", async () => {
     mocks.listChannelPlugins.mockReturnValue([
-      {
-        id: "discord",
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({}),
-          isConfigured: async () => true,
-        },
-      },
+      makePlugin({ id: "discord", isConfigured: async () => true }),
     ]);
 
     const selection = await resolveMessageChannelSelection({
@@ -87,5 +194,57 @@ describe("resolveMessageChannelSelection", () => {
         fallbackChannel: "not-a-channel",
       }),
     ).rejects.toThrow("Unknown channel: channel:c123");
+  });
+
+  it("falls back when the explicit known channel is unavailable in the active plugin registry", async () => {
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
+      channel === "slack" ? { id: "slack" } : undefined,
+    );
+
+    const selection = await resolveMessageChannelSelection({
+      cfg: {} as never,
+      channel: "discord",
+      fallbackChannel: "slack",
+    });
+
+    expect(selection).toEqual({
+      channel: "slack",
+      configured: [],
+      source: "tool-context-fallback",
+    });
+  });
+
+  it("throws unavailable when a known channel has no active plugin", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
+
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {} as never,
+        channel: "discord",
+      }),
+    ).rejects.toThrow("Channel is unavailable: discord");
+  });
+
+  it("throws when no channel is provided and nothing is configured", async () => {
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("Channel is required (no configured channels detected).");
+  });
+
+  it("throws when multiple channels are configured and no channel is selected", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({ id: "discord", isConfigured: async () => true }),
+      makePlugin({ id: "telegram", isConfigured: async () => true }),
+    ]);
+
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow(
+      "Channel is required when multiple channels are configured: discord, telegram",
+    );
   });
 });

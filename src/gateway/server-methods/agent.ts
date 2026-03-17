@@ -50,8 +50,7 @@ import { performGatewaySessionReset } from "../session-reset-service.js";
 import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
+  migrateAndPruneGatewaySessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -379,6 +378,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionId,
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,
+        fastMode: entry?.fastMode,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         systemSent: entry?.systemSent,
@@ -424,18 +424,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
         const persisted = await updateSessionStore(storePath, (store) => {
-          const target = resolveGatewaySessionStoreTarget({
+          const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
             cfg,
             key: requestedSessionKey,
             store,
           });
-          pruneLegacyStoreKeys({
-            store,
-            canonicalKey: target.canonicalKey,
-            candidates: target.storeKeys,
-          });
-          const merged = mergeSessionEntry(store[canonicalSessionKey], nextEntryPatch);
-          store[canonicalSessionKey] = merged;
+          const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
+          store[primaryKey] = merged;
           return merged;
         });
         sessionEntry = persisted;

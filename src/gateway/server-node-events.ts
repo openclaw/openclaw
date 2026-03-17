@@ -16,11 +16,7 @@ import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import {
-  loadSessionEntry,
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
-} from "./session-utils.js";
+import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -152,20 +148,16 @@ async function touchSessionStore(params: {
     return;
   }
   await updateSessionStore(storePath, (store) => {
-    const target = resolveGatewaySessionStoreTarget({
+    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
       cfg: params.cfg,
       key: params.sessionKey,
       store,
     });
-    pruneLegacyStoreKeys({
-      store,
-      canonicalKey: target.canonicalKey,
-      candidates: target.storeKeys,
-    });
-    store[params.canonicalKey] = {
+    store[primaryKey] = {
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
+      fastMode: params.entry?.fastMode,
       verboseLevel: params.entry?.verboseLevel,
       reasoningLevel: params.entry?.reasoningLevel,
       systemSent: params.entry?.systemSent,

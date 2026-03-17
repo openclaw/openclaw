@@ -16,6 +16,11 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
+import {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramReactionLevel,
+} from "../../../plugin-sdk/telegram.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -24,9 +29,6 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
-import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
-import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -39,6 +41,7 @@ import {
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
   buildBootstrapInjectionStats,
+  prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -57,6 +60,7 @@ import { supportsModelTools } from "../../model-tool-support.js";
 import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
+import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
@@ -97,6 +101,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
+import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
@@ -111,6 +116,7 @@ import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
+  updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
@@ -129,6 +135,8 @@ import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
+  resolveRunTimeoutDuringCompaction,
+  resolveRunTimeoutWithCompactionGraceMs,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
@@ -663,6 +671,7 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
   }
 
   let fallbackIndex = 1;
+  const assignedIds = new Set<string>();
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
@@ -674,20 +683,23 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
     if (typeof typedBlock.id === "string") {
       const trimmedId = typedBlock.id.trim();
       if (trimmedId) {
-        if (typedBlock.id !== trimmedId) {
-          typedBlock.id = trimmedId;
+        if (!assignedIds.has(trimmedId)) {
+          if (typedBlock.id !== trimmedId) {
+            typedBlock.id = trimmedId;
+          }
+          assignedIds.add(trimmedId);
+          continue;
         }
-        usedIds.add(trimmedId);
-        continue;
       }
     }
 
     let fallbackId = "";
-    while (!fallbackId || usedIds.has(fallbackId)) {
+    while (!fallbackId || usedIds.has(fallbackId) || assignedIds.has(fallbackId)) {
       fallbackId = `call_auto_${fallbackIndex++}`;
     }
     typedBlock.id = fallbackId;
     usedIds.add(fallbackId);
+    assignedIds.add(fallbackId);
   }
 }
 
@@ -830,6 +842,7 @@ function extractBalancedJsonPrefix(raw: string): string | null {
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
+const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
 function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
   if (/[}\]]/.test(delta)) {
@@ -998,7 +1011,7 @@ function wrapStreamRepairMalformedToolCallArguments(
                   if (!loggedRepairIndices.has(event.contentIndex)) {
                     loggedRepairIndices.add(event.contentIndex);
                     log.warn(
-                      `repairing kimi-coding tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
+                      `repairing Kimi tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
                     );
                   }
                 } else {
@@ -1053,7 +1066,7 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
 }
 
 function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
-  return normalizeProviderId(provider ?? "") === "kimi-coding";
+  return normalizeProviderId(provider ?? "") === "kimi";
 }
 
 // ---------------------------------------------------------------------------
@@ -1497,11 +1510,16 @@ export async function runEmbeddedAttempt(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
+          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
           agentDir,
           workspaceDir: effectiveWorkspace,
+          // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+          // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+          spawnWorkspaceDir:
+            sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? resolvedWorkspace : undefined,
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: params.model.provider,
@@ -1531,11 +1549,25 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
+    const bundleMcpRuntime = toolsEnabled
+      ? await createBundleMcpToolRuntime({
+          workspaceDir: effectiveWorkspace,
+          cfg: params.config,
+          reservedToolNames: [
+            ...tools.map((tool) => tool.name),
+            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+          ],
+        })
+      : undefined;
+    const effectiveTools =
+      bundleMcpRuntime && bundleMcpRuntime.tools.length > 0
+        ? [...tools, ...bundleMcpRuntime.tools]
+        : tools;
     const allowedToolNames = collectAllowedToolNames({
-      tools,
+      tools: effectiveTools,
       clientTools,
     });
-    logToolSchemasForGoogle({ tools, provider: params.provider });
+    logToolSchemasForGoogle({ tools: effectiveTools, provider: params.provider });
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -1634,6 +1666,9 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
+    const heartbeatPrompt = isDefaultAgent
+      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+      : undefined;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -1644,9 +1679,7 @@ export async function runEmbeddedAttempt(
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
-      heartbeatPrompt: isDefaultAgent
-        ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-        : undefined,
+      heartbeatPrompt,
       skillsPrompt,
       docsPath: docsPath ?? undefined,
       ttsHint,
@@ -1657,13 +1690,12 @@ export async function runEmbeddedAttempt(
       runtimeInfo,
       messageToolHints,
       sandboxInfo,
-      tools,
+      tools: effectiveTools,
       modelAliasLines: buildModelAliasLines(params.config),
       userTimezone,
       userTime,
       userTimeFormat,
       contextFiles,
-      bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptReport = buildSystemPromptReport({
@@ -1692,7 +1724,7 @@ export async function runEmbeddedAttempt(
       bootstrapFiles: hookAdjustedBootstrapFiles,
       injectedFiles: contextFiles,
       skillsPrompt,
-      tools,
+      tools: effectiveTools,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
@@ -1700,7 +1732,10 @@ export async function runEmbeddedAttempt(
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: params.timeoutMs,
+        timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
+          runTimeoutMs: params.timeoutMs,
+          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
+        }),
       }),
     });
 
@@ -1737,6 +1772,7 @@ export async function runEmbeddedAttempt(
         try {
           await params.contextEngine.bootstrap({
             sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
           });
         } catch (bootstrapErr) {
@@ -1788,7 +1824,7 @@ export async function runEmbeddedAttempt(
       const hookRunner = getGlobalHookRunner();
 
       const { builtInTools, customTools } = splitSdkTools({
-        tools,
+        tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
 
@@ -1925,7 +1961,10 @@ export async function runEmbeddedAttempt(
         params.config,
         params.provider,
         params.modelId,
-        params.streamParams,
+        {
+          ...params.streamParams,
+          fastMode: params.fastMode,
+        },
         params.thinkLevel,
         sessionAgentId,
       );
@@ -1939,9 +1978,10 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
-      // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
-      // on *any* follow-up provider call (including tool continuations). Wrap the stream function
-      // so every outbound request sees sanitized messages.
+      // Anthropic Claude endpoints can reject replayed `thinking` blocks
+      // (e.g. thinkingSignature:"reasoning_text") on any follow-up provider
+      // call, including tool continuations. Wrap the stream function so every
+      // outbound request sees sanitized messages.
       if (transcriptPolicy.dropThinkingBlocks) {
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
@@ -2089,6 +2129,7 @@ export async function runEmbeddedAttempt(
           try {
             const assembled = await params.contextEngine.assemble({
               sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
             });
@@ -2138,6 +2179,20 @@ export async function runEmbeddedAttempt(
         err.name = "AbortError";
         return err;
       };
+      const abortCompaction = () => {
+        if (!activeSession.isCompacting) {
+          return;
+        }
+        try {
+          activeSession.abortCompaction();
+        } catch (err) {
+          if (!isProbeSession) {
+            log.warn(
+              `embedded run abortCompaction failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
+            );
+          }
+        }
+      };
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
@@ -2148,6 +2203,7 @@ export async function runEmbeddedAttempt(
         } else {
           runAbortController.abort(reason);
         }
+        abortCompaction();
         void activeSession.abort();
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
@@ -2228,38 +2284,63 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      const abortTimer = setTimeout(
-        () => {
-          if (!isProbeSession) {
-            log.warn(
-              `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
-            );
-          }
-          if (
-            shouldFlagCompactionTimeout({
-              isTimeout: true,
+      const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+      let abortTimer: NodeJS.Timeout | undefined;
+      let compactionGraceUsed = false;
+      const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
+        abortTimer = setTimeout(
+          () => {
+            const timeoutAction = resolveRunTimeoutDuringCompaction({
               isCompactionPendingOrRetrying: subscription.isCompacting(),
               isCompactionInFlight: activeSession.isCompacting,
-            })
-          ) {
-            timedOutDuringCompaction = true;
-          }
-          abortRun(true);
-          if (!abortWarnTimer) {
-            abortWarnTimer = setTimeout(() => {
-              if (!activeSession.isStreaming) {
-                return;
-              }
+              graceAlreadyUsed: compactionGraceUsed,
+            });
+            if (timeoutAction === "extend") {
+              compactionGraceUsed = true;
               if (!isProbeSession) {
                 log.warn(
-                  `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+                  `embedded run timeout reached during compaction; extending deadline: ` +
+                    `runId=${params.runId} sessionId=${params.sessionId} extraMs=${compactionTimeoutMs}`,
                 );
               }
-            }, 10_000);
-          }
-        },
-        Math.max(1, params.timeoutMs),
-      );
+              scheduleAbortTimer(compactionTimeoutMs, "compaction-grace");
+              return;
+            }
+
+            if (!isProbeSession) {
+              log.warn(
+                reason === "compaction-grace"
+                  ? `embedded run timeout after compaction grace: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs} compactionGraceMs=${compactionTimeoutMs}`
+                  : `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
+              );
+            }
+            if (
+              shouldFlagCompactionTimeout({
+                isTimeout: true,
+                isCompactionPendingOrRetrying: subscription.isCompacting(),
+                isCompactionInFlight: activeSession.isCompacting,
+              })
+            ) {
+              timedOutDuringCompaction = true;
+            }
+            abortRun(true);
+            if (!abortWarnTimer) {
+              abortWarnTimer = setTimeout(() => {
+                if (!activeSession.isStreaming) {
+                  return;
+                }
+                if (!isProbeSession) {
+                  log.warn(
+                    `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+                  );
+                }
+              }, 10_000);
+            }
+          },
+          Math.max(1, delayMs),
+        );
+      };
+      scheduleAbortTimer(params.timeoutMs, "initial");
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
@@ -2298,7 +2379,13 @@ export async function runEmbeddedAttempt(
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = params.prompt;
+        let effectivePrompt = prependBootstrapPromptWarning(
+          params.prompt,
+          bootstrapPromptWarning.lines,
+          {
+            preserveExactPrompt: heartbeatPrompt,
+          },
+        );
         const hookCtx = {
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
@@ -2317,7 +2404,7 @@ export async function runEmbeddedAttempt(
         });
         {
           if (hookResult?.prependContext) {
-            effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+            effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
@@ -2366,6 +2453,8 @@ export async function runEmbeddedAttempt(
               `runId=${params.runId} sessionId=${params.sessionId}`,
           );
         }
+        const transcriptLeafId =
+          (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
@@ -2443,6 +2532,13 @@ export async function runEmbeddedAttempt(
                 log.warn(`llm_input hook failed: ${String(err)}`);
               });
           }
+
+          const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
+          updateActiveEmbeddedRunSnapshot(params.sessionId, {
+            transcriptLeafId,
+            messages: btwSnapshotMessages,
+            inFlightPrompt: effectivePrompt,
+          });
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
@@ -2536,14 +2632,19 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // Check if ANY compaction occurred during the entire attempt (prompt + retry).
+        // Using a cumulative count (> 0) instead of a delta check avoids missing
+        // compactions that complete during activeSession.prompt() before the delta
+        // baseline is sampled.
         const compactionOccurredThisAttempt = getCompactionCount() > 0;
-
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
         // Previously this was before the prompt, which caused a custom entry to be
         // inserted between compaction and the next prompt — breaking the
         // prepareCompaction() guard that checks the last entry type, leading to
         // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
         // Skip when timed out during compaction — session state may be inconsistent.
+        // Also skip when compaction ran this attempt — appending a custom entry
+        // after compaction would break the guard again. See: #28491
         if (!timedOutDuringCompaction && !compactionOccurredThisAttempt) {
           const shouldTrackCacheTtl =
             params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
@@ -2604,6 +2705,7 @@ export async function runEmbeddedAttempt(
             try {
               await params.contextEngine.afterTurn({
                 sessionId: sessionIdUsed,
+                sessionKey: params.sessionKey,
                 sessionFile: params.sessionFile,
                 messages: messagesSnapshot,
                 prePromptMessageCount,
@@ -2621,6 +2723,7 @@ export async function runEmbeddedAttempt(
                 try {
                   await params.contextEngine.ingestBatch({
                     sessionId: sessionIdUsed,
+                    sessionKey: params.sessionKey,
                     messages: newMessages,
                   });
                 } catch (ingestErr) {
@@ -2631,6 +2734,7 @@ export async function runEmbeddedAttempt(
                   try {
                     await params.contextEngine.ingest({
                       sessionId: sessionIdUsed,
+                      sessionKey: params.sessionKey,
                       message: msg,
                     });
                   } catch (ingestErr) {
@@ -2786,6 +2890,7 @@ export async function runEmbeddedAttempt(
       });
       session?.dispose();
       releaseWsSession(params.sessionId);
+      await bundleMcpRuntime?.dispose();
       await sessionLock.release();
     }
   } finally {

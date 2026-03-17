@@ -3,7 +3,7 @@ import {
   buildCatchallMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/zalouser";
 import { z } from "zod";
 
@@ -19,6 +19,7 @@ const zalouserAccountSchema = z.object({
   enabled: z.boolean().optional(),
   markdown: MarkdownConfigSchema,
   profile: z.string().optional(),
+  dangerouslyAllowNameMatching: z.boolean().optional(),
   dmPolicy: DmPolicySchema.optional(),
   allowFrom: AllowFromListSchema,
   historyLimit: z.number().int().min(0).optional(),

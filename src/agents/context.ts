@@ -108,9 +108,26 @@ function getCommandPathFromArgv(argv: string[]): string[] {
   return tokens;
 }
 
+const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
+  "backup",
+  "completion",
+  "config",
+  "directory",
+  "doctor",
+  "gateway",
+  "health",
+  "hooks",
+  "logs",
+  "plugins",
+  "secrets",
+  "status",
+  "update",
+  "webhooks",
+]);
+
 function shouldSkipEagerContextWindowWarmup(argv: string[] = process.argv): boolean {
-  const [primary, secondary] = getCommandPathFromArgv(argv);
-  return primary === "config" && secondary === "validate";
+  const [primary] = getCommandPathFromArgv(argv);
+  return primary ? SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary) : false;
 }
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
@@ -157,7 +174,8 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
     }
 
     try {
-      const { discoverAuthStorage, discoverModels } = await import("./pi-model-discovery.js");
+      const { discoverAuthStorage, discoverModels } =
+        await import("./pi-model-discovery-runtime.js");
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;

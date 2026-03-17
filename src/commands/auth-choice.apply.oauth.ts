@@ -1,13 +1,9 @@
+import { applyChutesConfig, applyChutesProviderConfig } from "../../extensions/chutes/onboard.js";
+import { applyAuthProfileConfig, writeOAuthCredentials } from "../plugins/provider-auth-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { loginChutes } from "./chutes-oauth.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
-import {
-  applyAuthProfileConfig,
-  applyChutesConfig,
-  applyChutesProviderConfig,
-  writeOAuthCredentials,
-} from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 
 export async function applyAuthChoiceOAuth(

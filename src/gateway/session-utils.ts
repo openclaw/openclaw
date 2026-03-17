@@ -263,6 +263,31 @@ export function pruneLegacyStoreKeys(params: {
   }
 }
 
+export function migrateAndPruneGatewaySessionStoreKey(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  key: string;
+  store: Record<string, SessionEntry>;
+}) {
+  const target = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.key,
+    store: params.store,
+  });
+  const primaryKey = target.canonicalKey;
+  if (!params.store[primaryKey]) {
+    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
+    if (existingKey) {
+      params.store[primaryKey] = params.store[existingKey];
+    }
+  }
+  pruneLegacyStoreKeys({
+    store: params.store,
+    canonicalKey: primaryKey,
+    candidates: target.storeKeys,
+  });
+  return { target, primaryKey, entry: params.store[primaryKey] };
+}
+
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
   if (key === "global") {
     return "global";
@@ -929,6 +954,7 @@ export function listSessionsFromStore(params: {
         systemSent: entry?.systemSent,
         abortedLastRun: entry?.abortedLastRun,
         thinkingLevel: entry?.thinkingLevel,
+        fastMode: entry?.fastMode,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         elevatedLevel: entry?.elevatedLevel,
