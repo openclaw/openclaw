@@ -49,36 +49,36 @@ describe("feishu monitor state defaults", () => {
 });
 
 describe("feishu monitor state cleanup", () => {
-  function mockServer(): http.Server {
-    return {
-      close: vi.fn(),
-      closeAllConnections: vi.fn(),
-    } as unknown as http.Server;
-  }
-
   it("calls closeAllConnections before close for a single account", () => {
-    const server = mockServer();
+    const callOrder: string[] = [];
+    const server = {
+      close: vi.fn(() => callOrder.push("close")),
+      closeAllConnections: vi.fn(() => callOrder.push("closeAllConnections")),
+    } as unknown as http.Server;
     httpServers.set("test-account", server);
 
     stopFeishuMonitorState("test-account");
 
-    expect(server.closeAllConnections).toHaveBeenCalled();
-    expect(server.close).toHaveBeenCalled();
+    expect(callOrder).toEqual(["closeAllConnections", "close"]);
     expect(httpServers.has("test-account")).toBe(false);
   });
 
   it("calls closeAllConnections on all servers when no accountId given", () => {
-    const server1 = mockServer();
-    const server2 = mockServer();
+    const callOrder: string[] = [];
+    const server1 = {
+      close: vi.fn(() => callOrder.push("s1:close")),
+      closeAllConnections: vi.fn(() => callOrder.push("s1:closeAll")),
+    } as unknown as http.Server;
+    const server2 = {
+      close: vi.fn(() => callOrder.push("s2:close")),
+      closeAllConnections: vi.fn(() => callOrder.push("s2:closeAll")),
+    } as unknown as http.Server;
     httpServers.set("a", server1);
     httpServers.set("b", server2);
 
     stopFeishuMonitorState();
 
-    expect(server1.closeAllConnections).toHaveBeenCalled();
-    expect(server1.close).toHaveBeenCalled();
-    expect(server2.closeAllConnections).toHaveBeenCalled();
-    expect(server2.close).toHaveBeenCalled();
+    expect(callOrder).toEqual(["s1:closeAll", "s1:close", "s2:closeAll", "s2:close"]);
     expect(httpServers.size).toBe(0);
   });
 });
