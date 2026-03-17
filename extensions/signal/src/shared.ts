@@ -4,13 +4,15 @@ import {
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
+  buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   getChatChannelMeta,
+  normalizeE164,
   setAccountEnabledInConfigSection,
+  SignalConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/core";
-import { normalizeE164 } from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/signal-core";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -42,7 +44,6 @@ export const signalConfigAccessors = createScopedAccountConfigAccessors({
 });
 
 export function createSignalPluginBase(params: {
-  configSchema: Pick<ChannelPlugin<ResolvedSignalAccount>, "configSchema">["configSchema"];
   setupWizard?: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setup"]>;
 }): Pick<
@@ -73,7 +74,7 @@ export function createSignalPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.signal"] },
-    configSchema: params.configSchema,
+    configSchema: buildChannelConfigSchema(SignalConfigSchema),
     config: {
       listAccountIds: (cfg) => listSignalAccountIds(cfg),
       resolveAccount: (cfg, accountId) => resolveSignalAccount({ cfg, accountId }),

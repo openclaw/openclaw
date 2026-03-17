@@ -17,6 +17,7 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 

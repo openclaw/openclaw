@@ -1,19 +1,22 @@
 import {
-  formatWhatsAppConfigAllowFromEntries,
-  resolveWhatsAppConfigAllowFrom,
-  resolveWhatsAppConfigDefaultTo,
-} from "openclaw/plugin-sdk/channel-config-helpers";
-import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
+  buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
+  formatWhatsAppConfigAllowFromEntries,
   getChatChannelMeta,
+  normalizeE164,
+  resolveWhatsAppConfigAllowFrom,
+  resolveWhatsAppConfigDefaultTo,
+  resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
+  WhatsAppConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/core";
-import { normalizeE164 } from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/whatsapp-core";
 import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
@@ -76,8 +79,6 @@ export function createWhatsAppSetupWizardProxy(
 }
 
 export function createWhatsAppPluginBase(params: {
-  configSchema: Pick<ChannelPlugin<ResolvedWhatsAppAccount>, "configSchema">["configSchema"];
-  groups: Pick<ChannelPlugin<ResolvedWhatsAppAccount>, "groups">["groups"];
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
@@ -113,7 +114,7 @@ export function createWhatsAppPluginBase(params: {
     },
     reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
     gatewayMethods: ["web.login.start", "web.login.wait"],
-    configSchema: params.configSchema,
+    configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
     config: {
       listAccountIds: (cfg) => listWhatsAppAccountIds(cfg),
       resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
@@ -212,6 +213,10 @@ export function createWhatsAppPluginBase(params: {
       },
     },
     setup: params.setup,
-    groups: params.groups,
+    groups: {
+      resolveRequireMention: resolveWhatsAppGroupRequireMention,
+      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
+      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
+    },
   };
 }
