@@ -7,7 +7,7 @@ export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
 export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
 export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
 
-function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+function getProxyAgent(): HttpsProxyAgent<string> | undefined {
   const proxyUrl =
     process.env.https_proxy ||
     process.env.HTTPS_PROXY ||
@@ -15,6 +15,11 @@ function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
     process.env.HTTP_PROXY;
   if (!proxyUrl) return undefined;
   return new HttpsProxyAgent(proxyUrl);
+}
+
+/** @deprecated Use getProxyAgent() instead */
+function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+  return getProxyAgent();
 }
 
 // Multi-account client cache
@@ -40,23 +45,32 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
  * Create an HTTP instance that delegates to the Lark SDK's default instance
  * but injects a default request timeout to prevent indefinite hangs
  * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
+ * Also injects proxy agent when HTTPS_PROXY environment variable is set.
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   const base: Lark.HttpInstance = Lark.defaultHttpInstance as unknown as Lark.HttpInstance;
+  const proxyAgent = getProxyAgent();
 
-  function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
-    return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
+  function injectTimeoutAndProxy<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
+    const result: Lark.HttpRequestOptions<D> = { timeout: defaultTimeoutMs, ...opts };
+    // Add proxy agent for HTTPS requests when proxy is configured
+    if (proxyAgent) {
+      result.httpsAgent = proxyAgent;
+      // Disable axios default proxy handling to avoid conflicts
+      result.proxy = false;
+    }
+    return result;
   }
 
   return {
-    request: (opts) => base.request(injectTimeout(opts)),
-    get: (url, opts) => base.get(url, injectTimeout(opts)),
-    post: (url, data, opts) => base.post(url, data, injectTimeout(opts)),
-    put: (url, data, opts) => base.put(url, data, injectTimeout(opts)),
-    patch: (url, data, opts) => base.patch(url, data, injectTimeout(opts)),
-    delete: (url, opts) => base.delete(url, injectTimeout(opts)),
-    head: (url, opts) => base.head(url, injectTimeout(opts)),
-    options: (url, opts) => base.options(url, injectTimeout(opts)),
+    request: (opts) => base.request(injectTimeoutAndProxy(opts)),
+    get: (url, opts) => base.get(url, injectTimeoutAndProxy(opts)),
+    post: (url, data, opts) => base.post(url, data, injectTimeoutAndProxy(opts)),
+    put: (url, data, opts) => base.put(url, data, injectTimeoutAndProxy(opts)),
+    patch: (url, data, opts) => base.patch(url, data, injectTimeoutAndProxy(opts)),
+    delete: (url, opts) => base.delete(url, injectTimeoutAndProxy(opts)),
+    head: (url, opts) => base.head(url, injectTimeoutAndProxy(opts)),
+    options: (url, opts) => base.options(url, injectTimeoutAndProxy(opts)),
   };
 }
 
