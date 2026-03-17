@@ -371,11 +371,7 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 {
   channels: {
     discord: {
-      token: {
-        source: "env",
-        provider: "default",
-        id: "DISCORD_BOT_TOKEN",
-      },
+      token: "1234abcd",
     },
   },
 }
