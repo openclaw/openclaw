@@ -330,4 +330,21 @@ describe("listNodes – pagination", () => {
       consoleWarnSpy.mockRestore();
     }
   });
+
+  it("regression #37626: returns all nodes across pages, not just first page", async () => {
+    // Before the fix, only the first 20 nodes were returned.
+    // This test verifies that pagination combines results across pages.
+    const page1Nodes = Array.from({ length: 20 }, (_, i) => ({ node_token: `node-p1-${i}` }));
+    const page2Nodes = Array.from({ length: 20 }, (_, i) => ({ node_token: `node-p2-${i}` }));
+
+    const client = buildClient([
+      { items: page1Nodes, has_more: true, page_token: "token-p1" },
+      { items: page2Nodes, has_more: false },
+    ]);
+
+    const result = await listNodes(client as unknown as Lark.Client, "space-1");
+    expect(result).toHaveLength(40); // Both pages combined
+    expect(result[0].node_token).toBe("node-p1-0");
+    expect(result[20].node_token).toBe("node-p2-0");
+  });
 });
