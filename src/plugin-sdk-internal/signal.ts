@@ -1,4 +1,5 @@
 export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
+export type { OpenClawConfig } from "../config/config.js";
 export type { ResolvedSignalAccount } from "../../extensions/signal/src/accounts.js";
 export type { SignalAccountConfig } from "../config/types.js";
 export * from "../plugin-sdk/channel-plugin-common.js";
@@ -23,6 +24,7 @@ export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
+export { evaluateSenderGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
 export { signalSetupWizard } from "../../extensions/signal/src/setup-surface.js";
 export { signalSetupAdapter } from "../../extensions/signal/src/setup-core.js";
 export { SignalConfigSchema } from "../config/zod-schema.providers-core.js";

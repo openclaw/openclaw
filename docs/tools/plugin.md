@@ -167,6 +167,18 @@ For example, TTS follows this shape:
 
 That same pattern should be preferred for future capabilities.
 
+### Capability example: video
+
+If OpenClaw adds video, prefer this order:
+
+1. define a core video capability
+2. decide the shared contract: input media shape, provider result shape, cache/fallback behavior, and runtime helpers
+3. let vendor plugins such as `openai` or a future video vendor register video implementations
+4. let channels or feature plugins consume `api.runtime.video` instead of wiring directly to a provider plugin
+
+This avoids baking one provider's video assumptions into core. The plugin owns
+the vendor surface; core owns the capability contract.
+
 ## Compatible bundles
 
 OpenClaw also recognizes two compatible external bundle layouts:
@@ -331,7 +343,8 @@ There are two layers of enforcement:
 2. **contract tests**
    Bundled plugins are captured in contract registries during test runs so
    OpenClaw can assert ownership explicitly. Today this is used for model
-   providers, web search providers, and bundled registration ownership.
+   providers, speech providers, web search providers, and bundled registration
+   ownership.
 
 The practical effect is that OpenClaw knows, up front, which plugin owns which
 surface. That lets core and channels compose seamlessly because ownership is
@@ -649,19 +662,32 @@ to think of as short-lived performance caches, not persistence.
 
 ## Runtime helpers
 
-Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
+Plugins can access selected core helpers via `api.runtime`. For TTS:
 
 ```ts
+const clip = await api.runtime.tts.textToSpeech({
+  text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
 const result = await api.runtime.tts.textToSpeechTelephony({
   text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
+const voices = await api.runtime.tts.listVoices({
+  provider: "elevenlabs",
   cfg: api.config,
 });
 ```
 
 Notes:
 
+- `textToSpeech` returns the normal core TTS output payload for file/voice-note surfaces.
 - Uses core `messages.tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
+- `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
+- Voice listings can include richer metadata such as locale, gender, and personality tags for provider-aware pickers.
 - OpenAI and ElevenLabs support telephony today. Microsoft does not.
 
 Plugins can also register speech providers via `api.registerSpeechProvider(...)`.

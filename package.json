@@ -70,6 +70,10 @@
       "types": "./dist/plugin-sdk/routing.d.ts",
       "default": "./dist/plugin-sdk/routing.js"
     },
+    "./plugin-sdk/setup": {
+      "types": "./dist/plugin-sdk/setup.d.ts",
+      "default": "./dist/plugin-sdk/setup.js"
+    },
     "./plugin-sdk/telegram": {
       "types": "./dist/plugin-sdk/telegram.d.ts",
       "default": "./dist/plugin-sdk/telegram.js"
@@ -226,9 +230,33 @@
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
     },
+    "./plugin-sdk/allow-from": {
+      "types": "./dist/plugin-sdk/allow-from.d.ts",
+      "default": "./dist/plugin-sdk/allow-from.js"
+    },
+    "./plugin-sdk/boolean-param": {
+      "types": "./dist/plugin-sdk/boolean-param.d.ts",
+      "default": "./dist/plugin-sdk/boolean-param.js"
+    },
+    "./plugin-sdk/channel-config-helpers": {
+      "types": "./dist/plugin-sdk/channel-config-helpers.d.ts",
+      "default": "./dist/plugin-sdk/channel-config-helpers.js"
+    },
+    "./plugin-sdk/group-access": {
+      "types": "./dist/plugin-sdk/group-access.d.ts",
+      "default": "./dist/plugin-sdk/group-access.js"
+    },
+    "./plugin-sdk/json-store": {
+      "types": "./dist/plugin-sdk/json-store.d.ts",
+      "default": "./dist/plugin-sdk/json-store.js"
+    },
     "./plugin-sdk/keyed-async-queue": {
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
+    },
+    "./plugin-sdk/request-url": {
+      "types": "./dist/plugin-sdk/request-url.d.ts",
+      "default": "./dist/plugin-sdk/request-url.js"
     },
     "./cli-entry": "./openclaw.mjs"
   },
@@ -401,7 +429,7 @@
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "file-type": "^21.3.2",
-    "gaxios": "^7.1.3",
+    "gaxios": "7.1.3",
     "grammy": "^1.41.1",
     "hono": "4.12.7",
     "https-proxy-agent": "^8.0.0",
