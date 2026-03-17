@@ -265,6 +265,26 @@ export const baseConfig = (): OpenClawConfig =>
   }) as OpenClawConfig;
 
 vi.mock("@buape/carbon", () => {
+  class Button {}
+  class ChannelSelectMenu {}
+  class Command {}
+  class CommandWithSubcommands {}
+  class Container {
+    constructor(
+      _components?: unknown,
+      _options?: {
+        accentColor?: string;
+        spoiler?: boolean;
+      },
+    ) {}
+  }
+  class MentionableSelectMenu {}
+  class Message {}
+  class MessageCreateListener {}
+  class MessageReactionAddListener {}
+  class MessageReactionRemoveListener {}
+  class Modal {}
+  class PresenceUpdateListener {}
   class ReadyListener {}
   class RateLimitError extends Error {
     status = 429;
@@ -302,16 +322,91 @@ vi.mock("@buape/carbon", () => {
       return clientGetPluginMock(name);
     }
   }
-  return { Client, RateLimitError, ReadyListener };
+  class RequestClient {}
+  class Row {}
+  class RoleSelectMenu {}
+  class Separator {}
+  class StringSelectMenu {}
+  class TextDisplay {}
+  class ThreadUpdateListener {}
+  class UserSelectMenu {}
+  class Embed {}
+  const ChannelType = {
+    GuildText: 0,
+    DM: 1,
+    GuildVoice: 2,
+    GroupDM: 3,
+    GuildCategory: 4,
+    GuildAnnouncement: 5,
+    AnnouncementThread: 10,
+    PublicThread: 11,
+    PrivateThread: 12,
+  };
+  const MessageType = {
+    Default: 0,
+    Reply: 19,
+  };
+  return {
+    Client,
+    Button,
+    ChannelSelectMenu,
+    ChannelType,
+    Command,
+    CommandWithSubcommands,
+    Container,
+    Embed,
+    MentionableSelectMenu,
+    Message,
+    MessageCreateListener,
+    MessageType,
+    MessageReactionAddListener,
+    MessageReactionRemoveListener,
+    Modal,
+    PresenceUpdateListener,
+    RateLimitError,
+    ReadyListener,
+    RequestClient,
+    Row,
+    RoleSelectMenu,
+    Separator,
+    serializePayload: (payload: unknown) => payload,
+    StringSelectMenu,
+    TextDisplay,
+    ThreadUpdateListener,
+    UserSelectMenu,
+  };
 });
 
-vi.mock("@buape/carbon/gateway", () => ({
-  GatewayCloseCodes: { DisallowedIntents: 4014 },
-}));
+vi.mock("@buape/carbon/gateway", () => {
+  class GatewayPlugin {
+    gatewayInfo?: unknown;
+    constructor(_options?: unknown) {}
+    async registerClient(_client: unknown) {
+      return undefined;
+    }
+  }
+  return {
+    GatewayCloseCodes: { DisallowedIntents: 4014 },
+    GatewayIntents: {
+      Guilds: 1 << 0,
+      GuildMessages: 1 << 9,
+      MessageContent: 1 << 15,
+      DirectMessages: 1 << 12,
+      GuildMessageReactions: 1 << 10,
+      DirectMessageReactions: 1 << 13,
+      GuildVoiceStates: 1 << 7,
+      GuildPresences: 1 << 8,
+      GuildMembers: 1 << 1,
+    },
+    GatewayPlugin,
+  };
+});
 
-vi.mock("@buape/carbon/voice", () => ({
-  VoicePlugin: class VoicePlugin {},
-}));
+vi.mock("@buape/carbon/voice", () => {
+  return {
+    VoicePlugin: class VoicePlugin {},
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
@@ -387,23 +482,25 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   };
 });
 
-vi.mock("../discord/src/accounts.js", () => ({
+vi.mock("../../../extensions/discord/src/accounts.js", () => ({
+  forgetDiscordManagedBotIdentity: forgetDiscordManagedBotIdentityMock,
+  rememberDiscordManagedBotIdentity: rememberDiscordManagedBotIdentityMock,
   resolveDiscordAccount: resolveDiscordAccountMock,
 }));
 
-vi.mock("../discord/src/probe.js", () => ({
+vi.mock("../../../extensions/discord/src/probe.js", () => ({
   fetchDiscordApplicationId: async () => "app-1",
 }));
 
-vi.mock("../discord/src/token.js", () => ({
+vi.mock("../../../extensions/discord/src/token.js", () => ({
   normalizeDiscordToken: (value?: string) => value,
 }));
 
-vi.mock("../discord/src/voice/command.js", () => ({
+vi.mock("../../../extensions/discord/src/voice/command.js", () => ({
   createDiscordVoiceCommand: () => ({ name: "voice-command" }),
 }));
 
-vi.mock("../discord/src/monitor/agent-components.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/agent-components.js", () => ({
   createAgentComponentButton: () => ({ id: "btn" }),
   createAgentSelectMenu: () => ({ id: "menu" }),
   createDiscordComponentButton: () => ({ id: "btn2" }),
@@ -415,15 +512,15 @@ vi.mock("../discord/src/monitor/agent-components.js", () => ({
   createDiscordComponentUserSelect: () => ({ id: "user" }),
 }));
 
-vi.mock("../discord/src/monitor/auto-presence.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/auto-presence.js", () => ({
   createDiscordAutoPresenceController: createDiscordAutoPresenceControllerMock,
 }));
 
-vi.mock("../discord/src/monitor/commands.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/commands.js", () => ({
   resolveDiscordSlashCommandConfig: () => ({ ephemeral: false }),
 }));
 
-vi.mock("../discord/src/monitor/exec-approvals.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/exec-approvals.js", () => ({
   createExecApprovalButton: () => ({ id: "exec-approval" }),
   DiscordExecApprovalHandler: class DiscordExecApprovalHandler {
     async start() {
@@ -435,11 +532,11 @@ vi.mock("../discord/src/monitor/exec-approvals.js", () => ({
   },
 }));
 
-vi.mock("../discord/src/monitor/gateway-plugin.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/gateway-plugin.js", () => ({
   createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
 }));
 
-vi.mock("../discord/src/monitor/listeners.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/listeners.js", () => ({
   DiscordMessageListener: class DiscordMessageListener {},
   DiscordPresenceListener: class DiscordPresenceListener {},
   DiscordReactionListener: class DiscordReactionListener {},
@@ -448,34 +545,34 @@ vi.mock("../discord/src/monitor/listeners.js", () => ({
   registerDiscordListener: vi.fn(),
 }));
 
-vi.mock("../discord/src/monitor/message-handler.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/message-handler.js", () => ({
   createDiscordMessageHandler: createDiscordMessageHandlerMock,
 }));
 
-vi.mock("../discord/src/monitor/native-command.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/native-command.js", () => ({
   createDiscordCommandArgFallbackButton: () => ({ id: "arg-fallback" }),
   createDiscordModelPickerFallbackButton: () => ({ id: "model-fallback-btn" }),
   createDiscordModelPickerFallbackSelect: () => ({ id: "model-fallback-select" }),
   createDiscordNativeCommand: createDiscordNativeCommandMock,
 }));
 
-vi.mock("../discord/src/monitor/presence.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/presence.js", () => ({
   resolveDiscordPresenceUpdate: () => undefined,
 }));
 
-vi.mock("../discord/src/monitor/provider.allowlist.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/provider.allowlist.js", () => ({
   resolveDiscordAllowlistConfig: resolveDiscordAllowlistConfigMock,
 }));
 
-vi.mock("../discord/src/monitor/provider.lifecycle.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/provider.lifecycle.js", () => ({
   runDiscordGatewayLifecycle: monitorLifecycleMock,
 }));
 
-vi.mock("../discord/src/monitor/rest-fetch.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/rest-fetch.js", () => ({
   resolveDiscordRestFetch: () => async () => undefined,
 }));
 
-vi.mock("../discord/src/monitor/thread-bindings.js", () => ({
+vi.mock("../../../extensions/discord/src/monitor/thread-bindings.js", () => ({
   createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
   createThreadBindingManager: createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,

@@ -99,6 +99,39 @@ async function runSessionResetFromAgent(params: {
   };
 }
 
+function canonicalizeAbortSessionKey(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  activeSessionKey?: string;
+  requestedSessionKey?: string;
+}): string | undefined {
+  const raw = params.requestedSessionKey?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const lowered = raw.toLowerCase();
+  if (lowered === "global" || lowered === "unknown") {
+    return lowered;
+  }
+  if (lowered.startsWith("agent:")) {
+    return lowered;
+  }
+  const activeAgentId =
+    (params.activeSessionKey ? resolveAgentIdFromSessionKey(params.activeSessionKey) : undefined) ??
+    resolveAgentIdFromSessionKey(lowered);
+  if (!activeAgentId) {
+    return lowered;
+  }
+  const canonicalMainKey = resolveAgentMainSessionKey({
+    cfg: params.cfg,
+    agentId: activeAgentId,
+  }).toLowerCase();
+  const configuredMainAlias = canonicalMainKey.split(":").slice(2).join(":");
+  if (lowered === "main" || lowered === configuredMainAlias) {
+    return canonicalMainKey;
+  }
+  return `agent:${normalizeAgentId(activeAgentId)}:${lowered}`;
+}
+
 function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
@@ -652,6 +685,40 @@ export const agentHandlers: GatewayRequestHandlers = {
       context,
     });
   },
+  "agent.enqueue": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+    await agentHandlers.agent({ req, params, respond, context, client, isWebchatConnect });
+  },
+  "agent.abort": ({ params, respond, context }) => {
+    if (!validateAgentAbortParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent.abort params: ${formatValidationErrors(validateAgentAbortParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const request = params as { runId: string; sessionKey?: string };
+    const runId = request.runId.trim();
+    const activeSessionKey = context.agentAbortControllers.get(runId)?.sessionKey;
+    const sessionKey = canonicalizeAbortSessionKey({
+      cfg: loadConfig(),
+      activeSessionKey,
+      requestedSessionKey:
+        typeof request.sessionKey === "string" && request.sessionKey.trim()
+          ? request.sessionKey.trim()
+          : undefined,
+    });
+    const result = abortAgentRunById({
+      agentAbortControllers: context.agentAbortControllers,
+      runId,
+      sessionKey,
+      reason: "rpc",
+    });
+    respond(true, { ok: true, aborted: result.aborted, runId });
+  },
   "agent.identity.get": ({ params, respond }) => {
     if (!validateAgentIdentityParams(params)) {
       respond(
@@ -795,3 +862,4 @@ export const agentHandlers: GatewayRequestHandlers = {
     });
   },
 };
+

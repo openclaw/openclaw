@@ -644,6 +644,7 @@ describe("gateway agent handler", () => {
     expect(controller.signal.aborted).toBe(true);
     expect(context.agentAbortControllers.has("run-1")).toBe(false);
     expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runId: "run-1" });
+    mocks.loadConfigReturn = {};
   });
 
   it("does not abort a session-bound run when sessionKey is omitted", async () => {
@@ -669,6 +670,33 @@ describe("gateway agent handler", () => {
     expect(controller.signal.aborted).toBe(false);
     expect(context.agentAbortControllers.has("run-1")).toBe(true);
     expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: false, runId: "run-1" });
+  });
+
+  it("canonicalizes alias session keys before aborting agent runs", async () => {
+    mocks.loadConfigReturn = { session: { mainKey: "work" } };
+    const respond = vi.fn();
+    const controller = new AbortController();
+    const context = makeContext();
+    context.agentAbortControllers.set("run-1", {
+      controller,
+      sessionKey: "agent:main:work",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    await agentHandlers["agent.abort"]({
+      params: { runId: "run-1", sessionKey: "main" },
+      respond: respond as never,
+      context,
+      req: { type: "req", id: "agent-abort-alias-session", method: "agent.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(context.agentAbortControllers.has("run-1")).toBe(false);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runId: "run-1" });
+    mocks.loadConfigReturn = {};
   });
 
   it("keeps a newer abort controller entry when an older run with the same id finishes", async () => {
@@ -866,3 +894,4 @@ describe("gateway agent handler", () => {
     );
   });
 });
+
