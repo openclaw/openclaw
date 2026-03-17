@@ -1,9 +1,7 @@
 import {
-  applyAccountNameToChannelSection,
-  DEFAULT_ACCOUNT_ID,
-  migrateBaseNameToDefaultAccount,
-  patchScopedAccountConfig,
   normalizeAccountId,
+  patchScopedAccountConfig,
+  prepareScopedSetupConfig,
   setTopLevelChannelDmPolicyWithAllowFrom,
   type ChannelSetupAdapter,
   type DmPolicy,
@@ -39,7 +37,7 @@ export function setBlueBubblesAllowFrom(
 export const blueBubblesSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
+    prepareScopedSetupConfig({
       cfg,
       channelKey: channel,
       accountId,
@@ -58,19 +56,13 @@ export const blueBubblesSetupAdapter: ChannelSetupAdapter = {
     return null;
   },
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
+    const next = prepareScopedSetupConfig({
       cfg,
       channelKey: channel,
       accountId,
       name: input.name,
+      migrateBaseName: true,
     });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
     return applyBlueBubblesConnectionConfig({
       cfg: next,
       accountId,

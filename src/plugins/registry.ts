@@ -22,6 +22,7 @@ import {
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
+  ImageGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliRegistrar,
@@ -104,29 +105,22 @@ export type PluginProviderRegistration = {
   rootDir?: string;
 };
 
-export type PluginWebSearchProviderRegistration = {
+type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
-  provider: WebSearchProviderPlugin;
+  provider: T;
   source: string;
   rootDir?: string;
 };
 
-export type PluginSpeechProviderRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  provider: SpeechProviderPlugin;
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginMediaUnderstandingProviderRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  provider: MediaUnderstandingProviderPlugin;
-  source: string;
-  rootDir?: string;
-};
+export type PluginSpeechProviderRegistration =
+  PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+export type PluginMediaUnderstandingProviderRegistration =
+  PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
+export type PluginImageGenerationProviderRegistration =
+  PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
+export type PluginWebSearchProviderRegistration =
+  PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 
 export type PluginHookRegistration = {
   pluginId: string;
@@ -174,6 +168,7 @@ export type PluginRecord = {
   providerIds: string[];
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  imageGenerationProviderIds: string[];
   webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
@@ -196,6 +191,7 @@ export type PluginRegistry = {
   providers: PluginProviderRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
+  imageGenerationProviders: PluginImageGenerationProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -243,6 +239,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     providers: [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
     webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
@@ -576,13 +573,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerUniqueProviderLike = <
     T extends { id: string },
-    R extends {
-      pluginId: string;
-      pluginName?: string;
-      provider: T;
-      source: string;
-      rootDir?: string;
-    },
+    R extends PluginOwnedProviderRegistration<T>,
   >(params: {
     record: PluginRecord;
     provider: T;
@@ -643,6 +634,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       kindLabel: "media provider",
       registrations: registry.mediaUnderstandingProviders,
       ownedIds: record.mediaUnderstandingProviderIds,
+    });
+  };
+
+  const registerImageGenerationProvider = (
+    record: PluginRecord,
+    provider: ImageGenerationProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "image-generation provider",
+      registrations: registry.imageGenerationProviders,
+      ownedIds: record.imageGenerationProviderIds,
     });
   };
 
@@ -872,6 +876,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         registrationMode === "full"
           ? (provider) => registerMediaUnderstandingProvider(record, provider)
           : () => {},
+      registerImageGenerationProvider:
+        registrationMode === "full"
+          ? (provider) => registerImageGenerationProvider(record, provider)
+          : () => {},
       registerWebSearchProvider:
         registrationMode === "full"
           ? (provider) => registerWebSearchProvider(record, provider)
@@ -947,6 +955,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerProvider,
     registerSpeechProvider,
     registerMediaUnderstandingProvider,
+    registerImageGenerationProvider,
     registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,

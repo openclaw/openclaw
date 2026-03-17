@@ -1,5 +1,7 @@
-import { applyAgentDefaultModelPrimary } from "../../src/commands/onboard-auth.config-shared.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+import {
+  applyAgentDefaultModelPrimary,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 

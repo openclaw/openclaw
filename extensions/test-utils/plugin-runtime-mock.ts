@@ -1,7 +1,7 @@
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/test-utils";
 import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk/test-utils";
 import { vi } from "vitest";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../src/agents/defaults.js";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown
@@ -110,10 +110,20 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       runFile: vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["runFile"],
       describeImageFile:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeImageFile"],
+      describeImageFileWithModel:
+        vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeImageFileWithModel"],
       describeVideoFile:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeVideoFile"],
       transcribeAudioFile:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"],
+    },
+    imageGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["imageGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["imageGeneration"]["listProviders"],
+    },
+    webSearch: {
+      listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
+      search: vi.fn() as unknown as PluginRuntime["webSearch"]["search"],
     },
     stt: {
       transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],

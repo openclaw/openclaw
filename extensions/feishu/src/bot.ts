@@ -1,3 +1,8 @@
+import {
+  ensureConfiguredAcpRouteReady,
+  resolveConfiguredAcpRoute,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import {
   buildAgentMediaPayload,
@@ -14,13 +19,8 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/feishu";
-import {
-  ensureConfiguredAcpRouteReady,
-  resolveConfiguredAcpRoute,
-} from "../../../src/acp/persistent-bindings.route.js";
-import { getSessionBindingService } from "../../../src/infra/outbound/session-binding-service.js";
-import { deriveLastRoutePolicy } from "../../../src/routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
+import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { buildFeishuConversationId } from "./conversation-id.js";

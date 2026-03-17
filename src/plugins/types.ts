@@ -17,13 +17,12 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
-import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
-import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -39,10 +38,19 @@ import type {
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { SecretInputMode } from "./provider-auth-types.js";
+import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
+
+export type ProviderAuthOptionBag = {
+  token?: string;
+  tokenProvider?: string;
+  secretInputMode?: SecretInputMode;
+  [key: string]: unknown;
+};
 
 export type PluginLogger = {
   debug?: (message: string) => void;
@@ -144,7 +152,7 @@ export type ProviderAuthContext = {
    * `--token/--token-provider` pairs. Direct `models auth login` usually
    * leaves this undefined.
    */
-  opts?: Partial<OnboardOptions>;
+  opts?: ProviderAuthOptionBag;
   /**
    * Onboarding secret persistence preference.
    *
@@ -152,7 +160,7 @@ export type ProviderAuthContext = {
    * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
    * usually leave it undefined.
    */
-  secretInputMode?: OnboardOptions["secretInputMode"];
+  secretInputMode?: SecretInputMode;
   /**
    * Whether the provider auth flow should offer the onboarding secret-storage
    * mode picker when `secretInputMode` is unset.
@@ -196,7 +204,7 @@ export type ProviderAuthMethodNonInteractiveContext = {
   authChoice: string;
   config: OpenClawConfig;
   baseConfig: OpenClawConfig;
-  opts: OnboardOptions;
+  opts: ProviderAuthOptionBag;
   runtime: RuntimeEnv;
   agentDir?: string;
   workspaceDir?: string;
@@ -883,6 +891,7 @@ export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
 };
 
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
+export type ImageGenerationProviderPlugin = ImageGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
   method: string;
@@ -1244,6 +1253,7 @@ export type OpenClawPluginApi = {
   registerProvider: (provider: ProviderPlugin) => void;
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
+  registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
   /**
