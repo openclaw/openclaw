@@ -1,7 +1,6 @@
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
-  formatDocsLink,
   hasConfiguredSecretInput,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
@@ -20,6 +19,7 @@ import {
   type ChannelSetupWizard,
   type ChannelSetupWizardAllowFromEntry,
 } from "../../../src/plugin-sdk-internal/setup.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { listSlackAccountIds, resolveSlackAccount, type ResolvedSlackAccount } from "./accounts.js";
 import {

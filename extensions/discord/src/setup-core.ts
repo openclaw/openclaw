@@ -2,7 +2,6 @@ import type { DiscordGuildEntry } from "../../../src/config/types.discord.js";
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
-  formatDocsLink,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   noteChannelLookupFailure,
@@ -18,6 +17,7 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "../../../src/plugin-sdk-internal/setup.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 
