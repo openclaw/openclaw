@@ -97,6 +97,7 @@ Do not edit these files under this plan:
 ### Stage 3B: onboarding flow consolidation
 
 - [x] Extract first shared gateway reachability and health-check workflow used by wizard and non-interactive local onboarding
+- [x] Extract shared workspace resolution and workspace-config helpers used by wizard and non-interactive local onboarding
 - [ ] Define shared `OnboardingPlan` decision graph
 - [ ] Keep separate interactive and non-interactive executors
 - [ ] Add parity coverage for equivalent inputs

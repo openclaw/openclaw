@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   waitForGatewayReachable: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   summarizeExistingConfig: vi.fn(),
+  ensureWorkspaceAndSessions: vi.fn(),
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -50,7 +51,7 @@ vi.mock("../terminal/note.js", () => ({
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
   applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
-  ensureWorkspaceAndSessions: vi.fn(),
+  ensureWorkspaceAndSessions: mocks.ensureWorkspaceAndSessions,
   guardCancel: <T>(value: T) => value,
   printWizardHeader: mocks.printWizardHeader,
   probeGatewayReachable: mocks.probeGatewayReachable,
@@ -157,5 +158,56 @@ describe("runConfigureWizard", () => {
     await runConfigureWizard({ command: "configure" }, runtime);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("shares workspace config updates through the common onboarding helper path", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            workspace: "/tmp/existing-workspace",
+          },
+        },
+      },
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
+
+    const selectQueue = ["local", "workspace", "__continue"];
+    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
+    mocks.clackText.mockResolvedValue("/tmp/next-workspace");
+    mocks.clackIntro.mockResolvedValue(undefined);
+    mocks.clackOutro.mockResolvedValue(undefined);
+    mocks.clackConfirm.mockResolvedValue(false);
+
+    await runConfigureWizard(
+      { command: "configure" },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      "/tmp/next-workspace",
+      expect.any(Object),
+    );
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            workspace: "/tmp/next-workspace",
+          }),
+        }),
+      }),
+    );
   });
 });

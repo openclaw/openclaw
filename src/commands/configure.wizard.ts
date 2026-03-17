@@ -31,6 +31,7 @@ import {
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { noteChannelStatus, setupChannels } from "./onboard-channels.js";
+import { applyOnboardingWorkspaceConfig, resolveOnboardingWorkspaceDir } from "./onboard-config.js";
 import { runGatewayReachabilityHealthWorkflow } from "./onboard-gateway-health.js";
 import {
   applyWizardMetadata,
@@ -421,10 +422,11 @@ export async function runConfigureWizard(
       };
       didSetGatewayMode = true;
     }
-    let workspaceDir =
-      nextConfig.agents?.defaults?.workspace ??
-      baseConfig.agents?.defaults?.workspace ??
-      DEFAULT_WORKSPACE;
+    let workspaceDir = resolveOnboardingWorkspaceDir({
+      requestedWorkspace: nextConfig.agents?.defaults?.workspace,
+      configuredWorkspace: baseConfig.agents?.defaults?.workspace,
+      defaultWorkspaceDir: DEFAULT_WORKSPACE,
+    });
     let gatewayPort = resolveGatewayPort(baseConfig);
 
     const persistConfig = async () => {
@@ -444,7 +446,10 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
+      workspaceDir = resolveOnboardingWorkspaceDir({
+        requestedWorkspace: String(workspaceInput ?? "").trim() || undefined,
+        defaultWorkspaceDir: DEFAULT_WORKSPACE,
+      });
       if (!snapshot.exists) {
         const indicators = ["MEMORY.md", "memory", ".git"].map((name) =>
           nodePath.join(workspaceDir, name),
@@ -471,16 +476,7 @@ export async function runConfigureWizard(
           );
         }
       }
-      nextConfig = {
-        ...nextConfig,
-        agents: {
-          ...nextConfig.agents,
-          defaults: {
-            ...nextConfig.agents?.defaults,
-            workspace: workspaceDir,
-          },
-        },
-      };
+      nextConfig = applyOnboardingWorkspaceConfig(nextConfig, workspaceDir);
       await ensureWorkspaceAndSessions(workspaceDir, runtime);
     };
 

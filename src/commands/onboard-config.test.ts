@@ -1,10 +1,54 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  applyOnboardingWorkspaceConfig,
   applyLocalSetupWorkspaceConfig,
   ONBOARDING_DEFAULT_DM_SCOPE,
   ONBOARDING_DEFAULT_TOOLS_PROFILE,
+  resolveOnboardingWorkspaceDir,
 } from "./onboard-config.js";
+
+describe("resolveOnboardingWorkspaceDir", () => {
+  it("prefers an explicit requested workspace", () => {
+    expect(
+      resolveOnboardingWorkspaceDir({
+        requestedWorkspace: "/tmp/requested",
+        configuredWorkspace: "/tmp/configured",
+        defaultWorkspaceDir: "/tmp/default",
+      }),
+    ).toBe("/tmp/requested");
+  });
+
+  it("falls back to configured workspace before the default", () => {
+    expect(
+      resolveOnboardingWorkspaceDir({
+        configuredWorkspace: "/tmp/configured",
+        defaultWorkspaceDir: "/tmp/default",
+      }),
+    ).toBe("/tmp/configured");
+  });
+});
+
+describe("applyOnboardingWorkspaceConfig", () => {
+  it("updates only the workspace portion of config", () => {
+    const baseConfig: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+        },
+      },
+    };
+
+    const result = applyOnboardingWorkspaceConfig(baseConfig, "/tmp/workspace");
+
+    expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
+    expect(result.agents?.defaults?.model).toBe("openai/gpt-5");
+    expect(result.gateway?.mode).toBe("remote");
+  });
+});
 
 describe("applyLocalSetupWorkspaceConfig", () => {
   it("defaults local setup tool profile to coding", () => {
