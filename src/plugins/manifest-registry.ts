@@ -384,6 +384,60 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
+
+      // When one side is an explicitly npm-installed global plugin and the
+      // other is the bundled version with the same id, the user intentionally
+      // installed the override — suppress the noisy duplicate warning.
+      const candidateIsInstalled = matchesInstalledPluginRecord({
+        pluginId: manifest.id,
+        candidate,
+        config,
+        env,
+      });
+      const existingIsInstalled = matchesInstalledPluginRecord({
+        pluginId: manifest.id,
+        candidate: existing.candidate,
+        config,
+        env,
+      });
+      const isIntentionalOverride =
+        (candidateIsInstalled && existing.candidate.origin === "bundled") ||
+        (existingIsInstalled && candidate.origin === "bundled");
+
+      if (isIntentionalOverride) {
+        // Replace the existing record when the new candidate wins precedence;
+        // either way skip the push below to avoid a duplicate registry entry.
+        const newRank = resolveDuplicatePrecedenceRank({
+          pluginId: manifest.id,
+          candidate,
+          config,
+          env,
+        });
+        const existingRank = resolveDuplicatePrecedenceRank({
+          pluginId: manifest.id,
+          candidate: existing.candidate,
+          config,
+          env,
+        });
+        if (newRank < existingRank) {
+          records[existing.recordIndex] = isBundleRecord
+            ? buildBundleRecord({
+                manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
+                candidate,
+                manifestPath: manifestRes.manifestPath,
+              })
+            : buildRecord({
+                manifest: manifest as PluginManifest,
+                candidate,
+                manifestPath: manifestRes.manifestPath,
+                schemaCacheKey,
+                configSchema,
+              });
+          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        }
+        continue;
+      }
+
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
