@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
@@ -16,6 +17,18 @@ export {
   normalizeExecHost,
   normalizeExecSecurity,
 } from "../infra/exec-approvals.js";
+import type { AccessPolicyConfig } from "../config/types.tools.js";
+import {
+  applyScriptPolicyOverride,
+  checkAccessPolicy,
+  resolveArgv0,
+  resolveScriptKey,
+} from "../infra/access-policy.js";
+import { isBwrapAvailable, wrapCommandWithBwrap } from "../infra/exec-sandbox-bwrap.js";
+import {
+  generateSeatbeltProfile,
+  wrapCommandWithSeatbelt,
+} from "../infra/exec-sandbox-seatbelt.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -286,6 +299,40 @@ export function emitExecSystemEvent(
   requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
+// Warn once per process when OS-level exec enforcement is unavailable and
+// access-policy permissions are configured — so operators know exec runs unconfined.
+let _bwrapUnavailableWarned = false;
+function _warnBwrapUnavailableOnce(): void {
+  if (_bwrapUnavailableWarned) {
+    return;
+  }
+  _bwrapUnavailableWarned = true;
+  console.error(
+    "[access-policy] WARNING: bwrap is not available on this Linux host — exec commands run unconfined. Install bubblewrap to enable OS-level exec enforcement.",
+  );
+}
+
+/** Reset the one-time bwrap-unavailable warning flag. Only for use in tests. */
+export function _resetBwrapUnavailableWarnedForTest(): void {
+  _bwrapUnavailableWarned = false;
+}
+
+let _windowsUnconfiguredWarned = false;
+function _warnWindowsUnconfiguredOnce(): void {
+  if (_windowsUnconfiguredWarned) {
+    return;
+  }
+  _windowsUnconfiguredWarned = true;
+  console.error(
+    "[access-policy] WARNING: OS-level exec enforcement is not supported on Windows — exec commands run unconfined even when access-policy permissions are configured.",
+  );
+}
+
+/** Reset the one-time Windows-unconfigured warning flag. Only for use in tests. */
+export function _resetWindowsUnconfiguredWarnedForTest(): void {
+  _windowsUnconfiguredWarned = false;
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -305,10 +352,84 @@ export async function runExecProcess(opts: {
   sessionKey?: string;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
+  /** When set, wrap the exec command with OS-level path enforcement. */
+  permissions?: AccessPolicyConfig;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
-  const execCommand = opts.execCommand ?? opts.command;
+  const baseCommand = opts.execCommand ?? opts.command;
+
+  // Apply access-policy enforcement when permissions are configured.
+  // Hash verification and tool-layer exec checks run unconditionally — container
+  // sandboxes (opts.sandbox) share the host filesystem via volume mounts so a
+  // tampered script is still reachable. Only OS-level wrapping (seatbelt/bwrap)
+  // is skipped when a container sandbox already provides filesystem isolation.
+  let execCommand = baseCommand;
+  if (opts.permissions) {
+    // Fall back to the first token rather than the full command string so that
+    // checkAccessPolicy matches against a path-like token instead of a multi-word
+    // string that never matches any absolute-path rule (and would pass unconditionally
+    // under a permissive default).
+    const argv0 =
+      resolveArgv0(baseCommand, opts.workdir) ?? baseCommand.trim().split(/\s+/)[0] ?? baseCommand;
+    const {
+      policy: effectivePermissions,
+      overrideRules,
+      hashMismatch,
+    } = applyScriptPolicyOverride(opts.permissions, argv0);
+    if (hashMismatch) {
+      throw new Error(`exec denied: script hash mismatch for ${argv0}`);
+    }
+    // Tool-layer exec path check — defense-in-depth for platforms where OS-level
+    // enforcement (seatbelt/bwrap) is unavailable (Linux without bwrap, Windows).
+    // Mirrors the checkAccessPolicy calls in read/write tools for consistency.
+    //
+    // For scripts{} entries, skip the broader rules check — a sha256-matched script
+    // doesn't also need an explicit exec rule in the base policy.
+    // Use resolveScriptKey so that both tilde keys ("~/bin/deploy.sh") and
+    // symlink keys ("/usr/bin/python" → /usr/bin/python3.12) match argv0, which
+    // is always the realpathSync result from resolveArgv0.
+    const _scripts = opts.permissions.scripts ?? {};
+    // Skip the reserved "policy" key and malformed (non-object) entries — only a
+    // validated ScriptPolicyEntry object counts as a legitimate script override.
+    // A truthy primitive (true, "oops") would otherwise bypass the base exec gate
+    // even though applyScriptPolicyOverride already rejected the entry.
+    const hasScriptOverride = Object.entries(_scripts).some(
+      ([k, v]) =>
+        k !== "policy" &&
+        v != null &&
+        typeof v === "object" &&
+        !Array.isArray(v) &&
+        path.normalize(resolveScriptKey(k)) === path.normalize(argv0),
+    );
+    if (!hasScriptOverride && checkAccessPolicy(argv0, "exec", effectivePermissions) === "deny") {
+      throw new Error(`exec denied by access policy: ${argv0}`);
+    }
+    // OS-level sandbox wrapping — skip when a container sandbox already isolates the process.
+    if (!opts.sandbox) {
+      if (process.platform === "darwin") {
+        const profile = generateSeatbeltProfile(effectivePermissions, os.homedir(), overrideRules);
+        execCommand = wrapCommandWithSeatbelt(baseCommand, profile);
+      } else if (process.platform === "linux") {
+        if (await isBwrapAvailable()) {
+          // Pass overrideRules separately so they are emitted AFTER deny[] mounts,
+          // giving script-specific grants precedence over base deny entries — matching
+          // the Seatbelt path where scriptOverrideRules are emitted last in the profile.
+          execCommand = wrapCommandWithBwrap(
+            baseCommand,
+            effectivePermissions,
+            os.homedir(),
+            overrideRules,
+          );
+        } else {
+          _warnBwrapUnavailableOnce();
+        }
+      } else if (process.platform === "win32") {
+        _warnWindowsUnconfiguredOnce();
+      }
+    }
+  }
+
   const supervisor = getProcessSupervisor();
   const shellRuntimeEnv: Record<string, string> = {
     ...opts.env,

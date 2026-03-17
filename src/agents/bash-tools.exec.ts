@@ -449,6 +449,7 @@ export function createExecTool(
           maxOutput,
           pendingMaxOutput,
           trustedSafeBinDirs,
+          permissions: defaults?.permissions,
         });
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
@@ -486,6 +487,7 @@ export function createExecTool(
         sessionKey: notifySessionKey,
         timeoutSec: effectiveTimeout,
         onUpdate,
+        permissions: defaults?.permissions,
       });
 
       let yielded = false;

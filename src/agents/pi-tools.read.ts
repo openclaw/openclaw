@@ -1,8 +1,11 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import type { AccessPolicyConfig } from "../config/types.tools.js";
+import { checkAccessPolicy } from "../infra/access-policy.js";
 import {
   appendFileWithinRoot,
   SafeOpenError,
@@ -47,9 +50,44 @@ const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_ADAPTIVE_READ_PAGES = 8;
 
+/**
+ * Resolve symlinks before a policy check. For paths that don't exist yet
+ * (e.g. a new file being created), resolves the parent directory so that
+ * intermediate symlinks are followed. Without this, a write to
+ * `/allowed/link/new.txt` where `link → /denied` would pass the check
+ * (path.resolve does not follow symlinks) and then land in the denied
+ * target when fs.writeFile follows the symlink.
+ */
+function safeRealpath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    // Path doesn't exist yet — walk up ancestors until we find one that exists,
+    // resolve it, then reconstruct the full path.
+    const parts: string[] = [];
+    let ancestor = p;
+    while (true) {
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) {
+        return path.resolve(p);
+      }
+      parts.unshift(path.basename(ancestor));
+      ancestor = parent;
+      try {
+        return path.join(realpathSync(ancestor), ...parts);
+      } catch {
+        // Keep walking up.
+      }
+    }
+  }
+}
+
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  permissions?: AccessPolicyConfig;
+  /** Workspace root used to resolve relative paths for permission checks. */
+  workspaceRoot?: string;
 };
 
 type ReadTruncationDetails = {
@@ -621,14 +659,20 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
 }
 
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceWriteTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; permissions?: AccessPolicyConfig },
+) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
 }
 
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceEditTool(
+  root: string,
+  options?: { workspaceOnly?: boolean; permissions?: AccessPolicyConfig },
+) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
@@ -649,14 +693,31 @@ export function createOpenClawReadTool(
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
+      // Path-level permission check (when tools.fs.permissions is configured).
+      // Use the resolved path for the actual read — closes the TOCTOU window where a
+      // symlink swapped between check and open could redirect I/O to an unchecked path.
+      // This mirrors the write/edit tools which return the resolved path from
+      // assertWritePermitted/assertEditPermitted and use it for the subsequent I/O call.
+      let readArgs = (normalized ?? params ?? {}) as Record<string, unknown>;
+      if (options?.permissions && filePath !== "<unknown>") {
+        const resolvedPath = safeRealpath(
+          path.isAbsolute(filePath)
+            ? filePath
+            : path.resolve(options.workspaceRoot ?? process.cwd(), filePath),
+        );
+        if (checkAccessPolicy(resolvedPath, "read", options.permissions) === "deny") {
+          throw new Error(`Permission denied: read access to ${resolvedPath} is not allowed.`);
+        }
+        readArgs = { ...readArgs, path: resolvedPath };
+      }
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
-        args: (normalized ?? params ?? {}) as Record<string, unknown>,
+        args: readArgs,
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
       });
-      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
       return sanitizeToolResultImages(
@@ -718,32 +779,58 @@ async function writeHostFile(absolutePath: string, content: string) {
   await fs.writeFile(resolved, content, "utf-8");
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostWriteOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; permissions?: AccessPolicyConfig },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
+  const permissions = options?.permissions;
+  // Resolve root once so that safeRealpath(child) paths can be compared against
+  // it — if root itself is a symlink, toRelativeWorkspacePath would otherwise
+  // throw "path escapes workspace root" for every path inside the workspace.
+  const resolvedRoot = safeRealpath(root);
+
+  // Returns the safeRealpath-resolved path so callers use the same concrete path
+  // for I/O that was checked by the policy — closes the TOCTOU window where a
+  // symlink swap between permission check and fs call could redirect I/O.
+  function assertWritePermitted(absolutePath: string): string {
+    const resolved = safeRealpath(absolutePath);
+    if (permissions && checkAccessPolicy(resolved, "write", permissions) === "deny") {
+      throw new Error(`Permission denied: write access to ${resolved} is not allowed.`);
+    }
+    return resolved;
+  }
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
+        const resolved = assertWritePermitted(dir);
         await fs.mkdir(resolved, { recursive: true });
       },
-      writeFile: writeHostFile,
+      writeFile: async (absolutePath: string, content: string) => {
+        const resolved = assertWritePermitted(absolutePath);
+        await writeHostFile(resolved, content);
+      },
     } as const;
   }
 
   // When workspaceOnly is true, enforce workspace boundary
   return {
     mkdir: async (dir: string) => {
-      const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
-      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
-      await assertSandboxPath({ filePath: resolved, cwd: root, root });
-      await fs.mkdir(resolved, { recursive: true });
+      const resolved = assertWritePermitted(dir);
+      const relative = toRelativeWorkspacePath(resolvedRoot, resolved, { allowRoot: true });
+      const absResolved = relative
+        ? path.resolve(resolvedRoot, relative)
+        : path.resolve(resolvedRoot);
+      await assertSandboxPath({ filePath: absResolved, cwd: resolvedRoot, root: resolvedRoot });
+      await fs.mkdir(absResolved, { recursive: true });
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const resolved = assertWritePermitted(absolutePath);
+      const relative = toRelativeWorkspacePath(resolvedRoot, resolved);
       await writeFileWithinRoot({
-        rootDir: root,
+        rootDir: resolvedRoot,
         relativePath: relative,
         data: content,
         mkdir: true,
@@ -752,19 +839,55 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   } as const;
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(
+  root: string,
+  options?: { workspaceOnly?: boolean; permissions?: AccessPolicyConfig },
+) {
   const workspaceOnly = options?.workspaceOnly ?? false;
+  const permissions = options?.permissions;
+  const resolvedRoot = safeRealpath(root);
+
+  // Edit = read + write the same file; check both permissions and return the
+  // safeRealpath-resolved path so callers use the same concrete path for I/O
+  // that was checked — closes the TOCTOU window where a symlink swap between
+  // permission check and fs call could redirect I/O to an unchecked target.
+  function assertEditPermitted(absolutePath: string): string {
+    const resolved = safeRealpath(absolutePath);
+    if (permissions) {
+      if (checkAccessPolicy(resolved, "read", permissions) === "deny") {
+        throw new Error(`Permission denied: read access to ${resolved} is not allowed.`);
+      }
+      if (checkAccessPolicy(resolved, "write", permissions) === "deny") {
+        throw new Error(`Permission denied: write access to ${resolved} is not allowed.`);
+      }
+    }
+    return resolved;
+  }
+
+  // access() checks existence only — requires read permission but not write.
+  // Using assertEditPermitted here would block existence checks on r-- paths before
+  // any write is attempted, producing a misleading "write access denied" error.
+  function assertReadPermitted(absolutePath: string): string {
+    const resolved = safeRealpath(absolutePath);
+    if (permissions && checkAccessPolicy(resolved, "read", permissions) === "deny") {
+      throw new Error(`Permission denied: read access to ${resolved} is not allowed.`);
+    }
+    return resolved;
+  }
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = assertEditPermitted(absolutePath);
         return await fs.readFile(resolved);
       },
-      writeFile: writeHostFile,
+      writeFile: async (absolutePath: string, content: string) => {
+        const resolved = assertEditPermitted(absolutePath);
+        await writeHostFile(resolved, content);
+      },
       access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = assertReadPermitted(absolutePath);
         await fs.access(resolved);
       },
     } as const;
@@ -773,26 +896,29 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
   // When workspaceOnly is true, enforce workspace boundary
   return {
     readFile: async (absolutePath: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const resolved = assertEditPermitted(absolutePath);
+      const relative = toRelativeWorkspacePath(resolvedRoot, resolved);
       const safeRead = await readFileWithinRoot({
-        rootDir: root,
+        rootDir: resolvedRoot,
         relativePath: relative,
       });
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
-      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const resolved = assertEditPermitted(absolutePath);
+      const relative = toRelativeWorkspacePath(resolvedRoot, resolved);
       await writeFileWithinRoot({
-        rootDir: root,
+        rootDir: resolvedRoot,
         relativePath: relative,
         data: content,
         mkdir: true,
       });
     },
     access: async (absolutePath: string) => {
+      const resolved = assertReadPermitted(absolutePath);
       let relative: string;
       try {
-        relative = toRelativeWorkspacePath(root, absolutePath);
+        relative = toRelativeWorkspacePath(resolvedRoot, resolved);
       } catch {
         // Path escapes workspace root.  Don't throw here – the upstream
         // library replaces any `access` error with a misleading "File not
