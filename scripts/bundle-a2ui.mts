@@ -13,7 +13,7 @@ const A2UI_APP_DIR = path.join(ROOT_DIR, "apps/shared/OpenClawKit/Tools/CanvasA2
 
 const exists = async (p: string) => fs.access(p).then(() => true).catch(() => false);
 
-// 检查源码目录
+// Check source directory
 const rendererExists = await exists(A2UI_RENDERER_DIR);
 const appExists = await exists(A2UI_APP_DIR);
 
@@ -26,7 +26,7 @@ if (!rendererExists || !appExists) {
   process.exit(1);
 }
 
-// 计算哈希
+// Calculate hash
 async function walk(entryPath: string): Promise<string[]> {
   const st = await fs.stat(entryPath);
   if (st.isDirectory()) {
@@ -59,7 +59,7 @@ for (const filePath of allFiles) {
 }
 const currentHash = hash.digest("hex");
 
-// 检查是否需要重新构建
+// Check if rebuild is needed
 if (await exists(HASH_FILE) && await exists(OUTPUT_FILE)) {
   const previousHash = (await fs.readFile(HASH_FILE, "utf8")).trim();
   if (previousHash === currentHash) {
@@ -70,17 +70,22 @@ if (await exists(HASH_FILE) && await exists(OUTPUT_FILE)) {
 
 const exec = (cmd: string) => execSync(cmd, { stdio: "inherit", cwd: ROOT_DIR });
 
-// 编译 TypeScript
-exec(`pnpm -s exec tsc -p "${A2UI_RENDERER_DIR}/tsconfig.json"`);
-
-// 打包
 try {
-  execSync("rolldown --version", { stdio: "ignore" });
-  exec(`rolldown -c "${A2UI_APP_DIR}/rolldown.config.mjs"`);
-} catch {
-  exec(`pnpm -s dlx rolldown -c "${A2UI_APP_DIR}/rolldown.config.mjs"`);
-}
+  // Compile TypeScript
+  exec(`pnpm -s exec tsc -p "${A2UI_RENDERER_DIR}/tsconfig.json"`);
 
-// 保存哈希
-await fs.writeFile(HASH_FILE, currentHash, "utf8");
-console.log("A2UI bundle complete.");
+  // Bundle
+  try {
+    exec(`pnpm -s exec rolldown -c "${A2UI_APP_DIR}/rolldown.config.mjs"`);
+  } catch {
+    exec(`pnpm -s dlx rolldown -c "${A2UI_APP_DIR}/rolldown.config.mjs"`);
+  }
+
+  // Save hash
+  await fs.writeFile(HASH_FILE, currentHash, "utf8");
+  console.log("A2UI bundle complete.");
+} catch (error) {
+  console.error("\nA2UI bundling failed. Re-run with: pnpm canvas:a2ui:bundle");
+  console.error("If this persists, verify pnpm deps and try again.\n");
+  throw error;
+}
