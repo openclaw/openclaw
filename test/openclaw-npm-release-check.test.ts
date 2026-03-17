@@ -113,7 +113,36 @@ describe("collectReleasePackageMetadataErrors", () => {
         license: "MIT",
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
+        optionalDependencies: { "node-llama-cpp": "^3.18.1" },
+        config: { nodeLlamaCppPostinstall: "ignoreFailedBuild" },
       }),
     ).toEqual([]);
+  });
+
+  it("requires node-llama-cpp in optionalDependencies", () => {
+    expect(
+      collectReleasePackageMetadataErrors({
+        name: "openclaw",
+        description: "Multi-channel AI gateway with extensible messaging integrations",
+        license: "MIT",
+        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
+        bin: { openclaw: "openclaw.mjs" },
+        config: { nodeLlamaCppPostinstall: "ignoreFailedBuild" },
+      }),
+    ).toContain('package.json optionalDependencies["node-llama-cpp"] must be present.');
+  });
+
+  it("requires nodeLlamaCppPostinstall to ignore failed builds", () => {
+    expect(
+      collectReleasePackageMetadataErrors({
+        name: "openclaw",
+        description: "Multi-channel AI gateway with extensible messaging integrations",
+        license: "MIT",
+        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
+        bin: { openclaw: "openclaw.mjs" },
+        optionalDependencies: { "node-llama-cpp": "^3.18.1" },
+        config: { nodeLlamaCppPostinstall: "unexpected" },
+      }),
+    ).toContain('package.json config.nodeLlamaCppPostinstall must be "ignoreFailedBuild".');
   });
 });

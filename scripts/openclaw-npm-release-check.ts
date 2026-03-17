@@ -13,6 +13,8 @@ type PackageJson = {
   bin?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+  optionalDependencies?: Record<string, string>;
+  config?: Record<string, unknown>;
 };
 
 export type ParsedReleaseVersion = {
@@ -193,6 +195,12 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
     errors.push(
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
+  }
+  if (!pkg.optionalDependencies?.["node-llama-cpp"]) {
+    errors.push('package.json optionalDependencies["node-llama-cpp"] must be present.');
+  }
+  if (pkg.config?.["nodeLlamaCppPostinstall"] !== "ignoreFailedBuild") {
+    errors.push('package.json config.nodeLlamaCppPostinstall must be "ignoreFailedBuild".');
   }
 
   return errors;
