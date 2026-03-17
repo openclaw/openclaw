@@ -513,6 +513,26 @@ describe("config cli", () => {
       );
     });
 
+    it("logs a dry-run note when value mode performs no validation checks", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.port", "19001", "--dry-run"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Dry run note: value mode does not run schema/resolvability checks.",
+        ),
+      );
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining("Dry run successful: 1 update(s) validated"),
+      );
+    });
+
     it("supports batch mode for refs/providers in dry-run", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
@@ -857,6 +877,56 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Dry run failed: 1 SecretRef assignment(s) could not be resolved."),
+      );
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider mismatch"));
+    });
+
+    it("fails dry-run for nested provider edits that make existing refs unresolvable", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        secrets: {
+          providers: {
+            vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              apiKey: {
+                source: "file",
+                provider: "vaultfile",
+                id: "/providers/search/apiKey",
+              },
+            },
+          },
+        } as never,
+      };
+      setSnapshot(resolved, resolved);
+      mockResolveSecretRefValue.mockImplementationOnce(async () => {
+        throw new Error("provider mismatch");
+      });
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "secrets.providers.vaultfile.path",
+          '"/tmp/other-secrets.json"',
+          "--strict-json",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockResolveSecretRefValue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "vaultfile",
+          id: "/providers/search/apiKey",
+        }),
+        expect.any(Object),
+      );
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining("Dry run failed: 1 SecretRef assignment(s) could not be resolved."),
       );
