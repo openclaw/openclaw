@@ -405,6 +405,10 @@ describe("gateway bonjour advertiser", () => {
 });
 
 describe("sanitizeForBonjour (DNS label truncation – RFC 1035)", () => {
+  afterEach(() => {
+    logWarn.mockClear();
+  });
+
   const encoder = new TextEncoder();
 
   it("returns short names unchanged", () => {
