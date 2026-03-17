@@ -8,6 +8,8 @@ import { handleTelegramAction } from "openclaw/plugin-sdk/agent-runtime";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-runtime";
 import {
+  createMessageToolButtonsSchema,
+  createTelegramPollExtraToolSchemas,
   createUnionActionGate,
   listTokenSourcedAccounts,
 } from "openclaw/plugin-sdk/channel-runtime";
@@ -27,6 +29,10 @@ import { resolveTelegramInlineButtons } from "./button-types.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 
 const providerId = "telegram";
+
+export const telegramMessageActionRuntime = {
+  handleTelegramAction,
+};
 
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
@@ -138,13 +144,44 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     );
     return buttonsEnabled ? (["interactive", "buttons"] as const) : [];
   },
+  getToolSchema: ({ cfg }) => {
+    const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
+    if (accounts.length === 0) {
+      return null;
+    }
+    const buttonsEnabled = accounts.some((account) =>
+      isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
+    );
+    const pollEnabledForAnyAccount = accounts.some((account) => {
+      const accountGate = createTelegramActionGate({
+        cfg,
+        accountId: account.accountId,
+      });
+      return resolveTelegramPollActionGateState(accountGate).enabled;
+    });
+    const entries = [];
+    if (buttonsEnabled) {
+      entries.push({
+        properties: {
+          buttons: createMessageToolButtonsSchema(),
+        },
+      });
+    }
+    if (pollEnabledForAnyAccount) {
+      entries.push({
+        properties: createTelegramPollExtraToolSchemas(),
+        visibility: "all-configured" as const,
+      });
+    }
+    return entries.length > 0 ? entries : null;
+  },
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
   handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots, toolContext }) => {
     if (action === "send") {
       const sendParams = readTelegramSendParams(params);
-      return await handleTelegramAction(
+      return await telegramMessageActionRuntime.handleTelegramAction(
         {
           action: "sendMessage",
           ...sendParams,
@@ -159,7 +196,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       const messageId = resolveReactionMessageId({ args: params, toolContext });
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
       const remove = readBooleanParam(params, "remove");
-      return await handleTelegramAction(
+      return await telegramMessageActionRuntime.handleTelegramAction(
         {
           action: "react",
           chatId: readTelegramChatIdParam(params),
@@ -192,7 +229,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       const pollPublic = readBooleanParam(params, "pollPublic");
       const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
       const silent = readBooleanParam(params, "silent");
-      return await handleTelegramAction(
+      return await telegramMessageActionRuntime.handleTelegramAction(
         {
           action: "poll",
           to,
@@ -215,7 +252,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (action === "delete") {
       const chatId = readTelegramChatIdParam(params);
       const messageId = readTelegramMessageIdParam(params);
-      return await handleTelegramAction(
+      return await telegramMessageActionRuntime.handleTelegramAction(
         {
           action: "deleteMessage",
           chatId,
@@ -232,7 +269,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       const messageId = readTelegramMessageIdParam(params);
       const message = readStringParam(params, "message", { required: true, allowEmpty: false });
       const buttons = params.buttons;
-      return await handleTelegramAction(
+      return await telegramMessageActionRuntime.handleTelegramAction(
         {
           action: "editMessage",
           chatId,
@@ -254,7 +291,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       const fileId = stickerIds?.[0] ?? readStringParam(params, "fileId", { required: true });
       const replyToMessageId = readNumberParam(params, "replyTo", { integer: true });
       const messageThreadId = readNumberParam(params, "threadId", { integer: true });
-      return await handleTelegramAction(
+      return await telegramMessageActionRuntime.handleTelegramAction(
         {
           action: "sendSticker",
           to,
@@ -271,7 +308,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (action === "sticker-search") {
       const query = readStringParam(params, "query", { required: true });
       const limit = readNumberParam(params, "limit", { integer: true });
-      return await handleTelegramAction(
+      return await telegramMessageActionRuntime.handleTelegramAction(
         {
           action: "searchSticker",
           query,
@@ -288,7 +325,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       const name = readStringParam(params, "name", { required: true });
       const iconColor = readNumberParam(params, "iconColor", { integer: true });
       const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
-      return await handleTelegramAction(
+      return await telegramMessageActionRuntime.handleTelegramAction(
         {
           action: "createForumTopic",
           chatId,
@@ -312,7 +349,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       }
       const name = readStringParam(params, "name");
       const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
-      return await handleTelegramAction(
+      return await telegramMessageActionRuntime.handleTelegramAction(
         {
           action: "editForumTopic",
           chatId,
