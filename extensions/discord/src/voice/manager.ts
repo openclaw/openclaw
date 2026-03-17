@@ -18,28 +18,19 @@ import {
 } from "@discordjs/voice";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  resolveTtsConfig,
-  textToSpeech,
-  type ResolvedTtsConfig,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  runCapability,
-} from "openclaw/plugin-sdk/media-runtime";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
+import { textToSpeech } from "openclaw/plugin-sdk/speech-runtime";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
@@ -240,33 +231,13 @@ async function transcribeAudio(params: {
   agentId: string;
   filePath: string;
 }): Promise<string | undefined> {
-  const ctx: MsgContext = {
-    MediaPath: params.filePath,
-    MediaType: "audio/wav",
-  };
-  const attachments = normalizeMediaAttachments(ctx);
-  if (attachments.length === 0) {
-    return undefined;
-  }
-  const cache = createMediaAttachmentCache(attachments);
-  const providerRegistry = buildProviderRegistry();
-  try {
-    const result = await runCapability({
-      capability: "audio",
-      cfg: params.cfg,
-      ctx,
-      attachments: cache,
-      media: attachments,
-      agentDir: resolveAgentDir(params.cfg, params.agentId),
-      providerRegistry,
-      config: params.cfg.tools?.media?.audio,
-    });
-    const output = result.outputs.find((entry) => entry.kind === "audio.transcription");
-    const text = output?.text?.trim();
-    return text || undefined;
-  } finally {
-    await cache.cleanup();
-  }
+  const result = await transcribeAudioFile({
+    filePath: params.filePath,
+    cfg: params.cfg,
+    agentDir: resolveAgentDir(params.cfg, params.agentId),
+    mime: "audio/wav",
+  });
+  return result.text?.trim() || undefined;
 }
 
 export class DiscordVoiceManager {

@@ -113,7 +113,7 @@ That means:
 Examples:
 
 - the bundled `openai` plugin owns OpenAI model-provider behavior and OpenAI
-  speech + media-understanding behavior
+  speech + media-understanding + image-generation behavior
 - the bundled `elevenlabs` plugin owns ElevenLabs speech behavior
 - the bundled `microsoft` plugin owns Microsoft speech behavior
 - the bundled `google`, `minimax`, `mistral`, `moonshot`, and `zai` plugins own
@@ -256,6 +256,9 @@ the vendor surface; core owns the capability contract and fallback behavior.
 If OpenClaw adds a new domain later, such as video generation, use the same
 sequence again: define the core capability first, then let vendor plugins
 register implementations against it.
+
+Need a concrete rollout checklist? See
+[Capability Cookbook](/tools/capability-cookbook).
 
 ## Compatible bundles
 
