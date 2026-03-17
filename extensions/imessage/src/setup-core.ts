@@ -155,9 +155,18 @@ export const imessageSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
-export function createIMessageSetupWizardProxy(
-  loadWizard: () => Promise<{ imessageSetupWizard: ChannelSetupWizard }>,
-) {
+type IMessageSetupWizardHandlers = {
+  resolveStatusLines: NonNullable<ChannelSetupWizard["status"]>["resolveStatusLines"];
+  resolveSelectionHint: NonNullable<ChannelSetupWizard["status"]>["resolveSelectionHint"];
+  resolveQuickstartScore: NonNullable<ChannelSetupWizard["status"]>["resolveQuickstartScore"];
+  shouldPromptCliPath: NonNullable<
+    NonNullable<ChannelSetupWizard["textInputs"]>[number]["shouldPrompt"]
+  >;
+};
+
+export function createIMessageSetupWizardBase(
+  handlers: IMessageSetupWizardHandlers,
+): ChannelSetupWizard {
   const imessageDmPolicy: ChannelSetupDmPolicy = {
     label: "iMessage",
     channel,
@@ -193,12 +202,9 @@ export function createIMessageSetupWizardProxy(
             account.config.region,
           );
         }),
-      resolveStatusLines: async (params) =>
-        (await loadWizard()).imessageSetupWizard.status.resolveStatusLines?.(params) ?? [],
-      resolveSelectionHint: async (params) =>
-        await (await loadWizard()).imessageSetupWizard.status.resolveSelectionHint?.(params),
-      resolveQuickstartScore: async (params) =>
-        await (await loadWizard()).imessageSetupWizard.status.resolveQuickstartScore?.(params),
+      resolveStatusLines: handlers.resolveStatusLines,
+      resolveSelectionHint: handlers.resolveSelectionHint,
+      resolveQuickstartScore: handlers.resolveQuickstartScore,
     },
     credentials: [],
     textInputs: [
@@ -209,12 +215,7 @@ export function createIMessageSetupWizardProxy(
           resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
         currentValue: ({ cfg, accountId }) =>
           resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
-        shouldPrompt: async (params) => {
-          const input = (await loadWizard()).imessageSetupWizard.textInputs?.find(
-            (entry) => entry.inputKey === "cliPath",
-          );
-          return (await input?.shouldPrompt?.(params)) ?? false;
-        },
+        shouldPrompt: handlers.shouldPromptCliPath,
         confirmCurrentValue: false,
         applyCurrentValue: true,
         helpTitle: "iMessage",
@@ -234,4 +235,23 @@ export function createIMessageSetupWizardProxy(
     dmPolicy: imessageDmPolicy,
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
+}
+
+export function createIMessageSetupWizardProxy(
+  loadWizard: () => Promise<{ imessageSetupWizard: ChannelSetupWizard }>,
+) {
+  return createIMessageSetupWizardBase({
+    resolveStatusLines: async (params) =>
+      (await loadWizard()).imessageSetupWizard.status.resolveStatusLines?.(params) ?? [],
+    resolveSelectionHint: async (params) =>
+      await (await loadWizard()).imessageSetupWizard.status.resolveSelectionHint?.(params),
+    resolveQuickstartScore: async (params) =>
+      await (await loadWizard()).imessageSetupWizard.status.resolveQuickstartScore?.(params),
+    shouldPromptCliPath: async (params) => {
+      const input = (await loadWizard()).imessageSetupWizard.textInputs?.find(
+        (entry) => entry.inputKey === "cliPath",
+      );
+      return (await input?.shouldPrompt?.(params)) ?? false;
+    },
+  });
 }
