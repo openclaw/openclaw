@@ -255,20 +255,28 @@ export type PinnedHostname = {
   lookup: typeof dnsLookupCb;
 };
 
+export type PinnedHostnameOverride = {
+  hostname: string;
+  addresses: string[];
+};
+
 export type PinnedDispatcherPolicy =
   | {
       mode: "direct";
       connect?: Record<string, unknown>;
+      pinnedHostname?: PinnedHostnameOverride;
     }
   | {
       mode: "env-proxy";
       connect?: Record<string, unknown>;
       proxyTls?: Record<string, unknown>;
+      pinnedHostname?: PinnedHostnameOverride;
     }
   | {
       mode: "explicit-proxy";
       proxyUrl: string;
       proxyTls?: Record<string, unknown>;
+      pinnedHostname?: PinnedHostnameOverride;
     };
 
 function dedupeAndPreferIpv4(results: readonly LookupAddress[]): string[] {
@@ -352,19 +360,41 @@ function withPinnedLookup(
   return connect ? { ...connect, lookup } : { lookup };
 }
 
+function resolvePinnedDispatcherLookup(
+  pinned: PinnedHostname,
+  override?: PinnedHostnameOverride,
+): PinnedHostname["lookup"] {
+  if (!override) {
+    return pinned.lookup;
+  }
+  const normalizedOverrideHost = normalizeHostname(override.hostname);
+  if (!normalizedOverrideHost || normalizedOverrideHost !== pinned.hostname) {
+    throw new Error(
+      `Pinned dispatcher override hostname mismatch: expected ${pinned.hostname}, got ${override.hostname}`,
+    );
+  }
+  return createPinnedLookup({
+    hostname: pinned.hostname,
+    addresses: [...override.addresses],
+    fallback: pinned.lookup,
+  });
+}
+
 export function createPinnedDispatcher(
   pinned: PinnedHostname,
   policy?: PinnedDispatcherPolicy,
 ): Dispatcher {
+  const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname);
+
   if (!policy || policy.mode === "direct") {
     return new Agent({
-      connect: withPinnedLookup(pinned.lookup, policy?.connect),
+      connect: withPinnedLookup(lookup, policy?.connect),
     });
   }
 
   if (policy.mode === "env-proxy") {
     return new EnvHttpProxyAgent({
-      connect: withPinnedLookup(pinned.lookup, policy.connect),
+      connect: withPinnedLookup(lookup, policy.connect),
       ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
     });
   }
