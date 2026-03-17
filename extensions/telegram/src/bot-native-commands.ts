@@ -330,16 +330,16 @@ async function resolveTelegramCommandAuth(params: {
   const groupSenderAllowed = isGroup
     ? isSenderAllowed({ allow: effectiveGroupAllow, senderId, senderUsername })
     : false;
-  const channelPolicy = isChannelPost ? resolveGroupPolicy(chatId) : null;
+  const channelPolicy = isChannelPost && useAccessGroups ? resolveGroupPolicy(chatId) : null;
   const commandAuthorizers = isChannelPost
     ? useAccessGroups
       ? [
           // Channel posts have no human sender identity, so explicit chat allow is the auth source.
           {
             configured: true,
-            allowed: Boolean(
-              channelPolicy?.allowlistEnabled && channelPolicy.allowed && channelPolicy.groupConfig,
-            ),
+            // policyAccess already rejects denied chats above; groupConfig here means
+            // the channel matched an explicit chat entry rather than only the "*" default.
+            allowed: Boolean(channelPolicy?.groupConfig),
           },
         ]
       : []
