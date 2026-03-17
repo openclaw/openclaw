@@ -1,5 +1,6 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   ChannelMessageActionName,
@@ -383,6 +384,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
         ? (["cards"] as const)
         : [];
     },
+    getToolSchema: ({ cfg }) =>
+      cfg.channels?.msteams?.enabled !== false &&
+      Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams))
+        ? {
+            properties: {
+              card: createMessageToolCardSchema(),
+            },
+          }
+        : null,
     handleAction: async (ctx) => {
       // Handle send action with card parameter
       if (ctx.action === "send" && ctx.params.card) {
