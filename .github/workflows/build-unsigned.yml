@@ -25,14 +25,18 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
 
-      # 选择存在的 Xcode 26.3.0（包含 Swift 6.2+）
+      # 选择 Xcode 26.3.0（满足 Swift 6.2 要求）
       - name: Select Xcode version
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '26.3.0'   # 使用镜像中已安装的最新稳定版
+          xcode-version: '26.3.0'
 
       - name: Install xcodegen
         run: brew install xcodegen
+
+      # 安装 lint 工具（swiftlint, swiftformat）
+      - name: Install linting tools
+        run: brew install swiftlint swiftformat
 
       - name: Prepare iOS project
         run: |
