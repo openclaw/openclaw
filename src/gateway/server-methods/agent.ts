@@ -83,7 +83,10 @@ function mergeAgentWaitStructuredMetadata<T extends AgentWaitTerminalSnapshot>(
 }
 
 function isMissingAgentWaitStructuredMetadata(snapshot: AgentWaitTerminalSnapshot): boolean {
-  return snapshot.stopReason === undefined || snapshot.pendingToolCalls === undefined;
+  if (snapshot.stopReason === undefined) {
+    return true;
+  }
+  return snapshot.stopReason === "tool_calls" && snapshot.pendingToolCalls === undefined;
 }
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {

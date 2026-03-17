@@ -922,4 +922,59 @@ describe("gateway agent handler", () => {
       }),
     );
   });
+
+  it("does not grace-wait when lifecycle resolves without tool calls", async () => {
+    vi.useFakeTimers();
+    try {
+      const respond = vi.fn();
+      const context = makeContext();
+      context.chatAbortControllers = new Map([
+        [
+          "wait-no-tools",
+          {
+            controller: new AbortController(),
+            sessionKey: "agent:main:main",
+            startedAtMs: Date.now(),
+            expiresAtMs: Date.now() + 60_000,
+          },
+        ],
+      ]);
+      mocks.waitForAgentJob.mockResolvedValue({
+        status: "ok",
+        startedAt: 10,
+        endedAt: 20,
+        stopReason: "stop",
+      });
+      mocks.waitForTerminalGatewayDedupe.mockImplementation(
+        () =>
+          new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), 1_000);
+          }),
+      );
+
+      const waitPromise = agentHandlers["agent.wait"]({
+        params: { runId: "wait-no-tools", timeoutMs: 100 },
+        respond,
+        context,
+      } as unknown as Parameters<(typeof agentHandlers)["agent.wait"]>[0]);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: "wait-no-tools",
+          status: "ok",
+          stopReason: "stop",
+          pendingToolCalls: undefined,
+        }),
+      );
+      expect(mocks.waitForTerminalGatewayDedupe).toHaveBeenCalledTimes(1);
+
+      await vi.runAllTimersAsync();
+      await waitPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
