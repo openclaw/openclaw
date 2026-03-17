@@ -2805,119 +2805,100 @@ description: test skill
     );
   });
 
-  it.each([
-    {
-      name: "warns when hooks token looks short",
-      cfg: {
-        hooks: { enabled: true, token: "short" },
-      } satisfies OpenClawConfig,
-      expectedFinding: "hooks.token_too_short",
-      expectedSeverity: "warn" as const,
-    },
-    {
-      name: "flags hooks token reuse of the gateway env token as critical",
-      cfg: {
-        hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
-      } satisfies OpenClawConfig,
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
-      },
-      expectedFinding: "hooks.token_reuse_gateway_token",
-      expectedSeverity: "critical" as const,
-    },
-    {
-      name: "warns when hooks.defaultSessionKey is unset",
-      cfg: {
-        hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
-      } satisfies OpenClawConfig,
-      expectedFinding: "hooks.default_session_key_unset",
-      expectedSeverity: "warn" as const,
-    },
-    {
-      name: "treats wildcard hooks.allowedAgentIds as unrestricted routing",
-      cfg: {
-        hooks: {
-          enabled: true,
-          token: "shared-gateway-token-1234567890",
-          defaultSessionKey: "hook:ingress",
-          allowedAgentIds: ["*"],
-        },
-      } satisfies OpenClawConfig,
-      expectedFinding: "hooks.allowed_agent_ids_unrestricted",
-      expectedSeverity: "warn" as const,
-    },
-  ])("$name", async (testCase) => {
-    const res = await audit(testCase.cfg, testCase.env ? { env: testCase.env } : undefined);
-    expectFinding(res, testCase.expectedFinding, testCase.expectedSeverity);
-  });
-
-  it("scores unrestricted hooks.allowedAgentIds by gateway exposure", async () => {
-    const baseHooks = {
+  it("evaluates hooks ingress auth and routing findings", async () => {
+    const unrestrictedBaseHooks = {
       enabled: true,
       token: "shared-gateway-token-1234567890",
       defaultSessionKey: "hook:ingress",
     } satisfies NonNullable<OpenClawConfig["hooks"]>;
-    const cases: Array<{
-      name: string;
-      cfg: OpenClawConfig;
-      expectedSeverity: "warn" | "critical";
-    }> = [
-      {
-        name: "local exposure",
-        cfg: { hooks: baseHooks },
-        expectedSeverity: "warn",
-      },
-      {
-        name: "remote exposure",
-        cfg: { gateway: { bind: "lan" }, hooks: baseHooks },
-        expectedSeverity: "critical",
-      },
-    ];
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        expect(
-          hasFinding(res, "hooks.allowed_agent_ids_unrestricted", testCase.expectedSeverity),
-          testCase.name,
-        ).toBe(true);
-      }),
-    );
-  });
-
-  it("scores hooks request sessionKey override by gateway exposure", async () => {
-    const baseHooks = {
-      enabled: true,
-      token: "shared-gateway-token-1234567890",
-      defaultSessionKey: "hook:ingress",
+    const requestSessionKeyHooks = {
+      ...unrestrictedBaseHooks,
       allowRequestSessionKey: true,
     } satisfies NonNullable<OpenClawConfig["hooks"]>;
-    const cases: Array<{
-      name: string;
-      cfg: OpenClawConfig;
-      expectedSeverity: "warn" | "critical";
-      expectsPrefixesMissing?: boolean;
-    }> = [
+    const cases = [
       {
-        name: "local exposure",
-        cfg: { hooks: baseHooks },
-        expectedSeverity: "warn",
-        expectsPrefixesMissing: true,
+        name: "warns when hooks token looks short",
+        cfg: {
+          hooks: { enabled: true, token: "short" },
+        } satisfies OpenClawConfig,
+        expectedFinding: "hooks.token_too_short",
+        expectedSeverity: "warn" as const,
       },
       {
-        name: "remote exposure",
-        cfg: { gateway: { bind: "lan" }, hooks: baseHooks },
-        expectedSeverity: "critical",
+        name: "flags hooks token reuse of the gateway env token as critical",
+        cfg: {
+          hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
+        } satisfies OpenClawConfig,
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
+        },
+        expectedFinding: "hooks.token_reuse_gateway_token",
+        expectedSeverity: "critical" as const,
       },
-    ];
+      {
+        name: "warns when hooks.defaultSessionKey is unset",
+        cfg: {
+          hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
+        } satisfies OpenClawConfig,
+        expectedFinding: "hooks.default_session_key_unset",
+        expectedSeverity: "warn" as const,
+      },
+      {
+        name: "treats wildcard hooks.allowedAgentIds as unrestricted routing",
+        cfg: {
+          hooks: {
+            enabled: true,
+            token: "shared-gateway-token-1234567890",
+            defaultSessionKey: "hook:ingress",
+            allowedAgentIds: ["*"],
+          },
+        } satisfies OpenClawConfig,
+        expectedFinding: "hooks.allowed_agent_ids_unrestricted",
+        expectedSeverity: "warn" as const,
+      },
+      {
+        name: "scores unrestricted hooks.allowedAgentIds by local exposure",
+        cfg: { hooks: unrestrictedBaseHooks } satisfies OpenClawConfig,
+        expectedFinding: "hooks.allowed_agent_ids_unrestricted",
+        expectedSeverity: "warn" as const,
+      },
+      {
+        name: "scores unrestricted hooks.allowedAgentIds by remote exposure",
+        cfg: { gateway: { bind: "lan" }, hooks: unrestrictedBaseHooks } satisfies OpenClawConfig,
+        expectedFinding: "hooks.allowed_agent_ids_unrestricted",
+        expectedSeverity: "critical" as const,
+      },
+      {
+        name: "scores hooks request sessionKey override by local exposure",
+        cfg: { hooks: requestSessionKeyHooks } satisfies OpenClawConfig,
+        expectedFinding: "hooks.request_session_key_enabled",
+        expectedSeverity: "warn" as const,
+        expectedExtraFinding: {
+          checkId: "hooks.request_session_key_prefixes_missing",
+          severity: "warn" as const,
+        },
+      },
+      {
+        name: "scores hooks request sessionKey override by remote exposure",
+        cfg: {
+          gateway: { bind: "lan" },
+          hooks: requestSessionKeyHooks,
+        } satisfies OpenClawConfig,
+        expectedFinding: "hooks.request_session_key_enabled",
+        expectedSeverity: "critical" as const,
+      },
+    ] as const;
+
     await Promise.all(
       cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        expect(
-          hasFinding(res, "hooks.request_session_key_enabled", testCase.expectedSeverity),
-          testCase.name,
-        ).toBe(true);
-        if (testCase.expectsPrefixesMissing) {
-          expect(hasFinding(res, "hooks.request_session_key_prefixes_missing", "warn")).toBe(true);
+        const res = await audit(testCase.cfg, testCase.env ? { env: testCase.env } : undefined);
+        expectFinding(res, testCase.expectedFinding, testCase.expectedSeverity);
+        if (testCase.expectedExtraFinding) {
+          expectFinding(
+            res,
+            testCase.expectedExtraFinding.checkId,
+            testCase.expectedExtraFinding.severity,
+          );
         }
       }),
     );
