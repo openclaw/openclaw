@@ -1,14 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, expect } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getEmbedBatchMock, resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import {
-  getMemorySearchManager,
-  type MemoryIndexManager,
-  type MemorySearchManager,
-} from "./index.js";
+import type { MemoryIndexManager, MemorySearchManager } from "./index.js";
+
+type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
+type MemoryIndexModule = typeof import("./index.js");
 
 export function installEmbeddingManagerFixture(opts: {
   fixturePrefix: string;
@@ -21,7 +19,6 @@ export function installEmbeddingManagerFixture(opts: {
   }) => OpenClawConfig;
   resetIndexEachTest?: boolean;
 }) {
-  const embedBatch = getEmbedBatchMock();
   const resetIndexEachTest = opts.resetIndexEachTest ?? true;
 
   let fixtureRoot: string | undefined;
@@ -29,6 +26,9 @@ export function installEmbeddingManagerFixture(opts: {
   let memoryDir: string | undefined;
   let managerLarge: MemoryIndexManager | undefined;
   let managerSmall: MemoryIndexManager | undefined;
+  let embedBatch: Mock<(texts: string[]) => Promise<number[][]>> | undefined;
+  let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+  let resetEmbeddingMocks: EmbeddingTestMocksModule["resetEmbeddingMocks"];
 
   const resetManager = (manager: MemoryIndexManager) => {
     (manager as unknown as { resetIndex: () => void }).resetIndex();
@@ -56,6 +56,12 @@ export function installEmbeddingManagerFixture(opts: {
   };
 
   beforeAll(async () => {
+    vi.resetModules();
+    await import("./embedding.test-mocks.js");
+    const embeddingMocks = await import("./embedding.test-mocks.js");
+    embedBatch = embeddingMocks.getEmbedBatchMock();
+    resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
+    ({ getMemorySearchManager } = await import("./index.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), opts.fixturePrefix));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
@@ -116,7 +122,9 @@ export function installEmbeddingManagerFixture(opts: {
   });
 
   return {
-    embedBatch,
+    get embedBatch() {
+      return requireValue(embedBatch, "embedBatch");
+    },
     getFixtureRoot: () => requireValue(fixtureRoot, "fixtureRoot"),
     getWorkspaceDir: () => requireValue(workspaceDir, "workspaceDir"),
     getMemoryDir: () => requireValue(memoryDir, "memoryDir"),

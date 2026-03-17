@@ -11,8 +11,8 @@ import {
   loadSessionStore,
   resolveMainSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
-  resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -488,8 +488,10 @@ export async function noteStateIntegrity(
   const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
   const agentId = resolveDefaultAgentId(cfg);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const sessionsDir =
+    resolveSessionFilePathOptions({ agentId, storePath })?.sessionsDir ??
+    resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
   const storeDir = path.dirname(storePath);
   const absoluteStorePath = path.resolve(storePath);
   const displayStateDir = shortenHomePath(stateDir);
@@ -764,7 +766,9 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          canonicalFilePath(resolveSessionFilePath(entry.sessionId, entry, { sessionsDir, agentId })),
+          canonicalFilePath(
+            resolveSessionFilePath(entry.sessionId, entry, { sessionsDir, agentId }),
+          ),
         );
       } catch {
         // ignore invalid legacy paths

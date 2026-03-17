@@ -214,6 +214,38 @@ describe("doctor state integrity oauth dir checks", () => {
     );
   });
 
+  it("resolves transcripts relative to a configured custom session store", async () => {
+    clearSessionStoreCacheForTest();
+    const customSessionsDir = path.join(tempHome, "custom-session-store");
+    const storePath = path.join(customSessionsDir, "sessions.json");
+    fs.mkdirSync(customSessionsDir, { recursive: true });
+    const sessions = {
+      "agent:main:main": {
+        sessionId: "custom-store-session",
+        updatedAt: Date.now(),
+      } as { sessionId: string; updatedAt: number },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
+    fs.writeFileSync(
+      path.join(customSessionsDir, "custom-store-session.jsonl"),
+      '{"type":"message"}\n',
+    );
+
+    const confirmSkipInNonInteractive = vi.fn(async () => false);
+    await noteStateIntegrity(
+      {
+        session: {
+          store: storePath,
+        },
+      },
+      { confirmSkipInNonInteractive },
+    );
+
+    const text = stateIntegrityText();
+    expect(text).not.toContain("missing transcripts");
+    expect(text).not.toContain("Main session transcript missing");
+  });
+
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
     const cfg: OpenClawConfig = {};
     writeSessionStore(cfg, {

@@ -17,21 +17,40 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
-import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
-import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import type {
+  SpeechProviderConfiguredContext,
+  SpeechListVoicesRequest,
+  SpeechProviderId,
+  SpeechSynthesisRequest,
+  SpeechSynthesisResult,
+  SpeechTelephonySynthesisRequest,
+  SpeechTelephonySynthesisResult,
+  SpeechVoiceOption,
+} from "../tts/provider-types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { SecretInputMode } from "./provider-auth-types.js";
+import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
+
+export type ProviderAuthOptionBag = {
+  token?: string;
+  tokenProvider?: string;
+  secretInputMode?: SecretInputMode;
+  [key: string]: unknown;
+};
 
 export type PluginLogger = {
   debug?: (message: string) => void;
@@ -133,7 +152,7 @@ export type ProviderAuthContext = {
    * `--token/--token-provider` pairs. Direct `models auth login` usually
    * leaves this undefined.
    */
-  opts?: Partial<OnboardOptions>;
+  opts?: ProviderAuthOptionBag;
   /**
    * Onboarding secret persistence preference.
    *
@@ -141,7 +160,7 @@ export type ProviderAuthContext = {
    * plaintext or env/file/exec ref storage. Ad-hoc `models auth login` flows
    * usually leave it undefined.
    */
-  secretInputMode?: OnboardOptions["secretInputMode"];
+  secretInputMode?: SecretInputMode;
   /**
    * Whether the provider auth flow should offer the onboarding secret-storage
    * mode picker when `secretInputMode` is unset.
@@ -185,7 +204,7 @@ export type ProviderAuthMethodNonInteractiveContext = {
   authChoice: string;
   config: OpenClawConfig;
   baseConfig: OpenClawConfig;
-  opts: OnboardOptions;
+  opts: ProviderAuthOptionBag;
   runtime: RuntimeEnv;
   agentDir?: string;
   workspaceDir?: string;
@@ -226,6 +245,18 @@ export type ProviderCatalogContext = {
   resolveProviderApiKey: (providerId?: string) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
+  };
+  resolveProviderAuth: (
+    providerId?: string,
+    options?: {
+      oauthMarker?: string;
+    },
+  ) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+    mode: "api_key" | "oauth" | "token" | "none";
+    source: "env" | "profile" | "none";
+    profileId?: string;
   };
 };
 
@@ -853,6 +884,27 @@ export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
   pluginId: string;
 };
 
+export type SpeechProviderPlugin = {
+  id: SpeechProviderId;
+  label: string;
+  aliases?: string[];
+  models?: readonly string[];
+  voices?: readonly string[];
+  isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
+  synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
+  synthesizeTelephony?: (
+    req: SpeechTelephonySynthesisRequest,
+  ) => Promise<SpeechTelephonySynthesisResult>;
+  listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
+};
+
+export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
+  pluginId: string;
+};
+
+export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
+export type ImageGenerationProviderPlugin = ImageGenerationProvider;
+
 export type OpenClawPluginGatewayMethod = {
   method: string;
   handler: GatewayRequestHandler;
@@ -900,6 +952,8 @@ export type PluginConversationBindingRequestParams = {
   detachHint?: string;
 };
 
+export type PluginConversationBindingResolutionDecision = "allow-once" | "allow-always" | "deny";
+
 export type PluginConversationBinding = {
   bindingId: string;
   pluginId: string;
@@ -929,6 +983,24 @@ export type PluginConversationBindingRequestResult =
       status: "error";
       message: string;
     };
+
+export type PluginConversationBindingResolvedEvent = {
+  status: "approved" | "denied";
+  binding?: PluginConversationBinding;
+  decision: PluginConversationBindingResolutionDecision;
+  request: {
+    summary?: string;
+    detachHint?: string;
+    requestedBySenderId?: string;
+    conversation: {
+      channel: string;
+      accountId: string;
+      conversationId: string;
+      parentConversationId?: string;
+      threadId?: string | number;
+    };
+  };
+};
 
 /**
  * Result returned by a plugin command handler.
@@ -1211,8 +1283,14 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
+  registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
+  registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
+  onConversationBindingResolved: (
+    handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
+  ) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.

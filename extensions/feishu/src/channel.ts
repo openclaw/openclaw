@@ -1,8 +1,6 @@
-import {
-  collectAllowlistProviderRestrictSendersWarnings,
-  formatAllowFromLowercase,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildChannelConfigSchema,
@@ -14,6 +12,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/feishu";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/feishu";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveFeishuAccount,
   resolveFeishuCredentials,
@@ -43,9 +42,10 @@ const meta: ChannelMeta = {
   order: 70,
 };
 
-async function loadFeishuChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
+const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
+  () => import("./channel.runtime.js"),
+  "feishuChannelRuntime",
+);
 
 function setFeishuNamedAccountEnabled(
   cfg: ClawdbotConfig,
@@ -822,11 +822,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       });
     },
   },
-  acpBindings: {
-    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+  bindings: {
+    compileConfiguredBinding: ({ conversationId }) =>
       normalizeFeishuAcpConversationId(conversationId),
-    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
-      matchFeishuAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+    matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      matchFeishuAcpConversation({
+        bindingConversationId: compiledBinding.conversationId,
+        conversationId,
+        parentConversationId,
+      }),
   },
   setup: feishuSetupAdapter,
   setupWizard: feishuSetupWizard,

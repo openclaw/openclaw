@@ -1,3 +1,4 @@
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -5,7 +6,11 @@ import type {
 } from "openclaw/plugin-sdk/zalo";
 import { extractToolSend, jsonResult, readStringParam } from "openclaw/plugin-sdk/zalo";
 import { listEnabledZaloAccounts } from "./accounts.js";
-import { sendMessageZalo } from "./send.js";
+
+const loadZaloActionsRuntime = createLazyRuntimeNamedExport(
+  () => import("./actions.runtime.js"),
+  "zaloActionsRuntime",
+);
 
 const providerId = "zalo";
 
@@ -35,6 +40,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
       });
       const mediaUrl = readStringParam(params, "media", { trim: false });
 
+      const { sendMessageZalo } = await loadZaloActionsRuntime();
       const result = await sendMessageZalo(to ?? "", content ?? "", {
         accountId: accountId ?? undefined,
         mediaUrl: mediaUrl ?? undefined,
