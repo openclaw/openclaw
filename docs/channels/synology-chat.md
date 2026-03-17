@@ -27,7 +27,7 @@ Details: [Plugins](/tools/plugin)
 ## Quick setup
 
 1. Install and enable the Synology Chat plugin.
-   - `openclaw setup --wizard` now shows Synology Chat in the same channel setup list as `openclaw channels add`.
+   - `openclaw onboard` now shows Synology Chat in the same channel setup list as `openclaw channels add`.
    - Non-interactive setup: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
 2. In Synology Chat integrations:
    - Create an incoming webhook and copy its URL.
@@ -36,7 +36,7 @@ Details: [Plugins](/tools/plugin)
    - `https://gateway-host/webhook/synology` by default.
    - Or your custom `channels.synology-chat.webhookPath`.
 4. Finish setup in OpenClaw.
-   - Guided: `openclaw setup --wizard`
+   - Guided: `openclaw onboard`
    - Direct: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
 5. Restart gateway and send a DM to the Synology Chat bot.
 

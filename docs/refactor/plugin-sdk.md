@@ -223,6 +223,8 @@ channel-specific UX and routing behavior:
 - `messaging.enableInteractiveReplies`: channel-owned reply normalization toggles
   (for example Slack interactive replies)
 - `messaging.resolveOutboundSessionRoute`: channel-owned outbound session routing
+- `status.formatCapabilitiesProbe` / `status.buildCapabilitiesDiagnostics`: channel-owned
+  `/channels capabilities` probe display and extra audits/scopes
 - `threading.resolveAutoThreadId`: channel-owned same-conversation auto-threading
 - `threading.resolveReplyTransport`: channel-owned reply-vs-thread delivery mapping
 - `actions.requiresTrustedRequesterSender`: channel-owned privileged action trust gates

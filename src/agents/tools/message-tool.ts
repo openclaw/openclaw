@@ -12,7 +12,8 @@ import {
   type ChannelMessageActionName,
 } from "../../channels/plugins/types.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
-import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
+import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
@@ -319,6 +320,8 @@ function buildReactionSchema() {
 function buildFetchSchema() {
   return {
     limit: Type.Optional(Type.Number()),
+    pageSize: Type.Optional(Type.Number()),
+    pageToken: Type.Optional(Type.String()),
     before: Type.Optional(Type.String()),
     after: Type.Optional(Type.String()),
     around: Type.Optional(Type.String()),
@@ -386,16 +389,27 @@ function buildChannelTargetSchema() {
     channelId: Type.Optional(
       Type.String({ description: "Channel id filter (search/thread list/event create)." }),
     ),
+    chatId: Type.Optional(
+      Type.String({ description: "Chat id for chat-scoped metadata actions." }),
+    ),
     channelIds: Type.Optional(
       Type.Array(Type.String({ description: "Channel id filter (repeatable)." })),
     ),
+    memberId: Type.Optional(Type.String()),
+    memberIdType: Type.Optional(Type.String()),
     guildId: Type.Optional(Type.String()),
     userId: Type.Optional(Type.String()),
+    openId: Type.Optional(Type.String()),
+    unionId: Type.Optional(Type.String()),
     authorId: Type.Optional(Type.String()),
     authorIds: Type.Optional(Type.Array(Type.String())),
     roleId: Type.Optional(Type.String()),
     roleIds: Type.Optional(Type.Array(Type.String())),
     participant: Type.Optional(Type.String()),
+    includeMembers: Type.Optional(Type.Boolean()),
+    members: Type.Optional(Type.Boolean()),
+    scope: Type.Optional(Type.String()),
+    kind: Type.Optional(Type.String()),
   };
 }
 
@@ -807,19 +821,35 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      const cfg = options?.config
-        ? options.config
-        : (
-            await resolveCommandSecretRefsViaGateway({
-              config: loadConfig(),
-              commandName: "tools.message",
-              targetIds: getChannelsCommandSecretTargetIds(),
-              mode: "enforce_resolved",
-            })
-          ).resolvedConfig;
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      let cfg = options?.config;
+      if (!cfg) {
+        const loadedRaw = loadConfig();
+        const scope = resolveMessageSecretScope({
+          channel: params.channel,
+          target: params.target,
+          targets: params.targets,
+          fallbackChannel: options?.currentChannelProvider,
+          accountId: params.accountId,
+          fallbackAccountId: agentAccountId,
+        });
+        const scopedTargets = getScopedChannelsCommandSecretTargets({
+          config: loadedRaw,
+          channel: scope.channel,
+          accountId: scope.accountId,
+        });
+        cfg = (
+          await resolveCommandSecretRefsViaGateway({
+            config: loadedRaw,
+            commandName: "tools.message",
+            targetIds: scopedTargets.targetIds,
+            ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+            mode: "enforce_resolved",
+          })
+        ).resolvedConfig;
+      }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =

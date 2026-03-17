@@ -1,7 +1,5 @@
-import {
-  collectAllowlistProviderRestrictSendersWarnings,
-  formatAllowFromLowercase,
-} from "openclaw/plugin-sdk/compat";
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
@@ -16,7 +14,9 @@ import {
   MSTeamsConfigSchema,
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/msteams";
+import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
+import type { ProbeMSTeamsResult } from "./probe.js";
 import {
   normalizeMSTeamsMessagingTarget,
   normalizeMSTeamsUserInput,
@@ -47,9 +47,22 @@ const meta = {
   order: 60,
 } as const;
 
-async function loadMSTeamsChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
+const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
+  "ChannelMessage.Read.All": "channel history",
+  "Chat.Read.All": "chat history",
+  "Channel.ReadBasic.All": "channel list",
+  "Team.ReadBasic.All": "team list",
+  "TeamsActivity.Read.All": "teams activity",
+  "Sites.Read.All": "files (SharePoint)",
+  "Files.Read.All": "files (OneDrive)",
+};
+
+type MSTeamsChannelRuntime = typeof import("./channel.runtime.js").msTeamsChannelRuntime;
+
+const loadMSTeamsChannelRuntime = createLazyRuntimeSurface(
+  () => import("./channel.runtime.js"),
+  ({ msTeamsChannelRuntime }) => msTeamsChannelRuntime,
+);
 
 export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   id: "msteams",
@@ -435,6 +448,40 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }),
     probeAccount: async ({ cfg }) =>
       await (await loadMSTeamsChannelRuntime()).probeMSTeams(cfg.channels?.msteams),
+    formatCapabilitiesProbe: ({ probe }) => {
+      const teamsProbe = probe as ProbeMSTeamsResult | undefined;
+      const lines: Array<{ text: string; tone?: "error" }> = [];
+      const appId = typeof teamsProbe?.appId === "string" ? teamsProbe.appId.trim() : "";
+      if (appId) {
+        lines.push({ text: `App: ${appId}` });
+      }
+      const graph = teamsProbe?.graph;
+      if (graph) {
+        const roles = Array.isArray(graph.roles)
+          ? graph.roles.map((role) => String(role).trim()).filter(Boolean)
+          : [];
+        const scopes = Array.isArray(graph.scopes)
+          ? graph.scopes.map((scope) => String(scope).trim()).filter(Boolean)
+          : [];
+        const formatPermission = (permission: string) => {
+          const hint = TEAMS_GRAPH_PERMISSION_HINTS[permission];
+          return hint ? `${permission} (${hint})` : permission;
+        };
+        if (graph.ok === false) {
+          lines.push({ text: `Graph: ${graph.error ?? "failed"}`, tone: "error" });
+        } else if (roles.length > 0 || scopes.length > 0) {
+          if (roles.length > 0) {
+            lines.push({ text: `Graph roles: ${roles.map(formatPermission).join(", ")}` });
+          }
+          if (scopes.length > 0) {
+            lines.push({ text: `Graph scopes: ${scopes.map(formatPermission).join(", ")}` });
+          }
+        } else if (graph.ok === true) {
+          lines.push({ text: "Graph: ok" });
+        }
+      }
+      return lines;
+    },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       accountId: account.accountId,
       enabled: account.enabled,

@@ -20,7 +20,7 @@ If the file is missing, OpenClaw uses safe defaults. Common reasons to add a con
 See the [full reference](/gateway/configuration-reference) for every available field.
 
 <Tip>
-**New to configuration?** Start with `openclaw setup --wizard` for interactive setup, or check out the [Configuration Examples](/gateway/configuration-examples) guide for complete copy-paste configs.
+**New to configuration?** Start with `openclaw onboard` for interactive setup, or check out the [Configuration Examples](/gateway/configuration-examples) guide for complete copy-paste configs.
 </Tip>
 
 ## Minimal config
@@ -38,7 +38,7 @@ See the [full reference](/gateway/configuration-reference) for every available f
 <Tabs>
   <Tab title="Interactive wizard">
     ```bash
-    openclaw setup --wizard       # full setup wizard
+    openclaw onboard       # full onboarding flow
     openclaw configure     # config wizard
     ```
   </Tab>
@@ -597,11 +597,11 @@ Rules:
   },
   skills: {
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         apiKey: {
           source: "file",
           provider: "filemain",
-          id: "/skills/entries/nano-banana-pro/apiKey",
+          id: "/skills/entries/image-lab/apiKey",
         },
       },
     },

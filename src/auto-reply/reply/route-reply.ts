@@ -7,13 +7,12 @@
  * across multiple providers.
  */
 
-import { parseSlackBlocksInput } from "../../../extensions/slack/src/blocks-input.js";
-import { isSlackInteractiveRepliesEnabled } from "../../../extensions/slack/src/interactive-replies.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { hasReplyContent } from "../../interactive/payload.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -101,9 +100,10 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
-    enableSlackInteractiveReplies:
-      plugin?.messaging?.enableInteractiveReplies?.({ cfg, accountId }) ??
-      (channel === "slack" ? isSlackInteractiveRepliesEnabled({ cfg, accountId }) : false),
+    enableSlackInteractiveReplies: plugin?.messaging?.enableInteractiveReplies?.({
+      cfg,
+      accountId,
+    }),
   });
   if (!normalized) {
     return { ok: true };
@@ -120,27 +120,19 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       ? [externalPayload.mediaUrl]
       : [];
   const replyToId = externalPayload.replyToId;
-  const hasInteractive = (externalPayload.interactive?.blocks.length ?? 0) > 0;
-  let hasChannelData =
-    externalPayload.channelData != null && Object.keys(externalPayload.channelData).length > 0;
-  if (
-    channel === "slack" &&
-    externalPayload.channelData?.slack &&
-    typeof externalPayload.channelData.slack === "object" &&
-    !Array.isArray(externalPayload.channelData.slack)
-  ) {
-    try {
-      hasChannelData = Boolean(
-        parseSlackBlocksInput((externalPayload.channelData.slack as { blocks?: unknown }).blocks)
-          ?.length,
-      );
-    } catch {
-      hasChannelData = false;
-    }
-  }
+  const hasChannelData = plugin?.messaging?.hasStructuredReplyPayload?.({
+    payload: externalPayload,
+  });
 
   // Skip empty replies.
-  if (!text.trim() && mediaUrls.length === 0 && !hasInteractive && !hasChannelData) {
+  if (
+    !hasReplyContent({
+      text,
+      mediaUrls,
+      interactive: externalPayload.interactive,
+      hasChannelData,
+    })
+  ) {
     return { ok: true };
   }
 

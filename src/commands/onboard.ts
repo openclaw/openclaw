@@ -61,7 +61,7 @@ export async function setupWizardCommand(
       [
         "Non-interactive setup requires explicit risk acknowledgement.",
         "Read: https://docs.openclaw.ai/security",
-        `Re-run with: ${formatCliCommand("openclaw setup --wizard --non-interactive --accept-risk ...")}`,
+        `Re-run with: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
     );
     runtime.exit(1);

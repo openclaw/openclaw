@@ -60,6 +60,10 @@
       "destination": "/concepts/compaction"
     },
     {
+      "source": "/context-engine",
+      "destination": "/concepts/context-engine"
+    },
+    {
       "source": "/cron",
       "destination": "/cron-jobs"
     },
@@ -952,6 +956,7 @@
                   "concepts/agent-loop",
                   "concepts/system-prompt",
                   "concepts/context",
+                  "concepts/context-engine",
                   "concepts/agent-workspace",
                   "concepts/oauth"
                 ]
@@ -1018,7 +1023,6 @@
                 "pages": [
                   "tools/browser",
                   "tools/browser-login",
-                  "tools/chrome-extension",
                   "tools/browser-linux-troubleshooting"
                 ]
               },
@@ -1614,7 +1618,6 @@
                 "pages": [
                   "zh-CN/tools/browser",
                   "zh-CN/tools/browser-login",
-                  "zh-CN/tools/chrome-extension",
                   "zh-CN/tools/browser-linux-troubleshooting"
                 ]
               },

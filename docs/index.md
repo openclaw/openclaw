@@ -33,8 +33,8 @@ title: "OpenClaw"
   <Card title="Get Started" href="/start/getting-started" icon="rocket">
     Install OpenClaw and bring up the Gateway in minutes.
   </Card>
-  <Card title="Run the Wizard" href="/start/wizard" icon="sparkles">
-    Guided setup with `openclaw setup --wizard` and pairing flows.
+  <Card title="Run Onboarding" href="/start/wizard" icon="sparkles">
+    Guided setup with `openclaw onboard` and pairing flows.
   </Card>
   <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     Launch the browser dashboard for chat, config, and sessions.
@@ -103,7 +103,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
   </Step>
   <Step title="Onboard and install the service">
     ```bash
-    openclaw setup --wizard --install-daemon
+    openclaw onboard --install-daemon
     ```
   </Step>
   <Step title="Pair WhatsApp and start the Gateway">

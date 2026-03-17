@@ -1,35 +1,35 @@
 ---
-summary: "Overview of OpenClaw setup options and flows"
+summary: "Overview of OpenClaw onboarding options and flows"
 read_when:
-  - Choosing a setup path
+  - Choosing an onboarding path
   - Setting up a new environment
-title: "Setup Overview"
-sidebarTitle: "Setup Overview"
+title: "Onboarding Overview"
+sidebarTitle: "Onboarding Overview"
 ---
 
-# Setup Overview
+# Onboarding Overview
 
-OpenClaw supports multiple setup paths depending on where the Gateway runs
+OpenClaw supports multiple onboarding paths depending on where the Gateway runs
 and how you prefer to configure providers.
 
-## Choose your setup path
+## Choose your onboarding path
 
-- **CLI wizard** for macOS, Linux, and Windows (via WSL2).
+- **CLI onboarding** for macOS, Linux, and Windows (via WSL2).
 - **macOS app** for a guided first run on Apple silicon or Intel Macs.
 
-## CLI setup wizard
+## CLI onboarding
 
-Run the wizard in a terminal:
+Run onboarding in a terminal:
 
 ```bash
-openclaw setup --wizard
+openclaw onboard
 ```
 
-Use the CLI wizard when you want full control of the Gateway, workspace,
+Use CLI onboarding when you want full control of the Gateway, workspace,
 channels, and skills. Docs:
 
-- [Setup Wizard (CLI)](/start/wizard)
-- [`openclaw setup --wizard` command](/cli/setup)
+- [Onboarding (CLI)](/start/wizard)
+- [`openclaw onboard` command](/cli/onboard)
 
 ## macOS app onboarding
 
@@ -41,11 +41,11 @@ Use the OpenClaw app when you want a fully guided setup on macOS. Docs:
 
 If you need an endpoint that is not listed, including hosted providers that
 expose standard OpenAI or Anthropic APIs, choose **Custom Provider** in the
-CLI wizard. You will be asked to:
+CLI onboarding. You will be asked to:
 
 - Pick OpenAI-compatible, Anthropic-compatible, or **Unknown** (auto-detect).
 - Enter a base URL and API key (if required by the provider).
 - Provide a model ID and optional alias.
 - Choose an Endpoint ID so multiple custom endpoints can coexist.
 
-For detailed steps, follow the CLI setup docs above.
+For detailed steps, follow the CLI onboarding docs above.

@@ -74,7 +74,7 @@ openclaw hooks info session-memory
 
 ### Onboarding
 
-During onboarding (`openclaw setup --wizard`), you'll be prompted to enable recommended hooks. The wizard automatically discovers eligible hooks and presents them for selection.
+During onboarding (`openclaw onboard`), you'll be prompted to enable recommended hooks. The wizard automatically discovers eligible hooks and presents them for selection.
 
 ## Hook Discovery
 

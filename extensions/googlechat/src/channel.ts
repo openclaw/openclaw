@@ -1,11 +1,13 @@
-import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
+import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
+import {
+  createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildOpenGroupPolicyConfigureRouteAllowlistWarning,
   collectAllowlistProviderGroupPolicyWarnings,
-  createScopedAccountConfigAccessors,
-  createScopedDmSecurityResolver,
-  formatNormalizedAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-policy";
 import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -19,13 +21,13 @@ import {
   resolveChannelMediaMaxBytes,
   resolveGoogleChatGroupRequireMention,
   runPassiveAccountLifecycle,
-  type ChannelDock,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/googlechat";
 import { GoogleChatConfigSchema } from "openclaw/plugin-sdk/googlechat";
+import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listGoogleChatAccountIds,
@@ -46,9 +48,12 @@ import {
 
 const meta = getChatChannelMeta("googlechat");
 
-async function loadGoogleChatChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
+type GoogleChatChannelRuntime = typeof import("./channel.runtime.js").googleChatChannelRuntime;
+
+const loadGoogleChatChannelRuntime = createLazyRuntimeSurface(
+  () => import("./channel.runtime.js"),
+  ({ googleChatChannelRuntime }) => googleChatChannelRuntime,
+);
 
 const formatAllowFromEntry = (entry: string) =>
   entry
@@ -93,33 +98,6 @@ const resolveGoogleChatDmPolicy = createScopedDmSecurityResolver<ResolvedGoogleC
   allowFromPathSuffix: "dm.",
   normalizeEntry: (raw) => formatAllowFromEntry(raw),
 });
-
-export const googlechatDock: ChannelDock = {
-  id: "googlechat",
-  capabilities: {
-    chatTypes: ["direct", "group", "thread"],
-    reactions: true,
-    media: true,
-    threads: true,
-    blockStreaming: true,
-  },
-  outbound: { textChunkLimit: 4000 },
-  config: googleChatConfigAccessors,
-  groups: {
-    resolveRequireMention: resolveGoogleChatGroupRequireMention,
-  },
-  threading: {
-    resolveReplyToMode: ({ cfg }) => cfg.channels?.["googlechat"]?.replyToMode ?? "off",
-    buildToolContext: ({ context, hasRepliedRef }) => {
-      const threadId = context.MessageThreadId ?? context.ReplyToId;
-      return {
-        currentChannelId: context.To?.trim() || undefined,
-        currentThreadTs: threadId != null ? String(threadId) : undefined,
-        hasRepliedRef,
-      };
-    },
-  },
-};
 
 const googlechatActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => googlechatMessageActions.listActions?.(ctx) ?? [],

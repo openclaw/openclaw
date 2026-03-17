@@ -2,13 +2,12 @@ import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequence,
   sendTextMediaPayload,
-} from "../../../src/channels/plugins/outbound/direct-text-media.js";
-import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { OutboundIdentity } from "../../../src/infra/outbound/identity.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+} from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
 import type { DiscordComponentMessageSpec } from "./components.js";
-import { buildDiscordInteractiveComponents } from "./components.js";
 import { getThreadBindingManager, type ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
 import {
@@ -17,6 +16,9 @@ import {
   sendPollDiscord,
   sendWebhookMessageDiscord,
 } from "./send.js";
+import { buildDiscordInteractiveComponents } from "./shared-interactive.js";
+
+export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 
 function resolveDiscordOutboundTarget(params: {
   to: string;
@@ -86,7 +88,7 @@ async function maybeSendDiscordWebhookText(params: {
 export const discordOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
-  textChunkLimit: 2000,
+  textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
   pollMaxOptions: 10,
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
   sendPayload: async (ctx) => {

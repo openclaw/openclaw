@@ -1,7 +1,7 @@
 import {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../../extensions/discord/src/monitor/timeouts.js";
+} from "../plugin-sdk/discord.js";
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
@@ -254,16 +254,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Starting local CDP port used for auto-allocated browser profile ports. Increase this when host-level port defaults conflict with other local services.",
   "browser.defaultProfile":
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
-  "browser.relayBindHost":
-    "Bind IP address for the Chrome extension relay listener. Leave unset for loopback-only access, or set an explicit non-loopback IP such as 0.0.0.0 only when the relay must be reachable across network namespaces (for example WSL2) and the surrounding network is already trusted.",
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":
     "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
+  "browser.profiles.*.userDataDir":
+    "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for host-local Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory.",
   "browser.profiles.*.driver":
-    'Per-profile browser driver mode: "openclaw" (or legacy "clawd") or "extension" depending on connection/runtime strategy. Use the driver that matches your browser control stack to avoid protocol mismatches.',
+    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for host-local Chrome DevTools MCP attachment.',
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
@@ -413,9 +413,9 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.http.endpoints.chatCompletions.images":
     "Image fetch/validation controls for OpenAI-compatible `image_url` parts.",
   "gateway.http.endpoints.chatCompletions.images.allowUrl":
-    "Allow server-side URL fetches for `image_url` parts (default: false; data URIs remain supported).",
+    "Allow server-side URL fetches for `image_url` parts (default: false; data URIs remain supported). Set this to `false` to disable URL fetching entirely.",
   "gateway.http.endpoints.chatCompletions.images.urlAllowlist":
-    "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards.",
+    "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards. Empty or omitted lists mean no hostname allowlist restriction.",
   "gateway.http.endpoints.chatCompletions.images.allowedMimes":
     "Allowed MIME types for `image_url` parts (case-insensitive list).",
   "gateway.http.endpoints.chatCompletions.images.maxBytes":
@@ -1005,6 +1005,12 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.installs.*.resolvedAt":
     "ISO timestamp when npm package metadata was last resolved for this install record.",
   "plugins.installs.*.installedAt": "ISO timestamp of last install/update.",
+  "plugins.installs.*.marketplaceName":
+    "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
+  "plugins.installs.*.marketplaceSource":
+    "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
+  "plugins.installs.*.marketplacePlugin":
+    "Plugin entry name inside the source marketplace, used for later updates.",
   "agents.list.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.defaults.model.primary": "Primary model (provider/model).",
@@ -1013,6 +1019,10 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.imageGenerationModel.primary":
+    "Optional image-generation model (provider/model) used by the shared image generation capability.",
+  "agents.defaults.imageGenerationModel.fallbacks":
+    "Ordered fallback image-generation models (provider/model).",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
@@ -1087,6 +1097,10 @@ export const FIELD_HELP: Record<string, string> = {
   "commands.bashForegroundMs":
     "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
   "commands.config": "Allow /config chat command to read/write config on disk (default: false).",
+  "commands.mcp":
+    "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
+  "commands.plugins":
+    "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart": "Allow /restart and gateway restart tool actions (default: true).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
@@ -1098,6 +1112,9 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional secret used to HMAC hash owner IDs when ownerDisplay=hash. Prefer env substitution.",
   "commands.allowFrom":
     "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
+  mcp: "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
+  "mcp.servers":
+    "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
   session:
     "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",
   "session.scope":
@@ -1526,6 +1543,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
   "channels.telegram.timeoutSeconds":
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+  "channels.telegram.silentErrorReplies":
+    "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
   "channels.telegram.threadBindings.enabled":
     "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
   "channels.telegram.threadBindings.idleHours":

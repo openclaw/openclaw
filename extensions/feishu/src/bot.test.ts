@@ -1,6 +1,6 @@
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import {
   buildBroadcastSessionKey,
@@ -77,12 +77,9 @@ vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
 }));
 
-vi.mock("../../../src/acp/persistent-bindings.route.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolveConfiguredAcpRoute: (params: unknown) => mockResolveConfiguredAcpRoute(params),
   ensureConfiguredAcpRouteReady: (params: unknown) => mockEnsureConfiguredAcpRouteReady(params),
-}));
-
-vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     resolveByConversation: mockResolveBoundConversation,
     touch: mockTouchBinding,
@@ -1160,6 +1157,51 @@ describe("handleFeishuMessage command authorization", () => {
       "inbound",
       expect.any(Number),
       "clip.mp4",
+    );
+  });
+
+  it("falls back to the message payload filename when download metadata omits it", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("video"),
+      contentType: "video/mp4",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-sender",
+        },
+      },
+      message: {
+        message_id: "msg-media-payload-name",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "media",
+        content: JSON.stringify({
+          file_key: "file_media_payload",
+          image_key: "img_media_thumb",
+          file_name: "payload-name.mp4",
+        }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockSaveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "video/mp4",
+      "inbound",
+      expect.any(Number),
+      "payload-name.mp4",
     );
   });
 

@@ -1,6 +1,7 @@
 import type {
   ChannelCapabilities,
   ChannelId,
+  ChannelMessagingAdapter,
   ChannelOutboundAdapter,
   ChannelPlugin,
 } from "../channels/plugins/types.js";
@@ -25,6 +26,9 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
     enabled: true,
   })),
   providers: [],
+  speechProviders: [],
+  mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
@@ -97,6 +101,7 @@ export const createMSTeamsTestPlugin = (params?: {
 export const createOutboundTestPlugin = (params: {
   id: ChannelId;
   outbound: ChannelOutboundAdapter;
+  messaging?: ChannelMessagingAdapter;
   label?: string;
   docsPath?: string;
   capabilities?: ChannelCapabilities;
@@ -109,4 +114,5 @@ export const createOutboundTestPlugin = (params: {
     config: { listAccountIds: () => [] },
   }),
   outbound: params.outbound,
+  ...(params.messaging ? { messaging: params.messaging } : {}),
 });

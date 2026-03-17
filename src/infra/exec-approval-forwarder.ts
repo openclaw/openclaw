@@ -118,8 +118,9 @@ function shouldSkipForwardingFallback(params: {
   if (!channel) {
     return false;
   }
+  const adapter = getChannelPlugin(channel)?.execApprovals;
   return (
-    getChannelPlugin(channel)?.execApprovals?.shouldSuppressForwardingFallback?.({
+    adapter?.shouldSuppressForwardingFallback?.({
       cfg: params.cfg,
       target: params.target,
       request: params.request,
