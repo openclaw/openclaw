@@ -1449,49 +1449,43 @@ description: test skill
     }
   });
 
-  it("warns when control UI allows insecure auth", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        controlUi: { allowInsecureAuth: true },
+  it.each([
+    {
+      name: "warns when control UI allows insecure auth",
+      cfg: {
+        gateway: {
+          controlUi: { allowInsecureAuth: true },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: {
+        checkId: "gateway.control_ui.insecure_auth",
+        severity: "warn",
       },
-    };
-
-    const res = await audit(cfg);
+      expectedDangerousFlag: "gateway.controlUi.allowInsecureAuth=true",
+    },
+    {
+      name: "warns when control UI device auth is disabled",
+      cfg: {
+        gateway: {
+          controlUi: { dangerouslyDisableDeviceAuth: true },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: {
+        checkId: "gateway.control_ui.device_auth_disabled",
+        severity: "critical",
+      },
+      expectedDangerousFlag: "gateway.controlUi.dangerouslyDisableDeviceAuth=true",
+    },
+  ])("$name", async (testCase) => {
+    const res = await audit(testCase.cfg);
 
     expect(res.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.control_ui.insecure_auth",
-          severity: "warn",
-        }),
+        expect.objectContaining(testCase.expectedFinding),
         expect.objectContaining({
           checkId: "config.insecure_or_dangerous_flags",
           severity: "warn",
-          detail: expect.stringContaining("gateway.controlUi.allowInsecureAuth=true"),
-        }),
-      ]),
-    );
-  });
-
-  it("warns when control UI device auth is disabled", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        controlUi: { dangerouslyDisableDeviceAuth: true },
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.control_ui.device_auth_disabled",
-          severity: "critical",
-        }),
-        expect.objectContaining({
-          checkId: "config.insecure_or_dangerous_flags",
-          severity: "warn",
-          detail: expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
+          detail: expect.stringContaining(testCase.expectedDangerousFlag),
         }),
       ]),
     );
@@ -1522,39 +1516,56 @@ description: test skill
     expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
   });
 
-  it("flags non-loopback Control UI without allowed origins", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+  it.each([
+    {
+      name: "flags non-loopback Control UI without allowed origins",
+      cfg: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: {
+        checkId: "gateway.control_ui.allowed_origins_required",
+        severity: "critical",
       },
-    };
-
-    const res = await audit(cfg);
-    expectFinding(res, "gateway.control_ui.allowed_origins_required", "critical");
-  });
-
-  it("flags wildcard Control UI origins by exposure level", async () => {
-    const loopbackCfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        controlUi: { allowedOrigins: ["*"] },
+    },
+    {
+      name: "flags wildcard Control UI origins by exposure level on loopback",
+      cfg: {
+        gateway: {
+          bind: "loopback",
+          controlUi: { allowedOrigins: ["*"] },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: {
+        checkId: "gateway.control_ui.allowed_origins_wildcard",
+        severity: "warn",
       },
-    };
-    const exposedCfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
-        controlUi: { allowedOrigins: ["*"] },
+    },
+    {
+      name: "flags wildcard Control UI origins by exposure level when exposed",
+      cfg: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+          controlUi: { allowedOrigins: ["*"] },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: {
+        checkId: "gateway.control_ui.allowed_origins_wildcard",
+        severity: "critical",
       },
-    };
-
-    const loopback = await audit(loopbackCfg);
-    const exposed = await audit(exposedCfg);
-
-    expectFinding(loopback, "gateway.control_ui.allowed_origins_wildcard", "warn");
-    expectFinding(exposed, "gateway.control_ui.allowed_origins_wildcard", "critical");
-    expectNoFinding(exposed, "gateway.control_ui.allowed_origins_required");
+      expectedNoFinding: "gateway.control_ui.allowed_origins_required",
+    },
+  ])("$name", async (testCase) => {
+    const res = await audit(testCase.cfg);
+    expect(res.findings).toEqual(
+      expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+    );
+    if (testCase.expectedNoFinding) {
+      expectNoFinding(res, testCase.expectedNoFinding);
+    }
   });
 
   it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", async () => {
