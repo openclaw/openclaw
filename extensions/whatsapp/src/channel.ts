@@ -1,6 +1,5 @@
 import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  buildChannelConfigSchema,
   createActionGate,
   createWhatsAppOutboundBase,
   DEFAULT_ACCOUNT_ID,
@@ -8,13 +7,9 @@ import {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
   readStringParam,
-  resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
   resolveWhatsAppOutboundTarget,
   resolveWhatsAppHeartbeatRecipients,
   resolveWhatsAppMentionStripRegexes,
-  WhatsAppConfigSchema,
   type ChannelMessageActionName,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/whatsapp";
@@ -49,12 +44,6 @@ function parseWhatsAppExplicitTarget(raw: string) {
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   ...createWhatsAppPluginBase({
-    configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
-    groups: {
-      resolveRequireMention: resolveWhatsAppGroupRequireMention,
-      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
-    },
     setupWizard: whatsappSetupWizardProxy,
     setup: whatsappSetupAdapter,
     isConfigured: async (account) =>
