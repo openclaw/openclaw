@@ -273,7 +273,9 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Run changed extension tests
-        run: pnpm test:extension ${{ matrix.extension }}
+        env:
+          EXTENSION_ID: ${{ matrix.extension }}
+        run: pnpm test:extension "$EXTENSION_ID"
 
   # Types, lint, and format check.
   check:
