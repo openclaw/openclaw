@@ -208,6 +208,39 @@ function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   }
 }
 
+/**
+ * Wraps the stream function to inject `skill_names` into every outgoing
+ * LLM request payload. The donut-backend LLM proxy reads this field for
+ * per-skill token attribution analytics.
+ *
+ * Note: `feature_context` is inferred server-side by the LLM proxy from
+ * the messages array, so it does not need to be injected here.
+ */
+function createSkillNamesWrapper(
+  baseStreamFn: StreamFn | undefined,
+  skillNames?: string[],
+): StreamFn {
+  if (!skillNames || skillNames.length === 0) {
+    return baseStreamFn ?? streamSimple;
+  }
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const p = payload as Record<string, unknown>;
+          if (!p.skill_names) {
+            p.skill_names = skillNames;
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
@@ -887,10 +920,7 @@ export function createTriggerSourceWrapper(
  * proxy to correlate multiple requests belonging to a single user message.
  * Injected as both an HTTP header (X-Turn-Id) and a body field (turn_id).
  */
-export function createTurnIdWrapper(
-  baseStreamFn: StreamFn | undefined,
-  turnId: string,
-): StreamFn {
+export function createTurnIdWrapper(baseStreamFn: StreamFn | undefined, turnId: string): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const originalOnPayload = options?.onPayload;
@@ -924,6 +954,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  skillNames?: string[],
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
@@ -1022,4 +1053,8 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  // Inject skill_names into every LLM request payload so the donut-backend
+  // LLM proxy can attribute token usage per skill.
+  agent.streamFn = createSkillNamesWrapper(agent.streamFn, skillNames);
 }
