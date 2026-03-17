@@ -611,6 +611,8 @@ export function detectToolCallLoop(
 
   if (browserSearch && resolvedConfig.detectors.browserSearchStorm) {
     const browserSearchStats = getBrowserSearchStormStats(history, browserSearch);
+    // TODO: This detector only sees browser-search entries still present in the bounded history
+    // window, so interspersed non-search calls can evict older search hops before thresholds trip.
     const hasVariedSearches =
       browserSearchStats.uniqueQueries >= 2 || browserSearchStats.uniqueHosts >= 2;
     if (
