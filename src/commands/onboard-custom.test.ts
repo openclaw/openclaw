@@ -156,7 +156,7 @@ describe("promptCustomApiConfig", () => {
       text: ["http://localhost:11434/v1", "", "bad-model", "good-model", "custom", ""],
       select: ["plaintext", "openai", "model"],
     });
-    stubFetchSequence([{ ok: false, status: 400 }, { ok: true }]);
+    stubFetchSequence([{ ok: false, status: 400 }, { ok: false, status: 400 }, { ok: true }]);
     await runPromptCustomApi(prompter);
 
     expect(prompter.text).toHaveBeenCalledTimes(6);

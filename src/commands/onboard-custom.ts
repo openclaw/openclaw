@@ -356,6 +356,15 @@ async function requestOpenAiVerification(params: {
     if (resultWithMaxCompletionTokens.ok || resultWithMaxCompletionTokens.status === 401) {
       return resultWithMaxCompletionTokens;
     }
+    // Only fall back when the endpoint explicitly rejected our request (4xx client error).
+    // Server errors (5xx) and network failures (status undefined) should propagate as-is
+    // to avoid masking real connectivity issues or creating false-positive verifications.
+    if (
+      resultWithMaxCompletionTokens.status === undefined ||
+      resultWithMaxCompletionTokens.status >= 500
+    ) {
+      return resultWithMaxCompletionTokens;
+    }
     // Fall back to max_tokens for older OpenAI-compatible providers
     return await requestVerification({
       endpoint,
