@@ -177,7 +177,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 
 - Wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh`
 - Credential chain: `DUNE_API_KEY` env → Vault token (fast) → Vault K8s JWT (slow)
-- Vault path: `secret/data/openclaw-sre` (key: `DUNE_API_KEY`)
+- Vault path: `secret/data/openclaw-sre/all-secrets` (key: `DUNE_API_KEY`)
 - Read-only by default; mutation commands (`query create`, `query update`,
   `query archive`) require `DUNE_ALLOW_MUTATIONS=1`.
 - Always outputs JSON by default (`--output json`).

@@ -34,7 +34,7 @@ Env:
   DUNE_API_KEY          (required; fallback: Vault cached token -> Vault K8s JWT auth)
   VAULT_ADDR            (optional; enables Vault credential lookup)
   VAULT_TOKEN           (optional; reuses existing Vault token)
-  DUNE_VAULT_SECRET_PATH (optional; default: secret/data/openclaw-sre)
+  DUNE_VAULT_SECRET_PATH (optional; default: secret/data/openclaw-sre/all-secrets)
   DUNE_ALLOW_MUTATIONS  (optional; set to 1 to allow create/update/archive)
   DUNE_SKIP_VAULT       (optional; set to 1 to skip Vault lookup)
 
@@ -77,7 +77,7 @@ detect_service_account_jwt() {
 load_api_key_from_vault_token() {
   local vault_addr="${VAULT_ADDR:-}"
   local vault_token="${VAULT_TOKEN:-}"
-  local secret_path="${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre}"
+  local secret_path="${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre/all-secrets}"
 
   [[ -n "$vault_addr" ]] || return 1
   [[ -n "$vault_token" ]] || return 1
@@ -105,7 +105,7 @@ load_api_key_from_vault_jwt() {
   local vault_addr="${VAULT_ADDR:-}"
   local auth_path="${VAULT_KUBERNETES_AUTH_PATH:-kubernetes}"
   local role="${VAULT_KUBERNETES_ROLE:-incident-readonly-agent}"
-  local secret_path="${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre}"
+  local secret_path="${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre/all-secrets}"
 
   [[ -n "$vault_addr" ]] || return 1
 
@@ -161,7 +161,7 @@ load_api_key() {
     die "missing DUNE_API_KEY (Vault lookup skipped via DUNE_SKIP_VAULT=1)"
   fi
 
-  local vault_path="${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre}"
+  local vault_path="${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre/all-secrets}"
 
   # 2. Vault with existing token (fast path — reuses start-gateway.sh token)
   if [[ -n "${VAULT_ADDR:-}" ]]; then
@@ -185,7 +185,7 @@ probe_auth() {
   printf '  DUNE_API_KEY env:     %s\n' "$(if [[ -n "${DUNE_API_KEY:-}" ]]; then redact_key "$DUNE_API_KEY"; else echo "(not set)"; fi)"
   printf '  VAULT_ADDR:           %s\n' "${VAULT_ADDR:-(not set)}"
   printf '  VAULT_TOKEN:          %s\n' "$(if [[ -n "${VAULT_TOKEN:-}" ]]; then echo "set ($(redact_key "$VAULT_TOKEN"))"; else echo "(not set)"; fi)"
-  printf '  DUNE_VAULT_SECRET_PATH: %s\n' "${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre}"
+  printf '  DUNE_VAULT_SECRET_PATH: %s\n' "${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre/all-secrets}"
   printf '  DUNE_SKIP_VAULT:      %s\n' "${DUNE_SKIP_VAULT:-0}"
   printf '  DUNE_ALLOW_MUTATIONS: %s\n' "${DUNE_ALLOW_MUTATIONS:-0}"
   printf '  dune binary:          %s\n' "$(command -v "$DUNE_CLI_BIN" 2>/dev/null || echo "(not found)")"
