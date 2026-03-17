@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../types.ts";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "./channel-config-extras.ts";
 import type { ChannelsProps } from "./channels.types.ts";
@@ -118,7 +118,7 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
 export function renderChannelConfigSection(params: { channelId: string; props: ChannelsProps }) {
   const { channelId, props } = params;
   const disabled = props.configSaving || props.configSchemaLoading;
-  const hasError = Boolean(props.lastError);
+  const hasError = Boolean(props.configSaveError);
   return html`
     <div style="margin-top: 16px;">
       ${
@@ -139,7 +139,7 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
         hasError
           ? html`
               <div class="callout danger" style="margin-top: 12px;">
-                ${props.lastError}
+                ${props.configSaveError}
               </div>
             `
           : nothing

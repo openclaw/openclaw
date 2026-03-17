@@ -32,6 +32,7 @@ export type ChannelsProps = {
   configUiHints: ConfigUiHints;
   configSaving: boolean;
   configFormDirty: boolean;
+  configSaveError: string | null;
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
   onRefresh: (probe: boolean) => void;
