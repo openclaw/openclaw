@@ -50,9 +50,9 @@ export function formatMemoryList(memories: MemoriaMemoryRecord[], maxChars = 140
     return "No memories found.";
   }
   return memories
-    .map(
-      (memory, index) =>
-        `${index + 1}. ${renderMemoryBadge(memory)} ${truncateText(escapePromptText(memory.content), maxChars)}`,
-    )
+    .map((memory, index) => {
+      const safeMemoryId = escapePromptText(memory.memory_id || "unknown-id");
+      return `${index + 1}. id=${safeMemoryId} ${renderMemoryBadge(memory)} ${truncateText(escapePromptText(memory.content), maxChars)}`;
+    })
     .join("\n");
 }
