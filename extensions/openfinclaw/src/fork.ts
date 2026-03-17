@@ -3,9 +3,7 @@
  * Handles downloading and extracting strategies from Hub.
  */
 import fs from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { pipeline } from "node:stream/promises";
 import {
   getStrategiesRoot,
   createDateDir,
@@ -14,22 +12,29 @@ import {
   parseStrategyId,
   formatDate,
 } from "./strategy-storage.js";
-import type { SkillApiConfig, ForkOptions, ForkResult, HubStrategyInfo } from "./types.js";
+import type {
+  SkillApiConfig,
+  ForkOptions,
+  ForkResult,
+  HubPublicEntry,
+  ForkAndDownloadResponse,
+} from "./types.js";
 import type { ForkMeta } from "./types.js";
 
 const HUB_BASE_URL = "https://hub.openfinclaw.ai";
 
 /**
- * Fetch strategy info from Hub API.
+ * Fetch public strategy info from Hub API.
+ * GET /api/v1/skill/public/{id}
  */
 export async function fetchStrategyInfo(
   config: SkillApiConfig,
   strategyId: string,
-): Promise<{ success: boolean; data?: HubStrategyInfo; error?: string }> {
-  const url = new URL(`${config.baseUrl}/api/v1/skill/${strategyId}`);
+): Promise<{ success: boolean; data?: HubPublicEntry; error?: string }> {
+  const url = new URL(`${config.baseUrl}/api/v1/skill/public/${strategyId}`);
 
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    Accept: "application/json",
   };
   if (config.apiKey) {
     headers["Authorization"] = `Bearer ${config.apiKey}`;
@@ -54,13 +59,17 @@ export async function fetchStrategyInfo(
     }
 
     if (response.status >= 200 && response.status < 300) {
-      return { success: true, data: data as HubStrategyInfo };
+      return { success: true, data: data as HubPublicEntry };
     }
 
-    const errorData = data as { message?: string; detail?: string };
+    const errorData = data as { error?: { message?: string }; message?: string; detail?: string };
     return {
       success: false,
-      error: errorData.message ?? errorData.detail ?? `HTTP ${response.status}`,
+      error:
+        errorData.error?.message ??
+        errorData.message ??
+        errorData.detail ??
+        `HTTP ${response.status}`,
     };
   } catch (err) {
     return {
@@ -71,24 +80,90 @@ export async function fetchStrategyInfo(
 }
 
 /**
- * Download strategy ZIP from Hub.
+ * Fork strategy and get download URL from Hub.
+ * POST /api/v1/skill/entries/{id}/fork-and-download
  */
-export async function downloadStrategyZip(
+export async function forkAndDownloadFromHub(
   config: SkillApiConfig,
   strategyId: string,
-): Promise<{ success: boolean; data?: Buffer; error?: string }> {
-  const url = new URL(`${config.baseUrl}/api/v1/skill/${strategyId}/download`);
-
-  const headers: Record<string, string> = {};
-  if (config.apiKey) {
-    headers["Authorization"] = `Bearer ${config.apiKey}`;
+  options?: ForkOptions,
+): Promise<{ success: boolean; data?: ForkAndDownloadResponse; error?: string }> {
+  if (!config.apiKey) {
+    return {
+      success: false,
+      error: "API key is required for fork operation. Set SKILL_API_KEY environment variable.",
+    };
   }
+
+  const url = new URL(`${config.baseUrl}/api/v1/skill/entries/${strategyId}/fork-and-download`);
+
+  const body: Record<string, unknown> = {};
+  if (options?.name) body.name = options.name;
+  if (options?.slug) body.slug = options.slug;
+  if (options?.description) body.description = options.description;
+  body.forkConfig = {
+    keepGenes: options?.keepGenes ?? true,
+    overrideParams: {},
+  };
 
   try {
     const response = await fetch(url.toString(), {
-      method: "GET",
-      headers,
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(config.requestTimeoutMs),
+    });
+
+    const rawText = await response.text();
+    let data: unknown;
+
+    if (rawText && rawText.trim().startsWith("{")) {
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = { raw: rawText };
+      }
+    }
+
+    if (response.status >= 200 && response.status < 300) {
+      return { success: true, data: data as ForkAndDownloadResponse };
+    }
+
+    const errorData = data as {
+      error?: { code?: string; message?: string };
+      code?: string;
+      message?: string;
+    };
+    return {
+      success: false,
+      error:
+        errorData.error?.message ??
+        errorData.message ??
+        errorData.error?.code ??
+        `HTTP ${response.status}`,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Download ZIP from signed URL.
+ */
+export async function downloadFromSignedUrl(
+  signedUrl: string,
+  timeoutMs: number,
+): Promise<{ success: boolean; data?: Buffer; error?: string }> {
+  try {
+    const response = await fetch(signedUrl, {
+      method: "GET",
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (response.status >= 200 && response.status < 300) {
@@ -96,16 +171,7 @@ export async function downloadStrategyZip(
       return { success: true, data: Buffer.from(arrayBuffer) };
     }
 
-    const errorText = await response.text();
-    let errorMessage = `HTTP ${response.status}`;
-    try {
-      const errorJson = JSON.parse(errorText);
-      errorMessage = errorJson.message ?? errorJson.detail ?? errorMessage;
-    } catch {
-      if (errorText) errorMessage = errorText;
-    }
-
-    return { success: false, error: errorMessage };
+    return { success: false, error: `HTTP ${response.status}` };
   } catch (err) {
     return {
       success: false,
@@ -116,7 +182,6 @@ export async function downloadStrategyZip(
 
 /**
  * Extract ZIP buffer to directory.
- * Uses Node.js built-in zlib for decompression.
  */
 export async function extractZipToDir(
   zipBuffer: Buffer,
@@ -140,6 +205,7 @@ export async function extractZipToDir(
 
 /**
  * Fork a strategy from Hub to local directory.
+ * Flow: fetchStrategyInfo → forkAndDownloadFromHub → downloadFromSignedUrl → extract
  */
 export async function forkStrategy(
   config: SkillApiConfig,
@@ -164,13 +230,31 @@ export async function forkStrategy(
   const info = infoResult.data;
   const shortId = strategyId.slice(0, 8);
 
+  const forkResult = await forkAndDownloadFromHub(config, strategyId, options);
+  if (!forkResult.success || !forkResult.data) {
+    return {
+      success: false,
+      localPath: "",
+      sourceId: strategyId,
+      sourceShortId: shortId,
+      sourceName: info.name,
+      sourceVersion: info.version ?? "1.0.0",
+      error: forkResult.error ?? "Failed to fork strategy",
+    };
+  }
+
+  const forkData = forkResult.data;
+  const forkEntryId = forkData.entry.id;
+  const forkEntrySlug = forkData.entry.slug;
+  const forkName = forkData.entry.name;
+
   let targetDir: string;
   if (options?.targetDir) {
     targetDir = options.targetDir;
   } else {
     const root = getStrategiesRoot();
     const dateDir = createDateDir(root, options?.dateDir);
-    const dirName = generateForkDirName(info.name, strategyId);
+    const dirName = generateForkDirName(forkName, forkEntryId);
     targetDir = path.join(dateDir, dirName);
   }
 
@@ -182,11 +266,16 @@ export async function forkStrategy(
       sourceShortId: shortId,
       sourceName: info.name,
       sourceVersion: info.version ?? "1.0.0",
+      forkEntryId,
+      forkEntrySlug,
       error: `Directory already exists: ${targetDir}`,
     };
   }
 
-  const downloadResult = await downloadStrategyZip(config, strategyId);
+  const downloadResult = await downloadFromSignedUrl(
+    forkData.download.url,
+    config.requestTimeoutMs,
+  );
   if (!downloadResult.success || !downloadResult.data) {
     return {
       success: false,
@@ -195,6 +284,8 @@ export async function forkStrategy(
       sourceShortId: shortId,
       sourceName: info.name,
       sourceVersion: info.version ?? "1.0.0",
+      forkEntryId,
+      forkEntrySlug,
       error: downloadResult.error ?? "Failed to download strategy",
     };
   }
@@ -208,6 +299,8 @@ export async function forkStrategy(
       sourceShortId: shortId,
       sourceName: info.name,
       sourceVersion: info.version ?? "1.0.0",
+      forkEntryId,
+      forkEntrySlug,
       error: extractResult.error ?? "Failed to extract strategy",
     };
   }
@@ -217,11 +310,13 @@ export async function forkStrategy(
     sourceShortId: shortId,
     sourceName: info.name,
     sourceVersion: info.version ?? "1.0.0",
-    sourceAuthor: info.author?.name,
-    forkedAt: new Date().toISOString(),
+    sourceAuthor: info.author?.displayName,
+    forkedAt: forkData.forkedAt ?? new Date().toISOString(),
     forkDateDir: options?.dateDir ?? formatDate(new Date()),
     hubUrl: `${HUB_BASE_URL}/strategy/${strategyId}`,
     localPath: targetDir,
+    forkEntryId,
+    forkEntrySlug,
   };
 
   writeForkMeta(targetDir, meta);
@@ -233,6 +328,9 @@ export async function forkStrategy(
     sourceShortId: shortId,
     sourceName: info.name,
     sourceVersion: info.version ?? "1.0.0",
+    forkEntryId,
+    forkEntrySlug,
+    creditsEarned: forkData.creditsEarned,
   };
 }
 

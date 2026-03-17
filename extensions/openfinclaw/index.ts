@@ -518,12 +518,28 @@ const openfinclawPlugin = {
         name: "skill_fork",
         label: "Fork strategy from Hub",
         description:
-          "Download a public strategy from hub.openfinclaw.ai to local directory. The strategy will be extracted and ready for modification. Returns the local path. Use this when user wants to download, clone, or fork a strategy from Hub.",
+          "Fork a public strategy from hub.openfinclaw.ai to local directory. Creates a new entry on Hub and downloads the code locally. Returns the local path and fork entry ID. Use this when user wants to download, clone, or fork a strategy from Hub. Requires API key.",
         parameters: Type.Object({
           strategyId: Type.String({
             description:
               "Strategy ID from Hub (UUID, short ID, or Hub URL like https://hub.openfinclaw.ai/strategy/{id})",
           }),
+          name: Type.Optional(
+            Type.String({
+              description: "Name for the forked strategy. Default: original name + '(Fork)'",
+            }),
+          ),
+          slug: Type.Optional(
+            Type.String({
+              description:
+                "URL-friendly slug for the forked strategy. Auto-generated if not provided.",
+            }),
+          ),
+          keepGenes: Type.Optional(
+            Type.Boolean({
+              description: "Whether to inherit gene combinations. Default: true",
+            }),
+          ),
           targetDir: Type.Optional(
             Type.String({
               description:
@@ -543,7 +559,18 @@ const openfinclawPlugin = {
               return json({ success: false, error: "strategyId is required" });
             }
 
+            if (!config.apiKey) {
+              return json({
+                success: false,
+                error:
+                  "API key is required for fork operation. Set skillApiKey in plugin config or SKILL_API_KEY env.",
+              });
+            }
+
             const result = await forkStrategy(config, strategyId, {
+              name: params.name ? String(params.name) : undefined,
+              slug: params.slug ? String(params.slug) : undefined,
+              keepGenes: typeof params.keepGenes === "boolean" ? params.keepGenes : undefined,
               targetDir: params.targetDir ? String(params.targetDir) : undefined,
               dateDir: params.dateDir ? String(params.dateDir) : undefined,
             });
@@ -552,9 +579,22 @@ const openfinclawPlugin = {
               const lines: string[] = [];
               lines.push("策略 Fork 成功！");
               lines.push("");
-              lines.push(`- 策略名称: ${result.sourceName}`);
-              lines.push(`- 来源 ID: ${result.sourceId}`);
+              lines.push(`- 原策略: ${result.sourceName} (${result.sourceId})`);
+              lines.push(`- Fork Entry ID: ${result.forkEntryId}`);
+              if (result.forkEntrySlug) {
+                lines.push(`- Fork Slug: ${result.forkEntrySlug}`);
+              }
               lines.push(`- 本地路径: ${result.localPath}`);
+
+              if (result.creditsEarned) {
+                lines.push("");
+                lines.push("积分奖励:");
+                lines.push(`- 获得 ${result.creditsEarned.amount} FC`);
+                if (result.creditsEarned.message) {
+                  lines.push(`- ${result.creditsEarned.message}`);
+                }
+              }
+
               lines.push("");
               lines.push("下一步:");
               lines.push(`- 编辑策略: code ${result.localPath}/scripts/strategy.py`);
@@ -665,16 +705,32 @@ const openfinclawPlugin = {
               lines.push("");
               lines.push(`- ID: ${info.id}`);
               lines.push(`- 名称: ${info.name}`);
+              if (info.slug) lines.push(`- Slug: ${info.slug}`);
               if (info.version) lines.push(`- 版本: ${info.version}`);
-              if (info.author?.name) lines.push(`- 作者: ${info.author.name}`);
-              if (info.market) lines.push(`- 市场: ${info.market}`);
+              if (info.author?.displayName) lines.push(`- 作者: ${info.author.displayName}`);
               if (info.description) lines.push(`- 描述: ${info.description}`);
+              if (info.summary) lines.push(`- 摘要: ${info.summary}`);
               if (info.tags?.length) lines.push(`- 标签: ${info.tags.join(", ")}`);
+              if (info.tier) lines.push(`- 等级: ${info.tier}`);
 
-              if (info.performance) {
+              if (info.stats) {
+                lines.push("");
+                lines.push("统计:");
+                if (typeof info.stats.fcsScore === "number") {
+                  lines.push(`- FCS 评分: ${info.stats.fcsScore.toFixed(1)}`);
+                }
+                if (typeof info.stats.forkCount === "number") {
+                  lines.push(`- Fork 次数: ${info.stats.forkCount}`);
+                }
+                if (typeof info.stats.downloadCount === "number") {
+                  lines.push(`- 下载次数: ${info.stats.downloadCount}`);
+                }
+              }
+
+              if (info.backtestResult) {
                 lines.push("");
                 lines.push("绩效指标:");
-                const perf = info.performance;
+                const perf = info.backtestResult;
                 if (typeof perf.totalReturn === "number") {
                   lines.push(`- 总收益率: ${(perf.totalReturn * 100).toFixed(2)}%`);
                 }
@@ -685,10 +741,7 @@ const openfinclawPlugin = {
                   lines.push(`- 最大回撤: ${(perf.maxDrawdown * 100).toFixed(2)}%`);
                 }
                 if (typeof perf.winRate === "number") {
-                  lines.push(`- 胜率: ${perf.winRate.toFixed(1)}%`);
-                }
-                if (typeof perf.totalTrades === "number") {
-                  lines.push(`- 交易笔数: ${perf.totalTrades}`);
+                  lines.push(`- 胜率: ${(perf.winRate * 100).toFixed(1)}%`);
                 }
               }
 
