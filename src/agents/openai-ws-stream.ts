@@ -292,7 +292,7 @@ export function convertMessagesToInputItems(
   modelOverride?: ReplayModelInfo,
 ): InputItem[] {
   const items: InputItem[] = [];
-  const skippedCallIds = new Set<string>();
+  const skippedCallIds = new Map<string, boolean>(); // callId -> whether paired function_call existed
 
   for (const msg of messages) {
     const m = msg as AnyMessage & {
@@ -375,11 +375,12 @@ export function convertMessagesToInputItems(
             // Track skipped callId so function_call_output can skip it too
             if (callIdRaw) {
               const [skippedId] = callIdRaw.split("|", 2);
-              skippedCallIds.add(skippedId);
+              skippedCallIds.set(skippedId, false); // false = no function_call
             }
             continue;
           }
           const [callId, itemId] = callIdRaw.split("|", 2);
+          skippedCallIds.set(callId, true); // true = has function_call
           items.push({
             type: "function_call",
             ...(itemId ? { id: itemId } : {}),
@@ -423,7 +424,8 @@ export function convertMessagesToInputItems(
     const imageParts = parts.filter((part) => part.type === "input_image");
     // Skip if callId was skipped in function_call (model switch scenario)
     // and remove it so later valid calls with same ID are not blocked
-    if (skippedCallIds.has(callId)) {
+    // Skip only if no valid function_call existed for this callId
+    if (skippedCallIds.get(callId) === false) {
       skippedCallIds.delete(callId);
       continue;
     }
