@@ -78,7 +78,6 @@ async function resolveSignalSendContext(params: {
   return { send, maxBytes };
 }
 
-
 async function sendSignalOutbound(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   to: string;
