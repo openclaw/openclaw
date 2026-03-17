@@ -12,19 +12,12 @@ const channel = "line" as const;
 function cloneLineAccountEntry(
   lineConfig: LineConfig,
   accountId: string,
-): { accountKey: string; entry: Record<string, unknown> } | undefined {
-  const accounts = lineConfig.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  const accountKey =
-    Object.keys(accounts).find((key) => key === accountId || key.toLowerCase() === accountId) ??
-    undefined;
-  const entry = accountKey ? accounts[accountKey] : undefined;
+): Record<string, unknown> | undefined {
+  const entry = lineConfig.accounts?.[accountId];
   if (!entry || typeof entry !== "object") {
     return undefined;
   }
-  return { accountKey, entry: { ...entry } as Record<string, unknown> };
+  return { ...entry } as Record<string, unknown>;
 }
 
 function clearPatchedFields(
@@ -44,16 +37,16 @@ function patchExistingDefaultLineAccount(params: {
   clearFields: string[];
   enabled?: boolean;
   patch: Record<string, unknown>;
-}): { accountKey: string; entry: Record<string, unknown> } | undefined {
+}): Record<string, unknown> | undefined {
   const nextDefaultAccount = cloneLineAccountEntry(params.lineConfig, DEFAULT_ACCOUNT_ID);
+  clearPatchedFields(nextDefaultAccount, params.clearFields);
   if (!nextDefaultAccount) {
     return undefined;
   }
-  clearPatchedFields(nextDefaultAccount.entry, params.clearFields);
   if (params.enabled) {
-    nextDefaultAccount.entry.enabled = true;
+    nextDefaultAccount.enabled = true;
   }
-  Object.assign(nextDefaultAccount.entry, params.patch);
+  Object.assign(nextDefaultAccount, params.patch);
   return nextDefaultAccount;
 }
 
@@ -89,7 +82,7 @@ export function patchLineAccountConfig(params: {
             ? {
                 accounts: {
                   ...lineConfig.accounts,
-                  [nextDefaultAccount.accountKey]: nextDefaultAccount.entry,
+                  [DEFAULT_ACCOUNT_ID]: nextDefaultAccount,
                 },
               }
             : {}),
@@ -98,10 +91,12 @@ export function patchLineAccountConfig(params: {
     };
   }
 
-  const existingAccount = cloneLineAccountEntry(lineConfig, accountId);
-  const nextAccount = existingAccount?.entry ?? ({} as Record<string, unknown>);
-  clearPatchedFields(nextAccount, clearFields);
-  const accountKey = existingAccount?.accountKey ?? accountId;
+  const nextAccount = {
+    ...(lineConfig.accounts?.[accountId] ?? {}),
+  } as Record<string, unknown>;
+  for (const field of clearFields) {
+    delete nextAccount[field];
+  }
 
   return {
     ...params.cfg,
@@ -112,7 +107,7 @@ export function patchLineAccountConfig(params: {
         ...(params.enabled ? { enabled: true } : {}),
         accounts: {
           ...lineConfig.accounts,
-          [accountKey]: {
+          [accountId]: {
             ...nextAccount,
             ...(params.enabled ? { enabled: true } : {}),
             ...params.patch,
