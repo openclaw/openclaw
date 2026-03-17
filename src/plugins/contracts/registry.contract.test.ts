@@ -27,6 +27,14 @@ function findSpeechProviderIdsForPlugin(pluginId: string) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function findSpeechProviderForPlugin(pluginId: string) {
+  const entry = speechProviderContractRegistry.find((candidate) => candidate.pluginId === pluginId);
+  if (!entry) {
+    throw new Error(`speech provider contract missing for ${pluginId}`);
+  }
+  return entry.provider;
+}
+
 function findRegistrationForPlugin(pluginId: string) {
   const entry = pluginRegistrationContractRegistry.find(
     (candidate) => candidate.pluginId === pluginId,
@@ -96,5 +104,11 @@ describe("plugin contract registry", () => {
       providerIds: [],
       speechProviderIds: ["microsoft"],
     });
+  });
+
+  it("keeps bundled speech voice-list support explicit", () => {
+    expect(findSpeechProviderForPlugin("openai").listVoices).toEqual(expect.any(Function));
+    expect(findSpeechProviderForPlugin("elevenlabs").listVoices).toEqual(expect.any(Function));
+    expect(findSpeechProviderForPlugin("microsoft").listVoices).toEqual(expect.any(Function));
   });
 });

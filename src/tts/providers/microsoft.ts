@@ -39,13 +39,8 @@ function buildMicrosoftVoiceHeaders(): Record<string, string> {
 }
 
 function formatMicrosoftVoiceDescription(entry: MicrosoftVoiceListEntry): string | undefined {
-  const parts = [entry.Locale, entry.Gender];
   const personalities = entry.VoiceTag?.VoicePersonalities?.filter(Boolean) ?? [];
-  if (personalities.length > 0) {
-    parts.push(personalities.join(", "));
-  }
-  const filtered = parts.filter((part): part is string => Boolean(part?.trim()));
-  return filtered.length > 0 ? filtered.join(" · ") : undefined;
+  return personalities.length > 0 ? personalities.join(", ") : undefined;
 }
 
 export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
@@ -67,6 +62,11 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
           name: voice.FriendlyName?.trim() || voice.ShortName?.trim() || undefined,
           category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
           description: formatMicrosoftVoiceDescription(voice),
+          locale: voice.Locale?.trim() || undefined,
+          gender: voice.Gender?.trim() || undefined,
+          personalities: voice.VoiceTag?.VoicePersonalities?.filter(
+            (value): value is string => value.trim().length > 0,
+          ),
         }))
         .filter((voice) => voice.id.length > 0)
     : [];
