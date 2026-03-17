@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
@@ -70,11 +70,9 @@ vi.mock("../globals.js", () => ({
 let sendModule: typeof import("./send.js");
 
 describe("LINE send helpers", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     sendModule = await import("./send.js");
-  });
-
-  beforeEach(() => {
     pushMessageMock.mockReset();
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();

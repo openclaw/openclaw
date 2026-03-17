@@ -19,7 +19,7 @@ vi.mock("../globals.js", () => ({
   logVerbose: () => {},
 }));
 
-import { downloadLineMedia } from "./download.js";
+let downloadLineMedia: typeof import("./download.js").downloadLineMedia;
 
 async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
   for (const part of parts) {
@@ -28,7 +28,9 @@ async function* chunks(parts: Buffer[]): AsyncGenerator<Buffer> {
 }
 
 describe("downloadLineMedia", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ downloadLineMedia } = await import("./download.js"));
     vi.clearAllMocks();
   });
 

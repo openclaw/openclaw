@@ -74,15 +74,18 @@ vi.mock("./template-messages.js", () => ({
   buildTemplateMessageFromPayload: vi.fn(),
 }));
 
+let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
+
 describe("monitorLineProvider lifecycle", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ monitorLineProvider } = await import("./monitor.js"));
     createLineBotMock.mockClear();
     unregisterHttpMock.mockClear();
     registerPluginHttpRouteMock.mockClear().mockReturnValue(unregisterHttpMock);
   });
 
   it("waits for abort before resolving", async () => {
-    const { monitorLineProvider } = await import("./monitor.js");
     const abort = new AbortController();
     let resolved = false;
 
@@ -109,7 +112,6 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   it("stops immediately when signal is already aborted", async () => {
-    const { monitorLineProvider } = await import("./monitor.js");
     const abort = new AbortController();
     abort.abort();
 
@@ -125,8 +127,6 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   it("returns immediately without abort signal and stop is idempotent", async () => {
-    const { monitorLineProvider } = await import("./monitor.js");
-
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
       channelSecret: "secret", // pragma: allowlist secret
