@@ -310,6 +310,8 @@ run_cast_probe() {
   (
     local selector="${1:?selector required}"
     local value stderr_file err status
+    # Defense-in-depth: re-validate address format before invoking cast.
+    [[ "$ADDRESS" =~ ^0x[a-fA-F0-9]{40}$ ]] || { echo "Invalid address format for cast" >&2; return 1; }
     local cast_args=("call" "--rpc-url" "$RPC_URL" "--" "$ADDRESS" "$selector")
     stderr_file="$(mktemp)"
     trap "rm -f -- '$stderr_file'" EXIT INT TERM
