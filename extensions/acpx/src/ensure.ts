@@ -233,7 +233,13 @@ export async function ensureAcpx(params: {
 
     const install = await spawnAndCollect({
       command: "npm",
-      args: ["install", "--omit=dev", "--no-save", `acpx@${installVersion}`],
+      args: [
+        "install",
+        "--omit=dev",
+        "--no-save",
+        "--package-lock=false",
+        `acpx@${installVersion}`,
+      ],
       cwd: pluginRoot,
       stripProviderAuthEnvVars: params.stripProviderAuthEnvVars,
     });

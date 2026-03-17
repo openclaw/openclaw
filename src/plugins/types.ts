@@ -940,6 +940,8 @@ export type PluginConversationBindingRequestParams = {
   detachHint?: string;
 };
 
+export type PluginConversationBindingResolutionDecision = "allow-once" | "allow-always" | "deny";
+
 export type PluginConversationBinding = {
   bindingId: string;
   pluginId: string;
@@ -969,6 +971,24 @@ export type PluginConversationBindingRequestResult =
       status: "error";
       message: string;
     };
+
+export type PluginConversationBindingResolvedEvent = {
+  status: "approved" | "denied";
+  binding?: PluginConversationBinding;
+  decision: PluginConversationBindingResolutionDecision;
+  request: {
+    summary?: string;
+    detachHint?: string;
+    requestedBySenderId?: string;
+    conversation: {
+      channel: string;
+      accountId: string;
+      conversationId: string;
+      parentConversationId?: string;
+      threadId?: string | number;
+    };
+  };
+};
 
 /**
  * Result returned by a plugin command handler.
@@ -1256,6 +1276,9 @@ export type OpenClawPluginApi = {
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
+  onConversationBindingResolved: (
+    handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
+  ) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.

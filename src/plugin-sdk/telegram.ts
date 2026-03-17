@@ -12,6 +12,11 @@ export type {
   TelegramActionConfig,
   TelegramNetworkConfig,
 } from "../config/types.js";
+export type {
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+} from "../channels/plugins/types.adapters.js";
 export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export type { ResolvedTelegramAccount } from "../../extensions/telegram/src/accounts.js";
 export type { TelegramProbe } from "../../extensions/telegram/src/probe.js";
@@ -26,7 +31,6 @@ export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 export { parseTelegramTopicConversation } from "../acp/conversation-id.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { formatDocsLink } from "../terminal/links.js";
-
 export {
   PAIRING_APPROVED_MESSAGE,
   applyAccountNameToChannelSection,
