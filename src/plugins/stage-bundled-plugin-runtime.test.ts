@@ -4,6 +4,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { withEnv } from "../test-utils/env.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
@@ -13,6 +15,20 @@ function makeRepoRoot(prefix: string): string {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tempDirs.push(repoRoot);
   return repoRoot;
+}
+
+function writeJson(filePath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function writeSkill(filePath: string, name: string, description: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(
+    filePath,
+    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,
+    "utf8",
+  );
 }
 
 afterEach(() => {
@@ -184,20 +200,24 @@ describe("stageBundledPluginRuntime", () => {
     ).resolves.toEqual({ text: "paired:now" });
   });
 
-  it("copies package metadata files but symlinks other non-js plugin artifacts into the runtime overlay", () => {
+  it("copies manifest-declared skill assets into dist-runtime while symlinking unrelated artifacts", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-assets-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "diffs");
     fs.mkdirSync(path.join(distPluginDir, "assets"), { recursive: true });
-    fs.writeFileSync(
-      path.join(distPluginDir, "package.json"),
-      JSON.stringify(
-        { name: "@openclaw/diffs", openclaw: { extensions: ["./index.js"] } },
-        null,
-        2,
-      ),
-      "utf8",
+    writeJson(path.join(distPluginDir, "package.json"), {
+      name: "@openclaw/diffs",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeJson(path.join(distPluginDir, "openclaw.plugin.json"), {
+      id: "diffs",
+      configSchema: { type: "object" },
+      skills: ["./skills"],
+    });
+    writeSkill(
+      path.join(distPluginDir, "skills", "acp-router", "SKILL.md"),
+      "acp-router",
+      "Routes ACP requests",
     );
-    fs.writeFileSync(path.join(distPluginDir, "openclaw.plugin.json"), "{}\n", "utf8");
     fs.writeFileSync(path.join(distPluginDir, "assets", "info.txt"), "ok\n", "utf8");
 
     stageBundledPluginRuntime({ repoRoot });
@@ -224,11 +244,23 @@ describe("stageBundledPluginRuntime", () => {
       "assets",
       "info.txt",
     );
+    const runtimeSkillPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "diffs",
+      "skills",
+      "acp-router",
+      "SKILL.md",
+    );
 
     expect(fs.lstatSync(runtimePackagePath).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(runtimePackagePath, "utf8")).toContain('"extensions": [');
     expect(fs.lstatSync(runtimeManifestPath).isSymbolicLink()).toBe(false);
-    expect(fs.readFileSync(runtimeManifestPath, "utf8")).toBe("{}\n");
+    expect(fs.readFileSync(runtimeManifestPath, "utf8")).toContain('"skills": [');
+    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(false);
+    expect(fs.realpathSync(runtimeSkillPath)).toBe(runtimeSkillPath);
+    expect(fs.readFileSync(runtimeSkillPath, "utf8")).toContain("acp-router");
     expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
   });
@@ -306,6 +338,55 @@ describe("stageBundledPluginRuntime", () => {
     expect(manifestRegistry.plugins[0]?.startupDeferConfiguredChannelFullLoadUntilAfterListen).toBe(
       true,
     );
+  });
+
+  it("keeps acpx-style skills loadable from the dist-runtime bundled plugin root", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-skills-");
+    const workspaceDir = makeRepoRoot("openclaw-stage-bundled-runtime-workspace-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "acpx");
+    const runtimeExtensionsDir = path.join(repoRoot, "dist-runtime", "extensions");
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    writeJson(path.join(distPluginDir, "package.json"), {
+      name: "@openclaw/acpx",
+      openclaw: { extensions: ["./index.js"] },
+    });
+    writeJson(path.join(distPluginDir, "openclaw.plugin.json"), {
+      id: "acpx",
+      configSchema: { type: "object" },
+      skills: ["./skills"],
+    });
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
+    writeSkill(
+      path.join(distPluginDir, "skills", "acp-router", "SKILL.md"),
+      "acp-router",
+      "Routes ACP requests",
+    );
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const snapshot = withEnv(
+      {
+        HOME: workspaceDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: runtimeExtensionsDir,
+        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+      },
+      () =>
+        buildWorkspaceSkillSnapshot(workspaceDir, {
+          bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+          config: {
+            plugins: {
+              entries: {
+                acpx: { enabled: true },
+              },
+            },
+          },
+          managedSkillsDir: path.join(workspaceDir, ".managed"),
+        }),
+    );
+
+    expect(snapshot.skills.map((skill) => skill.name)).toContain("acp-router");
+    expect(snapshot.prompt).toContain("acp-router");
   });
 
   it("removes stale runtime plugin directories that are no longer in dist", () => {
