@@ -23,7 +23,12 @@ enum HostEnvSecurityPolicy {
         "PS4",
         "GCONV_PATH",
         "IFS",
-        "SSLKEYLOGFILE"
+        "SSLKEYLOGFILE",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "PYTHONBREAKPOINT",
+        "DOTNET_STARTUP_HOOKS"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
