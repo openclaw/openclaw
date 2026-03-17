@@ -1,6 +1,6 @@
 import { filterToolsByPolicy } from "./pi-tools.policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
-import { isKnownCoreToolId } from "./tool-catalog.js";
+import { isKnownCoreToolOrGroupId } from "./tool-catalog.js";
 import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
@@ -118,9 +118,11 @@ export function applyToolPolicyPipeline(params: {
       if (resolved.unknownAllowlist.length > 0) {
         const entries = resolved.unknownAllowlist.join(", ");
         const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
-          isKnownCoreToolId(entry),
+          isKnownCoreToolOrGroupId(entry),
         );
-        const otherEntries = resolved.unknownAllowlist.filter((entry) => !isKnownCoreToolId(entry));
+        const otherEntries = resolved.unknownAllowlist.filter(
+          (entry) => !isKnownCoreToolOrGroupId(entry),
+        );
         if (
           !shouldSuppressUnavailableCoreToolWarning({
             suppressUnavailableCoreToolWarning: step.suppressUnavailableCoreToolWarning === true,
