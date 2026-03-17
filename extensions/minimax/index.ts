@@ -1,7 +1,6 @@
 import {
   buildOauthProviderAuthResult,
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderCatalogContext,
@@ -159,12 +158,11 @@ function createOAuthHandler(region: MiniMaxRegion) {
   };
 }
 
-const minimaxPlugin = {
+export default definePluginEntry({
   id: API_PROVIDER_ID,
   name: "MiniMax",
   description: "Bundled MiniMax API-key and OAuth provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: API_PROVIDER_ID,
       label: PROVIDER_LABEL,
@@ -280,6 +278,4 @@ const minimaxPlugin = {
     api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
     api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
   },
-};
-
-export default minimaxPlugin;
+});
