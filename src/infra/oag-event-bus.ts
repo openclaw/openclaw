@@ -10,7 +10,12 @@ export type OagEventType =
   | "task_watch_update"
   | "user_note_pending"
   | "health_snapshot_updated"
-  | "evolution_applied";
+  | "incident_recorded"
+  | "evolution_applied"
+  | "evolution_reverted"
+  | "evolution_confirmed"
+  | "diagnosis_completed"
+  | "metrics_snapshot";
 
 type OagEventPayload = {
   type: OagEventType;

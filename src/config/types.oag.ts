@@ -42,4 +42,6 @@ export type OagConfig = {
     /** Maximum age for lifecycle records in days (default: 30). */
     maxLifecycleAgeDays?: number;
   };
+  /** Per-channel OAG overrides keyed by channel id (e.g. "telegram", "discord"). */
+  channels?: Record<string, Partial<OagConfig>>;
 };

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { OagConfig } from "../config/types.oag.js";
+import { getTransportProfile } from "./oag-channel-profiles.js";
 
 const DEFAULTS = {
   delivery: {
@@ -40,15 +41,59 @@ function resolveOagSection(cfg?: OpenClawConfig): OagConfig | undefined {
   return cfg?.gateway?.oag;
 }
 
-export function resolveOagDeliveryMaxRetries(cfg?: OpenClawConfig): number {
-  const v = resolveOagSection(cfg)?.delivery?.maxRetries;
-  return typeof v === "number" && v > 0 ? v : DEFAULTS.delivery.maxRetries;
+/** Resolve the per-channel OAG override section. */
+function resolveChannelOagSection(cfg?: OpenClawConfig, channel?: string): OagConfig | undefined {
+  if (!channel) {
+    return undefined;
+  }
+  return resolveOagSection(cfg)?.channels?.[channel];
 }
 
-export function resolveOagDeliveryRecoveryBudgetMs(cfg?: OpenClawConfig): number {
-  const v = resolveOagSection(cfg)?.delivery?.recoveryBudgetMs;
-  return typeof v === "number" && v > 0 ? v : DEFAULTS.delivery.recoveryBudgetMs;
+// --- Delivery resolvers (transport-aware) ---
+
+export function resolveOagDeliveryMaxRetries(cfg?: OpenClawConfig, channel?: string): number {
+  // 1. User's channel-specific override
+  if (channel) {
+    const cv = resolveChannelOagSection(cfg, channel)?.delivery?.maxRetries;
+    if (typeof cv === "number" && cv > 0) {
+      return cv;
+    }
+  }
+  // 2. Global config value
+  const v = resolveOagSection(cfg)?.delivery?.maxRetries;
+  if (typeof v === "number" && v > 0) {
+    return v;
+  }
+  // 3. Transport profile default (if channel known)
+  if (channel) {
+    const profile = getTransportProfile(channel);
+    return profile.maxRetries;
+  }
+  return DEFAULTS.delivery.maxRetries;
 }
+
+export function resolveOagDeliveryRecoveryBudgetMs(cfg?: OpenClawConfig, channel?: string): number {
+  // 1. User's channel-specific override
+  if (channel) {
+    const cv = resolveChannelOagSection(cfg, channel)?.delivery?.recoveryBudgetMs;
+    if (typeof cv === "number" && cv > 0) {
+      return cv;
+    }
+  }
+  // 2. Global config value
+  const v = resolveOagSection(cfg)?.delivery?.recoveryBudgetMs;
+  if (typeof v === "number" && v > 0) {
+    return v;
+  }
+  // 3. Transport profile default (if channel known)
+  if (channel) {
+    const profile = getTransportProfile(channel);
+    return profile.recoveryBudgetMs;
+  }
+  return DEFAULTS.delivery.recoveryBudgetMs;
+}
+
+// --- Lock resolvers (system-wide, no transport dimension) ---
 
 export function resolveOagLockTimeoutMs(cfg?: OpenClawConfig): number {
   const v = resolveOagSection(cfg)?.lock?.timeoutMs;
@@ -60,10 +105,30 @@ export function resolveOagLockStaleMs(cfg?: OpenClawConfig): number {
   return typeof v === "number" && v > 0 ? v : DEFAULTS.lock.staleMs;
 }
 
-export function resolveOagStalePollFactor(cfg?: OpenClawConfig): number {
+// --- Health resolvers (transport-aware) ---
+
+export function resolveOagStalePollFactor(cfg?: OpenClawConfig, channel?: string): number {
+  // 1. User's channel-specific override
+  if (channel) {
+    const cv = resolveChannelOagSection(cfg, channel)?.health?.stalePollFactor;
+    if (typeof cv === "number" && cv > 0) {
+      return cv;
+    }
+  }
+  // 2. Global config value
   const v = resolveOagSection(cfg)?.health?.stalePollFactor;
-  return typeof v === "number" && v > 0 ? v : DEFAULTS.health.stalePollFactor;
+  if (typeof v === "number" && v > 0) {
+    return v;
+  }
+  // 3. Transport profile default (if channel known)
+  if (channel) {
+    const profile = getTransportProfile(channel);
+    return profile.stalePollFactor;
+  }
+  return DEFAULTS.health.stalePollFactor;
 }
+
+// --- Notes resolvers (system-wide) ---
 
 export function resolveOagNoteDedupWindowMs(cfg?: OpenClawConfig): number {
   const v = resolveOagSection(cfg)?.notes?.dedupWindowMs;
@@ -75,7 +140,7 @@ export function resolveOagMaxDeliveredNotes(cfg?: OpenClawConfig): number {
   return typeof v === "number" && v > 0 ? v : DEFAULTS.notes.maxDeliveredHistory;
 }
 
-// --- Evolution resolvers ---
+// --- Evolution resolvers (system-wide, channel param optional pass-through) ---
 
 export function resolveOagEvolutionMaxStepPercent(cfg?: OpenClawConfig): number {
   const v = resolveOagSection(cfg)?.evolution?.maxStepPercent;

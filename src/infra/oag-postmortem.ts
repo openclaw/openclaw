@@ -15,11 +15,13 @@ import {
   resolveOagStalePollFactor,
 } from "./oag-config.js";
 import { requestDiagnosis } from "./oag-diagnosis.js";
+import { emitOagEvent } from "./oag-event-bus.js";
 import { startEvolutionObservation } from "./oag-evolution-guard.js";
 import { injectEvolutionNote } from "./oag-evolution-notify.js";
 import { collectActiveIncidents } from "./oag-incident-collector.js";
 import {
   type MetricSnapshot,
+  type OagIncident,
   type OagMemory,
   type SentinelContext,
   appendAuditEntry,
@@ -147,6 +149,46 @@ function clampChange(current: number, suggested: number, cfg: OpenClawConfig): n
   return Math.max(minAllowed, Math.min(maxAllowed, suggested));
 }
 
+// Dominance threshold: when 80%+ of incidents come from a single channel,
+// scope the recommendation to that channel's config namespace.
+const CHANNEL_DOMINANCE_THRESHOLD = 0.8;
+
+/**
+ * Determine whether a config path should be scoped to a specific channel.
+ * When 80%+ of pattern incidents originate from a single channel, the
+ * recommendation targets `gateway.oag.channels.<channel>.delivery.*` instead
+ * of the global `gateway.oag.delivery.*`.
+ */
+function resolveChannelScopedConfigPath(
+  basePath: string,
+  patterns: { channel?: string; incidents: OagIncident[] }[],
+): string {
+  const channelCounts = new Map<string, number>();
+  let total = 0;
+  for (const pattern of patterns) {
+    for (const incident of pattern.incidents) {
+      if (incident.channel) {
+        channelCounts.set(incident.channel, (channelCounts.get(incident.channel) ?? 0) + 1);
+      }
+      total += 1;
+    }
+  }
+  if (total === 0) {
+    return basePath;
+  }
+  const dominant = [...channelCounts.entries()].find(
+    ([, count]) => count >= total * CHANNEL_DOMINANCE_THRESHOLD,
+  );
+  if (dominant) {
+    // Rewrite "gateway.oag.<rest>" → "gateway.oag.channels.<channel>.<rest>"
+    const prefix = "gateway.oag.";
+    if (basePath.startsWith(prefix)) {
+      return `gateway.oag.channels.${dominant[0]}.${basePath.slice(prefix.length)}`;
+    }
+  }
+  return basePath;
+}
+
 function analyzePatterns(
   memory: OagMemory,
   cfg: OpenClawConfig,
@@ -172,8 +214,12 @@ function analyzePatterns(
         const current = resolveOagDeliveryRecoveryBudgetMs(cfg);
         const suggested = clampChange(current, Math.round(current * 1.5), cfg);
         if (suggested > current) {
+          const configPath = resolveChannelScopedConfigPath(
+            "gateway.oag.delivery.recoveryBudgetMs",
+            [pattern],
+          );
           recommendations.push({
-            configPath: "gateway.oag.delivery.recoveryBudgetMs",
+            configPath,
             currentValue: current,
             suggestedValue: suggested,
             reason: `Channel ${channelLabel} crash-looped ${pattern.occurrences} times in ${ANALYSIS_WINDOW_HOURS}h — spreading recovery over longer window`,
@@ -187,8 +233,11 @@ function analyzePatterns(
         const current = resolveOagDeliveryMaxRetries(cfg);
         const suggested = clampChange(current, current + 2, cfg);
         if (suggested > current) {
+          const configPath = resolveChannelScopedConfigPath("gateway.oag.delivery.maxRetries", [
+            pattern,
+          ]);
           recommendations.push({
-            configPath: "gateway.oag.delivery.maxRetries",
+            configPath,
             currentValue: current,
             suggestedValue: suggested,
             reason: `Delivery recovery failed ${pattern.occurrences} times — increasing retry budget`,
@@ -202,8 +251,11 @@ function analyzePatterns(
         const current = resolveOagStalePollFactor(cfg);
         const suggested = clampChange(current, Math.round(current * 1.3), cfg);
         if (suggested > current) {
+          const configPath = resolveChannelScopedConfigPath("gateway.oag.health.stalePollFactor", [
+            pattern,
+          ]);
           recommendations.push({
-            configPath: "gateway.oag.health.stalePollFactor",
+            configPath,
             currentValue: current,
             suggestedValue: suggested,
             reason: `Stale detection triggered ${pattern.occurrences} times for ${channelLabel} — relaxing threshold to reduce false positives`,
@@ -393,6 +445,14 @@ export async function runPostRecoveryAnalysis(
         value: r.suggestedValue,
       }));
       await applyOagConfigChanges(configChanges);
+      for (const rec of applied) {
+        emitOagEvent("evolution_applied", {
+          parameter: rec.configPath,
+          oldValue: rec.currentValue,
+          newValue: rec.suggestedValue,
+          source: "heuristic",
+        });
+      }
     }
 
     if (applied.length > 0) {

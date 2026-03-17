@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import { isPassiveChannel, isPollingChannel } from "../infra/oag-channel-profiles.js";
 import { resolveOagStalePollFactor } from "../infra/oag-config.js";
 
 export type ChannelHealthSnapshot = {
@@ -120,7 +121,10 @@ export function evaluateChannelHealth(
     return { healthy: false, reason: "disconnected" };
   }
 
-  const isPollOrWebhook = policy.channelId === "telegram" || snapshot.mode === "webhook";
+  const isPollOrWebhook =
+    isPollingChannel(policy.channelId) ||
+    isPassiveChannel(policy.channelId) ||
+    snapshot.mode === "webhook";
 
   if (!isPollOrWebhook && snapshot.connected === true && snapshot.lastEventAt != null) {
     // WebSocket-based channels: detect half-dead sockets via lastEventAt.

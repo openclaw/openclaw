@@ -1,13 +1,17 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import {
-  recordOagIncident,
-  collectActiveIncidents,
-  clearActiveIncidents,
-} from "./oag-incident-collector.js";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+const mockEmitOagEvent = vi.fn();
+vi.mock("./oag-event-bus.js", () => ({
+  emitOagEvent: (...args: unknown[]) => mockEmitOagEvent(...args),
+}));
+
+const { recordOagIncident, collectActiveIncidents, clearActiveIncidents } =
+  await import("./oag-incident-collector.js");
 
 describe("oag-incident-collector", () => {
   beforeEach(() => {
     clearActiveIncidents();
+    mockEmitOagEvent.mockClear();
   });
 
   it("records a new incident", () => {
@@ -16,6 +20,15 @@ describe("oag-incident-collector", () => {
     expect(incidents).toHaveLength(1);
     expect(incidents[0].type).toBe("channel_crash_loop");
     expect(incidents[0].count).toBe(1);
+  });
+
+  it("emits incident_recorded event after recording", () => {
+    recordOagIncident({ type: "channel_crash_loop", channel: "telegram", detail: "ETIMEDOUT" });
+    expect(mockEmitOagEvent).toHaveBeenCalledWith("incident_recorded", {
+      type: "channel_crash_loop",
+      channel: "telegram",
+      detail: "ETIMEDOUT",
+    });
   });
 
   it("increments count for duplicate incidents", () => {

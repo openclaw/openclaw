@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import { getTransportProfile } from "../infra/oag-channel-profiles.js";
 import { recordOagIncident } from "../infra/oag-incident-collector.js";
 import { incrementOagMetric } from "../infra/oag-metrics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -84,6 +85,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     abortSignal,
   } = deps;
   const timing = resolveTimingPolicy(deps);
+  // Track whether the user explicitly set a stale threshold so transport
+  // profiles only fill in when no explicit override was provided.
+  const hasExplicitStaleThreshold =
+    deps.timing?.staleEventThresholdMs != null || deps.staleEventThresholdMs != null;
 
   const cooldownMs = cooldownCycles * checkIntervalMs;
   const restartRecords = new Map<string, RestartRecord>();
@@ -126,11 +131,18 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
+          const profile = getTransportProfile(channelId);
+          // User-explicit threshold takes priority; transport profile fills in
+          // only when no explicit override was provided.
+          const staleEventThresholdMs = hasExplicitStaleThreshold
+            ? timing.staleEventThresholdMs
+            : profile.staleThresholdMs || timing.staleEventThresholdMs;
           const healthPolicy: ChannelHealthPolicy = {
             channelId,
             now,
-            staleEventThresholdMs: timing.staleEventThresholdMs,
+            staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
+            stalePollFactor: profile.stalePollFactor,
           };
           const health = evaluateChannelHealth(status, healthPolicy);
           if (health.healthy) {

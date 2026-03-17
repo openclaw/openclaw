@@ -6,6 +6,7 @@ import {
   resolveOagEvolutionObservationWindowMs,
   resolveOagEvolutionRestartRegressionThreshold,
 } from "./oag-config.js";
+import { emitOagEvent } from "./oag-event-bus.js";
 import {
   appendAuditEntry,
   loadOagMemory,
@@ -196,6 +197,13 @@ export async function checkEvolutionHealth(cfg?: OpenClawConfig): Promise<{
     // Link recommendation outcomes to "reverted"
     await updateLinkedRecommendations(activeObservation, "reverted");
 
+    for (const rc of activeObservation.rollbackChanges) {
+      emitOagEvent("evolution_reverted", {
+        parameter: rc.configPath,
+        reason: regression.reason,
+      });
+    }
+
     await appendAuditEntry({
       timestamp: new Date().toISOString(),
       action: "evolution_reverted",
@@ -235,6 +243,12 @@ export async function checkEvolutionHealth(cfg?: OpenClawConfig): Promise<{
 
     // Link recommendation outcomes to "effective"
     await updateLinkedRecommendations(activeObservation, "effective");
+
+    for (const rc of activeObservation.rollbackChanges) {
+      emitOagEvent("evolution_confirmed", {
+        parameter: rc.configPath,
+      });
+    }
 
     await appendAuditEntry({
       timestamp: new Date().toISOString(),

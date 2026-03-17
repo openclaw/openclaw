@@ -81,4 +81,27 @@ describe("oag-config-writer", () => {
       applyOagConfigChanges([{ configPath: "gateway.oag.delivery.maxRetries.nested", value: 1 }]),
     ).rejects.toThrow("is not a plain object");
   });
+
+  it("accepts channel-scoped OAG config paths", async () => {
+    const result = await applyOagConfigChanges([
+      { configPath: "gateway.oag.channels.telegram.delivery.maxRetries", value: 8 },
+    ]);
+    expect(result.applied).toBe(true);
+    expect(writtenConfigs).toHaveLength(1);
+    const written = writtenConfigs[0] as Record<string, unknown>;
+    const gw = written.gateway as Record<string, unknown>;
+    const oag = gw.oag as Record<string, unknown>;
+    const channels = oag.channels as Record<string, unknown>;
+    const telegram = channels.telegram as Record<string, unknown>;
+    const delivery = telegram.delivery as Record<string, unknown>;
+    expect(delivery.maxRetries).toBe(8);
+  });
+
+  it("still rejects non-OAG paths with channels-like structure", async () => {
+    await expect(
+      applyOagConfigChanges([
+        { configPath: "gateway.channels.telegram.delivery.maxRetries", value: 8 },
+      ]),
+    ).rejects.toThrow('OAG config path must start with "gateway.oag."');
+  });
 });

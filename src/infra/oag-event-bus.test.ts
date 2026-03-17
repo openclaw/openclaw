@@ -76,6 +76,53 @@ describe("oag-event-bus", () => {
     expect(getCachedHealthSnapshot()).toBeNull();
   });
 
+  it("emits incident_recorded events", () => {
+    const handler = vi.fn();
+    onOagEvent(handler);
+    emitOagEvent("incident_recorded", { type: "channel_crash_loop", channel: "telegram" });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].type).toBe("incident_recorded");
+    expect(handler.mock.calls[0][0].data).toEqual({
+      type: "channel_crash_loop",
+      channel: "telegram",
+    });
+  });
+
+  it("emits evolution_reverted events", () => {
+    const handler = vi.fn();
+    onOagEvent(handler);
+    emitOagEvent("evolution_reverted", {
+      parameter: "gateway.oag.delivery.recoveryBudgetMs",
+      reason: "regression",
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].type).toBe("evolution_reverted");
+  });
+
+  it("emits evolution_confirmed events", () => {
+    const handler = vi.fn();
+    onOagEvent(handler);
+    emitOagEvent("evolution_confirmed", { parameter: "gateway.oag.delivery.recoveryBudgetMs" });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].type).toBe("evolution_confirmed");
+  });
+
+  it("emits diagnosis_completed events", () => {
+    const handler = vi.fn();
+    onOagEvent(handler);
+    emitOagEvent("diagnosis_completed", { diagnosisId: "diag-123" });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].type).toBe("diagnosis_completed");
+  });
+
+  it("emits metrics_snapshot events", () => {
+    const handler = vi.fn();
+    onOagEvent(handler);
+    emitOagEvent("metrics_snapshot", { uptimeMs: 60000 });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].type).toBe("metrics_snapshot");
+  });
+
   it("returns a deep clone so mutations do not affect the cache", () => {
     // startFileWatcher triggers an initial read which populates cachedSnapshot
     startFileWatcher("/tmp/fake-state.json", () => {});

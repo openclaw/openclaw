@@ -56,6 +56,118 @@ describe("oag-config resolvers", () => {
   });
 });
 
+describe("oag-config channel-specific cascade", () => {
+  it("channel-specific override takes precedence over global config", () => {
+    const cfg = {
+      gateway: {
+        oag: {
+          delivery: { maxRetries: 10 },
+          channels: {
+            telegram: { delivery: { maxRetries: 20 } },
+          },
+        },
+      },
+    };
+    expect(resolveOagDeliveryMaxRetries(cfg, "telegram")).toBe(20);
+    // Global config still applies for channels without override
+    expect(resolveOagDeliveryMaxRetries(cfg, "discord")).toBe(10);
+  });
+
+  it("falls through to global config when channel override is absent", () => {
+    const cfg = {
+      gateway: {
+        oag: {
+          delivery: { recoveryBudgetMs: 45_000 },
+          channels: {},
+        },
+      },
+    };
+    expect(resolveOagDeliveryRecoveryBudgetMs(cfg, "telegram")).toBe(45_000);
+  });
+
+  it("uses transport profile default when no config at all for that channel", () => {
+    // telegram is a polling channel with profile maxRetries=8
+    expect(resolveOagDeliveryMaxRetries(undefined, "telegram")).toBe(8);
+    // discord is websocket with profile maxRetries=5
+    expect(resolveOagDeliveryMaxRetries(undefined, "discord")).toBe(5);
+    // signal is local with profile maxRetries=3
+    expect(resolveOagDeliveryMaxRetries(undefined, "signal")).toBe(3);
+  });
+
+  it("uses transport profile recoveryBudgetMs when no config", () => {
+    // polling: 90_000
+    expect(resolveOagDeliveryRecoveryBudgetMs(undefined, "telegram")).toBe(90_000);
+    // websocket: 30_000
+    expect(resolveOagDeliveryRecoveryBudgetMs(undefined, "slack")).toBe(30_000);
+    // local: 15_000
+    expect(resolveOagDeliveryRecoveryBudgetMs(undefined, "imessage")).toBe(15_000);
+    // webhook: 60_000
+    expect(resolveOagDeliveryRecoveryBudgetMs(undefined, "line")).toBe(60_000);
+  });
+
+  it("uses transport profile stalePollFactor when no config", () => {
+    // polling: 2
+    expect(resolveOagStalePollFactor(undefined, "telegram")).toBe(2);
+    // websocket: 1
+    expect(resolveOagStalePollFactor(undefined, "discord")).toBe(1);
+  });
+
+  it("channel-specific stalePollFactor overrides global and transport", () => {
+    const cfg = {
+      gateway: {
+        oag: {
+          health: { stalePollFactor: 3 },
+          channels: {
+            telegram: { health: { stalePollFactor: 5 } },
+          },
+        },
+      },
+    };
+    expect(resolveOagStalePollFactor(cfg, "telegram")).toBe(5);
+    expect(resolveOagStalePollFactor(cfg, "matrix")).toBe(3);
+    expect(resolveOagStalePollFactor(cfg)).toBe(3);
+  });
+
+  it("3-tier cascade: channel config > global config > transport profile > hardcoded default", () => {
+    // Tier 3: no config, known channel -> transport profile default
+    expect(resolveOagDeliveryMaxRetries(undefined, "telegram")).toBe(8);
+    // Tier 2: global config set -> uses global
+    const globalOnly = { gateway: { oag: { delivery: { maxRetries: 12 } } } };
+    expect(resolveOagDeliveryMaxRetries(globalOnly, "telegram")).toBe(12);
+    // Tier 1: channel config set -> uses channel override
+    const withChannel = {
+      gateway: {
+        oag: {
+          delivery: { maxRetries: 12 },
+          channels: { telegram: { delivery: { maxRetries: 25 } } },
+        },
+      },
+    };
+    expect(resolveOagDeliveryMaxRetries(withChannel, "telegram")).toBe(25);
+  });
+
+  it("falls through to hardcoded default when no channel specified and no config", () => {
+    expect(resolveOagDeliveryMaxRetries()).toBe(5);
+    expect(resolveOagDeliveryRecoveryBudgetMs()).toBe(60_000);
+    expect(resolveOagStalePollFactor()).toBe(2);
+  });
+
+  it("ignores invalid channel-specific values and falls through", () => {
+    const cfg = {
+      gateway: {
+        oag: {
+          delivery: { maxRetries: 10 },
+          channels: {
+            telegram: { delivery: { maxRetries: -1 } },
+          },
+        },
+      },
+    };
+    // Invalid channel override -> falls to global
+    expect(resolveOagDeliveryMaxRetries(cfg, "telegram")).toBe(10);
+  });
+});
+
 describe("oag-config evolution resolvers", () => {
   it("returns defaults when config is undefined", () => {
     expect(resolveOagEvolutionMaxStepPercent()).toBe(50);

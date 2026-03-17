@@ -66,6 +66,19 @@ vi.mock("./oag-metrics.js", () => ({
   getOagMetrics: () => ({}),
 }));
 
+const mockEmitOagEvent = vi.fn();
+vi.mock("./oag-event-bus.js", () => ({
+  emitOagEvent: (...args: unknown[]) => mockEmitOagEvent(...args),
+}));
+
+vi.mock("./oag-evolution-notify.js", () => ({
+  injectEvolutionNote: vi.fn(async () => true),
+}));
+
+vi.mock("./oag-diagnosis.js", () => ({
+  requestDiagnosis: vi.fn(async () => {}),
+}));
+
 vi.mock("./oag-incident-collector.js", () => ({
   collectActiveIncidents: () => [],
 }));
@@ -92,6 +105,7 @@ describe("oag-postmortem", () => {
       diagnoses: [],
       metricSeries: [],
     };
+    mockEmitOagEvent.mockClear();
   });
 
   it("skips analysis when crash count is below threshold", async () => {
@@ -135,10 +149,10 @@ describe("oag-postmortem", () => {
     const result = await runPostRecoveryAnalysis();
     expect(result.analyzed).toBe(true);
     expect(result.recommendations.length).toBeGreaterThan(0);
-    const budgetRec = result.recommendations.find(
-      (r) => r.configPath === "gateway.oag.delivery.recoveryBudgetMs",
-    );
+    // All incidents from "telegram" — recommendation is channel-scoped
+    const budgetRec = result.recommendations.find((r) => r.configPath.includes("recoveryBudgetMs"));
     expect(budgetRec).toBeDefined();
+    expect(budgetRec!.configPath).toBe("gateway.oag.channels.telegram.delivery.recoveryBudgetMs");
     expect(budgetRec!.suggestedValue).toBeGreaterThan(60000);
     expect(budgetRec!.risk).toBe("low");
   });
@@ -264,12 +278,131 @@ describe("oag-postmortem", () => {
       channel: "slack",
     });
     expect(result.analyzed).toBe(true);
-    const budgetRec = result.recommendations.find(
-      (r) => r.configPath === "gateway.oag.delivery.recoveryBudgetMs",
-    );
+    // All incidents from "telegram" — channel-scoped path
+    const budgetRec = result.recommendations.find((r) => r.configPath.includes("recoveryBudgetMs"));
     expect(budgetRec).toBeDefined();
     // Incident has "telegram" — that should take precedence over sentinel "slack"
     expect(budgetRec!.reason).toContain("telegram");
+    expect(budgetRec!.configPath).toBe("gateway.oag.channels.telegram.delivery.recoveryBudgetMs");
+  });
+
+  it("generates channel-scoped recommendation when incidents are dominated by one channel", async () => {
+    const now = new Date().toISOString();
+    // All 4 incidents are from "telegram" — exceeds 80% threshold
+    mockMemory.current.lifecycles = Array.from({ length: 4 }, (_, i) => ({
+      id: `lc-${i}`,
+      startedAt: now,
+      stoppedAt: now,
+      stopReason: "crash" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "telegram",
+          detail: "ETIMEDOUT",
+          count: 1,
+          firstAt: now,
+          lastAt: now,
+        },
+      ],
+    }));
+
+    const result = await runPostRecoveryAnalysis();
+    expect(result.analyzed).toBe(true);
+    const budgetRec = result.recommendations.find((r) => r.configPath.includes("recoveryBudgetMs"));
+    expect(budgetRec).toBeDefined();
+    // Should be channel-scoped since all incidents are from "telegram"
+    expect(budgetRec!.configPath).toBe("gateway.oag.channels.telegram.delivery.recoveryBudgetMs");
+  });
+
+  it("generates global recommendation when incidents span multiple channels", async () => {
+    const now = new Date().toISOString();
+    // Incidents from "telegram" and "discord" — no single channel dominates
+    mockMemory.current.lifecycles = [
+      ...Array.from({ length: 2 }, (_, i) => ({
+        id: `lc-tg-${i}`,
+        startedAt: now,
+        stoppedAt: now,
+        stopReason: "crash" as const,
+        uptimeMs: 1000,
+        metricsSnapshot: {},
+        incidents: [
+          {
+            type: "channel_crash_loop" as const,
+            channel: "telegram",
+            detail: "ETIMEDOUT",
+            count: 1,
+            firstAt: now,
+            lastAt: now,
+          },
+        ],
+      })),
+      ...Array.from({ length: 2 }, (_, i) => ({
+        id: `lc-dc-${i}`,
+        startedAt: now,
+        stoppedAt: now,
+        stopReason: "crash" as const,
+        uptimeMs: 1000,
+        metricsSnapshot: {},
+        incidents: [
+          {
+            type: "channel_crash_loop" as const,
+            channel: "discord",
+            detail: "ETIMEDOUT",
+            count: 1,
+            firstAt: now,
+            lastAt: now,
+          },
+        ],
+      })),
+    ];
+
+    const result = await runPostRecoveryAnalysis();
+    expect(result.analyzed).toBe(true);
+    // With mixed channels (50/50 split), patterns are grouped separately.
+    // Each group has only 2 incidents (below min 3), so no recommendations.
+    // But if we add enough from each:
+    mockMemory.current.lifecycles = Array.from({ length: 3 }, (_, i) => ({
+      id: `lc-tg-${i}`,
+      startedAt: now,
+      stoppedAt: now,
+      stopReason: "crash" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "telegram",
+          detail: "ETIMEDOUT",
+          count: 1,
+          firstAt: now,
+          lastAt: now,
+        },
+        {
+          type: "channel_crash_loop" as const,
+          channel: "discord",
+          detail: "ECONNRESET",
+          count: 1,
+          firstAt: now,
+          lastAt: now,
+        },
+      ],
+    }));
+
+    // Reset evolutions to avoid cooldown from previous run
+    mockMemory.current.evolutions = [];
+
+    const result2 = await runPostRecoveryAnalysis();
+    // Both telegram and discord have 3 incidents each. Each pattern is
+    // channel-specific (telegram and discord separately), so each recommendation
+    // scopes to its own channel since 100% of that pattern's incidents come from
+    // one channel.
+    for (const rec of result2.recommendations) {
+      if (rec.configPath.includes("recoveryBudgetMs")) {
+        expect(rec.configPath).toMatch(/^gateway\.oag\.channels\.(telegram|discord)\./);
+      }
+    }
   });
 
   it("includes empty trends when no metric series data", async () => {

@@ -237,6 +237,193 @@ describe("evaluateChannelHealth", () => {
   });
 });
 
+describe("transport-aware channel health", () => {
+  it("treats matrix as a polling channel (skips stale-socket detection)", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+      },
+      {
+        channelId: "matrix",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("treats signal as a polling channel (local transport, skips stale-socket)", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 0,
+      },
+      {
+        channelId: "signal",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    // signal is local (polling-like), so stale-socket is not used;
+    // it falls through to the stale-poll path instead
+    expect(evaluation.reason).not.toBe("stale-socket");
+  });
+
+  it("treats zalo as a polling channel (skips stale-socket detection)", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+      },
+      {
+        channelId: "zalo",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("treats discord as a websocket channel (stale-socket detection applies)", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 0,
+      },
+      {
+        channelId: "discord",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("treats slack as a websocket channel (stale-socket detection applies)", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 0,
+      },
+      {
+        channelId: "slack",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("webhook channels (line) skip stale-socket detection via transport profile", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: 0,
+      },
+      {
+        channelId: "line",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    // line is a webhook (passive) channel, so stale-socket detection is skipped
+    expect(evaluation.reason).not.toBe("stale-socket");
+  });
+
+  it("webhook channels (msteams) skip stale-socket detection via transport profile", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastStartAt: 0,
+        lastEventAt: null,
+      },
+      {
+        channelId: "msteams",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("detects stale-poll for matrix channel with stale lastInboundAt", () => {
+    const now = 10 * 60 * 60_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastInboundAt: now - 61 * 60_000,
+        lastStartAt: now - 120 * 60_000,
+      },
+      {
+        channelId: "matrix",
+        now,
+        channelConnectGraceMs: 120_000,
+        staleEventThresholdMs: 30 * 60_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-poll" });
+  });
+
+  it("detects stale-poll for signal channel with stale lastInboundAt", () => {
+    const now = 10 * 60 * 60_000;
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        lastInboundAt: now - 61 * 60_000,
+        lastStartAt: now - 120 * 60_000,
+      },
+      {
+        channelId: "signal",
+        now,
+        channelConnectGraceMs: 120_000,
+        staleEventThresholdMs: 30 * 60_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-poll" });
+  });
+});
+
 describe("stale-poll detection", () => {
   it("telegram channel with stale lastInboundAt returns stale-poll", () => {
     const now = 10 * 60 * 60_000;

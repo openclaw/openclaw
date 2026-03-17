@@ -1,3 +1,4 @@
+import { emitOagEvent } from "./oag-event-bus.js";
 import type { OagIncident } from "./oag-memory.js";
 
 const activeIncidents = new Map<string, OagIncident>();
@@ -37,6 +38,11 @@ export function recordOagIncident(
       activeIncidents.delete(oldestKey);
     }
   }
+  emitOagEvent("incident_recorded", {
+    type: incident.type,
+    channel: incident.channel,
+    detail: incident.detail,
+  });
 }
 
 export function collectActiveIncidents(): OagIncident[] {

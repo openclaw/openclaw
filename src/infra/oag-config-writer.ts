@@ -13,8 +13,15 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
+function isValidOagConfigPath(p: string): boolean {
+  // Accept both global OAG paths and channel-scoped OAG paths:
+  //   gateway.oag.<rest>
+  //   gateway.oag.channels.<channelId>.<rest>
+  return p.startsWith("gateway.oag.");
+}
+
 function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
-  if (!path.startsWith("gateway.oag.")) {
+  if (!isValidOagConfigPath(path)) {
     throw new Error(`OAG config path must start with "gateway.oag.": ${path}`);
   }
   const parts = path.split(".");
