@@ -84,6 +84,17 @@ openclaw devices approve <requestId>
 openclaw devices reject <requestId>
 ```
 
+Third-party Gateway WS clients use the same device-pairing flow. For example,
+Paperclip's `openclaw_gateway` adapter may fail the first run with
+`openclaw_gateway_pairing_required` until you approve the pending device
+request. After the first failed connection, approve the latest request and
+retry:
+
+```bash
+openclaw devices approve --latest
+openclaw devices approve --latest --url ws://gateway-host:18789 --token <gateway-token>
+```
+
 ### Node pairing state storage
 
 Stored under `~/.openclaw/devices/`:

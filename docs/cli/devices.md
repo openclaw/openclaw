@@ -51,6 +51,17 @@ openclaw devices approve <requestId>
 openclaw devices approve --latest
 ```
 
+Common first-run recovery for headless or third-party Gateway WS clients (for
+example Paperclip's `openclaw_gateway` adapter):
+
+```
+openclaw devices approve --latest
+openclaw devices approve --latest --url ws://gateway-host:18789 --token <gateway-token>
+```
+
+If a client does not persist its device identity, it may create a new pending
+request after restart and require approval again.
+
 ### `openclaw devices reject <requestId>`
 
 Reject a pending device pairing request.
