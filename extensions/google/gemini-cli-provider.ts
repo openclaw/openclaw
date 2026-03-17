@@ -1,5 +1,5 @@
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/core";
 import { fetchGeminiUsage } from "../../src/infra/provider-usage.fetch.js";
-import { buildOauthProviderAuthResult } from "../../src/plugin-sdk/provider-auth-result.js";
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,

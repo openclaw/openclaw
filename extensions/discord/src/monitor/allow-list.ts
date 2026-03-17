@@ -1,4 +1,5 @@
 import type { Guild, User } from "@buape/carbon";
+import { evaluateGroupRouteAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import type { AllowlistMatch } from "../../../../src/channels/allowlist-match.js";
 import {
   buildChannelKeyCandidates,
@@ -6,7 +7,6 @@ import {
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "../../../../src/channels/channel-config.js";
-import { evaluateGroupRouteAccessForPolicy } from "../../../../src/plugin-sdk/group-access.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {

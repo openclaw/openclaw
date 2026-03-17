@@ -14,7 +14,6 @@ import {
 import {
   buildAgentSessionKey,
   resolveThreadSessionKeys,
-  type ChannelPlugin,
   type RoutePeer,
 } from "../../../src/plugin-sdk-internal/core.js";
 import {
@@ -31,6 +30,7 @@ import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
   TelegramConfigSchema,
+  type ChannelPlugin,
   type ChannelMessageActionAdapter,
   type OpenClawConfig,
 } from "../../../src/plugin-sdk-internal/telegram.js";

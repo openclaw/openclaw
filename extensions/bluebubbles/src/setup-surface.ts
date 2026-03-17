@@ -1,14 +1,14 @@
 import {
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
   mergeAllowFromEntries,
   resolveSetupAccountId,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+  type DmPolicy,
+  type OpenClawConfig,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
 import {
   listBlueBubblesAccountIds,
   resolveBlueBubblesAccount,

@@ -14,6 +14,7 @@ import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
 import * as providerSetupSdk from "openclaw/plugin-sdk/provider-setup";
 import * as sandboxSdk from "openclaw/plugin-sdk/sandbox";
 import * as selfHostedProviderSetupSdk from "openclaw/plugin-sdk/self-hosted-provider-setup";
+import * as setupSdk from "openclaw/plugin-sdk/setup";
 import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
@@ -61,6 +62,14 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof providerSetupSdk.promptAndConfigureOpenAICompatibleSelfHostedProviderAuth).toBe(
       "function",
     );
+  });
+
+  it("exports shared setup helpers from the dedicated subpath", () => {
+    expect(typeof setupSdk.DEFAULT_ACCOUNT_ID).toBe("string");
+    expect(typeof setupSdk.formatDocsLink).toBe("function");
+    expect(typeof setupSdk.mergeAllowFromEntries).toBe("function");
+    expect(typeof setupSdk.setTopLevelChannelDmPolicyWithAllowFrom).toBe("function");
+    expect(typeof setupSdk.formatResolvedUnresolvedNote).toBe("function");
   });
 
   it("exports narrow self-hosted provider setup helpers", () => {
