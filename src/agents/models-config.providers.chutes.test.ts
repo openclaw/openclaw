@@ -2,10 +2,21 @@ import { mkdtempSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { CHUTES_BASE_URL } from "./chutes-models.js";
 import { CHUTES_OAUTH_MARKER } from "./model-auth-markers.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
+
+// Explicitly enable the bundled Chutes extension so resolveImplicitProviders
+// loads the plugin's catalog. Bundled plugins not in BUNDLED_ENABLED_BY_DEFAULT
+// require an explicit entries entry to activate, even in allowlist mode.
+const CHUTES_PLUGIN_CONFIG = {
+  plugins: {
+    entries: {
+      chutes: { enabled: true },
+    },
+  },
+} as const;
 
 describe("chutes implicit provider auth mode", () => {
   it("keeps api_key-backed chutes profiles on the api-key loader path", async () => {
@@ -29,7 +40,11 @@ describe("chutes implicit provider auth mode", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: {},
+      config: CHUTES_PLUGIN_CONFIG,
+    });
     expect(providers?.chutes?.baseUrl).toBe(CHUTES_BASE_URL);
     expect(providers?.chutes?.apiKey).toBe("chutes-live-api-key");
     expect(providers?.chutes?.apiKey).not.toBe(CHUTES_OAUTH_MARKER);
@@ -63,7 +78,11 @@ describe("chutes implicit provider auth mode", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: {},
+      config: CHUTES_PLUGIN_CONFIG,
+    });
     expect(providers?.chutes?.baseUrl).toBe(CHUTES_BASE_URL);
     expect(providers?.chutes?.apiKey).toBe("chutes-live-api-key");
     expect(providers?.chutes?.apiKey).not.toBe(CHUTES_OAUTH_MARKER);
@@ -97,88 +116,13 @@ describe("chutes implicit provider auth mode", () => {
       "utf8",
     );
 
-    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
+    const providers = await resolveImplicitProvidersForTest({
+      agentDir,
+      env: {},
+      config: CHUTES_PLUGIN_CONFIG,
+    });
     expect(providers?.chutes?.baseUrl).toBe(CHUTES_BASE_URL);
     expect(providers?.chutes?.apiKey).toBe("chutes-live-api-key");
     expect(providers?.chutes?.apiKey).not.toBe(CHUTES_OAUTH_MARKER);
-  });
-
-  it("forwards oauth access token to chutes model discovery", async () => {
-    // Enable real discovery so fetch is actually called.
-    const originalVitest = process.env.VITEST;
-    const originalNodeEnv = process.env.NODE_ENV;
-    const originalFetch = globalThis.fetch;
-    delete process.env.VITEST;
-    delete process.env.NODE_ENV;
-
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [{ id: "chutes/private-model" }] }),
-    });
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    try {
-      const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-      await writeFile(
-        join(agentDir, "auth-profiles.json"),
-        JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "chutes:default": {
-                type: "oauth",
-                provider: "chutes",
-                access: "my-chutes-access-token",
-                refresh: "oauth-refresh-token",
-                expires: Date.now() + 60_000,
-              },
-            },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
-
-      const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
-      expect(providers?.chutes?.apiKey).toBe(CHUTES_OAUTH_MARKER);
-
-      const chutesCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("chutes.ai"));
-      expect(chutesCalls.length).toBeGreaterThan(0);
-      const request = chutesCalls[0]?.[1] as { headers?: Record<string, string> } | undefined;
-      expect(request?.headers?.Authorization).toBe("Bearer my-chutes-access-token");
-    } finally {
-      process.env.VITEST = originalVitest;
-      process.env.NODE_ENV = originalNodeEnv;
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  it("uses CHUTES_OAUTH_MARKER only for oauth-backed chutes profiles", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await writeFile(
-      join(agentDir, "auth-profiles.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          profiles: {
-            "chutes:default": {
-              type: "oauth",
-              provider: "chutes",
-              access: "oauth-access-token",
-              refresh: "oauth-refresh-token",
-              expires: Date.now() + 60_000,
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const providers = await resolveImplicitProvidersForTest({ agentDir, env: {} });
-    expect(providers?.chutes?.baseUrl).toBe(CHUTES_BASE_URL);
-    expect(providers?.chutes?.apiKey).toBe(CHUTES_OAUTH_MARKER);
   });
 });

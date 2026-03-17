@@ -288,6 +288,8 @@ importers:
 
   extensions/byteplus: {}
 
+  extensions/chutes: {}
+
   extensions/cloudflare-ai-gateway: {}
 
   extensions/copilot-proxy: {}

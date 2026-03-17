@@ -15,6 +15,7 @@ export {
   upsertAuthProfile,
 } from "../agents/auth-profiles.js";
 export {
+  CHUTES_OAUTH_MARKER,
   MINIMAX_OAUTH_MARKER,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "../agents/model-auth-markers.js";

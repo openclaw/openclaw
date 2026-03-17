@@ -1,9 +1,54 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { CHUTES_OAUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
+import { definePluginEntry, type ProviderCatalogContext } from "openclaw/plugin-sdk/core";
+import {
+  createProviderApiKeyAuthMethod,
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "openclaw/plugin-sdk/provider-auth";
 import { CHUTES_DEFAULT_MODEL_REF, applyChutesApiKeyConfig } from "./onboard.js";
 import { buildChutesProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "chutes";
+
+/**
+ * Resolve the Chutes implicit provider.
+ * - If an API key is available (env var or api_key profile), use it directly.
+ * - If an OAuth profile exists and no API key is present, use CHUTES_OAUTH_MARKER
+ *   so the gateway injects the stored access token at request time.
+ */
+async function resolveCatalog(ctx: ProviderCatalogContext) {
+  const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
+  if (apiKey) {
+    return {
+      provider: {
+        ...(await buildChutesProvider(discoveryApiKey)),
+        apiKey,
+      },
+    };
+  }
+
+  const authStore = ensureAuthProfileStore(ctx.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const oauthProfileId = listProfilesForProvider(authStore, PROVIDER_ID).find(
+    (id) => authStore.profiles[id]?.type === "oauth",
+  );
+  if (!oauthProfileId) {
+    return null;
+  }
+
+  // Pass the stored access token for authenticated model discovery.
+  // discoverChutesModels retries without auth on 401, so an expired token degrades gracefully.
+  const oauthCred = authStore.profiles[oauthProfileId];
+  const accessToken = oauthCred?.type === "oauth" ? oauthCred.access : undefined;
+
+  return {
+    provider: {
+      ...(await buildChutesProvider(accessToken)),
+      apiKey: CHUTES_OAUTH_MARKER,
+    },
+  };
+}
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -43,19 +88,8 @@ export default definePluginEntry({
         }),
       ],
       catalog: {
-        order: "simple",
-        run: async (ctx) => {
-          const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...(await buildChutesProvider(discoveryApiKey)),
-              apiKey,
-            },
-          };
-        },
+        order: "profile",
+        run: resolveCatalog,
       },
     });
   },
