@@ -23,6 +23,7 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import { ensureMemoryFlushTarget } from "./memory-flush.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
@@ -108,6 +109,12 @@ export async function getReplyFromConfig(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
+
+  // Ensure the daily memory file exists so agent read instructions don't ENOENT.
+  if (!isFastTestEnv) {
+    await ensureMemoryFlushTarget({ workspaceDir, cfg });
+  }
+
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =

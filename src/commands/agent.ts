@@ -43,6 +43,7 @@ import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { ensureMemoryFlushTarget } from "../auto-reply/reply/memory-flush.js";
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
 import {
   formatThinkingLevels,
@@ -639,6 +640,10 @@ async function prepareAgentCommandExecution(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+
+  // Ensure the daily memory file exists so agent read instructions don't ENOENT.
+  await ensureMemoryFlushTarget({ workspaceDir, cfg });
+
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
