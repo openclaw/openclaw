@@ -2,10 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
 import { __testing as providerTesting } from "../providers.js";
 import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
-import {
-  providerContractPluginIds,
-  webSearchProviderContractRegistry,
-} from "./registry.js";
+import { providerContractPluginIds, webSearchProviderContractRegistry } from "./registry.js";
 
 function uniqueSortedPluginIds(values: string[]) {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));

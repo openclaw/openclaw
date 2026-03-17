@@ -1,6 +1,6 @@
-import { detectBinary } from "../../../src/commands/onboard-helpers.js";
 import { setSetupChannelEnabled } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { detectBinary } from "../../../src/commands/onboard-helpers.js";
 import { listIMessageAccountIds, resolveIMessageAccount } from "./accounts.js";
 import {
   createIMessageCliPathTextInput,

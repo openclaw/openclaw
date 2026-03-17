@@ -178,7 +178,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     chunkerMode: "text",
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
-      const result = await (await loadIMessageChannelRuntime()).sendIMessageOutbound({
+      const result = await (
+        await loadIMessageChannelRuntime()
+      ).sendIMessageOutbound({
         cfg,
         to,
         text,
@@ -189,7 +191,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       return { channel: "imessage", ...result };
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
-      const result = await (await loadIMessageChannelRuntime()).sendIMessageOutbound({
+      const result = await (
+        await loadIMessageChannelRuntime()
+      ).sendIMessageOutbound({
         cfg,
         to,
         text,
