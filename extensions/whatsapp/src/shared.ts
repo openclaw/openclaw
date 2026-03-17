@@ -3,22 +3,20 @@ import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
-import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
 import {
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
-} from "../../../src/channels/plugins/group-mentions.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
-import { resolveWhatsAppGroupIntroHint } from "../../../src/channels/plugins/whatsapp-shared.js";
-import { getChatChannelMeta } from "../../../src/channels/registry.js";
-import { WhatsAppConfigSchema } from "../../../src/config/zod-schema.providers-whatsapp.js";
-import {
+  buildChannelConfigSchema,
+  DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
+  getChatChannelMeta,
+  normalizeE164,
   resolveWhatsAppConfigAllowFrom,
   resolveWhatsAppConfigDefaultTo,
-} from "../../../src/plugin-sdk/channel-config-helpers.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { normalizeE164 } from "../../../src/utils.js";
+  resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppGroupRequireMention,
+  resolveWhatsAppGroupToolPolicy,
+  WhatsAppConfigSchema,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/whatsapp";
 import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
