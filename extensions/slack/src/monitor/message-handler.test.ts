@@ -7,13 +7,20 @@ const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, 
   ...message,
 }));
 
-vi.mock("../../../../src/auto-reply/inbound-debounce.js", () => ({
-  resolveInboundDebounceMs: () => 10,
-  createInboundDebouncer: () => ({
-    enqueue: (entry: unknown) => enqueueMock(entry),
-    flushKey: (key: string) => flushKeyMock(key),
-  }),
-}));
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
+  return {
+    ...actual,
+    shouldDebounceTextInbound: ({ hasMedia }: { hasMedia?: boolean }) => !hasMedia,
+    createChannelInboundDebouncer: () => ({
+      debounceMs: 10,
+      debouncer: {
+        enqueue: (entry: unknown) => enqueueMock(entry),
+        flushKey: (key: string) => flushKeyMock(key),
+      },
+    }),
+  };
+});
 
 vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({

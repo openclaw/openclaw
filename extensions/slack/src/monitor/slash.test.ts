@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
-vi.mock("../../../../src/auto-reply/commands-registry.js", () => {
+vi.mock("./slash-commands.runtime.js", () => {
   const usageCommand = { key: "usage", nativeName: "usage" };
   const reportCommand = { key: "report", nativeName: "report" };
   const reportCompactCommand = { key: "reportcompact", nativeName: "reportcompact" };
@@ -408,7 +408,7 @@ describe("Slack native command argument menus", () => {
   let argMenuHandler: (args: unknown) => Promise<void>;
   let argMenuOptionsHandler: (args: unknown) => Promise<void>;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     harness = createArgMenusHarness();
     await registerCommands(harness.ctx, harness.account);
     usageHandler = requireHandler(harness.commands, "/usage", "/usage");
@@ -420,9 +420,6 @@ describe("Slack native command argument menus", () => {
     agentStatusHandler = requireHandler(harness.commands, "/agentstatus", "/agentstatus");
     argMenuHandler = requireHandler(harness.actions, "openclaw_cmdarg", "arg-menu action");
     argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
-  });
-
-  beforeEach(() => {
     harness.postEphemeral.mockClear();
   });
 
@@ -962,15 +959,15 @@ describe("slack slash commands access groups", () => {
 });
 
 describe("slack slash command session metadata", () => {
-  const { recordSessionMetaFromInboundMock } = getSlackSlashMocks();
+  const { recordInboundSessionMetaSafeMock } = getSlackSlashMocks();
 
   it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {
     const harness = createPolicyHarness({ groupPolicy: "open" });
     await registerAndRunPolicySlash({ harness });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
-    const call = recordSessionMetaFromInboundMock.mock.calls[0]?.[0] as {
+    expect(recordInboundSessionMetaSafeMock).toHaveBeenCalledTimes(1);
+    const call = recordInboundSessionMetaSafeMock.mock.calls[0]?.[0] as {
       sessionKey?: string;
       ctx?: { OriginatingChannel?: string };
     };
@@ -980,7 +977,7 @@ describe("slack slash command session metadata", () => {
 
   it("awaits session metadata persistence before dispatch", async () => {
     const deferred = createDeferred<void>();
-    recordSessionMetaFromInboundMock.mockClear().mockReturnValue(deferred.promise);
+    recordInboundSessionMetaSafeMock.mockClear().mockReturnValue(deferred.promise);
 
     const harness = createPolicyHarness({ groupPolicy: "open" });
     await registerCommands(harness.ctx, harness.account);
@@ -994,7 +991,7 @@ describe("slack slash command session metadata", () => {
     });
 
     await vi.waitFor(() => {
-      expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
+      expect(recordInboundSessionMetaSafeMock).toHaveBeenCalledTimes(1);
     });
     expect(dispatchMock).not.toHaveBeenCalled();
 

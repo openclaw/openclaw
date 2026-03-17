@@ -10,13 +10,21 @@ const memberMocks = vi.hoisted(() => ({
   readAllow: vi.fn(),
 }));
 
-vi.mock("../../../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: memberMocks.enqueue,
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: memberMocks.enqueue,
+  };
+});
 
-vi.mock("../../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: memberMocks.readAllow,
-}));
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: memberMocks.readAllow,
+  };
+});
 
 type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 

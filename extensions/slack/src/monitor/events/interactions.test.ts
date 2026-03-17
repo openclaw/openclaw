@@ -10,20 +10,26 @@ const dispatchPluginInteractiveHandlerMock = vi.fn(async () => ({
 const resolvePluginConversationBindingApprovalMock = vi.fn();
 const buildPluginBindingResolvedTextMock = vi.fn(() => "Binding updated.");
 
-vi.mock("../../../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) =>
-    (enqueueSystemEventMock as (...innerArgs: unknown[]) => unknown)(...args),
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) =>
+      (enqueueSystemEventMock as (...innerArgs: unknown[]) => unknown)(...args),
+  };
+});
 
-vi.mock("../../../../../src/plugins/interactive.js", () => ({
-  dispatchPluginInteractiveHandler: (...args: unknown[]) =>
-    (dispatchPluginInteractiveHandlerMock as (...innerArgs: unknown[]) => unknown)(...args),
-}));
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    dispatchPluginInteractiveHandler: (...args: unknown[]) =>
+      (dispatchPluginInteractiveHandlerMock as (...innerArgs: unknown[]) => unknown)(...args),
+  };
+});
 
-vi.mock("../../../../../src/plugins/conversation-binding.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../../../src/plugins/conversation-binding.js")
-  >("../../../../../src/plugins/conversation-binding.js");
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
     resolvePluginConversationBindingApproval: (...args: unknown[]) =>

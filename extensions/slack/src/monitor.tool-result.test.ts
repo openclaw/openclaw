@@ -15,6 +15,7 @@ import {
 const { resetInboundDedupe } = await import("../../../src/auto-reply/reply/inbound-dedupe.js");
 const { HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js");
 const { CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js");
+const { resetSlackThreadStarterCacheForTest } = await import("./monitor/media.js");
 const { monitorSlackProvider } = await import("./monitor.js");
 
 const slackTestState = getSlackTestState();
@@ -22,6 +23,7 @@ const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestSt
 
 beforeEach(() => {
   resetInboundDedupe();
+  resetSlackThreadStarterCacheForTest();
   resetSlackTestState(defaultSlackTestConfig());
 });
 

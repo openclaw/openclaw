@@ -8,13 +8,21 @@ import {
 const messageQueueMock = vi.fn();
 const messageAllowMock = vi.fn();
 
-vi.mock("../../../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
+  };
+});
 
-vi.mock("../../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => messageAllowMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: (...args: unknown[]) => messageAllowMock(...args),
+  };
+});
 
 type MessageHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 type RegisteredEventName = "message" | "app_mention";

@@ -3,9 +3,13 @@ import type { SlackMonitorContext } from "./context.js";
 
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readChannelAllowFromStoreMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: (...args: unknown[]) => readChannelAllowFromStoreMock(...args),
+  };
+});
 
 import { clearSlackAllowFromCacheForTest, resolveSlackEffectiveAllowFrom } from "./auth.js";
 
