@@ -16,7 +16,7 @@ If you use `OPENROUTER_API_KEY`, an `sk-or-...` key in `tools.web.search.perplex
 
 ## Getting a Perplexity API key
 
-1. Create a Perplexity account at <https://www.perplexity.ai/settings/api>
+1. Create a Perplexity account at [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api)
 2. Generate an API key in the dashboard
 3. Store the key in config or set `PERPLEXITY_API_KEY` in the Gateway environment.
 

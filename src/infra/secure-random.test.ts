@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const cryptoMocks = vi.hoisted(() => ({
   randomBytes: vi.fn((bytes: number) => Buffer.alloc(bytes, 0xab)),
@@ -11,7 +11,13 @@ vi.mock("node:crypto", () => ({
   randomUUID: cryptoMocks.randomUUID,
 }));
 
-import { generateSecureToken, generateSecureUuid } from "./secure-random.js";
+let generateSecureToken: typeof import("./secure-random.js").generateSecureToken;
+let generateSecureUuid: typeof import("./secure-random.js").generateSecureUuid;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ generateSecureToken, generateSecureUuid } = await import("./secure-random.js"));
+});
 
 describe("secure-random", () => {
   it("delegates UUID generation to crypto.randomUUID", () => {
