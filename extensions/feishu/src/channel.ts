@@ -12,7 +12,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/feishu";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/feishu";
-import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveFeishuAccount,
   resolveFeishuCredentials,
@@ -42,11 +42,9 @@ const meta: ChannelMeta = {
   order: 70,
 };
 
-type FeishuChannelRuntime = typeof import("./channel.runtime.js").feishuChannelRuntime;
-
-const loadFeishuChannelRuntime = createLazyRuntimeSurface(
+const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
-  ({ feishuChannelRuntime }) => feishuChannelRuntime,
+  "feishuChannelRuntime",
 );
 
 function setFeishuNamedAccountEnabled(

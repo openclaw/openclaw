@@ -1,6 +1,6 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
-import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
@@ -57,11 +57,9 @@ const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
   "Files.Read.All": "files (OneDrive)",
 };
 
-type MSTeamsChannelRuntime = typeof import("./channel.runtime.js").msTeamsChannelRuntime;
-
-const loadMSTeamsChannelRuntime = createLazyRuntimeSurface(
+const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
-  ({ msTeamsChannelRuntime }) => msTeamsChannelRuntime,
+  "msTeamsChannelRuntime",
 );
 
 export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {

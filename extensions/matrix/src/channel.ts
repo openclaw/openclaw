@@ -7,7 +7,7 @@ import {
   buildOpenGroupPolicyWarning,
   collectAllowlistProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
@@ -39,11 +39,9 @@ import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
-type MatrixChannelRuntime = typeof import("./channel.runtime.js").matrixChannelRuntime;
-
-const loadMatrixChannelRuntime = createLazyRuntimeSurface(
+const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
-  ({ matrixChannelRuntime }) => matrixChannelRuntime,
+  "matrixChannelRuntime",
 );
 
 const meta = {
