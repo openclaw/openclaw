@@ -121,6 +121,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "diffs",
   "llm-task",
   "memory-lancedb",
+  "synology-chat",
   "talk-voice",
   "thread-ownership",
   "voice-call",
@@ -175,6 +176,7 @@ function collectExtensionSourceFiles(): string[] {
       }
       if (
         fullPath.includes(".test.") ||
+        fullPath.includes(".test-") ||
         fullPath.includes(".fixture.") ||
         fullPath.includes(".snap") ||
         fullPath.includes("test-support") ||
@@ -249,6 +251,15 @@ function collectExtensionFiles(extensionId: string): string[] {
         continue;
       }
       if (entry.name.endsWith(".d.ts")) {
+        continue;
+      }
+      if (
+        fullPath.includes(".test.") ||
+        fullPath.includes(".test-") ||
+        fullPath.includes(".spec.") ||
+        fullPath.includes(".fixture.") ||
+        fullPath.includes(".snap")
+      ) {
         continue;
       }
       files.push(fullPath);
