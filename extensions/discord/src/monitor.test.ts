@@ -1,6 +1,6 @@
 import { ChannelType, type Guild } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { typedCases } from "../../../src/test-utils/typed-cases.js";
+import { typedCases } from "../../../test/helpers/extensions/typed-cases.js";
 import {
   allowListMatches,
   buildDiscordMediaPayload,

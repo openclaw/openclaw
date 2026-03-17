@@ -1,11 +1,11 @@
 import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
+import { resolveSignalAccount } from "../../../plugin-sdk/account-resolution.js";
 import {
   listEnabledSignalAccounts,
   removeReactionSignal,
-  resolveSignalAccount,
   resolveSignalReactionLevel,
   sendReactionSignal,
-} from "../../../plugin-sdk-internal/signal.js";
+} from "../../../plugin-sdk/signal.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { resolveReactionMessageId } from "./reaction-message-id.js";
 

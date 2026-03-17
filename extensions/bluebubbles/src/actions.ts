@@ -11,18 +11,17 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
 } from "openclaw/plugin-sdk/bluebubbles";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
 import type { BlueBubblesSendTarget } from "./types.js";
 
-let actionsRuntimePromise: Promise<typeof import("./actions.runtime.js")> | null = null;
-
-function loadBlueBubblesActionsRuntime() {
-  actionsRuntimePromise ??= import("./actions.runtime.js");
-  return actionsRuntimePromise;
-}
+const loadBlueBubblesActionsRuntime = createLazyRuntimeNamedExport(
+  () => import("./actions.runtime.js"),
+  "blueBubblesActionsRuntime",
+);
 
 const providerId = "bluebubbles";
 

@@ -3,6 +3,39 @@ import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  applyMinimaxApiConfig,
+  applyMinimaxApiProviderConfig,
+} from "../../extensions/minimax/onboard.js";
+import {
+  applyMistralConfig,
+  applyMistralProviderConfig,
+} from "../../extensions/mistral/onboard.js";
+import {
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
+} from "../../extensions/opencode-go/onboard.js";
+import {
+  applyOpencodeZenConfig,
+  applyOpencodeZenProviderConfig,
+} from "../../extensions/opencode/onboard.js";
+import {
+  applyOpenrouterConfig,
+  applyOpenrouterProviderConfig,
+} from "../../extensions/openrouter/onboard.js";
+import {
+  applySyntheticConfig,
+  applySyntheticProviderConfig,
+  SYNTHETIC_DEFAULT_MODEL_REF,
+} from "../../extensions/synthetic/onboard.js";
+import {
+  applyXaiConfig,
+  applyXaiProviderConfig,
+  XAI_DEFAULT_MODEL_REF,
+} from "../../extensions/xai/onboard.js";
+import { applyXiaomiConfig, applyXiaomiProviderConfig } from "../../extensions/xiaomi/onboard.js";
+import { applyZaiConfig, applyZaiProviderConfig } from "../../extensions/zai/onboard.js";
+import { SYNTHETIC_DEFAULT_MODEL_ID } from "../agents/synthetic-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -10,36 +43,17 @@ import {
 } from "../config/model-input.js";
 import type { ModelApi } from "../config/types.models.js";
 import {
-  applyAuthProfileConfig,
-  applyLitellmProviderConfig,
-  applyMistralConfig,
-  applyMistralProviderConfig,
-  applyMinimaxApiConfig,
-  applyMinimaxApiProviderConfig,
-  applyOpencodeGoConfig,
-  applyOpencodeGoProviderConfig,
-  applyOpencodeZenConfig,
-  applyOpencodeZenProviderConfig,
-  applyOpenrouterConfig,
-  applyOpenrouterProviderConfig,
-  applySyntheticConfig,
-  applySyntheticProviderConfig,
-  applyXaiConfig,
-  applyXaiProviderConfig,
-  applyXiaomiConfig,
-  applyXiaomiProviderConfig,
-  applyZaiConfig,
-  applyZaiProviderConfig,
-  OPENROUTER_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
-  SYNTHETIC_DEFAULT_MODEL_ID,
-  SYNTHETIC_DEFAULT_MODEL_REF,
-  XAI_DEFAULT_MODEL_REF,
-  setMinimaxApiKey,
-  writeOAuthCredentials,
   ZAI_CODING_CN_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
-} from "./onboard-auth.js";
+} from "../plugin-sdk/provider-models.js";
+import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
+import {
+  OPENROUTER_DEFAULT_MODEL_REF,
+  setMinimaxApiKey,
+  writeOAuthCredentials,
+} from "../plugins/provider-auth-storage.js";
+import { applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
