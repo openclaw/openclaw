@@ -240,11 +240,16 @@ vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => slackTestState.sendMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => slackTestState.readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) =>
-    slackTestState.upsertPairingRequestMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) =>
+      slackTestState.readAllowFromStoreMock(...args),
+    upsertChannelPairingRequest: (...args: unknown[]) =>
+      slackTestState.upsertPairingRequestMock(...args),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
