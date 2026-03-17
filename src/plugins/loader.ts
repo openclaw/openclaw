@@ -198,6 +198,21 @@ const resolvePluginSdkAliasFile = (params: {
 const resolvePluginSdkAlias = (): string | null =>
   resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
+function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
+  return {
+    interopDefault: true,
+    // Prefer Node's native sync ESM loader for built dist/*.js modules so
+    // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
+    tryNative: true,
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+    ...(Object.keys(aliasMap).length > 0
+      ? {
+          alias: aliasMap,
+        }
+      : {}),
+  };
+}
+
 function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}): string | null {
   try {
     const modulePath = resolveLoaderModulePath(params);
@@ -273,6 +288,7 @@ const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
 };
 
 export const __testing = {
+  buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
   resolvePluginSdkAliasCandidateOrder,
@@ -839,15 +855,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...resolvePluginSdkScopedAliasMap(),
     };
-    jitiLoader = createJiti(import.meta.url, {
-      interopDefault: true,
-      extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(Object.keys(aliasMap).length > 0
-        ? {
-            alias: aliasMap,
-          }
-        : {}),
-    });
+    jitiLoader = createJiti(import.meta.url, buildPluginLoaderJitiOptions(aliasMap));
     return jitiLoader;
   };
 

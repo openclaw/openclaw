@@ -3211,6 +3211,16 @@ module.exports = {
     expect(resolved).toBe(distFile);
   });
 
+  it("configures the plugin loader jiti boundary to prefer native dist modules", () => {
+    const options = __testing.buildPluginLoaderJitiOptions({});
+
+    expect(options.tryNative).toBe(true);
+    expect(options.interopDefault).toBe(true);
+    expect(options.extensions).toContain(".js");
+    expect(options.extensions).toContain(".ts");
+    expect("alias" in options).toBe(false);
+  });
+
   it("prefers src root-alias shim when loader runs from src in non-production", () => {
     const { root, srcFile } = createPluginSdkAliasFixture({
       srcFile: "root-alias.cjs",
@@ -3241,6 +3251,15 @@ module.exports = {
       }),
     );
     expect(resolved).toBe(srcFile);
+  });
+
+  it("prefers dist plugin runtime module when loader runs from dist", () => {
+    const { root, distFile } = createPluginRuntimeAliasFixture();
+
+    const resolved = __testing.resolvePluginRuntimeModulePath({
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
   });
 
   it("resolves plugin runtime module from package root when loader runs from transpiler cache path", () => {
