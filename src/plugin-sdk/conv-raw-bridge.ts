@@ -39,7 +39,8 @@ export async function tryLogConvRawBotReply(params: {
         timestamp: params.timestamp,
       });
     } else {
-      console.warn(`[Conv-Raw-Bridge] engine "${engine.info?.id}" has no logBotReply`);
+      // Not a conv-raw engine — silent no-op as documented
+      return;
     }
   } catch (err) {
     console.warn(`[Conv-Raw-Bridge] tryLogConvRawBotReply failed: ${String(err)}`);

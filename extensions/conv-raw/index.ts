@@ -376,7 +376,9 @@ export class ConvRawEngine implements ContextEngine {
       }
 
       const { compactModel } = getConfigDefaults(this.config);
-      const jobName = `conv-raw-compact-${cleanId.slice(0, 8)}`;
+      // Sanitize cleanId: only allow alphanumerics, hyphens, underscores
+      const safeId = cleanId.slice(0, 8).replace(/[^a-zA-Z0-9_-]/g, "_");
+      const jobName = `conv-raw-compact-${safeId}`;
       const truncatedPrompt = taskPrompt.slice(0, 3500).replace(/'/g, "'\\''");
       const cmd = `openclaw cron add --name "${jobName}" --at "1m" --message '${truncatedPrompt}' --model "${compactModel}" --session isolated --no-deliver --delete-after-run --timeout-seconds 300`;
 
@@ -428,17 +430,21 @@ export class ConvRawEngine implements ContextEngine {
         };
       }
 
+      // verifyRawCount reads the file AFTER atomicAppendWrite, so it already
+      // includes the newly written entry. Use it directly — no extra increment.
       const actualCount = verifyRawCount(rawPath);
       if (actualCount >= 0) {
-        if (actualCount !== meta.count) {
+        // Genuine drift = difference > 1 (the +1 from the pending write is expected)
+        if (Math.abs(actualCount - meta.count) > 1) {
           console.warn(
             `[Conv-Raw] Count drift detected: meta.count=${meta.count}, actual=${actualCount}. Auto-correcting.`,
           );
         }
         meta.count = actualCount;
+      } else {
+        // fallback if file is unreadable
+        meta.count = (meta.count || 0) + 1;
       }
-
-      meta.count = (meta.count || 0) + 1;
 
       const threshold = this.getThreshold(chatId);
       if (meta.count >= threshold && !meta.compressPending) {
@@ -456,7 +462,9 @@ export class ConvRawEngine implements ContextEngine {
         }
 
         const { compactModel } = getConfigDefaults(this.config);
-        const jobName = `conv-raw-compact-${cleanId.slice(0, 8)}`;
+        // Sanitize cleanId before interpolating into shell command
+        const safeId = cleanId.slice(0, 8).replace(/[^a-zA-Z0-9_-]/g, "_");
+        const jobName = `conv-raw-compact-${safeId}`;
         const truncatedPrompt = taskPrompt.slice(0, 3500).replace(/'/g, "'\\''");
         const cmd = `openclaw cron add --name "${jobName}" --at "1m" --message '${truncatedPrompt}' --model "${compactModel}" --session isolated --no-deliver --delete-after-run --timeout-seconds 300`;
 
@@ -507,16 +515,20 @@ export class ConvRawEngine implements ContextEngine {
 
       let history = "";
 
-      if (fs.existsSync(rawPath)) {
-        const raw = fs.readFileSync(rawPath, "utf-8");
-        history += this.trimLastEntries(raw, skipLastEntries);
+      // Older compacted history first, then recent messages — correct chronological order
+      if (fs.existsSync(prevPath)) {
+        history += fs.readFileSync(prevPath, "utf-8");
       }
 
-      if (fs.existsSync(prevPath)) {
-        if (history) {
-          history += "\n\n---\n\n";
+      if (fs.existsSync(rawPath)) {
+        const raw = fs.readFileSync(rawPath, "utf-8");
+        const recent = this.trimLastEntries(raw, skipLastEntries);
+        if (recent) {
+          if (history) {
+            history += "\n\n---\n\n";
+          }
+          history += recent;
         }
-        history += fs.readFileSync(prevPath, "utf-8");
       }
 
       return history;
@@ -572,11 +584,14 @@ const convRawPlugin = {
     },
   },
   register(api: OpenClawPluginApi) {
-    // Get config from plugin settings
-    const config = api.config?.plugins?.convRaw as ConvRawPluginConfig | undefined;
+    // Get config from plugin settings (stored under plugins.entries["conv-raw"].config)
+    const config = (api.config as Record<string, unknown> | undefined)?.["plugins"] as
+      | { entries?: Record<string, { config?: ConvRawPluginConfig }> }
+      | undefined;
+    const pluginConfig = config?.entries?.["conv-raw"]?.config;
 
     // Create engine instance
-    const engine = getConvRawEngine(config);
+    const engine = getConvRawEngine(pluginConfig);
 
     // Register as a context engine
     api.registerContextEngine("conv-raw", () => engine);
