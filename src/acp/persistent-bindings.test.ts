@@ -3,6 +3,7 @@ import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { feishuPlugin } from "../../extensions/feishu/src/channel.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -532,7 +533,7 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     );
     const resolved = resolveBindingRecord(cfg);
 
-    expect(resolved?.spec.cwd).toBe("/workspace/openclaw");
+    expect(resolved?.spec.cwd).toBe(resolveAgentWorkspaceDir(cfg, "codex"));
   });
 });
 
