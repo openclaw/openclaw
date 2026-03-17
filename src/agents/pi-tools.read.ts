@@ -418,17 +418,27 @@ export function wrapToolMutationLock(
         if (ranMutation) {
           // Mutation completed (or failed) — release so next waiter can proceed.
           release?.();
+          if (workspaceMutationLocks.get(lockKey) === current) {
+            workspaceMutationLocks.delete(lockKey);
+          }
         } else {
-          // Aborted/errored before mutation ran — splice ourselves out of the
-          // queue by forwarding our promise to resolve only when our predecessor
-          // completes, preserving ordering for later waiters.
+          // Aborted/errored before mutation ran — keep `current` in the map so
+          // new same-path writes still queue behind it, then forward resolution
+          // to when our predecessor completes.
           void previous.then(
-            () => release?.(),
-            () => release?.(),
+            () => {
+              release?.();
+              if (workspaceMutationLocks.get(lockKey) === current) {
+                workspaceMutationLocks.delete(lockKey);
+              }
+            },
+            () => {
+              release?.();
+              if (workspaceMutationLocks.get(lockKey) === current) {
+                workspaceMutationLocks.delete(lockKey);
+              }
+            },
           );
-        }
-        if (workspaceMutationLocks.get(lockKey) === current) {
-          workspaceMutationLocks.delete(lockKey);
         }
       }
     },
