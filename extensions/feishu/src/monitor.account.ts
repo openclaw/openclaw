@@ -132,7 +132,7 @@ export async function resolveReactionSyntheticEvent(
       sender_type: "user",
     },
     message: {
-      message_id: `${messageId}:reaction:${emoji}:${senderId}`,
+      message_id: `${messageId}:reaction:${emoji}:${senderId}:${action}`,
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",
