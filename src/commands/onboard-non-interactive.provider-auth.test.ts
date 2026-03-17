@@ -2,15 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
   MINIMAX_API_BASE_URL,
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
-} from "./onboard-auth.js";
+} from "../plugins/provider-model-definitions.js";
+import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createThrowingRuntime,
   readJsonFile,

@@ -2,23 +2,23 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveApiKeyForProvider, resolveEnvApiKey } from "../agents/model-auth.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { captureEnv } from "../test-utils/env.js";
 import {
   applyKilocodeProviderConfig,
   applyKilocodeConfig,
   KILOCODE_BASE_URL,
-} from "./onboard-auth.config-core.js";
-import { KILOCODE_DEFAULT_MODEL_REF } from "./onboard-auth.credentials.js";
+  KILOCODE_DEFAULT_MODEL_REF,
+} from "../../extensions/kilocode/onboard.js";
+import { resolveApiKeyForProvider, resolveEnvApiKey } from "../agents/model-auth.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
   buildKilocodeModelDefinition,
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_COST,
-} from "./onboard-auth.models.js";
+} from "../plugins/provider-model-definitions.js";
+import { captureEnv } from "../test-utils/env.js";
 
 const emptyCfg: OpenClawConfig = {};
 const KILOCODE_MODEL_IDS = ["kilo/auto"];

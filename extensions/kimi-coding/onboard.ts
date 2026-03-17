@@ -9,13 +9,14 @@ import {
   KIMI_CODING_DEFAULT_MODEL_ID,
 } from "./provider-catalog.js";
 
-export const KIMI_CODING_MODEL_REF = `kimi-coding/${KIMI_CODING_DEFAULT_MODEL_ID}`;
+export const KIMI_MODEL_REF = `kimi/${KIMI_CODING_DEFAULT_MODEL_ID}`;
+export const KIMI_CODING_MODEL_REF = KIMI_MODEL_REF;
 
 export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
-  models[KIMI_CODING_MODEL_REF] = {
-    ...models[KIMI_CODING_MODEL_REF],
-    alias: models[KIMI_CODING_MODEL_REF]?.alias ?? "Kimi",
+  models[KIMI_MODEL_REF] = {
+    ...models[KIMI_MODEL_REF],
+    alias: models[KIMI_MODEL_REF]?.alias ?? "Kimi",
   };
 
   const defaultModel = buildKimiCodingProvider().models[0];
@@ -25,7 +26,7 @@ export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
-    providerId: "kimi-coding",
+    providerId: "kimi",
     api: "anthropic-messages",
     baseUrl: KIMI_CODING_BASE_URL,
     defaultModel,
@@ -34,5 +35,5 @@ export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 }
 
 export function applyKimiCodeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(applyKimiCodeProviderConfig(cfg), KIMI_CODING_MODEL_REF);
+  return applyAgentDefaultModelPrimary(applyKimiCodeProviderConfig(cfg), KIMI_MODEL_REF);
 }
