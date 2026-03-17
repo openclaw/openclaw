@@ -13,7 +13,7 @@ export type {
   ThreadBindingManager,
   ThreadBindingRecord,
   ThreadBindingTargetKind,
-} from "../../extensions/discord/api.js";
+} from "../../extensions/discord/runtime-api.js";
 export type {
   ChannelConfiguredBindingProvider,
   ChannelConfiguredBindingConversationRef,
@@ -75,20 +75,20 @@ export {
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
 } from "../../extensions/discord/api.js";
-export { collectDiscordAuditChannelIds } from "../../extensions/discord/api.js";
+export { collectDiscordAuditChannelIds } from "../../extensions/discord/runtime-api.js";
 export { collectDiscordStatusIssues } from "../../extensions/discord/api.js";
 export {
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../../extensions/discord/api.js";
+} from "../../extensions/discord/runtime-api.js";
 export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/api.js";
 export {
   autoBindSpawnedDiscordSubagent,
   listThreadBindingsBySessionKey,
   unbindThreadBindingsBySessionKey,
-} from "../../extensions/discord/api.js";
-export { getGateway } from "../../extensions/discord/api.js";
-export { getPresence } from "../../extensions/discord/api.js";
+} from "../../extensions/discord/runtime-api.js";
+export { getGateway } from "../../extensions/discord/runtime-api.js";
+export { getPresence } from "../../extensions/discord/runtime-api.js";
 export { readDiscordComponentSpec } from "../../extensions/discord/api.js";
 export { resolveDiscordChannelId } from "../../extensions/discord/api.js";
 export {
@@ -134,5 +134,5 @@ export {
   unpinMessageDiscord,
   uploadEmojiDiscord,
   uploadStickerDiscord,
-} from "../../extensions/discord/api.js";
-export { discordMessageActions } from "../../extensions/discord/api.js";
+} from "../../extensions/discord/runtime-api.js";
+export { discordMessageActions } from "../../extensions/discord/runtime-api.js";

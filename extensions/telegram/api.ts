@@ -1,4 +1,3 @@
-export * from "./runtime-api.js";
 export * from "./src/account-inspect.js";
 export * from "./src/accounts.js";
 export * from "./src/allow-from.js";
