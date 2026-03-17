@@ -1,7 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "../../src/commands/onboard-auth.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import { isRecord } from "../../src/utils.js";
+import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "kimi-coding";

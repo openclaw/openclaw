@@ -7,14 +7,14 @@ import {
   getScopedCredentialValue,
   setScopedCredentialValue,
 } from "../../src/agents/tools/web-search-plugin-factory.js";
-import {
-  applyMoonshotConfig,
-  applyMoonshotConfigCn,
-} from "../../src/commands/onboard-auth.config-core.js";
-import { MOONSHOT_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.models.js";
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import {
+  applyMoonshotConfig,
+  applyMoonshotConfigCn,
+  MOONSHOT_DEFAULT_MODEL_REF,
+} from "./onboard.js";
 import { buildMoonshotProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "moonshot";

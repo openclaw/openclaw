@@ -15,11 +15,8 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../../src/agents/pi-embedded-runner/proxy-stream-wrappers.js";
-import {
-  applyOpenrouterConfig,
-  OPENROUTER_DEFAULT_MODEL_REF,
-} from "../../src/commands/onboard-auth.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildOpenrouterProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "openrouter";

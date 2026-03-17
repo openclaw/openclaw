@@ -1,6 +1,6 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildQianfanProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "qianfan";
