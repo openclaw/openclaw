@@ -1254,10 +1254,12 @@ export async function handleFeishuMessage(params: {
       const configuredRoute = resolveConfiguredAcpRoute({
         cfg: effectiveCfg,
         route,
-        channel: "feishu",
-        accountId: account.accountId,
-        conversationId: currentConversationId,
-        parentConversationId,
+        conversation: {
+          channel: "feishu",
+          accountId: account.accountId,
+          conversationId: currentConversationId,
+          parentConversationId,
+        },
       });
       configuredBinding = configuredRoute.configuredBinding;
       route = configuredRoute.route;

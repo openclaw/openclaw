@@ -27,12 +27,12 @@ vi.mock("./runtime/session-meta.js", () => ({
   readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
-vi.mock("./persistent-bindings.resolve.js", () => ({
+vi.mock("../channels/plugins/acp-bindings.js", () => ({
   resolveConfiguredAcpBindingSpecBySessionKey:
     resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey,
 }));
 
-import { resetAcpSessionInPlace } from "./persistent-bindings.lifecycle.js";
+import { resetConfiguredAcpBindingSessionInPlace } from "../channels/plugins/acp-binding-sessions.js";
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -52,7 +52,7 @@ beforeEach(() => {
   resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey.mockReset().mockReturnValue(null);
 });
 
-describe("resetAcpSessionInPlace", () => {
+describe("resetConfiguredAcpBindingSessionInPlace", () => {
   it("does not resolve configured bindings when ACP metadata already exists", async () => {
     const sessionKey = "agent:claude:acp:binding:discord:default:9373ab192b2317f4";
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
@@ -67,7 +67,7 @@ describe("resetAcpSessionInPlace", () => {
       throw new Error("configured binding resolution should be skipped");
     });
 
-    const result = await resetAcpSessionInPlace({
+    const result = await resetConfiguredAcpBindingSessionInPlace({
       cfg: baseCfg,
       sessionKey,
       reason: "reset",

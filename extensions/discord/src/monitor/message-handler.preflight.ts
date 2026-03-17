@@ -461,10 +461,12 @@ export async function preflightDiscordMessage(
       ? resolveConfiguredAcpRoute({
           cfg: freshCfg,
           route,
-          channel: "discord",
-          accountId: params.accountId,
-          conversationId: messageChannelId,
-          parentConversationId: earlyThreadParentId,
+          conversation: {
+            channel: "discord",
+            accountId: params.accountId,
+            conversationId: messageChannelId,
+            parentConversationId: earlyThreadParentId,
+          },
         })
       : null;
   const configuredBinding = configuredRoute?.configuredBinding ?? null;

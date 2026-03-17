@@ -541,24 +541,38 @@ export type ChannelAllowlistAdapter = {
   supportsScope?: (params: { scope: "dm" | "group" | "all" }) => boolean;
 };
 
+export type ChannelAcpBindingConversationRef = {
+  conversationId: string;
+  parentConversationId?: string;
+};
+
+export type ChannelAcpBindingMatch = ChannelAcpBindingConversationRef & {
+  matchPriority?: number;
+};
+
 export type ChannelAcpBindingAdapter = {
+  compileConfiguredBinding?: (params: {
+    binding: AgentAcpBinding;
+    conversationId: string;
+  }) => ChannelAcpBindingConversationRef | null;
+  matchInboundConversation?: (params: {
+    binding: AgentAcpBinding;
+    compiledBinding: ChannelAcpBindingConversationRef;
+    conversationId: string;
+    parentConversationId?: string;
+  }) => ChannelAcpBindingMatch | null;
+  // Compatibility bridge for third-party plugins that still implement the
+  // earlier ACP adapter shape.
   normalizeConfiguredBindingTarget?: (params: {
     binding: AgentAcpBinding;
     conversationId: string;
-  }) => {
-    conversationId: string;
-    parentConversationId?: string;
-  } | null;
+  }) => ChannelAcpBindingConversationRef | null;
   matchConfiguredBinding?: (params: {
     binding: AgentAcpBinding;
     bindingConversationId: string;
     conversationId: string;
     parentConversationId?: string;
-  }) => {
-    conversationId: string;
-    parentConversationId?: string;
-    matchPriority?: number;
-  } | null;
+  }) => ChannelAcpBindingMatch | null;
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {

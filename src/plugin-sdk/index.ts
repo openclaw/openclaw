@@ -14,8 +14,18 @@ export type {
   ChannelMessageActionName,
   ChannelStatusIssue,
 } from "../channels/plugins/types.js";
+export type {
+  ChannelAcpBindingAdapter,
+  ChannelAcpBindingConversationRef,
+  ChannelAcpBindingMatch,
+} from "../channels/plugins/types.adapters.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupAdapter, ChannelSetupInput } from "../channels/plugins/types.js";
+export type {
+  AcpBindingConversation,
+  AcpBindingResolution,
+  CompiledAcpBinding,
+} from "../channels/plugins/acp-binding-types.js";
 export type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,

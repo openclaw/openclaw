@@ -97,10 +97,12 @@ export function resolveTelegramConversationRoute(params: {
   const configuredRoute = resolveConfiguredAcpRoute({
     cfg: params.cfg,
     route,
-    channel: "telegram",
-    accountId: params.accountId,
-    conversationId: peerId,
-    parentConversationId: params.isGroup ? String(params.chatId) : undefined,
+    conversation: {
+      channel: "telegram",
+      accountId: params.accountId,
+      conversationId: peerId,
+      parentConversationId: params.isGroup ? String(params.chatId) : undefined,
+    },
   });
   let configuredBinding = configuredRoute.configuredBinding;
   let configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";

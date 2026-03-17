@@ -493,10 +493,14 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       }),
   },
   acpBindings: {
-    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+    compileConfiguredBinding: ({ conversationId }) =>
       normalizeDiscordAcpConversationId(conversationId),
-    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
-      matchDiscordAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+    matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      matchDiscordAcpConversation({
+        bindingConversationId: compiledBinding.conversationId,
+        conversationId,
+        parentConversationId,
+      }),
   },
   status: {
     defaultRuntime: {

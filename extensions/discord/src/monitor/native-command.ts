@@ -1625,10 +1625,12 @@ async function dispatchDiscordCommandInteraction(params: {
       ? resolveConfiguredAcpRoute({
           cfg,
           route,
-          channel: "discord",
-          accountId,
-          conversationId: channelId,
-          parentConversationId: threadParentId,
+          conversation: {
+            channel: "discord",
+            accountId,
+            conversationId: channelId,
+            parentConversationId: threadParentId,
+          },
         })
       : null;
   const configuredBinding = configuredRoute?.configuredBinding ?? null;

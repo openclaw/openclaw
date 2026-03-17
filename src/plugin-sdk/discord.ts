@@ -18,6 +18,11 @@ export type {
   ThreadBindingTargetKind,
 } from "../../extensions/discord/src/monitor/thread-bindings.js";
 export type {
+  ChannelAcpBindingAdapter,
+  ChannelAcpBindingConversationRef,
+  ChannelAcpBindingMatch,
+} from "../channels/plugins/types.adapters.js";
+export type {
   ChannelMessageActionContext,
   ChannelPlugin,
   OpenClawPluginApi,

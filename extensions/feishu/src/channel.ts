@@ -823,10 +823,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     },
   },
   acpBindings: {
-    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+    compileConfiguredBinding: ({ conversationId }) =>
       normalizeFeishuAcpConversationId(conversationId),
-    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
-      matchFeishuAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+    matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      matchFeishuAcpConversation({
+        bindingConversationId: compiledBinding.conversationId,
+        conversationId,
+        parentConversationId,
+      }),
   },
   setup: feishuSetupAdapter,
   setupWizard: feishuSetupWizard,
