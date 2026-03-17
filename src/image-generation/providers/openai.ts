@@ -22,12 +22,18 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProviderPlu
   return {
     id: "openai",
     label: "OpenAI",
+    defaultModel: DEFAULT_OPENAI_IMAGE_MODEL,
+    models: [DEFAULT_OPENAI_IMAGE_MODEL],
     supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
     async generateImage(req) {
+      if ((req.inputImages?.length ?? 0) > 0) {
+        throw new Error("OpenAI image generation provider does not support reference-image edits");
+      }
       const auth = await resolveApiKeyForProvider({
         provider: "openai",
         cfg: req.cfg,
         agentDir: req.agentDir,
+        store: req.authStore,
       });
       if (!auth.apiKey) {
         throw new Error("OpenAI API key missing");
@@ -44,7 +50,6 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProviderPlu
           prompt: req.prompt,
           n: req.count ?? 1,
           size: req.size ?? DEFAULT_SIZE,
-          response_format: "b64_json",
         }),
       });
 
