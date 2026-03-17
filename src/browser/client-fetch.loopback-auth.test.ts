@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   })),
   startBrowserControlServiceFromConfig: vi.fn(async () => ({ ok: true })),
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
+  getBridgeAuthForPort: vi.fn(() => undefined),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -36,7 +37,11 @@ vi.mock("./routes/dispatcher.js", () => ({
   })),
 }));
 
-import { fetchBrowserJson } from "./client-fetch.js";
+vi.mock("./bridge-auth-registry.js", () => ({
+  getBridgeAuthForPort: mocks.getBridgeAuthForPort,
+}));
+
+let fetchBrowserJson: typeof import("./client-fetch.js").fetchBrowserJson;
 
 function stubJsonFetchOk() {
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
@@ -73,6 +78,7 @@ async function expectThrownBrowserFetchError(
 
 describe("fetchBrowserJson loopback auth", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.restoreAllMocks();
     mocks.loadConfig.mockClear();
     mocks.loadConfig.mockReturnValue({
@@ -84,6 +90,11 @@ describe("fetchBrowserJson loopback auth", () => {
     });
     mocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue({ ok: true });
     mocks.dispatch.mockReset().mockResolvedValue(okDispatchResponse());
+    mocks.getBridgeAuthForPort.mockReset().mockReturnValue(undefined);
+  });
+
+  beforeEach(async () => {
+    ({ fetchBrowserJson } = await import("./client-fetch.js"));
   });
 
   afterEach(() => {

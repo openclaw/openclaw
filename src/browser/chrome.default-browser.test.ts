@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { resolveBrowserExecutableForPlatform } from "./chrome.executables.js";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
@@ -15,6 +14,8 @@ vi.mock("node:fs", () => {
 });
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+
+let resolveBrowserExecutableForPlatform: typeof import("./chrome.executables.js").resolveBrowserExecutableForPlatform;
 
 describe("browser default executable detection", () => {
   const launchServicesPlist = "com.apple.launchservices.secure.plist";
@@ -47,7 +48,12 @@ describe("browser default executable detection", () => {
   }
 
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
+  });
+
+  beforeEach(async () => {
+    ({ resolveBrowserExecutableForPlatform } = await import("./chrome.executables.js"));
   });
 
   it("prefers default Chromium browser on macOS", () => {

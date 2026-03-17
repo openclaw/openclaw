@@ -5,6 +5,7 @@ import { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-t
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn<() => OpenClawConfig>(),
   writeConfigFile: vi.fn(async (_cfg: OpenClawConfig) => {}),
+  ensureGatewayStartupAuth: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -16,7 +17,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-import { ensureBrowserControlAuth } from "./control-auth.js";
+vi.mock("../gateway/startup-auth.js", () => ({
+  ensureGatewayStartupAuth: mocks.ensureGatewayStartupAuth,
+}));
+
+let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
 
 describe("ensureBrowserControlAuth", () => {
   const expectExplicitModeSkipsAutoAuth = async (mode: "password" | "none") => {
@@ -48,9 +53,37 @@ describe("ensureBrowserControlAuth", () => {
   };
 
   beforeEach(() => {
+    vi.resetModules();
     vi.restoreAllMocks();
     mocks.loadConfig.mockClear();
     mocks.writeConfigFile.mockClear();
+    mocks.ensureGatewayStartupAuth
+      .mockReset()
+      .mockImplementation(async ({ cfg }: { cfg: OpenClawConfig }) => {
+        const generatedToken = "0123456789abcdef0123456789abcdef0123456789abcdef";
+        const nextCfg: OpenClawConfig = {
+          ...cfg,
+          gateway: {
+            ...cfg.gateway,
+            auth: {
+              ...cfg.gateway?.auth,
+              mode: "token",
+              token: generatedToken,
+            },
+          },
+        };
+        await mocks.writeConfigFile(nextCfg);
+        return {
+          cfg: nextCfg,
+          auth: { mode: "token", token: generatedToken, password: undefined },
+          generatedToken,
+          persistedGeneratedToken: true,
+        };
+      });
+  });
+
+  beforeEach(async () => {
+    ({ ensureBrowserControlAuth } = await import("./control-auth.js"));
   });
 
   it("returns existing auth and skips writes", async () => {
@@ -83,6 +116,7 @@ describe("ensureBrowserControlAuth", () => {
 
     const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
     expectGeneratedTokenPersisted(result);
+    expect(mocks.ensureGatewayStartupAuth).toHaveBeenCalledTimes(1);
   });
 
   it("skips auto-generation in test env", async () => {
@@ -151,6 +185,7 @@ describe("ensureBrowserControlAuth", () => {
       },
     };
     mocks.loadConfig.mockReturnValue(cfg);
+    mocks.ensureGatewayStartupAuth.mockRejectedValueOnce(new Error("MISSING_GW_TOKEN"));
 
     await expect(ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv })).rejects.toThrow(
       /MISSING_GW_TOKEN/i,
