@@ -287,6 +287,16 @@ export function resolveConfiguredModelRef(params: {
         return aliasMatch.ref;
       }
 
+      // Before hard-coding "anthropic", check whether the configured models map
+      // uniquely pins this model to a single provider — use that if so (#48576).
+      const inferredProvider = inferUniqueProviderFromConfiguredModels({
+        cfg: params.cfg,
+        model: trimmed,
+      });
+      if (inferredProvider) {
+        return normalizeModelRef(inferredProvider, trimmed);
+      }
+
       // Default to anthropic if no provider is specified, but warn as this is deprecated.
       const safeTrimmed = sanitizeForLog(trimmed);
       log.warn(

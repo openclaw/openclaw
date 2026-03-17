@@ -716,6 +716,61 @@ describe("model-selection", () => {
         resetLogger();
       }
     });
+
+    it("uses provider inferred from configured models when model is set without provider", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            model: { primary: "gemini-2.5-flash" },
+            models: {
+              "google/gemini-2.5-flash": {},
+            },
+          },
+        },
+      };
+
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+
+      expect(result).toEqual({ provider: "google", model: "gemini-2.5-flash" });
+    });
+
+    it("does not infer provider when configured models are ambiguous", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "gemini-2.5-flash" },
+              models: {
+                "google/gemini-2.5-flash": {},
+                "vertex/gemini-2.5-flash": {},
+              },
+            },
+          },
+        };
+
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+        });
+
+        // Ambiguous — falls back to anthropic with warning
+        expect(result).toEqual({ provider: "anthropic", model: "gemini-2.5-flash" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to "anthropic/gemini-2.5-flash"'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    });
   });
 
   describe("resolveThinkingDefault", () => {
