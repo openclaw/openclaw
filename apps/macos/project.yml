@@ -1,0 +1,157 @@
+name: OpenClawMac
+options:
+  bundleIdPrefix: ai.openclaw
+  deploymentTarget:
+    macOS: "15.0"
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+
+packages:
+  OpenClawKit:
+    path: ../shared/OpenClawKit
+  Swabble:
+    path: ../../Swabble
+  MenuBarExtraAccess:
+    url: https://github.com/orchetect/MenuBarExtraAccess
+    exactVersion: 1.2.2
+  Subprocess:
+    url: https://github.com/swiftlang/swift-subprocess.git
+    from: 0.1.0
+  Logging:
+    url: https://github.com/apple/swift-log.git
+    from: 1.8.0
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.8.1
+  Peekaboo:
+    url: https://github.com/steipete/Peekaboo.git
+    revision: bace59f90bb276f1c6fb613acfda3935ec4a7a90
+
+schemes:
+  OpenClaw:
+    shared: true
+    build:
+      targets:
+        OpenClaw: all
+    test:
+      targets:
+        - OpenClawIPCTests
+
+  OpenClawMacCLI:
+    shared: true
+    build:
+      targets:
+        OpenClawMacCLI: all
+
+  OpenClawIPCTests:
+    shared: true
+    build:
+      targets:
+        OpenClawIPCTests: all
+    test:
+      targets:
+        - OpenClawIPCTests
+
+targets:
+  OpenClawIPC:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Sources/OpenClawIPC
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.mac.ipc
+        GENERATE_INFOPLIST_FILE: YES
+
+  OpenClawDiscovery:
+    type: framework
+    platform: macOS
+    sources:
+      - path: Sources/OpenClawDiscovery
+    dependencies:
+      - package: OpenClawKit
+        product: OpenClawKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.mac.discovery
+        GENERATE_INFOPLIST_FILE: YES
+
+  OpenClaw:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/OpenClaw
+        excludes:
+          - Resources/Info.plist
+      - path: Sources/OpenClaw/Resources
+        type: folder
+        includes:
+          - OpenClaw.icns
+      - path: Sources/OpenClaw/Resources/Assets.xcassets
+      - path: Sources/OpenClaw/Resources/DeviceModels
+        type: folder
+    dependencies:
+      - target: OpenClawIPC
+      - target: OpenClawDiscovery
+      - package: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawChatUI
+      - package: OpenClawKit
+        product: OpenClawProtocol
+      - package: Swabble
+        product: SwabbleKit
+      - package: MenuBarExtraAccess
+      - package: Subprocess
+        product: Subprocess
+      - package: Logging
+        product: Logging
+      - package: Sparkle
+      - package: Peekaboo
+        product: PeekabooBridge
+      - package: Peekaboo
+        product: PeekabooAutomationKit
+    info:
+      path: Sources/OpenClaw/Resources/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.mac
+        PRODUCT_NAME: OpenClaw
+        ENABLE_HARDENED_RUNTIME: NO
+
+  OpenClawMacCLI:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/OpenClawMacCLI
+    dependencies:
+      - target: OpenClawDiscovery
+      - package: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawProtocol
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.mac.cli
+        PRODUCT_NAME: openclaw-mac
+
+  OpenClawIPCTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/OpenClawIPCTests
+    dependencies:
+      - target: OpenClawIPC
+      - target: OpenClaw
+      - target: OpenClawDiscovery
+      - package: OpenClawKit
+        product: OpenClawProtocol
+      - package: Swabble
+        product: SwabbleKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.mac.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenClaw.app/Contents/MacOS/OpenClaw"
+        BUNDLE_LOADER: "$(TEST_HOST)"

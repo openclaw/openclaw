@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import Foundation
+import OpenClawKit
 
 extension CanvasWindowController {
     static func _testSanitizeSessionKey(_ key: String) -> String {
@@ -44,7 +45,8 @@ extension CanvasWindowController {
     }
 
     static func _testIsLocalNetworkCanvasURL(_ url: URL) -> Bool {
-        CanvasA2UIActionMessageHandler.isLocalNetworkCanvasURL(url)
+        guard let host = url.host(percentEncoded: false) else { return false }
+        return LoopbackHost.isLocalNetworkHost(host)
     }
 }
 #endif

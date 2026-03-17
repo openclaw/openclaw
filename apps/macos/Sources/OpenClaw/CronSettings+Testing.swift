@@ -1,11 +1,68 @@
 import SwiftUI
 
 #if DEBUG
+private struct CronJobFixture: Encodable {
+    let id: String
+    let agentId: String?
+    let name: String
+    let description: String?
+    let enabled: Bool
+    let deleteAfterRun: Bool?
+    let createdAtMs: Int
+    let updatedAtMs: Int
+    let schedule: CronSchedule
+    let sessionTarget: String
+    let wakeMode: CronWakeMode
+    let payload: CronPayload
+    let delivery: CronDelivery?
+    let state: CronJobState
+}
+
+private func makeCronJob(
+    id: String,
+    agentId: String?,
+    name: String,
+    description: String?,
+    enabled: Bool,
+    deleteAfterRun: Bool?,
+    createdAtMs: Int,
+    updatedAtMs: Int,
+    schedule: CronSchedule,
+    sessionTarget: CronCustomSessionTarget,
+    wakeMode: CronWakeMode,
+    payload: CronPayload,
+    delivery: CronDelivery?,
+    state: CronJobState
+) -> CronJob {
+    let fixture = CronJobFixture(
+        id: id,
+        agentId: agentId,
+        name: name,
+        description: description,
+        enabled: enabled,
+        deleteAfterRun: deleteAfterRun,
+        createdAtMs: createdAtMs,
+        updatedAtMs: updatedAtMs,
+        schedule: schedule,
+        sessionTarget: sessionTarget.rawValue,
+        wakeMode: wakeMode,
+        payload: payload,
+        delivery: delivery,
+        state: state)
+
+    do {
+        let data = try JSONEncoder().encode(fixture)
+        return try JSONDecoder().decode(CronJob.self, from: data)
+    } catch {
+        fatalError("Failed to build CronJob fixture: \(error)")
+    }
+}
+
 struct CronSettings_Previews: PreviewProvider {
     static var previews: some View {
         let store = CronJobsStore(isPreview: true)
         store.jobs = [
-            CronJob(
+            makeCronJob(
                 id: "job-1",
                 agentId: "ops",
                 name: "Daily summary",
@@ -15,7 +72,7 @@ struct CronSettings_Previews: PreviewProvider {
                 createdAtMs: 0,
                 updatedAtMs: 0,
                 schedule: .every(everyMs: 86_400_000, anchorMs: nil),
-                sessionTarget: .isolated,
+                sessionTarget: .predefined(.isolated),
                 wakeMode: .now,
                 payload: .agentTurn(
                     message: "Summarize inbox",
@@ -59,7 +116,7 @@ extension CronSettings {
         store.schedulerEnabled = false
         store.schedulerStorePath = "/tmp/openclaw-cron-store.json"
 
-        let job = CronJob(
+        let job = makeCronJob(
             id: "job-1",
             agentId: "ops",
             name: "Daily summary",
@@ -69,7 +126,7 @@ extension CronSettings {
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_100_000,
             schedule: .cron(expr: "0 8 * * *", tz: "UTC"),
-            sessionTarget: .isolated,
+            sessionTarget: .predefined(.isolated),
             wakeMode: .nextHeartbeat,
             payload: .agentTurn(
                 message: "Summarize",

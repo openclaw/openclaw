@@ -6,6 +6,8 @@ import SwiftUI
 
 /// Menu contents for the OpenClaw menu bar extra.
 struct MenuContent: View {
+    private static let primaryGatewayChatID = "__primary__"
+
     @Bindable var state: AppState
     let updater: UpdaterProviding?
     @Bindable private var updateStatus: UpdateStatus
@@ -16,7 +18,9 @@ struct MenuContent: View {
     private let activityStore = WorkActivityStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
     @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
+    @Bindable private var gatewayProfiles = GatewayProfilesStore.shared
     @Environment(\.openSettings) private var openSettings
+    @State private var selectedChatGatewayID = MenuContent.primaryGatewayChatID
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
     @State private var micObserver = AudioInputDeviceObserver()
@@ -61,6 +65,27 @@ struct MenuContent: View {
                 }
             }
             .disabled(self.state.connectionMode == .unconfigured)
+
+            if !self.gatewayProfiles.profiles.isEmpty {
+                Menu("Gateway") {
+                    ForEach(self.gatewayProfiles.profiles) { profile in
+                        Button {
+                            self.gatewayProfiles.apply(profile: profile, to: self.state)
+                            Task {
+                                await ControlChannel.shared.refreshEndpoint(reason: "gateway selected from menu")
+                            }
+                        } label: {
+                            if self.gatewayProfiles.selectedProfileID == profile.id {
+                                Label(profile.name, systemImage: "checkmark")
+                            } else {
+                                Text(profile.name)
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("Manage Gateways…") { self.open(tab: .instances) }
+                }
+            }
 
             Divider()
             Toggle(isOn: self.heartbeatsBinding) {
@@ -120,6 +145,40 @@ struct MenuContent: View {
                 }
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+            }
+            if !self.gatewayProfiles.profiles.isEmpty {
+                Menu("Select Chat Gateway") {
+                    Button {
+                        self.selectedChatGatewayID = Self.primaryGatewayChatID
+                    } label: {
+                        if self.selectedChatGatewayID == Self.primaryGatewayChatID {
+                            Label("This Mac Gateway", systemImage: "checkmark")
+                        } else {
+                            Text("This Mac Gateway")
+                        }
+                    }
+                    Divider()
+                    ForEach(self.gatewayProfiles.profiles) { profile in
+                        Button {
+                            self.selectedChatGatewayID = profile.id
+                        } label: {
+                            if self.selectedChatGatewayID == profile.id {
+                                Label(profile.name, systemImage: "checkmark")
+                            } else {
+                                Text(profile.name)
+                            }
+                        }
+                    }
+                }
+                Button {
+                    Task { @MainActor in
+                        let selectedProfile = self.selectedGatewayProfile()
+                        let sessionKey = await WebChatManager.shared.preferredSessionKey(gatewayProfile: selectedProfile)
+                        WebChatManager.shared.show(sessionKey: sessionKey, gatewayProfile: selectedProfile)
+                    }
+                } label: {
+                    Label("Open Chat on Selected Gateway", systemImage: "bubble.left.and.bubble.right")
+                }
             }
             if self.state.canvasEnabled {
                 Button {
@@ -184,6 +243,11 @@ struct MenuContent: View {
         .task { @MainActor in
             SettingsWindowOpener.shared.register(openSettings: self.openSettings)
         }
+    }
+
+    private func selectedGatewayProfile() -> GatewayProfile? {
+        guard self.selectedChatGatewayID != Self.primaryGatewayChatID else { return nil }
+        return self.gatewayProfiles.profiles.first(where: { $0.id == self.selectedChatGatewayID })
     }
 
     private var connectionLabel: String {

@@ -1,16 +1,27 @@
 import AppKit
+import Observation
+import OpenClawDiscovery
 import SwiftUI
 
 struct InstancesSettings: View {
+    @Bindable var state: AppState
     var store: InstancesStore
+    @Bindable private var gatewayProfiles = GatewayProfilesStore.shared
+    @State private var gatewayDiscovery = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
+    @State private var manualHost = ""
+    @State private var manualPort = "443"
+    @State private var manualToken = ""
+    @State private var manualError: String?
 
-    init(store: InstancesStore = .shared) {
+    init(state: AppState = .preview, store: InstancesStore = .shared) {
+        self.state = state
         self.store = store
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             self.header
+            self.gatewayConnectionsSection
             if let err = store.lastError {
                 Text("Error: \(err)")
                     .foregroundStyle(.red)
@@ -29,8 +40,14 @@ struct InstancesSettings: View {
             }
             Spacer()
         }
-        .onAppear { self.store.start() }
-        .onDisappear { self.store.stop() }
+        .onAppear {
+            self.store.start()
+            self.gatewayDiscovery.start()
+        }
+        .onDisappear {
+            self.store.stop()
+            self.gatewayDiscovery.stop()
+        }
     }
 
     private var header: some View {
@@ -46,6 +63,142 @@ struct InstancesSettings: View {
             SettingsRefreshButton(isLoading: self.store.isLoading) {
                 Task { await self.store.refresh() }
             }
+        }
+    }
+
+    private var gatewayConnectionsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Gateway Connections")
+                .font(.headline)
+            Text("Discover gateways on your local or VPN network, or add one manually.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            GatewayDiscoveryInlineList(
+                discovery: self.gatewayDiscovery,
+                currentTarget: self.state.remoteTarget,
+                currentUrl: self.state.remoteUrl,
+                transport: .direct)
+            { gateway in
+                self.addDiscoveredGateway(gateway)
+            }
+
+            HStack(alignment: .center, spacing: 8) {
+                TextField("Gateway host", text: self.$manualHost)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Port", text: self.$manualPort)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+                SecureField("Access token", text: self.$manualToken)
+                    .textFieldStyle(.roundedBorder)
+                Button("Add Gateway") {
+                    self.addManualGateway()
+                }
+                .disabled(self.manualInputsInvalid)
+            }
+
+            if let manualError = self.manualError {
+                Text(manualError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if self.gatewayProfiles.profiles.isEmpty {
+                Text("No saved secondary gateways yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                List(self.gatewayProfiles.profiles) { profile in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(profile.name)
+                                    .font(.subheadline.weight(.semibold))
+                                if self.gatewayProfiles.selectedProfileID == profile.id {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                            Text(profile.endpointLabel)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Button("Connect") {
+                            self.connect(profile: profile)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Button(role: .destructive) {
+                            self.gatewayProfiles.remove(profileID: profile.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(minHeight: 90, maxHeight: 180)
+                .listStyle(.inset)
+            }
+        }
+    }
+
+    private var manualInputsInvalid: Bool {
+        self.manualEndpoint == nil || self.manualToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var manualEndpoint: (host: String, port: Int)? {
+        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return nil }
+        guard let port = Int(self.manualPort.trimmingCharacters(in: .whitespacesAndNewlines)),
+              (1...65535).contains(port)
+        else {
+            return nil
+        }
+        return (host, port)
+    }
+
+    private func addManualGateway() {
+        guard let endpoint = self.manualEndpoint else {
+            self.manualError = "Enter a valid host and port (1-65535)."
+            return
+        }
+        let token = self.manualToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            self.manualError = "An access token is required."
+            return
+        }
+
+        let profile = self.gatewayProfiles.upsert(
+            host: endpoint.host,
+            port: endpoint.port,
+            accessToken: token,
+            name: endpoint.host)
+        self.manualError = nil
+        self.connect(profile: profile)
+    }
+
+    private func addDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
+        guard let endpoint = GatewayDiscoveryHelpers.serviceEndpoint(for: gateway) else {
+            self.manualError = "Discovered gateway is missing a valid endpoint."
+            return
+        }
+        let token = self.state.remoteToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let profile = self.gatewayProfiles.upsert(
+            host: endpoint.host,
+            port: endpoint.port,
+            accessToken: token,
+            name: gateway.displayName)
+        self.manualHost = endpoint.host
+        self.manualPort = String(endpoint.port)
+        self.manualError = nil
+        self.connect(profile: profile)
+    }
+
+    private func connect(profile: GatewayProfile) {
+        self.gatewayProfiles.apply(profile: profile, to: self.state)
+        Task {
+            await ControlChannel.shared.refreshEndpoint(reason: "gateway profile selected")
         }
     }
 
@@ -344,7 +497,7 @@ struct InstancesSettings: View {
 #if DEBUG
 extension InstancesSettings {
     static func exerciseForTesting() {
-        let view = InstancesSettings(store: InstancesStore(isPreview: true))
+        let view = InstancesSettings(state: AppState(preview: true), store: InstancesStore(isPreview: true))
         let mac = InstanceInfo(
             id: "mac",
             host: "studio",
@@ -440,7 +593,7 @@ extension InstancesSettings {
 
 struct InstancesSettings_Previews: PreviewProvider {
     static var previews: some View {
-        InstancesSettings(store: .preview())
+        InstancesSettings(state: .preview, store: .preview())
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
     }
 }

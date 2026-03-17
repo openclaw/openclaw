@@ -5,6 +5,63 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CronJobEditorSmokeTests {
+    private struct CronJobFixture: Encodable {
+        let id: String
+        let agentId: String?
+        let name: String
+        let description: String?
+        let enabled: Bool
+        let deleteAfterRun: Bool?
+        let createdAtMs: Int
+        let updatedAtMs: Int
+        let schedule: CronSchedule
+        let sessionTarget: String
+        let wakeMode: CronWakeMode
+        let payload: CronPayload
+        let delivery: CronDelivery?
+        let state: CronJobState
+    }
+
+    private func makeCronJob(
+        id: String,
+        agentId: String?,
+        name: String,
+        description: String?,
+        enabled: Bool,
+        deleteAfterRun: Bool?,
+        createdAtMs: Int,
+        updatedAtMs: Int,
+        schedule: CronSchedule,
+        sessionTarget: CronCustomSessionTarget,
+        wakeMode: CronWakeMode,
+        payload: CronPayload,
+        delivery: CronDelivery?,
+        state: CronJobState
+    ) -> CronJob {
+        let fixture = CronJobFixture(
+            id: id,
+            agentId: agentId,
+            name: name,
+            description: description,
+            enabled: enabled,
+            deleteAfterRun: deleteAfterRun,
+            createdAtMs: createdAtMs,
+            updatedAtMs: updatedAtMs,
+            schedule: schedule,
+            sessionTarget: sessionTarget.rawValue,
+            wakeMode: wakeMode,
+            payload: payload,
+            delivery: delivery,
+            state: state)
+
+        do {
+            let data = try JSONEncoder().encode(fixture)
+            return try JSONDecoder().decode(CronJob.self, from: data)
+        } catch {
+            fatalError("Failed to build CronJob fixture: \(error)")
+        }
+    }
+
     private func makeEditor(job: CronJob? = nil, channelsStore: ChannelsStore? = nil) -> CronJobEditor {
         CronJobEditor(
             job: job,
@@ -27,7 +84,7 @@ struct CronJobEditorSmokeTests {
 
     @Test func `cron job editor builds body for existing job`() {
         let channelsStore = ChannelsStore(isPreview: true)
-        let job = CronJob(
+        let job = self.makeCronJob(
             id: "job-1",
             agentId: "ops",
             name: "Daily summary",
@@ -37,7 +94,7 @@ struct CronJobEditorSmokeTests {
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_000_000,
             schedule: .every(everyMs: 3_600_000, anchorMs: 1_700_000_000_000),
-            sessionTarget: .isolated,
+            sessionTarget: .predefined(.isolated),
             wakeMode: .nextHeartbeat,
             payload: .agentTurn(
                 message: "Summarize the last day",

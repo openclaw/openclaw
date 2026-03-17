@@ -294,7 +294,7 @@ final class RemotePortTunnel {
         }
     }
 
-    #if SWIFT_PACKAGE
+    #if SWIFT_PACKAGE || DEBUG
     static func _testPortIsFree(_ port: UInt16) -> Bool {
         self.portIsFree(port)
     }

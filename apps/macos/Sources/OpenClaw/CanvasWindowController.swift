@@ -323,11 +323,15 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     func shouldAutoNavigateToA2UI(lastAutoTarget: String?) -> Bool {
         let trimmed = (self.currentTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || trimmed == "/" { return true }
+
+        // If we're already showing the last auto-targeted A2UI URL, do not reload it.
+        // Re-loading the host page clears in-page A2UI surface state, which makes the
+        // canvas appear to flicker and then end up empty after a successful push/eval.
         if let lastAuto = lastAutoTarget?.trimmingCharacters(in: .whitespacesAndNewlines),
            !lastAuto.isEmpty,
            trimmed == lastAuto
         {
-            return true
+            return false
         }
         return false
     }
