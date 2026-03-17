@@ -83,9 +83,6 @@ function mergeAgentWaitStructuredMetadata<T extends AgentWaitTerminalSnapshot>(
 }
 
 function isMissingAgentWaitStructuredMetadata(snapshot: AgentWaitTerminalSnapshot): boolean {
-  if (snapshot.stopReason === undefined) {
-    return true;
-  }
   return snapshot.stopReason === "tool_calls" && snapshot.pendingToolCalls === undefined;
 }
 
@@ -815,6 +812,13 @@ export const agentHandlers: GatewayRequestHandlers = {
             ignoreAgentTerminalSnapshot: hasActiveChatRun,
           }),
         );
+        if (snapshot.stopReason === undefined) {
+          const immediateDedupeMetadata = (await Promise.race([
+            dedupePromise,
+            Promise.resolve<AgentWaitTerminalSnapshot | null>(null),
+          ])) ?? null;
+          snapshot = mergeAgentWaitStructuredMetadata(snapshot, immediateDedupeMetadata);
+        }
         if (isMissingAgentWaitStructuredMetadata(snapshot)) {
           const dedupeMetadata =
             (await Promise.race([

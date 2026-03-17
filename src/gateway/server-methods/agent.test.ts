@@ -977,4 +977,59 @@ describe("gateway agent handler", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not grace-wait when lifecycle metadata omits stopReason", async () => {
+    vi.useFakeTimers();
+    try {
+      const respond = vi.fn();
+      const context = makeContext();
+      context.chatAbortControllers = new Map([
+        [
+          "wait-no-stop-reason",
+          {
+            controller: new AbortController(),
+            sessionKey: "agent:main:main",
+            startedAtMs: Date.now(),
+            expiresAtMs: Date.now() + 60_000,
+          },
+        ],
+      ]);
+      mocks.waitForAgentJob.mockResolvedValue({
+        status: "error",
+        startedAt: 10,
+        endedAt: 20,
+        error: "boom",
+      });
+      mocks.waitForTerminalGatewayDedupe.mockImplementation(
+        () =>
+          new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), 1_000);
+          }),
+      );
+
+      const waitPromise = agentHandlers["agent.wait"]({
+        params: { runId: "wait-no-stop-reason", timeoutMs: 100 },
+        respond,
+        context,
+      } as unknown as Parameters<(typeof agentHandlers)["agent.wait"]>[0]);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: "wait-no-stop-reason",
+          status: "error",
+          error: "boom",
+          stopReason: undefined,
+          pendingToolCalls: undefined,
+        }),
+      );
+
+      await vi.runAllTimersAsync();
+      await waitPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
