@@ -260,23 +260,14 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
-  it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "browser", error: "url required" },
-    });
-  });
-
-  it("suppresses recoverable tool errors containing 'missing' for non-mutating tools", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "browser", error: "url missing" },
-    });
-  });
-
-  it("suppresses recoverable tool errors containing 'invalid' for non-mutating tools", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "browser", error: "invalid parameter: url" },
-    });
-  });
+  it.each(["url required", "url missing", "invalid parameter: url"])(
+    "suppresses recoverable non-mutating tool error: %s",
+    (error) => {
+      expectNoPayloads({
+        lastToolError: { toolName: "browser", error },
+      });
+    },
+  );
 
   it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
     expectNoPayloads({
