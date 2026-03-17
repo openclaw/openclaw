@@ -1,4 +1,3 @@
-import { formatCliCommand } from "../../../src/cli/command-format.js";
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
@@ -11,6 +10,7 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+import { formatCliCommand } from "../../../src/cli/command-format.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { fetchTelegramChatId } from "./api-fetch.js";
