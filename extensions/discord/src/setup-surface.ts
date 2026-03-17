@@ -100,7 +100,6 @@ async function resolveDiscordGroupAllowlist(params: {
   });
 }
 
-<<<<<<< HEAD
 export const discordSetupWizard: ChannelSetupWizard = createDiscordSetupWizardBase({
   promptAllowFrom: promptDiscordAllowFrom,
   resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) =>
