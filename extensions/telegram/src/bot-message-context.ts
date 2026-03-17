@@ -9,7 +9,7 @@ import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
 import { ensureConfiguredAcpRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import { buildAgentSessionKey, deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
+import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -17,12 +17,11 @@ import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from 
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import { buildTelegramInboundContextPayload } from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
+import { buildTypingThreadParams, resolveTelegramThreadSpec } from "./bot/helpers.js";
 import {
-  buildTypingThreadParams,
-  resolveTelegramDirectPeerId,
-  resolveTelegramThreadSpec,
-} from "./bot/helpers.js";
-import { resolveTelegramConversationRoute } from "./conversation-route.js";
+  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import {
@@ -224,22 +223,13 @@ export const buildTelegramMessageContext = async ({
     return false;
   };
 
-  const baseSessionKey = isNamedAccountFallback
-    ? buildAgentSessionKey({
-        agentId: route.agentId,
-        channel: "telegram",
-        accountId: route.accountId,
-        peer: {
-          kind: "direct",
-          id: resolveTelegramDirectPeerId({
-            chatId,
-            senderId,
-          }),
-        },
-        dmScope: "per-account-channel-peer",
-        identityLinks: freshCfg.session?.identityLinks,
-      }).toLowerCase()
-    : route.sessionKey;
+  const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+    cfg: freshCfg,
+    route,
+    chatId,
+    isGroup,
+    senderId,
+  });
   // DMs: use thread suffix for session isolation (works regardless of dmScope)
   const threadKeys =
     dmThreadId != null

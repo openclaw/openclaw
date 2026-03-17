@@ -20,6 +20,7 @@ import * as setupSdk from "openclaw/plugin-sdk/setup";
 import * as signalSdk from "openclaw/plugin-sdk/signal";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
+import * as testingSdk from "openclaw/plugin-sdk/testing";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
@@ -112,6 +113,11 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<PluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
+  });
+
+  it("exports the public testing seam", () => {
+    expect(typeof testingSdk.removeAckReactionAfterReply).toBe("function");
+    expect(typeof testingSdk.shouldAckReaction).toBe("function");
   });
 
   it("keeps core shared types aligned with the channel prelude", () => {
