@@ -1,10 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import {
-  buildBytePlusCodingProvider,
-  buildBytePlusProvider,
-} from "../../src/agents/models-config.providers.static.js";
 import { ensureModelAllowlistEntry } from "../../src/commands/model-allowlist.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { buildBytePlusCodingProvider, buildBytePlusProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "byteplus";
 const BYTEPLUS_DEFAULT_MODEL_REF = "byteplus-plan/ark-code-latest";

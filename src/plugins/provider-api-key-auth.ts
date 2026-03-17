@@ -1,9 +1,4 @@
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
-import { normalizeApiKeyInput, validateApiKeyInput } from "../commands/auth-choice.api-key.js";
-import { ensureApiKeyFromOptionEnvOrPrompt } from "../commands/auth-choice.apply-helpers.js";
-import { applyPrimaryModel } from "../commands/model-picker.js";
-import { buildApiKeyCredential } from "../commands/onboard-auth.credentials.js";
-import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
+import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -34,6 +29,15 @@ type ProviderApiKeyAuthMethodOptions = {
   applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 };
 
+let providerApiKeyAuthRuntimePromise:
+  | Promise<typeof import("./provider-api-key-auth.runtime.js")>
+  | undefined;
+
+function loadProviderApiKeyAuthRuntime() {
+  providerApiKeyAuthRuntimePromise ??= import("./provider-api-key-auth.runtime.js");
+  return providerApiKeyAuthRuntimePromise;
+}
+
 function resolveStringOption(opts: Record<string, unknown> | undefined, optionKey: string) {
   return normalizeOptionalSecretInput(opts?.[optionKey]);
 }
@@ -56,13 +60,14 @@ function resolveProfileIds(params: {
   return [resolveProfileId(params)];
 }
 
-function applyApiKeyConfig(params: {
+async function applyApiKeyConfig(params: {
   ctx: ProviderAuthMethodNonInteractiveContext;
   providerId: string;
   profileIds: string[];
   defaultModel?: string;
   applyConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
+  const { applyAuthProfileConfig, applyPrimaryModel } = await loadProviderApiKeyAuthRuntime();
   let next = params.ctx.config;
   for (const profileId of params.profileIds) {
     next = applyAuthProfileConfig(next, {
@@ -92,6 +97,12 @@ export function createProviderApiKeyAuthMethod(
       let capturedSecretInput: SecretInput | undefined;
       let capturedCredential = false;
       let capturedMode: "plaintext" | "ref" | undefined;
+      const {
+        buildApiKeyCredential,
+        ensureApiKeyFromOptionEnvOrPrompt,
+        normalizeApiKeyInput,
+        validateApiKeyInput,
+      } = await loadProviderApiKeyAuthRuntime();
 
       await ensureApiKeyFromOptionEnvOrPrompt({
         token: flagValue ?? normalizeOptionalSecretInput(ctx.opts?.token),
@@ -171,7 +182,7 @@ export function createProviderApiKeyAuthMethod(
         }
       }
 
-      return applyApiKeyConfig({
+      return await applyApiKeyConfig({
         ctx,
         providerId: params.providerId,
         profileIds,

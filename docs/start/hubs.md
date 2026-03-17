@@ -19,7 +19,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Getting Started](/start/getting-started)
 - [Quick start](/start/quickstart)
 - [Onboarding](/start/onboarding)
-- [Wizard](/start/wizard)
+- [Onboarding (CLI)](/start/wizard)
 - [Setup](/start/setup)
 - [Dashboard (local Gateway)](http://127.0.0.1:18789/)
 - [Help](/help)
