@@ -1,4 +1,3 @@
-import { formatDocsLink } from "openclaw/plugin-sdk/discord";
 import {
   type OpenClawConfig,
   promptLegacyChannelAllowFrom,
