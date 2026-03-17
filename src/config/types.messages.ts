@@ -148,6 +148,8 @@ export type CommandsConfig = {
   bashForegroundMs?: number;
   /** Allow /config command (default: false). */
   config?: boolean;
+  /** Allow /mcp command for project-local embedded Pi MCP settings (default: false). */
+  mcp?: boolean;
   /** Allow /debug command (default: false). */
   debug?: boolean;
   /** Allow restart commands/tools (default: true). */
