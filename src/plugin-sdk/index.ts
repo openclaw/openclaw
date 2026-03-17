@@ -183,14 +183,17 @@ export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export * from "./speech.js";
 
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
+export * from "./media-understanding.js";
 export {
   mapAllowlistResolutionInputs,
   mapBasicAllowlistResolutionEntries,
   type BasicAllowlistResolutionEntry,
 } from "./allowlist-resolution.js";
+export * from "./provider-web-search.js";
 export { resolveRequestUrl } from "./request-url.js";
 export {
   buildDiscordSendMediaOptions,

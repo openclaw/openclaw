@@ -8,11 +8,11 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
+import { capturePluginRegistration } from "./captured-registration.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginWebSearchProviderRegistration } from "./registry.js";
 import { getActivePluginRegistry } from "./runtime.js";
-import type { OpenClawPluginApi, WebSearchProviderPlugin } from "./types.js";
-import type { PluginWebSearchProviderEntry } from "./types.js";
+import type { OpenClawPluginApi, PluginWebSearchProviderEntry } from "./types.js";
 
 type RegistrablePlugin = {
   id: string;
@@ -76,18 +76,8 @@ function normalizeWebSearchPluginConfig(params: {
 function captureBundledWebSearchProviders(
   plugin: RegistrablePlugin,
 ): PluginWebSearchProviderRegistration[] {
-  const providers: WebSearchProviderPlugin[] = [];
-  const api = {
-    registerProvider() {},
-    registerSpeechProvider() {},
-    registerMediaUnderstandingProvider() {},
-    registerWebSearchProvider(provider: WebSearchProviderPlugin) {
-      providers.push(provider);
-    },
-    registerTool() {},
-  };
-  plugin.register(api as unknown as OpenClawPluginApi);
-  return providers.map((provider) => ({
+  const captured = capturePluginRegistration(plugin);
+  return captured.webSearchProviders.map((provider) => ({
     pluginId: plugin.id,
     pluginName: plugin.name,
     provider,
