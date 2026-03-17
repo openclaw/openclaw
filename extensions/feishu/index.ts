@@ -1,5 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/feishu";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { registerFeishuBitableTools } from "./src/bitable.js";
 import { feishuPlugin } from "./src/channel.js";
 import { registerFeishuChatTools } from "./src/chat.js";
@@ -7,6 +6,7 @@ import { registerFeishuDocTools } from "./src/docx.js";
 import { registerFeishuDriveTools } from "./src/drive.js";
 import { registerFeishuPermTools } from "./src/perm.js";
 import { setFeishuRuntime } from "./src/runtime.js";
+import { registerFeishuSubagentHooks } from "./src/subagent-hooks.js";
 import { registerFeishuWikiTools } from "./src/wiki.js";
 
 export { monitorFeishuProvider } from "./src/monitor.js";
@@ -45,14 +45,14 @@ export {
 } from "./src/mention.js";
 export { feishuPlugin } from "./src/channel.js";
 
-const plugin = {
+export default defineChannelPluginEntry({
   id: "feishu",
   name: "Feishu",
   description: "Feishu/Lark channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setFeishuRuntime(api.runtime);
-    api.registerChannel({ plugin: feishuPlugin });
+  plugin: feishuPlugin,
+  setRuntime: setFeishuRuntime,
+  registerFull(api) {
+    registerFeishuSubagentHooks(api);
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);
     registerFeishuWikiTools(api);
@@ -60,6 +60,4 @@ const plugin = {
     registerFeishuPermTools(api);
     registerFeishuBitableTools(api);
   },
-};
-
-export default plugin;
+});

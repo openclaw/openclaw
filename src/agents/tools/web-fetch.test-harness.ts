@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 
+export function makeFetchHeaders(map: Record<string, string>): {
+  get: (key: string) => string | null;
+} {
+  return {
+    get: (key) => map[key.toLowerCase()] ?? null,
+  };
+}
+
 export function installWebFetchSsrfHarness() {
   const lookupMock = vi.fn();
   const resolvePinnedHostname = ssrf.resolvePinnedHostname;

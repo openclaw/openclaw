@@ -19,7 +19,12 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
-export type PluginInstallRecord = InstallRecordBase;
+export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
+  source: InstallRecordBase["source"] | "marketplace";
+  marketplaceName?: string;
+  marketplaceSource?: string;
+  marketplacePlugin?: string;
+};
 
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */

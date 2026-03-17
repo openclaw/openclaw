@@ -17,6 +17,11 @@ import {
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
+type FakeWrappedStream = {
+  result: () => Promise<unknown>;
+  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+};
+
 function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenClawConfig {
   return {
     models: {
@@ -30,6 +35,34 @@ function createOllamaProviderConfig(injectNumCtxForOpenAICompat: boolean): OpenC
       },
     },
   };
+}
+
+function createFakeStream(params: {
+  events: unknown[];
+  resultMessage: unknown;
+}): FakeWrappedStream {
+  return {
+    async result() {
+      return params.resultMessage;
+    },
+    [Symbol.asyncIterator]() {
+      return (async function* () {
+        for (const event of params.events) {
+          yield event;
+        }
+      })();
+    },
+  };
+}
+
+async function invokeWrappedTestStream(
+  wrap: (
+    baseFn: (...args: never[]) => unknown,
+  ) => (...args: never[]) => FakeWrappedStream | Promise<FakeWrappedStream>,
+  baseFn: (...args: never[]) => unknown,
+): Promise<FakeWrappedStream> {
+  const wrappedFn = wrap(baseFn);
+  return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
 
 describe("resolvePromptBuildHookResult", () => {
@@ -190,30 +223,14 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
   });
 });
 describe("wrapStreamFnTrimToolCallNames", () => {
-  function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
-    result: () => Promise<unknown>;
-    [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-  } {
-    return {
-      async result() {
-        return params.resultMessage;
-      },
-      [Symbol.asyncIterator]() {
-        return (async function* () {
-          for (const event of params.events) {
-            yield event;
-          }
-        })();
-      },
-    };
-  }
-
   async function invokeWrappedStream(
     baseFn: (...args: never[]) => unknown,
     allowedToolNames?: Set<string>,
   ) {
-    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, allowedToolNames);
-    return await wrappedFn({} as never, {} as never, {} as never);
+    return await invokeWrappedTestStream(
+      (innerBaseFn) => wrapStreamFnTrimToolCallNames(innerBaseFn as never, allowedToolNames),
+      baseFn,
+    );
   }
 
   function createEventStream(params: {
@@ -702,30 +719,34 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("read");
     expect(finalToolCall.id).toBe("call_42");
   });
+
+  it("reassigns duplicate tool call ids within a message to unique fallbacks", async () => {
+    const finalToolCallA = { type: "toolCall", name: " read ", id: "  edit:22  " };
+    const finalToolCallB = { type: "toolCall", name: " write ", id: "edit:22" };
+    const finalMessage = { role: "assistant", content: [finalToolCallA, finalToolCallB] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    await stream.result();
+
+    expect(finalToolCallA.name).toBe("read");
+    expect(finalToolCallB.name).toBe("write");
+    expect(finalToolCallA.id).toBe("edit:22");
+    expect(finalToolCallB.id).toBe("call_auto_1");
+  });
 });
 
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
-  function createFakeStream(params: { events: unknown[]; resultMessage: unknown }): {
-    result: () => Promise<unknown>;
-    [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-  } {
-    return {
-      async result() {
-        return params.resultMessage;
-      },
-      [Symbol.asyncIterator]() {
-        return (async function* () {
-          for (const event of params.events) {
-            yield event;
-          }
-        })();
-      },
-    };
-  }
-
   async function invokeWrappedStream(baseFn: (...args: never[]) => unknown) {
-    const wrappedFn = wrapStreamFnRepairMalformedToolCallArguments(baseFn as never);
-    return await wrappedFn({} as never, {} as never, {} as never);
+    return await invokeWrappedTestStream(
+      (innerBaseFn) => wrapStreamFnRepairMalformedToolCallArguments(innerBaseFn as never),
+      baseFn,
+    );
   }
 
   it("repairs anthropic-compatible tool arguments when trailing junk follows valid JSON", async () => {

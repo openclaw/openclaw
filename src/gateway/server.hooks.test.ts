@@ -62,6 +62,42 @@ function mockIsolatedRunOkOnce(): void {
   });
 }
 
+function mockIsolatedRunOk(): void {
+  cronIsolatedRun.mockClear();
+  cronIsolatedRun.mockResolvedValue({
+    status: "ok",
+    summary: "done",
+  });
+}
+
+async function postAgentHookWithIdempotency(
+  port: number,
+  idempotencyKey: string,
+  headers?: Record<string, string>,
+) {
+  const response = await postHook(
+    port,
+    "/hooks/agent",
+    { message: "Do it", name: "Email" },
+    { headers: { "Idempotency-Key": idempotencyKey, ...headers } },
+  );
+  expect(response.status).toBe(200);
+  return response;
+}
+
+async function expectFirstHookDelivery(
+  port: number,
+  idempotencyKey: string,
+  headers?: Record<string, string>,
+) {
+  const first = await postAgentHookWithIdempotency(port, idempotencyKey, headers);
+  const firstBody = (await first.json()) as { runId?: string };
+  expect(firstBody.runId).toBeTruthy();
+  await waitForSystemEvent();
+  drainSystemEvents(resolveMainKey());
+  return firstBody;
+}
+
 describe("gateway server hooks", () => {
   test("handles auth, wake, and agent flows", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
@@ -288,29 +324,11 @@ describe("gateway server hooks", () => {
   test("dedupes repeated /hooks/agent deliveries by idempotency key", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
-
-      const first = await postHook(
-        port,
-        "/hooks/agent",
-        { message: "Do it", name: "Email" },
-        { headers: { "Idempotency-Key": "hook-idem-1" } },
-      );
-      expect(first.status).toBe(200);
-      const firstBody = (await first.json()) as { runId?: string };
-      expect(firstBody.runId).toBeTruthy();
-      await waitForSystemEvent();
+      mockIsolatedRunOk();
+      const firstBody = await expectFirstHookDelivery(port, "hook-idem-1");
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-      drainSystemEvents(resolveMainKey());
 
-      const second = await postHook(
-        port,
-        "/hooks/agent",
-        { message: "Do it", name: "Email" },
-        { headers: { "Idempotency-Key": "hook-idem-1" } },
-      );
-      expect(second.status).toBe(200);
+      const second = await postAgentHookWithIdempotency(port, "hook-idem-1");
       const secondBody = (await second.json()) as { runId?: string };
       expect(secondBody.runId).toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
@@ -329,37 +347,13 @@ describe("gateway server hooks", () => {
     );
 
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
-
-      const first = await postHook(
-        port,
-        "/hooks/agent",
-        { message: "Do it", name: "Email" },
-        {
-          headers: {
-            "Idempotency-Key": "hook-idem-forwarded",
-            "X-Forwarded-For": "198.51.100.10",
-          },
-        },
-      );
-      expect(first.status).toBe(200);
-      const firstBody = (await first.json()) as { runId?: string };
-      await waitForSystemEvent();
-      drainSystemEvents(resolveMainKey());
-
-      const second = await postHook(
-        port,
-        "/hooks/agent",
-        { message: "Do it", name: "Email" },
-        {
-          headers: {
-            "Idempotency-Key": "hook-idem-forwarded",
-            "X-Forwarded-For": "203.0.113.25",
-          },
-        },
-      );
-      expect(second.status).toBe(200);
+      mockIsolatedRunOk();
+      const firstBody = await expectFirstHookDelivery(port, "hook-idem-forwarded", {
+        "X-Forwarded-For": "198.51.100.10",
+      });
+      const second = await postAgentHookWithIdempotency(port, "hook-idem-forwarded", {
+        "X-Forwarded-For": "203.0.113.25",
+      });
       const secondBody = (await second.json()) as { runId?: string };
       expect(secondBody.runId).toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
@@ -371,26 +365,9 @@ describe("gateway server hooks", () => {
     const oversizedKey = "x".repeat(257);
 
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
-
-      const first = await postHook(
-        port,
-        "/hooks/agent",
-        { message: "Do it", name: "Email" },
-        { headers: { "Idempotency-Key": oversizedKey } },
-      );
-      expect(first.status).toBe(200);
-      await waitForSystemEvent();
-      drainSystemEvents(resolveMainKey());
-
-      const second = await postHook(
-        port,
-        "/hooks/agent",
-        { message: "Do it", name: "Email" },
-        { headers: { "Idempotency-Key": oversizedKey } },
-      );
-      expect(second.status).toBe(200);
+      mockIsolatedRunOk();
+      await expectFirstHookDelivery(port, oversizedKey);
+      await postAgentHookWithIdempotency(port, oversizedKey);
       await waitForSystemEvent();
 
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
@@ -403,19 +380,8 @@ describe("gateway server hooks", () => {
     nowSpy.mockReturnValue(1_000_000);
 
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
-
-      const first = await postHook(
-        port,
-        "/hooks/agent",
-        { message: "Do it", name: "Email" },
-        { headers: { "Idempotency-Key": "fixed-window-idem" } },
-      );
-      expect(first.status).toBe(200);
-      const firstBody = (await first.json()) as { runId?: string };
-      await waitForSystemEvent();
-      drainSystemEvents(resolveMainKey());
+      mockIsolatedRunOk();
+      const firstBody = await expectFirstHookDelivery(port, "fixed-window-idem");
 
       nowSpy.mockReturnValue(1_000_000 + DEDUPE_TTL_MS - 1);
       const second = await postHook(
