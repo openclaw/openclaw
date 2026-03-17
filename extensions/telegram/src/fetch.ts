@@ -41,6 +41,13 @@ type LookupFunction = (
   callback: LookupCallback,
 ) => void;
 
+/**
+ * Known alternative IP for the Telegram Bot API.
+ * Used as a last-resort fallback when the DNS-resolved IP is unreachable.
+ * Connected via DNS pinning (custom lookup) so TLS validates against api.telegram.org.
+ */
+const TELEGRAM_FALLBACK_IPS: readonly string[] = ["149.154.167.220"];
+
 const FALLBACK_RETRY_ERROR_CODES = [
   "ETIMEDOUT",
   "ENETUNREACH",
@@ -102,6 +109,45 @@ function createDnsResultOrderLookup(
       verbatim: order === "verbatim",
     };
     lookup(hostname, lookupOptions, callback);
+  };
+}
+
+/**
+ * Creates a lookup function that pins DNS resolution to known fallback IPs
+ * for the Telegram API hostname. All other hostnames delegate to system DNS.
+ * This allows connecting to an alternative IP while TLS validates against the
+ * original hostname (same principle as curl --resolve).
+ */
+function createFallbackIpLookup(
+  apiHostname: string,
+  fallbackIps: readonly string[],
+): LookupFunction {
+  const baseLookup = dns.lookup as unknown as (
+    hostname: string,
+    options: LookupOptions,
+    callback: LookupCallback,
+  ) => void;
+  return (hostname, options, callback) => {
+    if (hostname !== apiHostname || fallbackIps.length === 0) {
+      const baseOptions: LookupOptions =
+        typeof options === "number"
+          ? { family: options }
+          : options
+            ? { ...(options as LookupOptions) }
+            : {};
+      baseLookup(hostname, baseOptions, callback);
+      return;
+    }
+    const ip = fallbackIps[0];
+    const opts = typeof options === "number" ? { family: options } : options;
+    if (opts && "all" in opts && opts.all) {
+      (callback as (err: null, addresses: dns.LookupAddress[]) => void)(
+        null,
+        fallbackIps.map((addr) => ({ address: addr, family: 4 })),
+      );
+    } else {
+      (callback as (err: null, address: string, family: number) => void)(null, ip, 4);
+    }
   };
 }
 
@@ -465,36 +511,84 @@ export function resolveTelegramTransport(
     return stickyIpv4Dispatcher;
   };
 
+  // Fallback IP: when both default and IPv4-only dispatchers fail because the
+  // DNS-resolved IP is unreachable, try a known alternative Telegram Bot API IP
+  // via DNS pinning. TLS validates against api.telegram.org (same as curl --resolve).
+  let stickyFallbackIpEnabled = false;
+  let fallbackIpDispatcher: TelegramDispatcher | null = null;
+  const resolveFallbackIpDispatcher = () => {
+    if (!fallbackIpDispatcher) {
+      const lookup = createFallbackIpLookup(TELEGRAM_API_HOSTNAME, TELEGRAM_FALLBACK_IPS);
+      const connect = {
+        family: 4 as const,
+        autoSelectFamily: false,
+        lookup,
+      };
+      fallbackIpDispatcher = stickyShouldUseEnvProxy
+        ? new EnvHttpProxyAgent({ connect, proxyTls: connect })
+        : new Agent({ connect });
+    }
+    return fallbackIpDispatcher;
+  };
+
   const resolvedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
     );
-    const initialInit = withDispatcherIfMissing(
-      init,
-      stickyIpv4FallbackEnabled ? resolveStickyIpv4Dispatcher() : defaultDispatcher.dispatcher,
-    );
+    const initialDispatcher = stickyFallbackIpEnabled
+      ? resolveFallbackIpDispatcher()
+      : stickyIpv4FallbackEnabled
+        ? resolveStickyIpv4Dispatcher()
+        : defaultDispatcher.dispatcher;
+    const initialInit = withDispatcherIfMissing(init, initialDispatcher);
     try {
       return await sourceFetch(input, initialInit);
     } catch (err) {
-      if (shouldRetryWithIpv4Fallback(err)) {
-        // Preserve caller-owned dispatchers on retry.
-        if (callerProvidedDispatcher) {
-          return sourceFetch(input, init ?? {});
-        }
-        // Proxy routes should not arm sticky IPv4 mode; `family=4` would constrain
-        // proxy-connect behavior instead of Telegram endpoint selection.
-        if (!allowStickyIpv4Fallback) {
-          throw err;
-        }
-        if (!stickyIpv4FallbackEnabled) {
-          stickyIpv4FallbackEnabled = true;
-          log.warn(
-            `fetch fallback: enabling sticky IPv4-only dispatcher (codes=${formatErrorCodes(err)})`,
-          );
-        }
-        return sourceFetch(input, withDispatcherIfMissing(init, resolveStickyIpv4Dispatcher()));
+      if (!shouldRetryWithIpv4Fallback(err)) {
+        throw err;
       }
-      throw err;
+      // Preserve caller-owned dispatchers on retry.
+      if (callerProvidedDispatcher) {
+        return sourceFetch(input, init ?? {});
+      }
+      // Proxy routes should not arm sticky IPv4 mode; `family=4` would constrain
+      // proxy-connect behavior instead of Telegram endpoint selection.
+      if (!allowStickyIpv4Fallback) {
+        throw err;
+      }
+      // Already on fallback IP — nothing more to try.
+      if (stickyFallbackIpEnabled) {
+        throw err;
+      }
+      // Already on IPv4 — escalate to fallback IP.
+      if (stickyIpv4FallbackEnabled) {
+        stickyFallbackIpEnabled = true;
+        log.warn(
+          `fetch fallback: DNS-resolved IP unreachable; trying alternative Telegram API IP (codes=${formatErrorCodes(err)})`,
+        );
+        return sourceFetch(input, withDispatcherIfMissing(init, resolveFallbackIpDispatcher()));
+      }
+      // First failure — arm sticky IPv4 and retry.
+      stickyIpv4FallbackEnabled = true;
+      log.warn(
+        `fetch fallback: enabling sticky IPv4-only dispatcher (codes=${formatErrorCodes(err)})`,
+      );
+      try {
+        return await sourceFetch(
+          input,
+          withDispatcherIfMissing(init, resolveStickyIpv4Dispatcher()),
+        );
+      } catch (ipv4Err) {
+        if (!shouldRetryWithIpv4Fallback(ipv4Err)) {
+          throw ipv4Err;
+        }
+        // IPv4 also failed — last resort: try alternative Telegram API IP.
+        stickyFallbackIpEnabled = true;
+        log.warn(
+          `fetch fallback: DNS-resolved IP unreachable; trying alternative Telegram API IP (codes=${formatErrorCodes(ipv4Err)})`,
+        );
+        return sourceFetch(input, withDispatcherIfMissing(init, resolveFallbackIpDispatcher()));
+      }
     }
   }) as typeof fetch;
 
