@@ -21,6 +21,7 @@ const baiduPlugin = {
         placeholder: "bce-...",
         signupUrl: "https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey",
         docsUrl: "https://docs.openclaw.ai/tools/web",
+        autoDetectOrder: 5,
         getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "baidu"),
         setCredentialValue: (searchConfigTarget, value) =>
           setScopedCredentialValue(searchConfigTarget, "baidu", value),
