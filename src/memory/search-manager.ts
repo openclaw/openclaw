@@ -151,7 +151,7 @@ class FallbackMemoryManager implements MemorySearchManager {
       sessionKey: opts?.sessionKey,
       agentId: this.deps.agentId,
       query,
-      results: Array.isArray(results) ? results : [results],
+      results: Array.isArray(results) ? results.map(r => ({ snippet: r.snippet, score: r.score, source: r.source, path: r.path })) : [{ snippet: results.snippet, score: results.score, source: results.source, path: results.path }],
     });
     
     return results;

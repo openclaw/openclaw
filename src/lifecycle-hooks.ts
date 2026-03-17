@@ -46,7 +46,7 @@ export type MemoryRetrieveContext = {
   agentId?: string;
   query: string;
   results: Array<{
-    content: string;
+    snippet: string;
     score: number;
     source?: string;
     path?: string;
@@ -139,8 +139,15 @@ export async function emitLifecycleHook<T extends LifecycleHookName>(
   for (const entry of handlers) {
     try {
       const result = entry.handler(context);
-      if (entry.options?.async && result instanceof Promise) {
-        await result;
+      if (result instanceof Promise) {
+        if (entry.options?.async) {
+          await result;
+        } else {
+          // Swallow promise rejections for non-async handlers - don't break execution
+          result.catch((err) => {
+            log.error(`Hook handler error for ${hook}:`, err);
+          });
+        }
       }
     } catch (err) {
       log.error(`Hook handler error for ${hook}:`, err);
