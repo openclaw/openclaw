@@ -334,14 +334,8 @@ export async function resolveChatGuidForTarget(params: {
             if (participants.includes(normalizedHandle)) {
               if (service === "imessage") {
                 imessageParticipantMatch ??= guid;
-                if (preferredService === "imessage") {
-                  return guid;
-                }
               } else if (service === "sms") {
                 smsParticipantMatch ??= guid;
-                if (preferredService === "sms") {
-                  return guid;
-                }
               } else {
                 otherParticipantMatch ??= guid;
               }
