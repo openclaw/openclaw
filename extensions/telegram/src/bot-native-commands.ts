@@ -145,13 +145,6 @@ export type RegisterTelegramNativeCommandsParams = {
   opts: { token: string };
 };
 
-function isChannelPostContext(ctx: TelegramNativeCommandContext) {
-  if (typeof ctx.hasChatType === "function") {
-    return ctx.hasChatType("channel");
-  }
-  return ctx.channelPost != null;
-}
-
 async function resolveTelegramCommandAuth(params: {
   msg: NonNullable<TelegramNativeCommandContext["message"]>;
   bot: Bot;
@@ -167,7 +160,6 @@ async function resolveTelegramCommandAuth(params: {
     messageThreadId?: number,
   ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
   requireAuth: boolean;
-  isChannelPost?: boolean;
 }): Promise<TelegramCommandAuthResult | null> {
   const {
     msg,
@@ -181,7 +173,6 @@ async function resolveTelegramCommandAuth(params: {
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
     requireAuth,
-    isChannelPost,
   } = params;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -564,8 +555,7 @@ export const registerTelegramNativeCommands = ({
       for (const command of nativeCommands) {
         const normalizedCommandName = normalizeTelegramCommandName(command.name);
         bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
-          const isChannelPost = isChannelPostContext(ctx);
-          const msg = isChannelPost ? ctx.channelPost : ctx.message;
+          const msg = ctx.message;
           if (!msg) {
             return;
           }
@@ -584,7 +574,6 @@ export const registerTelegramNativeCommands = ({
             resolveGroupPolicy,
             resolveTelegramGroupConfig,
             requireAuth: true,
-            isChannelPost,
           });
           if (!auth) {
             return;
@@ -818,8 +807,7 @@ export const registerTelegramNativeCommands = ({
 
       for (const pluginCommand of pluginCatalog.commands) {
         bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext) => {
-          const isChannelPost = isChannelPostContext(ctx);
-          const msg = isChannelPost ? ctx.channelPost : ctx.message;
+          const msg = ctx.message;
           if (!msg) {
             return;
           }
@@ -850,7 +838,6 @@ export const registerTelegramNativeCommands = ({
             resolveGroupPolicy,
             resolveTelegramGroupConfig,
             requireAuth: match.command.requireAuth !== false,
-            isChannelPost,
           });
           if (!auth) {
             return;
