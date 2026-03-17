@@ -1,4 +1,5 @@
 import { normalizeModelCompat } from "../../src/agents/model-compat.js";
+import { findCatalogTemplate } from "../../src/plugins/provider-catalog.js";
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -48,18 +49,4 @@ export function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
-export function findCatalogTemplate(params: {
-  entries: ReadonlyArray<{ provider: string; id: string }>;
-  providerId: string;
-  templateIds: readonly string[];
-}) {
-  return params.templateIds
-    .map((templateId) =>
-      params.entries.find(
-        (entry) =>
-          entry.provider.toLowerCase() === params.providerId.toLowerCase() &&
-          entry.id.toLowerCase() === templateId.toLowerCase(),
-      ),
-    )
-    .find((entry) => entry !== undefined);
-}
+export { findCatalogTemplate };
