@@ -326,6 +326,87 @@ describe("memory-memoria plugin", () => {
     );
   });
 
+  it("derives fallback memory_stats from all available list pages", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/v1/memories/stats")) {
+        return new Response(JSON.stringify({ detail: "missing endpoint" }), { status: 404 });
+      }
+      if (url.includes("/v1/memories?") && url.includes("cursor=page-2")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                memory_id: "m-3",
+                content: "third",
+                memory_type: "semantic",
+              },
+            ],
+            next_cursor: null,
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          },
+        );
+      }
+      if (url.includes("/v1/memories?")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                memory_id: "m-1",
+                content: "first",
+                memory_type: "profile",
+              },
+              {
+                memory_id: "m-2",
+                content: "second",
+                memory_type: "semantic",
+              },
+            ],
+            next_cursor: "page-2",
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          },
+        );
+      }
+      return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { api, registeredTools } = createMockApi({
+      backend: "http",
+      apiUrl: "http://127.0.0.1:8100",
+    });
+    plugin.register(api as never);
+
+    const tool = findTool(registeredTools, { sessionKey: "session-stats" }, "memory_stats");
+    const result = await tool.execute("tc-stats-fallback", {});
+    const details = result.details as {
+      activeMemoryCount?: number;
+      byType?: Record<string, number>;
+    };
+
+    expect(details.activeMemoryCount).toBe(3);
+    expect(details.byType).toEqual(
+      expect.objectContaining({
+        profile: 1,
+        semantic: 2,
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/memories/stats"),
+      expect.any(Object),
+    );
+  });
+
   it("injects guidance and auto-recall context in before_prompt_build", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -489,7 +570,7 @@ describe("memory-memoria plugin", () => {
   });
 
   it("skips auto-observe storage for prompt-injection-like text", async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -527,7 +608,7 @@ describe("memory-memoria plugin", () => {
   });
 
   it("does not duplicate auto-observe writes for already-captured tail messages", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       if (String(input).includes("/v1/memories/store")) {
         return new Response(
           JSON.stringify({

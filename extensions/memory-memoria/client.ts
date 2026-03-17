@@ -433,17 +433,34 @@ class MemoriaHttpClient implements MemoriaClientOps {
           : [],
       };
     } catch {
-      const list = await this.listMemories({ userId, limit: 500 });
       const byType: Record<string, number> = {};
-      for (const item of list.items) {
-        const type = item.memory_type ?? "unknown";
-        byType[type] = (byType[type] ?? 0) + 1;
+      let activeMemoryCount = 0;
+      let cursor: string | undefined;
+
+      for (let page = 0; page < this.config.maxListPages; page += 1) {
+        const response = await this.listMemoriesPage({ userId, cursor });
+        for (const item of response.items) {
+          const normalized = normalizeMemoryRecord(item);
+          const type = normalized.memory_type ?? "unknown";
+          byType[type] = (byType[type] ?? 0) + 1;
+          activeMemoryCount += 1;
+        }
+        cursor = response.next_cursor ?? undefined;
+        if (!cursor) {
+          break;
+        }
       }
+
+      const limitations = cursor
+        ? [
+            `Detailed stats endpoint unavailable; derived from the first ${this.config.maxListPages} pages of memory_list.`,
+          ]
+        : ["Detailed stats endpoint unavailable; derived from memory_list."];
 
       return {
         backend: "http",
         user_id: userId,
-        activeMemoryCount: list.count,
+        activeMemoryCount,
         inactiveMemoryCount: null,
         byType,
         entityCount: null,
@@ -451,7 +468,7 @@ class MemoriaHttpClient implements MemoriaClientOps {
         branchCount: null,
         healthWarnings: [],
         partial: true,
-        limitations: ["Detailed stats endpoint unavailable; derived from memory_list."],
+        limitations,
       };
     }
   }
