@@ -1,4 +1,5 @@
 export type { OpenClawConfig } from "../config/config.js";
+export type { DmPolicy } from "../config/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type { ChannelSetupDmPolicy } from "../channels/plugins/setup-wizard-types.js";
