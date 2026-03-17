@@ -320,7 +320,7 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
 
   const markImagePayloadOmitted = (bytes: number) => {
     entry.omitted = true;
-    entry.bytes = bytes;
+    entry.bytes = (toFiniteNumber(entry.bytes) ?? 0) + bytes;
     changed = true;
   };
 
