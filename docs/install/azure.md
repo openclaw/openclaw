@@ -16,9 +16,9 @@ This guide sets up an Azure Linux VM, applies Network Security Group (NSG) harde
 
 - Deploy Azure compute and network resources with Azure Resource Manager (ARM) templates
 - Apply Azure Network Security Group (NSG) rules so VM SSH is allowed only from Azure Bastion
-- Run a bootstrap script to install OpenClaw on the VM
 - Use Azure Bastion for SSH access
-- Finish setup with OpenClaw onboarding
+- Install OpenClaw with the installer script
+- Verify the Gateway
 
 ## Before you start
 
@@ -53,8 +53,8 @@ az provider show --namespace Microsoft.Network --query registrationState -o tsv
 ```bash
 RG="rg-openclaw"
 LOCATION="westus2"
-TEMPLATE_URI="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/install/azure/templates/azuredeploy.json"
-PARAMS_URI="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/install/azure/templates/azuredeploy.parameters.json"
+TEMPLATE_URI="https://raw.githubusercontent.com/openclaw/openclaw/main/infra/azure/templates/azuredeploy.json"
+PARAMS_URI="https://raw.githubusercontent.com/openclaw/openclaw/main/infra/azure/templates/azuredeploy.parameters.json"
 ```
 
 ## 4) Select SSH key
@@ -120,7 +120,7 @@ az deployment group create \
   --parameters sshPublicKey="${SSH_PUB_KEY}"
 ```
 
-## 8) Bootstrap OpenClaw on the VM
+## 8) SSH into the VM through Azure Bastion
 
 ```bash
 RG="rg-openclaw"
@@ -129,18 +129,6 @@ BASTION_NAME="bas-openclaw"
 ADMIN_USERNAME="openclaw"
 VM_ID="$(az vm show -g "${RG}" -n "${VM_NAME}" --query id -o tsv)"
 
-az vm run-command invoke \
-  -g "${RG}" \
-  -n "${VM_NAME}" \
-  --command-id RunShellScript \
-  --scripts "curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw/main/docs/install/azure/scripts/bootstrap-openclaw.sh | bash"
-```
-
-For production, pin the script URL to a commit SHA instead of `main` for reproducibility, or download/review the script and run it with `--scripts @./bootstrap-openclaw.sh`.
-
-## 9) SSH into the VM through Azure Bastion
-
-```bash
 az network bastion ssh \
   --name "${BASTION_NAME}" \
   --resource-group "${RG}" \
@@ -150,17 +138,28 @@ az network bastion ssh \
   --ssh-key ~/.ssh/id_ed25519
 ```
 
-## 10) Finish OpenClaw setup
-
-From within the Azure Bastion SSH shell, start the [OpenClaw onboarding wizard](/start/onboarding) by running:
+## 9) Install OpenClaw (in the VM shell)
 
 ```bash
-openclaw onboard --install-daemon
+curl -fsSL https://openclaw.ai/install.sh -o /tmp/openclaw-install.sh
+bash /tmp/openclaw-install.sh
+rm -f /tmp/openclaw-install.sh
+openclaw --version
+```
+
+The installer script handles Node detection/installation and runs onboarding by default.
+
+## 10) Verify the Gateway
+
+After onboarding completes:
+
+```bash
+openclaw gateway status
 ```
 
 Most enterprise Azure teams already have GitHub Copilot licenses. If that is your case, we recommend choosing the GitHub Copilot provider in the OpenClaw onboarding wizard. See [GitHub Copilot provider](/providers/github-copilot).
 
-The included ARM template uses Ubuntu image `version: "latest"` for convenience. If you need reproducible builds, pin a specific image version in `docs/install/azure/templates/azuredeploy.json` (you can list versions with `az vm image list --publisher Canonical --offer ubuntu-24_04-lts --sku server --all -o table`).
+The included ARM template uses Ubuntu image `version: "latest"` for convenience. If you need reproducible builds, pin a specific image version in `infra/azure/templates/azuredeploy.json` (you can list versions with `az vm image list --publisher Canonical --offer ubuntu-24_04-lts --sku server --all -o table`).
 
 ## Next steps
 

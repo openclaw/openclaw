@@ -14,9 +14,6 @@
     "adminUsername": {
       "value": "openclaw"
     },
-    "sshPublicKey": {
-      "value": "<contents of ~/.ssh/id_ed25519.pub>"
-    },
     "vnetName": {
       "value": "vnet-openclaw"
     },
