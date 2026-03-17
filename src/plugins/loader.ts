@@ -1048,9 +1048,10 @@ function activatePluginRegistry(
   cacheKey: string,
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
   workspaceDir?: string,
+  options?: { hookTimeoutMs?: number },
 ): void {
   setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
-  initializeGlobalHookRunner(registry);
+  initializeGlobalHookRunner(registry, { hookTimeoutMs: options?.hookTimeoutMs });
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
@@ -1097,6 +1098,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           cacheKey,
           runtimeSubagentMode,
           options.workspaceDir,
+          { hookTimeoutMs: options.config?.plugins?.hookTimeoutMs },
         );
       }
       return cached.registry;
@@ -1777,7 +1779,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
     }
     if (shouldActivate) {
-      activatePluginRegistry(registry, cacheKey, runtimeSubagentMode, options.workspaceDir);
+      activatePluginRegistry(registry, cacheKey, runtimeSubagentMode, options.workspaceDir, {
+        hookTimeoutMs: options.config?.plugins?.hookTimeoutMs,
+      });
     }
     return registry;
   } finally {

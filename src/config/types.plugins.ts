@@ -38,6 +38,8 @@ export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */
   enabled?: boolean;
+  /** Per-handler timeout for async plugin hooks (ms). Default 10 000. Set 0 to disable. */
+  hookTimeoutMs?: number;
   /** Optional plugin allowlist (plugin ids). */
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */

@@ -29,7 +29,10 @@ const getLog = () => createSubsystemLogger("plugins");
  * Initialize the global hook runner with a plugin registry.
  * Called once when plugins are loaded during gateway startup.
  */
-export function initializeGlobalHookRunner(registry: PluginRegistry): void {
+export function initializeGlobalHookRunner(
+  registry: PluginRegistry,
+  options?: { hookTimeoutMs?: number },
+): void {
   const state = getState();
   const log = getLog();
   state.registry = registry;
@@ -43,6 +46,7 @@ export function initializeGlobalHookRunner(registry: PluginRegistry): void {
     failurePolicyByHook: {
       before_tool_call: "fail-closed",
     },
+    hookTimeoutMs: options?.hookTimeoutMs,
   });
 
   const hookCount = registry.hooks.length;
