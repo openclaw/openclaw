@@ -11,6 +11,7 @@ export {
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
 } from "../plugin-sdk/channel-config-helpers.js";
+export { isAllowedParsedChatSender } from "../plugin-sdk/allow-from.js";
 export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,

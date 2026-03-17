@@ -7,7 +7,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "../../../src/config/types.js";
-import { evaluateMatchedGroupAccessForPolicy } from "../../../src/plugin-sdk/group-access.js";
+import { evaluateMatchedGroupAccessForPolicy } from "../../../src/plugin-sdk-internal/telegram.js";
 import { isSenderAllowed, type NormalizedAllowFrom } from "./bot-access.js";
 import { firstDefined } from "./bot-access.js";
 
