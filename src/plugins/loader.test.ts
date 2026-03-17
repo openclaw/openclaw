@@ -2856,83 +2856,115 @@ module.exports = {
     ).toBe(false);
   });
 
-  it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
+  it("evaluates load-path provenance warnings", () => {
     useNoBundledPlugins();
-    const stateDir = makeTempDir();
-    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
-      const globalDir = path.join(stateDir, "extensions", "rogue");
-      mkdirSafe(globalDir);
-      writePlugin({
-        id: "rogue",
-        body: `module.exports = { id: "rogue", register() {} };`,
-        dir: globalDir,
-        filename: "index.cjs",
-      });
+    const scenarios = [
+      {
+        label: "warns when loaded non-bundled plugin has no install/load-path provenance",
+        loadRegistry: () => {
+          const stateDir = makeTempDir();
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+            const globalDir = path.join(stateDir, "extensions", "rogue");
+            mkdirSafe(globalDir);
+            writePlugin({
+              id: "rogue",
+              body: `module.exports = { id: "rogue", register() {} };`,
+              dir: globalDir,
+              filename: "index.cjs",
+            });
 
-      const warnings: string[] = [];
-      const registry = loadOpenClawPlugins({
-        cache: false,
-        logger: createWarningLogger(warnings),
-        config: {
-          plugins: {
-            allow: ["rogue"],
-          },
+            const warnings: string[] = [];
+            const registry = loadOpenClawPlugins({
+              cache: false,
+              logger: createWarningLogger(warnings),
+              config: {
+                plugins: {
+                  allow: ["rogue"],
+                },
+              },
+            });
+
+            return { registry, warnings, pluginId: "rogue", expectWarning: true };
+          });
         },
-      });
+      },
+      {
+        label: "does not warn about missing provenance for env-resolved load paths",
+        loadRegistry: () => {
+          const { plugin, env } = createEnvResolvedPluginFixture("tracked-load-path");
+          const warnings: string[] = [];
+          const registry = loadOpenClawPlugins({
+            cache: false,
+            logger: createWarningLogger(warnings),
+            env,
+            config: {
+              plugins: {
+                load: { paths: ["~/plugins/tracked-load-path"] },
+                allow: [plugin.id],
+              },
+            },
+          });
 
-      const rogue = registry.plugins.find((entry) => entry.id === "rogue");
-      expect(rogue?.status).toBe("loaded");
+          return {
+            registry,
+            warnings,
+            pluginId: plugin.id,
+            expectWarning: false,
+            expectedSource: plugin.file,
+          };
+        },
+      },
+      {
+        label: "does not warn about missing provenance for env-resolved install paths",
+        loadRegistry: () => {
+          const { plugin, env } = createEnvResolvedPluginFixture("tracked-install-path");
+          const warnings: string[] = [];
+          const registry = loadOpenClawPlugins({
+            cache: false,
+            logger: createWarningLogger(warnings),
+            env,
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+                allow: [plugin.id],
+                installs: {
+                  [plugin.id]: {
+                    source: "path",
+                    installPath: `~/plugins/${plugin.id}`,
+                    sourcePath: `~/plugins/${plugin.id}`,
+                  },
+                },
+              },
+            },
+          });
+
+          return {
+            registry,
+            warnings,
+            pluginId: plugin.id,
+            expectWarning: false,
+            expectedSource: plugin.file,
+          };
+        },
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const { registry, warnings, pluginId, expectWarning, expectedSource } =
+        scenario.loadRegistry();
+      const plugin = registry.plugins.find((entry) => entry.id === pluginId);
+      expect(plugin?.status, scenario.label).toBe("loaded");
+      if (expectedSource) {
+        expect(plugin?.source, scenario.label).toBe(expectedSource);
+      }
       expect(
         warnings.some(
           (msg) =>
-            msg.includes("rogue") && msg.includes("loaded without install/load-path provenance"),
+            msg.includes(pluginId) && msg.includes("loaded without install/load-path provenance"),
         ),
-      ).toBe(true);
-    });
-  });
-
-  it.each([
-    {
-      name: "does not warn about missing provenance for env-resolved load paths",
-      pluginId: "tracked-load-path",
-      buildConfig: (plugin: TempPlugin) => ({
-        plugins: {
-          load: { paths: ["~/plugins/tracked-load-path"] },
-          allow: [plugin.id],
-        },
-      }),
-    },
-    {
-      name: "does not warn about missing provenance for env-resolved install paths",
-      pluginId: "tracked-install-path",
-      buildConfig: (plugin: TempPlugin) => ({
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: [plugin.id],
-          installs: {
-            [plugin.id]: {
-              source: "path",
-              installPath: `~/plugins/${plugin.id}`,
-              sourcePath: `~/plugins/${plugin.id}`,
-            },
-          },
-        },
-      }),
-    },
-  ])("$name", ({ pluginId, buildConfig }) => {
-    const { plugin, env } = createEnvResolvedPluginFixture(pluginId);
-    const warnings: string[] = [];
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      logger: createWarningLogger(warnings),
-      env,
-      config: buildConfig(plugin),
-    });
-
-    expect(registry.plugins.find((entry) => entry.id === plugin.id)?.source).toBe(plugin.file);
-    expect(
-      warnings.some((msg) => msg.includes("loaded without install/load-path provenance")),
-    ).toBe(false);
+        scenario.label,
+      ).toBe(expectWarning);
+    }
   });
 
   it.each([
