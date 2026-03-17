@@ -33,6 +33,49 @@ function resolveTaskName(env: GatewayServiceEnv): string {
   return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
 }
 
+function decodeTaskXmlValue(raw: string | undefined): string {
+  return (raw ?? "")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&")
+    .trim();
+}
+
+function parseScheduledTaskRunTarget(command?: string, args?: string): string | null {
+  const candidates = [decodeTaskXmlValue(command), decodeTaskXmlValue(args)].filter(Boolean);
+  if (candidates.length === 2) {
+    candidates.unshift(`${candidates[0]} ${candidates[1]}`);
+  }
+  for (const raw of candidates) {
+    const parsed = parseCmdScriptCommandLine(raw);
+    if (!parsed.includes(raw)) {
+      parsed.unshift(raw);
+    }
+    for (const candidate of parsed) {
+      const unquoted = candidate.trim().replace(/^"(.*)"$/s, "$1");
+      if (/\.(cmd|bat)$/i.test(unquoted)) {
+        return unquoted;
+      }
+    }
+  }
+  return null;
+}
+
+function parseScheduledTaskRunTargetFromXml(xml: string): string | null {
+  const command = /<Command>([\s\S]*?)<\/Command>/i.exec(xml)?.[1];
+  const args = /<Arguments>([\s\S]*?)<\/Arguments>/i.exec(xml)?.[1];
+  if (!command && !args) {
+    return null;
+  }
+  const trimmedCommand = decodeTaskXmlValue(command);
+  if (!trimmedCommand) {
+    return null;
+  }
+  return parseScheduledTaskRunTarget(trimmedCommand, args);
+}
+
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   return (
     /access is denied/i.test(params.detail) ||
@@ -109,50 +152,65 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
-  const scriptPath = resolveTaskScriptPath(env);
+  let scriptPath = resolveTaskScriptPath(env);
+  let content: string;
   try {
-    const content = await fs.readFile(scriptPath, "utf8");
-    let workingDirectory = "";
-    let commandLine = "";
-    const environment: Record<string, string> = {};
-    for (const rawLine of content.split(/\r?\n/)) {
-      const line = rawLine.trim();
-      if (!line) {
-        continue;
-      }
-      const lower = line.toLowerCase();
-      if (line.startsWith("@echo")) {
-        continue;
-      }
-      if (lower.startsWith("rem ")) {
-        continue;
-      }
-      if (lower.startsWith("set ")) {
-        const assignment = parseCmdSetAssignment(line.slice(4));
-        if (assignment) {
-          environment[assignment.key] = assignment.value;
-        }
-        continue;
-      }
-      if (lower.startsWith("cd /d ")) {
-        workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
-        continue;
-      }
-      commandLine = line;
-      break;
-    }
-    if (!commandLine) {
+    content = await fs.readFile(scriptPath, "utf8");
+  } catch {
+    const taskName = resolveTaskName(env);
+    const query = await execSchtasks(["/Query", "/TN", taskName, "/XML"]).catch(() => null);
+    if (query?.code !== 0) {
       return null;
     }
-    return {
-      programArguments: parseCmdScriptCommandLine(commandLine),
-      ...(workingDirectory ? { workingDirectory } : {}),
-      ...(Object.keys(environment).length > 0 ? { environment } : {}),
-      sourcePath: scriptPath,
-    };
-  } catch {
+    const queriedScriptPath = parseScheduledTaskRunTargetFromXml(query.stdout);
+    if (!queriedScriptPath || queriedScriptPath === scriptPath) {
+      return null;
+    }
+    try {
+      scriptPath = queriedScriptPath;
+      content = await fs.readFile(scriptPath, "utf8");
+    } catch {
+      return null;
+    }
+  }
+  let workingDirectory = "";
+  let commandLine = "";
+  const environment: Record<string, string> = {};
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    const lower = line.toLowerCase();
+    if (line.startsWith("@echo")) {
+      continue;
+    }
+    if (lower.startsWith("rem ")) {
+      continue;
+    }
+    if (lower.startsWith("set ")) {
+      const assignment = parseCmdSetAssignment(line.slice(4));
+      if (assignment) {
+        environment[assignment.key] = assignment.value;
+      }
+      continue;
+    }
+    if (lower.startsWith("cd /d ")) {
+      workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
+      continue;
+    }
+    commandLine = line;
+    break;
+  }
+  if (!commandLine) {
     return null;
   }
+  return {
+    programArguments: parseCmdScriptCommandLine(commandLine),
+    ...(workingDirectory ? { workingDirectory } : {}),
+    ...(Object.keys(environment).length > 0 ? { environment } : {}),
+    sourcePath: scriptPath,
+  };
 }
 
 export type ScheduledTaskInfo = {
