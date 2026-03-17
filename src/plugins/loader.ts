@@ -71,7 +71,9 @@ const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 const registryCache: Map<string, PluginRegistry> =
   ((globalThis as Record<string, unknown>).__ocPluginRegistryCache as Map<string, PluginRegistry> | undefined) ??
   ((globalThis as Record<string, unknown>).__ocPluginRegistryCache = new Map<string, PluginRegistry>());
-const openAllowlistWarningCache = new Set<string>();
+const openAllowlistWarningCache: Set<string> =
+  ((globalThis as Record<string, unknown>).__ocPluginAllowlistWarningCache as Set<string> | undefined) ??
+  ((globalThis as Record<string, unknown>).__ocPluginAllowlistWarningCache = new Set<string>());
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "config",
