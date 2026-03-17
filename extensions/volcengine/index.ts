@@ -1,10 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import {
-  buildDoubaoCodingProvider,
-  buildDoubaoProvider,
-} from "../../src/agents/models-config.providers.static.js";
 import { ensureModelAllowlistEntry } from "../../src/commands/model-allowlist.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "volcengine";
 const VOLCENGINE_DEFAULT_MODEL_REF = "volcengine-plan/ark-code-latest";
