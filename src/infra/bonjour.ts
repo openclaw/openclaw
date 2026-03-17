@@ -48,35 +48,18 @@ function prettifyInstanceName(name: string) {
   return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
 }
 
-type BonjourService = {
-  advertise: () => Promise<void>;
-  destroy: () => Promise<void>;
-  getFQDN: () => string;
-  getHostname: () => string;
-  getPort: () => number;
-  on: (event: string, listener: (...args: unknown[]) => void) => unknown;
-  serviceState: string;
-};
+type BonjourService = import("@homebridge/ciao").CiaoService;
+type BonjourResponder = import("@homebridge/ciao").Responder;
+type BonjourServiceState = BonjourService["serviceState"];
 
 type BonjourCycle = {
-  responder: {
-    createService: (options: {
-      name: string;
-      type: string;
-      protocol: unknown;
-      port: number;
-      domain: string;
-      hostname: string;
-      txt: Record<string, string>;
-    }) => unknown;
-    shutdown: () => Promise<void>;
-  };
+  responder: BonjourResponder;
   services: Array<{ label: string; svc: BonjourService }>;
   cleanupUnhandledRejection?: () => void;
 };
 
 type ServiceStateTracker = {
-  state: string;
+  state: BonjourServiceState | "unknown";
   sinceMs: number;
 };
 
@@ -105,6 +88,10 @@ function serviceSummary(label: string, svc: BonjourService): string {
   }
   const state = typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
   return `${label} fqdn=${fqdn} host=${hostname} port=${port} state=${state}`;
+}
+
+function isAnnouncedState(state: BonjourServiceState | "unknown") {
+  return String(state) === "announced";
 }
 
 export async function startGatewayBonjourAdvertiser(
@@ -198,6 +185,20 @@ export async function startGatewayBonjourAdvertiser(
     if (!cycle) {
       return;
     }
+    const responder = cycle.responder as unknown as {
+      advertiseService?: (...args: unknown[]) => unknown;
+      announce?: (...args: unknown[]) => unknown;
+      probe?: (...args: unknown[]) => unknown;
+      republishService?: (...args: unknown[]) => unknown;
+    };
+    const noopAsync = async () => {};
+    // ciao schedules its own 2s retry timers after failed probe/announce attempts.
+    // Those callbacks target the original responder instance, so disarm it before
+    // destroy/shutdown to prevent a dead cycle from re-entering advertise/probe.
+    responder.advertiseService = noopAsync;
+    responder.announce = noopAsync;
+    responder.probe = noopAsync;
+    responder.republishService = noopAsync;
     for (const { svc } of cycle.services) {
       try {
         await svc.destroy();
@@ -271,10 +272,15 @@ export async function startGatewayBonjourAdvertiser(
   const updateStateTrackers = (services: Array<{ label: string; svc: BonjourService }>) => {
     const now = Date.now();
     for (const { label, svc } of services) {
-      const nextState = typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
+      const nextState: BonjourServiceState | "unknown" =
+        typeof svc.serviceState === "string" ? svc.serviceState : "unknown";
       const current = stateTracker.get(label);
-      if (!current || current.state !== nextState) {
-        stateTracker.set(label, { state: nextState, sinceMs: now });
+      const nextEnteredAt =
+        current && !isAnnouncedState(current.state) && !isAnnouncedState(nextState)
+          ? current.sinceMs
+          : now;
+      if (!current || current.state !== nextState || current.sinceMs !== nextEnteredAt) {
+        stateTracker.set(label, { state: nextState, sinceMs: nextEnteredAt });
       }
     }
   };
@@ -289,11 +295,11 @@ export async function startGatewayBonjourAdvertiser(
     recreatePromise = (async () => {
       logWarn(`bonjour: restarting advertiser (${reason})`);
       const previous = cycle;
+      await stopCycle(previous);
       cycle = createCycle();
       stateTracker.clear();
       attachConflictListeners(cycle.services);
       startAdvertising(cycle.services);
-      await stopCycle(previous);
     })().finally(() => {
       recreatePromise = null;
     });
@@ -315,12 +321,12 @@ export async function startGatewayBonjourAdvertiser(
       }
       const tracked = stateTracker.get(label);
       if (
-        stateUnknown === "announcing" &&
+        stateUnknown !== "announced" &&
         tracked &&
         Date.now() - tracked.sinceMs >= STUCK_ANNOUNCING_MS
       ) {
         void recreateAdvertiser(
-          `service stuck announcing for ${Date.now() - tracked.sinceMs}ms (${serviceSummary(
+          `service stuck in ${stateUnknown} for ${Date.now() - tracked.sinceMs}ms (${serviceSummary(
             label,
             svc,
           )})`,

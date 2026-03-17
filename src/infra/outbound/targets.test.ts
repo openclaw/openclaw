@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
-import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
-import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
+import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -385,6 +384,24 @@ describe("resolveSessionDeliveryTarget", () => {
     });
 
     expect(resolved.to).toBe("C12345:topic:999");
+    expect(resolved.threadId).toBeUndefined();
+  });
+
+  it("keeps raw :topic: targets when the telegram plugin registry is unavailable", () => {
+    setActivePluginRegistry(createTestRegistry([]));
+
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-no-registry",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "63448508",
+      },
+      requestedChannel: "last",
+      explicitTo: "63448508:topic:1008013",
+    });
+
+    expect(resolved.to).toBe("63448508:topic:1008013");
     expect(resolved.threadId).toBeUndefined();
   });
 

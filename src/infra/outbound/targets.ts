@@ -415,9 +415,11 @@ function inferChatTypeFromTarget(params: {
   if (/^group:/i.test(to)) {
     return "group";
   }
-  return resolveOutboundChannelPlugin({
-    channel: params.channel,
-  })?.messaging?.inferTargetChatType?.({ to });
+  return (
+    resolveOutboundChannelPlugin({
+      channel: params.channel,
+    })?.messaging?.inferTargetChatType?.({ to }) ?? undefined
+  );
 }
 
 function resolveHeartbeatDeliveryChatType(params: {

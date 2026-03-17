@@ -4,10 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
+import { isRecord } from "../utils.js";
 import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 
 const tempDirs: string[] = [];
+
+function getServerArgs(value: unknown): unknown[] | undefined {
+  return isRecord(value) && Array.isArray(value.args) ? value.args : undefined;
+}
 
 async function createTempDir(prefix: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -73,10 +78,18 @@ describe("loadEnabledBundleMcpConfig", () => {
         cfg: config,
       });
       const resolvedServerPath = await fs.realpath(serverPath);
+      const loadedServer = loaded.config.mcpServers.bundleProbe;
+      const loadedArgs = getServerArgs(loadedServer);
+      const loadedServerPath = typeof loadedArgs?.[0] === "string" ? loadedArgs[0] : undefined;
 
       expect(loaded.diagnostics).toEqual([]);
-      expect(loaded.config.mcpServers.bundleProbe?.command).toBe("node");
-      expect(loaded.config.mcpServers.bundleProbe?.args).toEqual([resolvedServerPath]);
+      expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("node");
+      expect(loadedArgs).toHaveLength(1);
+      expect(loadedServerPath).toBeDefined();
+      if (!loadedServerPath) {
+        throw new Error("expected bundled MCP args to include the server path");
+      }
+      expect(await fs.realpath(loadedServerPath)).toBe(resolvedServerPath);
     } finally {
       env.restore();
     }
