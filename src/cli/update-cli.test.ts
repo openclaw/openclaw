@@ -206,6 +206,14 @@ describe("update-cli", () => {
     return call;
   };
 
+  const expectPackageInstallSpec = (spec: string) => {
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["npm", "i", "-g", spec, "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  };
+
   const makeOkUpdateResult = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult =>
     ({
       status: "ok",
@@ -456,18 +464,54 @@ describe("update-cli", () => {
     );
   });
 
-  it("honors --tag override", async () => {
-    const tempDir = createCaseDir("openclaw-update");
-
-    mockPackageInstallStatus(tempDir);
-
-    await updateCommand({ tag: "next" });
-
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["npm", "i", "-g", "openclaw@next", "--no-fund", "--no-audit", "--loglevel=error"],
-      expect.any(Object),
-    );
+  it("resolves package install specs from tags and env overrides", async () => {
+    for (const scenario of [
+      {
+        name: "explicit dist-tag",
+        run: async () => {
+          mockPackageInstallStatus(createCaseDir("openclaw-update"));
+          await updateCommand({ tag: "next" });
+        },
+        expectedSpec: "openclaw@next",
+      },
+      {
+        name: "main shorthand",
+        run: async () => {
+          mockPackageInstallStatus(createCaseDir("openclaw-update"));
+          await updateCommand({ yes: true, tag: "main" });
+        },
+        expectedSpec: "github:openclaw/openclaw#main",
+      },
+      {
+        name: "explicit git package spec",
+        run: async () => {
+          mockPackageInstallStatus(createCaseDir("openclaw-update"));
+          await updateCommand({ yes: true, tag: "github:openclaw/openclaw#main" });
+        },
+        expectedSpec: "github:openclaw/openclaw#main",
+      },
+      {
+        name: "OPENCLAW_UPDATE_PACKAGE_SPEC override",
+        run: async () => {
+          mockPackageInstallStatus(createCaseDir("openclaw-update"));
+          await withEnvAsync(
+            { OPENCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/openclaw-next.tgz" },
+            async () => {
+              await updateCommand({ yes: true, tag: "latest" });
+            },
+          );
+        },
+        expectedSpec: "http://10.211.55.2:8138/openclaw-next.tgz",
+      },
+    ]) {
+      vi.clearAllMocks();
+      readPackageName.mockResolvedValue("openclaw");
+      readPackageVersion.mockResolvedValue("1.0.0");
+      resolveGlobalManager.mockResolvedValue("npm");
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
+      await scenario.run();
+      expectPackageInstallSpec(scenario.expectedSpec);
+    }
   });
 
   it("prepends portable Git PATH for package updates on Windows", async () => {
@@ -521,74 +565,6 @@ describe("update-cli", () => {
     ]);
     expect(updateOptions?.env?.NPM_CONFIG_SCRIPT_SHELL).toBe("cmd.exe");
     expect(updateOptions?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
-  });
-
-  it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for package updates", async () => {
-    const tempDir = createCaseDir("openclaw-update");
-    mockPackageInstallStatus(tempDir);
-
-    await withEnvAsync(
-      { OPENCLAW_UPDATE_PACKAGE_SPEC: "http://10.211.55.2:8138/openclaw-next.tgz" },
-      async () => {
-        await updateCommand({ yes: true, tag: "latest" });
-      },
-    );
-
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [
-        "npm",
-        "i",
-        "-g",
-        "http://10.211.55.2:8138/openclaw-next.tgz",
-        "--no-fund",
-        "--no-audit",
-        "--loglevel=error",
-      ],
-      expect.any(Object),
-    );
-  });
-
-  it("maps --tag main to the GitHub main package spec for package updates", async () => {
-    const tempDir = createCaseDir("openclaw-update");
-    mockPackageInstallStatus(tempDir);
-
-    await updateCommand({ yes: true, tag: "main" });
-
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [
-        "npm",
-        "i",
-        "-g",
-        "github:openclaw/openclaw#main",
-        "--no-fund",
-        "--no-audit",
-        "--loglevel=error",
-      ],
-      expect.any(Object),
-    );
-  });
-
-  it("passes explicit git package specs through for package updates", async () => {
-    const tempDir = createCaseDir("openclaw-update");
-    mockPackageInstallStatus(tempDir);
-
-    await updateCommand({ yes: true, tag: "github:openclaw/openclaw#main" });
-
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [
-        "npm",
-        "i",
-        "-g",
-        "github:openclaw/openclaw#main",
-        "--no-fund",
-        "--no-audit",
-        "--loglevel=error",
-      ],
-      expect.any(Object),
-    );
   });
 
   it("updateCommand outputs JSON when --json is set", async () => {
@@ -758,12 +734,18 @@ describe("update-cli", () => {
     expect(runDaemonInstall).not.toHaveBeenCalled();
   });
 
-  it("updateCommand falls back to restart when env refresh install fails", async () => {
-    await runRestartFallbackScenario({ daemonInstall: "fail" });
-  });
+  it("updateCommand falls back to restart when service env refresh cannot complete", async () => {
+    for (const daemonInstall of ["fail", "ok"] as const) {
+      vi.clearAllMocks();
+      vi.mocked(runDaemonRestart).mockResolvedValue(true);
+      await runRestartFallbackScenario({ daemonInstall });
 
-  it("updateCommand falls back to restart when no detached restart script is available", async () => {
-    await runRestartFallbackScenario({ daemonInstall: "ok" });
+      expect(runDaemonInstall).toHaveBeenCalledWith({
+        force: true,
+        json: undefined,
+      });
+      expect(runDaemonRestart).toHaveBeenCalled();
+    }
   });
 
   it("updateCommand does not refresh service env when --no-restart is set", async () => {
