@@ -8,6 +8,10 @@ Docs: https://docs.openclaw.ai
 
 - Placeholder: replace with the first 2026.3.14 user-facing change.
 
+### Fixes
+
+- Agents/bootstrap warnings: move bootstrap truncation warnings out of the system prompt and into the per-turn prompt body so prompt-cache reuse stays stable when truncation warnings appear or disappear. (#48753) Thanks @scoootscooob and @obviyus.
+
 ## 2026.3.13
 
 ### Changes
