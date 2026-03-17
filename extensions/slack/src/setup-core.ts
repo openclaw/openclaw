@@ -79,6 +79,60 @@ type SlackSetupWizardHandlers = {
   resolveGroupAllowlist: (params: SlackGroupAllowlistResolverParams) => Promise<string[]>;
 };
 
+function buildSlackTokenCredential(params: {
+  inputKey: "botToken" | "appToken";
+  providerHint: "slack-bot" | "slack-app";
+  credentialLabel: string;
+  preferredEnvVar: "SLACK_BOT_TOKEN" | "SLACK_APP_TOKEN";
+  inputPrompt: string;
+}): NonNullable<ChannelSetupWizard["credentials"]>[number] {
+  const configKey = params.inputKey;
+  return {
+    inputKey: params.inputKey,
+    providerHint: params.providerHint,
+    credentialLabel: params.credentialLabel,
+    preferredEnvVar: params.preferredEnvVar,
+    envPrompt: `${params.preferredEnvVar} detected. Use env var?`,
+    keepPrompt: `${params.credentialLabel} already configured. Keep it?`,
+    inputPrompt: params.inputPrompt,
+    allowEnv: ({ accountId }: { accountId: string }) => accountId === DEFAULT_ACCOUNT_ID,
+    inspect: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) => {
+      const resolved = resolveSlackAccount({ cfg, accountId });
+      const tokenValue = resolved[configKey]?.trim() || undefined;
+      const configuredValue = resolved.config[configKey];
+      return {
+        accountConfigured: Boolean(tokenValue) || hasConfiguredSecretInput(configuredValue),
+        hasConfiguredValue: hasConfiguredSecretInput(configuredValue),
+        resolvedValue: tokenValue,
+        envValue:
+          accountId === DEFAULT_ACCOUNT_ID
+            ? process.env[params.preferredEnvVar]?.trim()
+            : undefined,
+      };
+    },
+    applyUseEnv: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
+      enableSlackAccount(cfg, accountId),
+    applySet: ({
+      cfg,
+      accountId,
+      value,
+    }: {
+      cfg: OpenClawConfig;
+      accountId: string;
+      value: unknown;
+    }) =>
+      patchChannelConfigForAccount({
+        cfg,
+        channel,
+        accountId,
+        patch: {
+          enabled: true,
+          [configKey]: value,
+        },
+      }),
+  };
+}
+
 export function createSlackSetupWizardBase(handlers: SlackSetupWizardHandlers): ChannelSetupWizard {
   const slackDmPolicy: ChannelSetupDmPolicy = {
     label: "Slack",
@@ -128,88 +182,20 @@ export function createSlackSetupWizardBase(handlers: SlackSetupWizardHandlers): 
       apply: ({ cfg, accountId }) => enableSlackAccount(cfg, accountId),
     },
     credentials: [
-      {
+      buildSlackTokenCredential({
         inputKey: "botToken",
         providerHint: "slack-bot",
         credentialLabel: "Slack bot token",
         preferredEnvVar: "SLACK_BOT_TOKEN",
-        envPrompt: "SLACK_BOT_TOKEN detected. Use env var?",
-        keepPrompt: "Slack bot token already configured. Keep it?",
         inputPrompt: "Enter Slack bot token (xoxb-...)",
-        allowEnv: ({ accountId }: { accountId: string }) => accountId === DEFAULT_ACCOUNT_ID,
-        inspect: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) => {
-          const resolved = resolveSlackAccount({ cfg, accountId });
-          return {
-            accountConfigured:
-              Boolean(resolved.botToken) || hasConfiguredSecretInput(resolved.config.botToken),
-            hasConfiguredValue: hasConfiguredSecretInput(resolved.config.botToken),
-            resolvedValue: resolved.botToken?.trim() || undefined,
-            envValue:
-              accountId === DEFAULT_ACCOUNT_ID ? process.env.SLACK_BOT_TOKEN?.trim() : undefined,
-          };
-        },
-        applyUseEnv: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
-          enableSlackAccount(cfg, accountId),
-        applySet: ({
-          cfg,
-          accountId,
-          value,
-        }: {
-          cfg: OpenClawConfig;
-          accountId: string;
-          value: unknown;
-        }) =>
-          patchChannelConfigForAccount({
-            cfg,
-            channel,
-            accountId,
-            patch: {
-              enabled: true,
-              botToken: value,
-            },
-          }),
-      },
-      {
+      }),
+      buildSlackTokenCredential({
         inputKey: "appToken",
         providerHint: "slack-app",
         credentialLabel: "Slack app token",
         preferredEnvVar: "SLACK_APP_TOKEN",
-        envPrompt: "SLACK_APP_TOKEN detected. Use env var?",
-        keepPrompt: "Slack app token already configured. Keep it?",
         inputPrompt: "Enter Slack app token (xapp-...)",
-        allowEnv: ({ accountId }: { accountId: string }) => accountId === DEFAULT_ACCOUNT_ID,
-        inspect: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) => {
-          const resolved = resolveSlackAccount({ cfg, accountId });
-          return {
-            accountConfigured:
-              Boolean(resolved.appToken) || hasConfiguredSecretInput(resolved.config.appToken),
-            hasConfiguredValue: hasConfiguredSecretInput(resolved.config.appToken),
-            resolvedValue: resolved.appToken?.trim() || undefined,
-            envValue:
-              accountId === DEFAULT_ACCOUNT_ID ? process.env.SLACK_APP_TOKEN?.trim() : undefined,
-          };
-        },
-        applyUseEnv: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
-          enableSlackAccount(cfg, accountId),
-        applySet: ({
-          cfg,
-          accountId,
-          value,
-        }: {
-          cfg: OpenClawConfig;
-          accountId: string;
-          value: unknown;
-        }) =>
-          patchChannelConfigForAccount({
-            cfg,
-            channel,
-            accountId,
-            patch: {
-              enabled: true,
-              appToken: value,
-            },
-          }),
-      },
+      }),
     ],
     dmPolicy: slackDmPolicy,
     allowFrom: {
