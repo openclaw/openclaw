@@ -628,39 +628,52 @@ describe("update-cli", () => {
     expect(updateOptions?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 
-  it("updateCommand outputs JSON when --json is set", async () => {
-    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-    vi.mocked(defaultRuntime.log).mockClear();
+  it("updateCommand reports success and failure outcomes", async () => {
+    const cases = [
+      {
+        name: "outputs JSON when --json is set",
+        run: async () => {
+          vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+          vi.mocked(defaultRuntime.log).mockClear();
+          await updateCommand({ json: true });
+        },
+        assert: () => {
+          const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
+          const jsonOutput = logCalls.find((call) => {
+            try {
+              JSON.parse(call[0] as string);
+              return true;
+            } catch {
+              return false;
+            }
+          });
+          expect(jsonOutput).toBeDefined();
+        },
+      },
+      {
+        name: "exits with error on failure",
+        run: async () => {
+          vi.mocked(runGatewayUpdate).mockResolvedValue({
+            status: "error",
+            mode: "git",
+            reason: "rebase-failed",
+            steps: [],
+            durationMs: 100,
+          } satisfies UpdateRunResult);
+          vi.mocked(defaultRuntime.exit).mockClear();
+          await updateCommand({});
+        },
+        assert: () => {
+          expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        },
+      },
+    ] as const;
 
-    await updateCommand({ json: true });
-
-    const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
-    const jsonOutput = logCalls.find((call) => {
-      try {
-        JSON.parse(call[0] as string);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-    expect(jsonOutput).toBeDefined();
-  });
-
-  it("updateCommand exits with error on failure", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "error",
-      mode: "git",
-      reason: "rebase-failed",
-      steps: [],
-      durationMs: 100,
-    };
-
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(defaultRuntime.exit).mockClear();
-
-    await updateCommand({});
-
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    for (const testCase of cases) {
+      vi.clearAllMocks();
+      await testCase.run();
+      testCase.assert();
+    }
   });
 
   it("updateCommand handles service env refresh and restart behavior", async () => {
