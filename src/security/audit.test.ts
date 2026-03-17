@@ -1274,62 +1274,59 @@ description: test skill
     );
   });
 
-  it("flags ineffective gateway.nodes.denyCommands entries", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        nodes: {
-          denyCommands: ["system.*", "system.runx"],
-        },
+  it("evaluates ineffective gateway.nodes.denyCommands entries", async () => {
+    const cases = [
+      {
+        name: "flags ineffective gateway.nodes.denyCommands entries",
+        cfg: {
+          gateway: {
+            nodes: {
+              denyCommands: ["system.*", "system.runx"],
+            },
+          },
+        } satisfies OpenClawConfig,
+        detailIncludes: ["system.*", "system.runx", "did you mean", "system.run"],
       },
-    };
-
-    const res = await audit(cfg);
-
-    const finding = res.findings.find(
-      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
-    );
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("system.*");
-    expect(finding?.detail).toContain("system.runx");
-    expect(finding?.detail).toContain("did you mean");
-    expect(finding?.detail).toContain("system.run");
-  });
-
-  it("suggests prefix-matching commands for unknown denyCommands entries", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        nodes: {
-          denyCommands: ["system.run.prep"],
-        },
+      {
+        name: "suggests prefix-matching commands for unknown denyCommands entries",
+        cfg: {
+          gateway: {
+            nodes: {
+              denyCommands: ["system.run.prep"],
+            },
+          },
+        } satisfies OpenClawConfig,
+        detailIncludes: ["system.run.prep", "did you mean", "system.run.prepare"],
       },
-    };
-
-    const res = await audit(cfg);
-    const finding = res.findings.find(
-      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
-    );
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("system.run.prep");
-    expect(finding?.detail).toContain("did you mean");
-    expect(finding?.detail).toContain("system.run.prepare");
-  });
-
-  it("keeps unknown denyCommands entries without suggestions when no close command exists", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        nodes: {
-          denyCommands: ["zzzzzzzzzzzzzz"],
-        },
+      {
+        name: "keeps unknown denyCommands entries without suggestions when no close command exists",
+        cfg: {
+          gateway: {
+            nodes: {
+              denyCommands: ["zzzzzzzzzzzzzz"],
+            },
+          },
+        } satisfies OpenClawConfig,
+        detailIncludes: ["zzzzzzzzzzzzzz"],
+        detailExcludes: ["did you mean"],
       },
-    };
+    ] as const;
 
-    const res = await audit(cfg);
-    const finding = res.findings.find(
-      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        const finding = res.findings.find(
+          (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+        );
+        expect(finding?.severity, testCase.name).toBe("warn");
+        for (const text of testCase.detailIncludes) {
+          expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
+        }
+        for (const text of testCase.detailExcludes ?? []) {
+          expect(finding?.detail, `${testCase.name}:${text}`).not.toContain(text);
+        }
+      }),
     );
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("zzzzzzzzzzzzzz");
-    expect(finding?.detail).not.toContain("did you mean");
   });
 
   it("scores dangerous gateway.nodes.allowCommands by exposure", async () => {
