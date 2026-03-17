@@ -519,6 +519,99 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("suppresses system event when mapping sets deliver: false", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "silent" },
+          action: "agent",
+          name: "SilentTriage",
+          messageTemplate: "Triage: {{payload.subject}}",
+          deliver: false,
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "labeled inbox",
+      });
+
+      const res = await postHook(port, "/hooks/silent", { subject: "Hello" });
+      expect(res.status).toBe(200);
+
+      // Give the async dispatch time to complete.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // No system event should be injected — deliver: false means fully silent.
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+
+      // Verify the isolated run was still invoked.
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        job?: { payload?: { deliver?: boolean } };
+      };
+      expect(call?.job?.payload?.deliver).toBe(false);
+    });
+  });
+
+  test("still surfaces errors to main session even when deliver: false", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "silent-err" },
+          action: "agent",
+          name: "SilentBroken",
+          messageTemplate: "Triage: {{payload.subject}}",
+          deliver: false,
+        },
+      ],
+    };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockRejectedValueOnce(new Error("model quota exceeded"));
+
+      const res = await postHook(port, "/hooks/silent-err", { subject: "Boom" });
+      expect(res.status).toBe(200);
+
+      // Error should still be surfaced to main session despite deliver: false.
+      const events = await waitForSystemEvent();
+      expect(events.some((e) => e.includes("SilentBroken") && e.includes("error"))).toBe(true);
+      expect(events.some((e) => e.includes("model quota exceeded"))).toBe(true);
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("direct /hooks/agent with deliver: false suppresses system event", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "silently done",
+      });
+
+      const res = await postHook(port, "/hooks/agent", {
+        message: "Label this email",
+        name: "GmailTriage",
+        deliver: false,
+      });
+      expect(res.status).toBe(200);
+
+      // Give the async dispatch time to complete.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // No system event — deliver: false.
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+    });
+  });
+
   test("rejects non-POST hook requests without consuming auth failure budget", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
