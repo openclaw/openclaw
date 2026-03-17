@@ -52,6 +52,43 @@ function applyAndCapture(params: {
   return captured;
 }
 
+function applyAndCaptureReasoning(params: {
+  cfg?: OpenClawConfig;
+  modelId: string;
+  initialPayload?: Record<string, unknown>;
+  thinkingLevel?: "minimal" | "low" | "medium" | "high";
+}) {
+  let capturedPayload: Record<string, unknown> | undefined;
+
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    const payload: Record<string, unknown> = { ...params.initialPayload };
+    options?.onPayload?.(payload, model);
+    capturedPayload = payload;
+    return createAssistantMessageEventStream();
+  };
+  const agent = { streamFn: baseStreamFn };
+
+  applyExtraParamsToAgent(
+    agent,
+    params.cfg ?? TEST_CFG,
+    "kilocode",
+    params.modelId,
+    undefined,
+    params.thinkingLevel ?? "high",
+  );
+
+  const model = {
+    api: "openai-completions",
+    provider: "kilocode",
+    id: params.modelId,
+  } as Model<"openai-completions">;
+  const context: Context = { messages: [] };
+
+  void agent.streamFn?.(model, context, {});
+
+  return capturedPayload;
+}
+
 describe("extra-params: Kilocode wrapper", () => {
   const envSnapshot = captureEnv(["KILOCODE_FEATURE"]);
 
@@ -121,27 +158,10 @@ describe("extra-params: Kilocode wrapper", () => {
 
 describe("extra-params: Kilocode kilo/auto reasoning", () => {
   it("does not inject reasoning.effort for kilo/auto", () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = { reasoning_effort: "high" };
-      options?.onPayload?.(payload, model);
-      capturedPayload = payload;
-      return createAssistantMessageEventStream();
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    // Pass thinking level explicitly (6th parameter) to trigger reasoning injection
-    applyExtraParamsToAgent(agent, TEST_CFG, "kilocode", "kilo/auto", undefined, "high");
-
-    const model = {
-      api: "openai-completions",
-      provider: "kilocode",
-      id: "kilo/auto",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
+    const capturedPayload = applyAndCaptureReasoning({
+      modelId: "kilo/auto",
+      initialPayload: { reasoning_effort: "high" },
+    });
 
     // kilo/auto should not have reasoning injected
     expect(capturedPayload?.reasoning).toBeUndefined();
@@ -149,70 +169,23 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
   });
 
   it("injects reasoning.effort for non-auto kilocode models", () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, model);
-      capturedPayload = payload;
-      return createAssistantMessageEventStream();
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(
-      agent,
-      TEST_CFG,
-      "kilocode",
-      "anthropic/claude-sonnet-4",
-      undefined,
-      "high",
-    );
-
-    const model = {
-      api: "openai-completions",
-      provider: "kilocode",
-      id: "anthropic/claude-sonnet-4",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
+    const capturedPayload = applyAndCaptureReasoning({
+      modelId: "anthropic/claude-sonnet-4",
+    });
 
     // Non-auto models should have reasoning injected
     expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
   });
 
   it("still normalizes reasoning for Kilocode under restrictive plugins.allow", () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = {};
-      options?.onPayload?.(payload, model);
-      capturedPayload = payload;
-      return createAssistantMessageEventStream();
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(
-      agent,
-      {
+    const capturedPayload = applyAndCaptureReasoning({
+      cfg: {
         plugins: {
           allow: ["openrouter"],
         },
       },
-      "kilocode",
-      "anthropic/claude-sonnet-4",
-      undefined,
-      "high",
-    );
-
-    const model = {
-      api: "openai-completions",
-      provider: "kilocode",
-      id: "anthropic/claude-sonnet-4",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
+      modelId: "anthropic/claude-sonnet-4",
+    });
 
     expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
   });
