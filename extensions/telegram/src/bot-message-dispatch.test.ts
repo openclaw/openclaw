@@ -13,6 +13,19 @@ const deliverReplies = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
+const gatewayBroadcastMocks = vi.hoisted(() => ({
+  getFallbackGatewayContext: vi.fn(() => undefined),
+  loadSessionEntry: vi.fn(() => ({
+    storePath: "/tmp/sessions.json",
+    entry: { sessionId: "sess-1", sessionFile: "sess-1.jsonl" },
+  })),
+  readSessionMessages: vi.fn(() => []),
+  stripEnvelopeFromMessage: vi.fn((message: unknown) => message),
+}));
+const getFallbackGatewayContext = gatewayBroadcastMocks.getFallbackGatewayContext;
+const loadSessionEntry = gatewayBroadcastMocks.loadSessionEntry;
+const readSessionMessages = gatewayBroadcastMocks.readSessionMessages;
+const stripEnvelopeFromMessage = gatewayBroadcastMocks.stripEnvelopeFromMessage;
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -44,6 +57,19 @@ vi.mock("./sticker-cache.js", () => ({
   describeStickerImage: vi.fn(),
 }));
 
+vi.mock("../../../src/gateway/server-plugins.js", () => ({
+  getFallbackGatewayContext: gatewayBroadcastMocks.getFallbackGatewayContext,
+}));
+
+vi.mock("../../../src/gateway/session-utils.js", () => ({
+  loadSessionEntry: gatewayBroadcastMocks.loadSessionEntry,
+  readSessionMessages: gatewayBroadcastMocks.readSessionMessages,
+}));
+
+vi.mock("../../../src/gateway/chat-sanitize.js", () => ({
+  stripEnvelopeFromMessage: gatewayBroadcastMocks.stripEnvelopeFromMessage,
+}));
+
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 
 describe("dispatchTelegramMessage draft streaming", () => {
@@ -56,8 +82,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
     editMessageTelegram.mockClear();
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
+    getFallbackGatewayContext.mockClear();
+    loadSessionEntry.mockClear();
+    readSessionMessages.mockClear();
+    stripEnvelopeFromMessage.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
+    getFallbackGatewayContext.mockReturnValue(undefined);
+    loadSessionEntry.mockReturnValue({
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-1", sessionFile: "sess-1.jsonl" },
+    });
+    readSessionMessages.mockReturnValue([]);
+    stripEnvelopeFromMessage.mockImplementation((message: unknown) => message);
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -2218,5 +2255,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(statusReactionController.cancelPending.mock.invocationCallOrder[0]).toBeLessThan(
       statusReactionController.setThinking.mock.invocationCallOrder[1],
     );
+  });
+
+  it("skips chat broadcast when the transcript has no new assistant row for this run", async () => {
+    const broadcast = vi.fn();
+    const nodeSendToSession = vi.fn();
+    getFallbackGatewayContext.mockReturnValue({
+      broadcast,
+      nodeSendToSession,
+      agentRunSeq: new Map(),
+    });
+    readSessionMessages
+      .mockReturnValueOnce([{ role: "assistant", content: [{ type: "text", text: "Existing" }] }])
+      .mockReturnValueOnce([
+        { role: "assistant", content: [{ type: "text", text: "Existing" }] },
+        { role: "assistant", content: [{ type: "text", text: "Other concurrent reply" }] },
+      ]);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Stopped current run" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(nodeSendToSession).not.toHaveBeenCalled();
   });
 });

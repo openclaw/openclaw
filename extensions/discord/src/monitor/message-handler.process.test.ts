@@ -66,6 +66,19 @@ const configSessionsMocks = vi.hoisted(() => ({
 }));
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
 const resolveStorePath = configSessionsMocks.resolveStorePath;
+const gatewayBroadcastMocks = vi.hoisted(() => ({
+  getFallbackGatewayContext: vi.fn(() => undefined),
+  loadSessionEntry: vi.fn(() => ({
+    storePath: "/tmp/openclaw-discord-process-test-sessions.json",
+    entry: { sessionId: "sess-1", sessionFile: "sess-1.jsonl" },
+  })),
+  readSessionMessages: vi.fn(() => []),
+  stripEnvelopeFromMessage: vi.fn((message: unknown) => message),
+}));
+const getFallbackGatewayContext = gatewayBroadcastMocks.getFallbackGatewayContext;
+const loadSessionEntry = gatewayBroadcastMocks.loadSessionEntry;
+const readSessionMessages = gatewayBroadcastMocks.readSessionMessages;
+const stripEnvelopeFromMessage = gatewayBroadcastMocks.stripEnvelopeFromMessage;
 
 vi.mock("../send.js", () => ({
   reactMessageDiscord: sendMocks.reactMessageDiscord,
@@ -121,6 +134,19 @@ vi.mock("../../../../src/config/sessions.js", () => ({
   resolveStorePath: configSessionsMocks.resolveStorePath,
 }));
 
+vi.mock("../../../../src/gateway/server-plugins.js", () => ({
+  getFallbackGatewayContext: gatewayBroadcastMocks.getFallbackGatewayContext,
+}));
+
+vi.mock("../../../../src/gateway/session-utils.js", () => ({
+  loadSessionEntry: gatewayBroadcastMocks.loadSessionEntry,
+  readSessionMessages: gatewayBroadcastMocks.readSessionMessages,
+}));
+
+vi.mock("../../../../src/gateway/chat-sanitize.js", () => ({
+  stripEnvelopeFromMessage: gatewayBroadcastMocks.stripEnvelopeFromMessage,
+}));
+
 const { processDiscordMessage } = await import("./message-handler.process.js");
 
 const createBaseContext = createBaseDiscordMessageContext;
@@ -164,6 +190,13 @@ beforeEach(() => {
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
   resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
+  getFallbackGatewayContext.mockReturnValue(undefined);
+  loadSessionEntry.mockReturnValue({
+    storePath: "/tmp/openclaw-discord-process-test-sessions.json",
+    entry: { sessionId: "sess-1", sessionFile: "sess-1.jsonl" },
+  });
+  readSessionMessages.mockReturnValue([]);
+  stripEnvelopeFromMessage.mockImplementation((message: unknown) => message);
   threadBindingTesting.resetThreadBindingsForTests();
 });
 
@@ -668,5 +701,30 @@ describe("processDiscordMessage draft streaming", () => {
     await runInPartialStreamMode();
 
     expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("skips chat broadcast when the transcript has no new assistant row for this run", async () => {
+    const broadcast = vi.fn();
+    const nodeSendToSession = vi.fn();
+    getFallbackGatewayContext.mockReturnValue({
+      broadcast,
+      nodeSendToSession,
+      agentRunSeq: new Map(),
+    });
+    readSessionMessages
+      .mockReturnValueOnce([{ role: "assistant", content: [{ type: "text", text: "Existing" }] }])
+      .mockReturnValueOnce([
+        { role: "assistant", content: [{ type: "text", text: "Existing" }] },
+        { role: "assistant", content: [{ type: "text", text: "Other concurrent reply" }] },
+      ]);
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      params?.dispatcher.sendFinalReply({ text: "Stopped current run" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    await processStreamOffDiscordMessage();
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(nodeSendToSession).not.toHaveBeenCalled();
   });
 });

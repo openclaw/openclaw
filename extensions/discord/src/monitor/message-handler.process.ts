@@ -1,5 +1,5 @@
-import { ChannelType, type RequestClient } from "@buape/carbon";
 import { randomUUID } from "node:crypto";
+import { ChannelType, type RequestClient } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../../../src/agents/identity.js";
 import { EmbeddedBlockChunker } from "../../../../src/agents/pi-embedded-block-chunker.js";
 import { resolveChunkMode } from "../../../../src/auto-reply/chunk.js";
@@ -30,16 +30,19 @@ import { resolveDiscordPreviewStreamMode } from "../../../../src/config/discord-
 import { resolveMarkdownTableMode } from "../../../../src/config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../../src/config/sessions.js";
 import { stripEnvelopeFromMessage } from "../../../../src/gateway/chat-sanitize.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { getFallbackGatewayContext } from "../../../../src/gateway/server-plugins.js";
 import { loadSessionEntry, readSessionMessages } from "../../../../src/gateway/session-utils.js";
+import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { convertMarkdownTables } from "../../../../src/markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../../../src/media/local-roots.js";
 import { buildAgentSessionKey } from "../../../../src/routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../../src/routing/session-key.js";
 import { stripReasoningTagsFromText } from "../../../../src/shared/text/reasoning-tags.js";
 import { truncateUtf16Safe } from "../../../../src/utils.js";
-import { stripInlineDirectiveTagsFromMessageForDisplay } from "../../../../src/utils/directive-tags.js";
+import {
+  stripInlineDirectiveTagsForDisplay,
+  stripInlineDirectiveTagsFromMessageForDisplay,
+} from "../../../../src/utils/directive-tags.js";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
@@ -71,6 +74,48 @@ const DISCORD_TYPING_MAX_DURATION_MS = 20 * 60_000;
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
+}
+
+function normalizeComparableText(text: string | undefined): string | undefined {
+  if (typeof text !== "string") {
+    return undefined;
+  }
+  const normalized = stripInlineDirectiveTagsForDisplay(text).text.trim();
+  return normalized || undefined;
+}
+
+function extractComparableAssistantText(
+  message: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!message) {
+    return undefined;
+  }
+  const directText = normalizeComparableText(
+    typeof message.text === "string" ? message.text : undefined,
+  );
+  if (directText) {
+    return directText;
+  }
+  const content = message.content;
+  if (typeof content === "string") {
+    return normalizeComparableText(content);
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const parts = content
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return undefined;
+      }
+      const block = entry as { type?: unknown; text?: unknown };
+      if (block.type !== "text" && block.type !== "output_text" && block.type !== "input_text") {
+        return undefined;
+      }
+      return normalizeComparableText(typeof block.text === "string" ? block.text : undefined);
+    })
+    .filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
@@ -598,6 +643,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   // When draft streaming is active, suppress block streaming to avoid double-streaming.
   const disableBlockStreamingForDraft = draftStream ? true : undefined;
+  const deliveredFinalTexts = new Set<string>();
 
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
@@ -609,6 +655,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           return;
         }
         const isFinal = info.kind === "final";
+        if (isFinal) {
+          const normalizedFinalText = normalizeComparableText(payload.text);
+          if (normalizedFinalText) {
+            deliveredFinalTexts.add(normalizedFinalText);
+          }
+        }
         if (payload.isReasoning) {
           // Reasoning/thinking payloads should not be delivered to Discord.
           return;
@@ -894,7 +946,16 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
             (m as Record<string, unknown>)?.role === "assistant",
         );
         const newAssistantMessages = assistantMessages.slice(preDispatchAssistantCount);
-        message = newAssistantMessages.pop() as Record<string, unknown> | undefined;
+        message = [...newAssistantMessages].reverse().find((entry) => {
+          const candidate = stripEnvelopeFromMessage(entry) as Record<string, unknown> | undefined;
+          const candidateText = extractComparableAssistantText(candidate);
+          return candidateText ? deliveredFinalTexts.has(candidateText) : false;
+        }) as Record<string, unknown> | undefined;
+      }
+
+      if (!message) {
+        gatewayCtx.agentRunSeq.delete(runId);
+        return;
       }
 
       const sanitizedMessage = message
