@@ -6,7 +6,7 @@ import {
 } from "./provider-auth-input.js";
 import { applyPrimaryModel } from "./provider-model-primary.js";
 
-export {
+export const providerApiKeyAuthRuntime = {
   applyAuthProfileConfig,
   applyPrimaryModel,
   buildApiKeyCredential,
