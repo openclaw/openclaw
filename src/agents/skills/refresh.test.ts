@@ -71,3 +71,14 @@ describe("ensureSkillsWatcher", () => {
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
   });
 });
+
+describe("getSkillsSnapshotVersion", () => {
+  it("initial globalVersion is > 0 so stale session snapshots are always detected", async () => {
+    // After a gateway restart the refresh guard checks `snapshotVersion > 0`.
+    // If globalVersion starts at 0 this is always false and stale snapshots
+    // from sessions.json are never rebuilt.
+    const mod = await import("./refresh.js");
+    const version = mod.getSkillsSnapshotVersion();
+    expect(version).toBeGreaterThan(0);
+  });
+});
