@@ -27,13 +27,13 @@ vi.mock("./runtime/session-meta.js", () => ({
   readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
-import {
-  buildConfiguredAcpSessionKey,
-  ensureConfiguredAcpBindingSession,
-  resetAcpSessionInPlace,
-  resolveConfiguredAcpBindingRecord,
-  resolveConfiguredAcpBindingSpecBySessionKey,
-} from "./persistent-bindings.js";
+type PersistentBindingsModule = typeof import("./persistent-bindings.js");
+
+let buildConfiguredAcpSessionKey: PersistentBindingsModule["buildConfiguredAcpSessionKey"];
+let ensureConfiguredAcpBindingSession: PersistentBindingsModule["ensureConfiguredAcpBindingSession"];
+let resetAcpSessionInPlace: PersistentBindingsModule["resetAcpSessionInPlace"];
+let resolveConfiguredAcpBindingRecord: PersistentBindingsModule["resolveConfiguredAcpBindingRecord"];
+let resolveConfiguredAcpBindingSpecBySessionKey: PersistentBindingsModule["resolveConfiguredAcpBindingSpecBySessionKey"];
 
 type ConfiguredBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 type BindingRecordInput = Parameters<typeof resolveConfiguredAcpBindingRecord>[0];
@@ -182,6 +182,17 @@ beforeEach(() => {
   managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
+});
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    buildConfiguredAcpSessionKey,
+    ensureConfiguredAcpBindingSession,
+    resetAcpSessionInPlace,
+    resolveConfiguredAcpBindingRecord,
+    resolveConfiguredAcpBindingSpecBySessionKey,
+  } = await import("./persistent-bindings.js"));
 });
 
 describe("resolveConfiguredAcpBindingRecord", () => {
