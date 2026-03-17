@@ -32,6 +32,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
   buildAcpRunDeliveryTarget,
+  createAcpDispatchDeliveryState,
   createAcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -219,6 +220,7 @@ export async function tryDispatchAcpReply(params: {
   }
 
   let queuedFinal = false;
+  const deliveryState = createAcpDispatchDeliveryState();
   const delivery = createAcpDispatchDeliveryCoordinator({
     cfg: params.cfg,
     ctx: params.ctx,
@@ -230,6 +232,7 @@ export async function tryDispatchAcpReply(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
+    state: deliveryState,
   });
 
   const identityPendingBeforeTurn = isSessionIdentityPending(
@@ -356,6 +359,7 @@ export async function tryDispatchAcpReply(params: {
             originatingTo: params.originatingTo,
             onReplyStart: params.onReplyStart,
             restartMode,
+            ...(restartMode ? {} : { state: deliveryState }),
           }),
       });
       let turnError: unknown;

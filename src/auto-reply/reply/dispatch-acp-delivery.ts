@@ -30,6 +30,20 @@ type AcpDispatchDeliveryState = {
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
 
+export function createAcpDispatchDeliveryState(): AcpDispatchDeliveryState {
+  return {
+    startedReplyLifecycle: false,
+    accumulatedBlockText: "",
+    blockCount: 0,
+    routedCounts: {
+      tool: 0,
+      block: 0,
+      final: 0,
+    },
+    toolMessageByCallId: new Map(),
+  };
+}
+
 export type AcpDispatchDeliveryCoordinator = {
   startReplyLifecycle: () => Promise<void>;
   deliver: (
@@ -102,18 +116,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
   restartMode?: boolean;
+  state?: AcpDispatchDeliveryState;
 }): AcpDispatchDeliveryCoordinator {
-  const state: AcpDispatchDeliveryState = {
-    startedReplyLifecycle: false,
-    accumulatedBlockText: "",
-    blockCount: 0,
-    routedCounts: {
-      tool: 0,
-      block: 0,
-      final: 0,
-    },
-    toolMessageByCallId: new Map(),
-  };
+  const state = params.state ?? createAcpDispatchDeliveryState();
 
   const startReplyLifecycleOnce = async () => {
     if (state.startedReplyLifecycle) {

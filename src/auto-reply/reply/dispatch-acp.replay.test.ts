@@ -1,11 +1,77 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpGatewayStore } from "../../acp/store/store.js";
 import { createProjectionRestartHarness } from "../../acp/test-harness/restart-harness.js";
+import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { AcpDurableProjectionService } from "./dispatch-acp-replay.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
+
+const routeMocks = vi.hoisted(() => ({
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+}));
+
+const ttsMocks = vi.hoisted(() => ({
+  maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
+    const params = paramsUnknown as { payload: unknown };
+    return params.payload;
+  }),
+}));
+
+const zodMocks = vi.hoisted(() => {
+  const createSchema = (): unknown =>
+    new Proxy(
+      {},
+      {
+        get: (_target, prop) => {
+          if (prop === "parse") {
+            return (value: unknown) => value;
+          }
+          if (prop === "safeParse") {
+            return (value: unknown) => ({ success: true, data: value });
+          }
+          if (prop === "spa") {
+            return async (value: unknown) => ({ success: true, data: value });
+          }
+          return (..._args: unknown[]) => createSchema();
+        },
+      },
+    );
+  const z = new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "coerce") {
+          return new Proxy(
+            {},
+            {
+              get:
+                () =>
+                (..._args: unknown[]) =>
+                  createSchema(),
+            },
+          );
+        }
+        if (prop === "ZodIssueCode") {
+          return {};
+        }
+        return (..._args: unknown[]) => createSchema();
+      },
+    },
+  );
+  return { z };
+});
+
+vi.mock("./route-reply.js", () => ({
+  routeReply: (params: unknown) => routeMocks.routeReply(params),
+}));
+
+vi.mock("../../tts/tts.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+
+vi.mock("zod", () => zodMocks);
 
 const tempRoots: string[] = [];
 
@@ -24,6 +90,7 @@ async function seedTerminalRun(params: {
   targetId?: string;
   channel: string;
   to: string;
+  routeMode?: "originating" | "session";
   text: string;
   now: number;
   terminalKind?: "completed" | "failed";
@@ -46,7 +113,7 @@ async function seedTerminalRun(params: {
     targetId: params.targetId ?? "primary",
     channel: params.channel,
     to: params.to,
-    routeMode: "originating",
+    routeMode: params.routeMode ?? "originating",
     now: params.now + 2,
   });
   await params.store.appendWorkerEvent({
@@ -87,10 +154,24 @@ async function seedTerminalRun(params: {
 }
 
 afterEach(async () => {
+  routeMocks.routeReply.mockReset();
+  routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+  ttsMocks.maybeApplyTtsToPayload.mockClear();
   await Promise.all(
     tempRoots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
   );
 });
+
+function createDispatcherStub() {
+  return {
+    sendToolResult: vi.fn(() => true),
+    sendBlockReply: vi.fn(() => true),
+    sendFinalReply: vi.fn(() => true),
+    waitForIdle: vi.fn(async () => {}),
+    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    markComplete: vi.fn(),
+  };
+}
 
 describe("AcpDurableProjectionService", () => {
   it("keeps run-scoped delivery targets isolated across multiple runs on one session", async () => {
@@ -229,5 +310,109 @@ describe("AcpDurableProjectionService", () => {
         payload: entry.payload,
       })),
     ).toEqual(baselineDeliveries.slice(1));
+  });
+
+  it("does not advance the projector checkpoint before confirmed live session-route delivery", async () => {
+    const store = await createStore();
+    await seedTerminalRun({
+      store,
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-session-live",
+      channel: "discord",
+      to: "discord:session-thread",
+      routeMode: "session",
+      text: "session lane body",
+      now: 10,
+    });
+
+    let resolveRouteReply!: (value: { ok: true; messageId: string }) => void;
+    routeMocks.routeReply.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRouteReply = resolve;
+        }),
+    );
+
+    const cfg = createAcpTestConfig();
+    const service = new AcpDurableProjectionService({
+      store,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: false,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    const projectionPromise = service.ensureProjection({
+      cfg,
+      target: (await store.getRunDeliveryTarget("run-session-live", "primary"))!,
+      shouldSendToolSummaries: true,
+      restartMode: false,
+    });
+
+    await vi.waitFor(() => expect(routeMocks.routeReply).toHaveBeenCalledTimes(1));
+    expect(await store.getCheckpoint("projector:run-session-live:primary")).toBeNull();
+
+    resolveRouteReply({ ok: true, messageId: "session-live-1" });
+    await projectionPromise;
+
+    expect(await store.getCheckpoint("projector:run-session-live:primary")).toMatchObject({
+      runId: "run-session-live",
+      cursorSeq: 1,
+      deliveredEffectCount: 1,
+    });
+  });
+
+  it("replays missing session-route output after restart when no checkpoint was durably recorded", async () => {
+    const store = await createStore();
+    await seedTerminalRun({
+      store,
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-session-replay",
+      channel: "discord",
+      to: "discord:session-thread",
+      routeMode: "session",
+      text: "replay me",
+      now: 10,
+    });
+
+    const cfg = createAcpTestConfig();
+    const service = new AcpDurableProjectionService({
+      store,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: false,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    await service.ensureProjection({
+      cfg,
+      target: (await store.getRunDeliveryTarget("run-session-replay", "primary"))!,
+      shouldSendToolSummaries: true,
+      restartMode: true,
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "discord:session-thread",
+        payload: expect.objectContaining({ text: "replay me" }),
+      }),
+    );
+    expect(await store.getCheckpoint("projector:run-session-replay:primary")).toMatchObject({
+      runId: "run-session-replay",
+      cursorSeq: 1,
+      deliveredEffectCount: 1,
+    });
   });
 });

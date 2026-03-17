@@ -59,7 +59,19 @@ const gatewayRuntimeMocks = vi.hoisted(() => ({
 }));
 
 const projectionServiceMocks = vi.hoisted(() => ({
-  ensureProjection: vi.fn(async () => undefined),
+  ensureProjection: vi.fn<
+    (
+      params?: unknown,
+      serviceParams?: {
+        store: unknown;
+        coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+      },
+    ) => Promise<void>
+  >(async () => undefined),
+  instances: [] as Array<{
+    store: unknown;
+    coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+  }>,
 }));
 
 const zodMocks = vi.hoisted(() => {
@@ -159,7 +171,18 @@ vi.mock("../../acp/store/gateway-events.js", () => ({
 
 vi.mock("./dispatch-acp-replay.js", () => ({
   AcpDurableProjectionService: class {
-    ensureProjection = projectionServiceMocks.ensureProjection;
+    constructor(params: {
+      store: unknown;
+      coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+    }) {
+      projectionServiceMocks.instances.push(params);
+    }
+
+    ensureProjection = async (params: unknown) =>
+      await projectionServiceMocks.ensureProjection(
+        params,
+        projectionServiceMocks.instances.at(-1),
+      );
   },
 }));
 
@@ -316,6 +339,7 @@ describe("tryDispatchAcpReply", () => {
     gatewayRuntimeMocks.getRun.mockResolvedValue(null);
     projectionServiceMocks.ensureProjection.mockReset();
     projectionServiceMocks.ensureProjection.mockResolvedValue(undefined);
+    projectionServiceMocks.instances.length = 0;
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -458,7 +482,8 @@ describe("tryDispatchAcpReply", () => {
         routeMode: "originating",
       }),
     );
-    expect(projectionServiceMocks.ensureProjection).toHaveBeenCalledWith(
+    expect(projectionServiceMocks.ensureProjection).toHaveBeenCalledTimes(1);
+    expect(projectionServiceMocks.ensureProjection.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         cfg: expect.any(Object),
         target: expect.objectContaining({
@@ -476,6 +501,149 @@ describe("tryDispatchAcpReply", () => {
       }),
     );
     expect(managerMocks.runTurn.mock.calls[0]?.[0]).not.toHaveProperty("onEvent");
+  });
+
+  it("shares live durable delivery state so routed counts and final TTS propagate through the dispatch result", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({
+        backend: "acp-node",
+      }),
+    });
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { kind: string; payload: { text?: string } };
+      if (params.kind === "final" && params.payload.text === "durable streamed block") {
+        return {
+          mediaUrl: "https://example.com/final-tts.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+    projectionServiceMocks.ensureProjection.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as { target: unknown };
+      const serviceParams = args[1] as
+        | {
+            coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+          }
+        | undefined;
+      const coordinator = serviceParams?.coordinatorFactory({
+        target: params.target,
+        restartMode: false,
+      }) as {
+        deliver: (
+          kind: "tool" | "block" | "final",
+          payload: { text?: string; mediaUrl?: string; audioAsVoice?: boolean },
+          meta?: { toolCallId?: string; allowEdit?: boolean },
+        ) => Promise<boolean>;
+      };
+      await coordinator.deliver(
+        "tool",
+        { text: "tool update" },
+        { toolCallId: "tool-1", allowEdit: false },
+      );
+      await coordinator.deliver("block", { text: "durable streamed block" });
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply from durable path",
+      dispatcher,
+      shouldRouteToOriginating: true,
+      ctxOverrides: {
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:thread-1",
+      },
+    });
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: {
+        tool: 1,
+        block: 1,
+        final: 1,
+      },
+    });
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(3);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        payload: expect.objectContaining({ text: "tool update" }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        payload: expect.objectContaining({ text: "durable streamed block" }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/final-tts.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+  });
+
+  it("uses confirmed session-route delivery for live durable projection instead of the queued dispatcher lane", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({
+        backend: "acp-node",
+      }),
+    });
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    projectionServiceMocks.ensureProjection.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as { target: unknown };
+      const serviceParams = args[1] as
+        | {
+            coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+          }
+        | undefined;
+      const coordinator = serviceParams?.coordinatorFactory({
+        target: params.target,
+        restartMode: false,
+      }) as {
+        deliver: (kind: "tool" | "block" | "final", payload: { text?: string }) => Promise<boolean>;
+      };
+      await coordinator.deliver("block", { text: "session route block" });
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply from session route durable path",
+      dispatcher,
+      shouldRouteToOriginating: false,
+      ctxOverrides: {
+        To: "discord:session-thread",
+      },
+    });
+
+    expect(result).toMatchObject({
+      counts: {
+        block: 1,
+      },
+    });
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "discord:session-thread",
+        payload: expect.objectContaining({ text: "session route block" }),
+      }),
+    );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not start reply lifecycle for empty ACP prompt", async () => {
