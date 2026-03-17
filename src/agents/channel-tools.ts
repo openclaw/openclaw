@@ -15,6 +15,14 @@ import { defaultRuntime } from "../runtime.js";
 export function listChannelSupportedActions(params: {
   cfg?: OpenClawConfig;
   channel?: string;
+  currentChannelId?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  accountId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  requesterSenderId?: string | null;
 }): ChannelMessageActionName[] {
   if (!params.channel) {
     return [];
@@ -24,7 +32,18 @@ export function listChannelSupportedActions(params: {
     return [];
   }
   const cfg = params.cfg ?? ({} as OpenClawConfig);
-  return runPluginListActions(plugin, cfg);
+  return runPluginListActions(plugin, {
+    cfg,
+    currentChannelId: params.currentChannelId,
+    currentChannelProvider: params.channel,
+    currentThreadTs: params.currentThreadTs,
+    currentMessageId: params.currentMessageId,
+    accountId: params.accountId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    requesterSenderId: params.requesterSenderId,
+  });
 }
 
 /**
@@ -32,6 +51,14 @@ export function listChannelSupportedActions(params: {
  */
 export function listAllChannelSupportedActions(params: {
   cfg?: OpenClawConfig;
+  currentChannelId?: string | null;
+  currentThreadTs?: string | null;
+  currentMessageId?: string | number | null;
+  accountId?: string | null;
+  sessionKey?: string | null;
+  sessionId?: string | null;
+  agentId?: string | null;
+  requesterSenderId?: string | null;
 }): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
   for (const plugin of listChannelPlugins()) {
@@ -39,7 +66,18 @@ export function listAllChannelSupportedActions(params: {
       continue;
     }
     const cfg = params.cfg ?? ({} as OpenClawConfig);
-    const channelActions = runPluginListActions(plugin, cfg);
+    const channelActions = runPluginListActions(plugin, {
+      cfg,
+      currentChannelId: params.currentChannelId,
+      currentChannelProvider: plugin.id,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      accountId: params.accountId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      requesterSenderId: params.requesterSenderId,
+    });
     for (const action of channelActions) {
       actions.add(action);
     }
@@ -86,13 +124,13 @@ const loggedListActionErrors = new Set<string>();
 
 function runPluginListActions(
   plugin: ChannelPlugin,
-  cfg: OpenClawConfig,
+  context: Parameters<NonNullable<NonNullable<ChannelPlugin["actions"]>["listActions"]>>[0],
 ): ChannelMessageActionName[] {
   if (!plugin.actions?.listActions) {
     return [];
   }
   try {
-    const listed = plugin.actions.listActions({ cfg });
+    const listed = plugin.actions.listActions(context);
     return Array.isArray(listed) ? listed : [];
   } catch (err) {
     logListActionsError(plugin.id, err);
