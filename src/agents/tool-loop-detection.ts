@@ -494,7 +494,7 @@ function getBrowserSearchStormStats(
   uniqueQueries.add(currentSearch.queryHash);
 
   return {
-    count: recentSearches.length + 1,
+    count: recentSearches.length,
     uniqueHosts: uniqueHosts.size,
     uniqueQueries: uniqueQueries.size,
   };

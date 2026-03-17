@@ -475,7 +475,7 @@ describe("tool-loop-detection", () => {
       recordSuccessfulBrowserSearchCalls({
         state,
         queries: Array.from(
-          { length: BROWSER_SEARCH_WARNING_THRESHOLD - 1 },
+          { length: BROWSER_SEARCH_WARNING_THRESHOLD },
           (_, index) => `openclaw issue ${index}`,
         ),
       });
@@ -502,7 +502,7 @@ describe("tool-loop-detection", () => {
       recordSuccessfulBrowserSearchCalls({
         state,
         queries: Array.from(
-          { length: BROWSER_SEARCH_CRITICAL_THRESHOLD - 1 },
+          { length: BROWSER_SEARCH_CRITICAL_THRESHOLD },
           (_, index) => `openclaw loop detection ${index}`,
         ),
         hostAtIndex: (index) => (index % 2 === 0 ? "www.google.com" : "www.bing.com"),
@@ -527,7 +527,7 @@ describe("tool-loop-detection", () => {
 
     it("matches Yandex search pages with a trailing slash", () => {
       const state = createState();
-      for (let i = 0; i < BROWSER_SEARCH_WARNING_THRESHOLD - 1; i += 1) {
+      for (let i = 0; i < BROWSER_SEARCH_WARNING_THRESHOLD; i += 1) {
         const fixture = createBrowserSearchFixture(`yandex issue ${i}`, "yandex.com", {
           path: "/search/",
           queryParam: "text",
