@@ -32,6 +32,7 @@ Every native OpenClaw plugin **must** ship a `openclaw.plugin.json` file in the
 plugin errors and block config validation.
 
 See the full plugin system guide: [Plugins](/tools/plugin).
+For the public capability model: [Capability model](/tools/plugin#public-capability-model).
 
 ## Required fields
 
@@ -54,8 +55,8 @@ Required keys:
 Optional keys:
 
 - `kind` (string): plugin kind (examples: `"memory"`, `"context-engine"`).
-- `channels` (array): channel ids registered by this plugin (example: `["matrix"]`).
-- `providers` (array): provider ids registered by this plugin.
+- `channels` (array): channel ids registered by this plugin (channel capability; example: `["matrix"]`).
+- `providers` (array): provider ids registered by this plugin (text inference capability).
 - `providerAuthEnvVars` (object): auth env vars keyed by provider id. Use this
   when OpenClaw should resolve provider credentials from env without loading
   plugin runtime first.
