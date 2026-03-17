@@ -1,13 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig } from "tsdown";
+import { defineConfig, type UserConfig } from "tsdown";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
+
+type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
+type InputOptionsArg = InputOptionsFactory extends (
+  options: infer Options,
+  format: infer _Format,
+  context: infer _Context,
+) => infer _Return
+  ? Options
+  : never;
+type InputOptionsReturn = InputOptionsFactory extends (
+  options: infer _Options,
+  format: infer _Format,
+  context: infer _Context,
+) => infer Return
+  ? Return
+  : never;
+type OnLogFunction = InputOptionsArg extends { onLog?: infer OnLog } ? NonNullable<OnLog> : never;
 
 const env = {
   NODE_ENV: "production",
 };
 
-function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown }) {
+function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
@@ -32,11 +49,8 @@ function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown })
 
   return {
     ...options,
-    onLog(
-      level: string,
-      log: { code?: string; message?: string; id?: string; importer?: string },
-      defaultHandler: (level: string, log: { code?: string }) => void,
-    ) {
+    onLog(...args: Parameters<OnLogFunction>) {
+      const [level, log, defaultHandler] = args;
       if (isSuppressedLog(log)) {
         return;
       }
@@ -49,7 +63,7 @@ function buildInputOptions(options: { onLog?: unknown; [key: string]: unknown })
   };
 }
 
-function nodeBuildConfig(config: Record<string, unknown>) {
+function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
     env,
