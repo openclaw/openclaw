@@ -12,7 +12,7 @@ import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
 import { applyGroupGating } from "./group-gating.js";
 import { updateLastRouteInBackground } from "./last-route.js";
-import { resolvePeerId } from "./peer.js";
+import { resolveConversationId, resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
 
 export function createWebOnMessageHandler(params: {
@@ -61,7 +61,7 @@ export function createWebOnMessageHandler(params: {
     });
 
   return async (msg: WebInboundMsg) => {
-    const conversationId = msg.conversationId ?? msg.from;
+    const conversationId = resolveConversationId(msg);
     const peerId = resolvePeerId(msg);
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
     const route = resolveAgentRoute({
@@ -97,7 +97,7 @@ export function createWebOnMessageHandler(params: {
 
     if (msg.chatType === "group") {
       const metaCtx = {
-        From: msg.from,
+        From: conversationId,
         To: msg.to,
         SessionKey: route.sessionKey,
         AccountId: route.accountId,

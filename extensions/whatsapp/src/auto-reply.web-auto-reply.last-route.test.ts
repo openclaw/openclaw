@@ -125,6 +125,41 @@ describe("web auto-reply last-route", () => {
     await store.cleanup();
   });
 
+  it("falls back to conversationId when a direct message is missing from", async () => {
+    const now = Date.now();
+    const mainSessionKey = "agent:main:main";
+    const store = await makeSessionStore({
+      [mainSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
+    });
+
+    const { handler, backgroundTasks } = createLastRouteHarness(store.storePath);
+
+    await expect(
+      handler({
+        id: "m-missing-from",
+        from: undefined,
+        conversationId: "+1000",
+        to: "+2000",
+        body: "hello",
+        timestamp: now,
+        chatType: "direct",
+        chatId: "direct:+1000",
+        accountId: "default",
+        sendComposing: vi.fn().mockResolvedValue(undefined),
+        reply: vi.fn().mockResolvedValue(undefined),
+        sendMedia: vi.fn().mockResolvedValue(undefined),
+      } as never),
+    ).resolves.toBeUndefined();
+
+    await awaitBackgroundTasks(backgroundTasks);
+
+    const stored = await readStoredRoutes(store.storePath);
+    expect(stored[mainSessionKey]?.lastChannel).toBe("whatsapp");
+    expect(stored[mainSessionKey]?.lastTo).toBe("+1000");
+
+    await store.cleanup();
+  });
+
   it("updates last-route for group chats with account id", async () => {
     const now = Date.now();
     const groupSessionKey = "agent:main:whatsapp:group:123@g.us";
