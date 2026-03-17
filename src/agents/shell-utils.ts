@@ -40,6 +40,20 @@ export function resolvePowerShellPath(): string {
 }
 
 export function getShellConfig(): { shell: string; args: string[] } {
+  // CLAWDBOT_SHELL override: force a specific shell for exec regardless of $SHELL.
+  // Checked first (before platform checks) to mirror detectRuntimeShell() ordering,
+  // which also honours CLAWDBOT_SHELL before its Windows block.
+  const overrideShell = process.env.CLAWDBOT_SHELL?.trim();
+  if (overrideShell) {
+    const name = normalizeShellName(overrideShell);
+    if (name) {
+      const shellPath = path.isAbsolute(overrideShell)
+        ? overrideShell
+        : (resolveShellFromPath(name) ?? name);
+      return { shell: shellPath, args: ["-c"] };
+    }
+  }
+
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
@@ -50,19 +64,6 @@ export function getShellConfig(): { shell: string; args: string[] } {
       shell: resolvePowerShellPath(),
       args: ["-NoProfile", "-NonInteractive", "-Command"],
     };
-  }
-
-  // CLAWDBOT_SHELL override: force a specific shell for exec regardless of $SHELL.
-  // Mirrors detectRuntimeShell() which uses the same var for system prompt identification.
-  const overrideShell = process.env.CLAWDBOT_SHELL?.trim();
-  if (overrideShell) {
-    const name = normalizeShellName(overrideShell);
-    if (name) {
-      const shellPath = path.isAbsolute(overrideShell)
-        ? overrideShell
-        : (resolveShellFromPath(name) ?? name);
-      return { shell: shellPath, args: ["-c"] };
-    }
   }
 
   const envShell = process.env.SHELL?.trim();
