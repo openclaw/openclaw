@@ -1,10 +1,10 @@
-import { collectTelegramUnmentionedGroupIds } from "../../../extensions/telegram/src/audit.js";
-import { telegramMessageActions } from "../../../extensions/telegram/src/channel-actions.js";
+import { collectTelegramUnmentionedGroupIds } from "../../../extensions/telegram/api.js";
+import { telegramMessageActions } from "../../../extensions/telegram/runtime-api.js";
 import {
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
-} from "../../../extensions/telegram/src/thread-bindings.js";
-import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
+} from "../../../extensions/telegram/runtime-api.js";
+import { resolveTelegramToken } from "../../../extensions/telegram/runtime-api.js";
 import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeSurface,

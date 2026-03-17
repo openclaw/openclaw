@@ -1,7 +1,7 @@
 export type { OpenClawConfig } from "../config/config.js";
 export type { SlackAccountConfig } from "../config/types.slack.js";
-export type { InspectedSlackAccount } from "../../extensions/slack/src/account-inspect.js";
-export type { ResolvedSlackAccount } from "../../extensions/slack/src/accounts.js";
+export type { InspectedSlackAccount } from "../../extensions/slack/api.js";
+export type { ResolvedSlackAccount } from "../../extensions/slack/api.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -52,18 +52,15 @@ export {
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
   resolveSlackReplyToMode,
-} from "../../extensions/slack/src/accounts.js";
-export { isSlackInteractiveRepliesEnabled } from "../../extensions/slack/src/interactive-replies.js";
-export { inspectSlackAccount } from "../../extensions/slack/src/account-inspect.js";
+} from "../../extensions/slack/api.js";
+export { isSlackInteractiveRepliesEnabled } from "../../extensions/slack/api.js";
+export { inspectSlackAccount } from "../../extensions/slack/api.js";
 export { parseSlackTarget, resolveSlackChannelId } from "./slack-targets.js";
-export {
-  extractSlackToolSend,
-  listSlackMessageActions,
-} from "../../extensions/slack/src/message-actions.js";
-export { buildSlackThreadingToolContext } from "../../extensions/slack/src/threading-tool-context.js";
-export { parseSlackBlocksInput } from "../../extensions/slack/src/blocks-input.js";
-export { handleSlackHttpRequest } from "../../extensions/slack/src/http/index.js";
-export { sendMessageSlack } from "../../extensions/slack/src/send.js";
+export { extractSlackToolSend, listSlackMessageActions } from "../../extensions/slack/api.js";
+export { buildSlackThreadingToolContext } from "../../extensions/slack/api.js";
+export { parseSlackBlocksInput } from "../../extensions/slack/api.js";
+export { handleSlackHttpRequest } from "../../extensions/slack/api.js";
+export { sendMessageSlack } from "../../extensions/slack/api.js";
 export {
   deleteSlackMessage,
   downloadSlackFile,
@@ -79,8 +76,8 @@ export {
   removeSlackReaction,
   sendSlackMessage,
   unpinSlackMessage,
-} from "../../extensions/slack/src/actions.js";
-export { recordSlackThreadParticipation } from "../../extensions/slack/src/sent-thread-cache.js";
+} from "../../extensions/slack/api.js";
+export { recordSlackThreadParticipation } from "../../extensions/slack/api.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
 export { createSlackActions } from "../channels/plugins/slack.actions.js";
 export type { SlackActionContext } from "../agents/tools/slack-actions.js";

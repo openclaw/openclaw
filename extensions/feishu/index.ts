@@ -9,6 +9,8 @@ import { setFeishuRuntime } from "./src/runtime.js";
 import { registerFeishuSubagentHooks } from "./src/subagent-hooks.js";
 import { registerFeishuWikiTools } from "./src/wiki.js";
 
+export { feishuPlugin } from "./src/channel.js";
+export { setFeishuRuntime } from "./src/runtime.js";
 export { monitorFeishuProvider } from "./src/monitor.js";
 export {
   sendMessageFeishu,

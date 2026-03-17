@@ -5,6 +5,9 @@ import { createNostrProfileHttpHandler } from "./src/nostr-profile-http.js";
 import { getNostrRuntime, setNostrRuntime } from "./src/runtime.js";
 import { resolveNostrAccount } from "./src/types.js";
 
+export { nostrPlugin } from "./src/channel.js";
+export { setNostrRuntime } from "./src/runtime.js";
+
 export default defineChannelPluginEntry({
   id: "nostr",
   name: "Nostr",

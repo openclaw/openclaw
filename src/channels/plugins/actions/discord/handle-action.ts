@@ -1,1 +1,1 @@
-export * from "../../../../../extensions/discord/src/actions/handle-action.js";
+export * from "../../../../../extensions/discord/api.js";

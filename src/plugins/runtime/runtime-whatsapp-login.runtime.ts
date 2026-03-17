@@ -1,4 +1,4 @@
-import { loginWeb as loginWebImpl } from "../../../extensions/whatsapp/src/login.js";
+import { loginWeb as loginWebImpl } from "../../../extensions/whatsapp/runtime-api.js";
 import type { PluginRuntime } from "./types.js";
 
 type RuntimeWhatsAppLogin = Pick<PluginRuntime["channel"]["whatsapp"], "loginWeb">;

@@ -1,4 +1,4 @@
-import { loadWebMedia } from "../../../extensions/whatsapp/src/media.js";
+import { loadWebMedia } from "../../../extensions/whatsapp/runtime-api.js";
 import { isVoiceCompatibleAudio } from "../../media/audio.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { getImageMetadata, resizeToJpeg } from "../../media/image-ops.js";
