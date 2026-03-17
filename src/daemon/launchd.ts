@@ -513,7 +513,7 @@ export async function installLaunchAgent({
   });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
-  // real listener startup past onboarding's health deadline.
+  // real listener startup past setup's health deadline.
 
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(

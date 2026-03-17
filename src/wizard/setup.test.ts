@@ -361,7 +361,7 @@ describe("runSetupWizard", () => {
     await runTuiHatchTest({ writeBootstrapFile: false, expectedMessage: undefined });
   });
 
-  it("shows the web search hint at the end of onboarding", async () => {
+  it("shows the web search hint at the end of setup", async () => {
     const prevBraveKey = process.env.BRAVE_API_KEY;
     delete process.env.BRAVE_API_KEY;
 
@@ -398,7 +398,7 @@ describe("runSetupWizard", () => {
     }
   });
 
-  it("resolves gateway.auth.password SecretRef for local onboarding probe", async () => {
+  it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
     const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
     process.env.OPENCLAW_GATEWAY_PASSWORD = "gateway-ref-password"; // pragma: allowlist secret
     probeGatewayReachable.mockClear();

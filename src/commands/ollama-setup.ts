@@ -1,6 +1,6 @@
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
+import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 import {
-  OLLAMA_DEFAULT_BASE_URL,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
@@ -8,14 +8,14 @@ import {
   type OllamaModelWithContext,
 } from "../agents/ollama-models.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyAgentDefaultModelPrimary } from "../plugins/provider-onboarding-config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
-import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 import { openUrl } from "./onboard-helpers.js";
 import type { OnboardMode, OnboardOptions } from "./onboard-types.js";
 
-export { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-models.js";
+export { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 export const OLLAMA_DEFAULT_MODEL = "glm-4.7-flash";
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = ["glm-4.7-flash"];

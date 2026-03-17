@@ -276,7 +276,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("clears discovery cache before reloading the onboarding plugin registry", () => {
+  it("clears discovery cache before reloading the setup plugin registry", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
 
@@ -337,6 +337,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
       hookNames: [],
       channelIds: [],
       providerIds: [],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
       webSearchProviderIds: [],
       gatewayMethods: [],
       cliCommands: [],

@@ -1,17 +1,24 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { MockFn } from "openclaw/plugin-sdk/test-utils";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { ChannelGroupPolicy } from "../../../src/config/group-policy.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
-import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
 type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 type GetPluginCommandSpecsFn =
-  typeof import("../../../src/plugins/commands.js").getPluginCommandSpecs;
-type MatchPluginCommandFn = typeof import("../../../src/plugins/commands.js").matchPluginCommand;
+  typeof import("openclaw/plugin-sdk/plugin-runtime").getPluginCommandSpecs;
+type MatchPluginCommandFn = typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
 type ExecutePluginCommandFn =
-  typeof import("../../../src/plugins/commands.js").executePluginCommand;
+  typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand;
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
+  ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
+>;
+type RecordInboundSessionMetaSafeFn =
+  typeof import("openclaw/plugin-sdk/channel-runtime").recordInboundSessionMetaSafe;
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 type NativeCommandHarness = {
@@ -37,10 +44,41 @@ export const getPluginCommandSpecs = pluginCommandMocks.getPluginCommandSpecs;
 export const matchPluginCommand = pluginCommandMocks.matchPluginCommand;
 export const executePluginCommand = pluginCommandMocks.executePluginCommand;
 
-vi.mock("../../../src/plugins/commands.js", () => ({
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
   matchPluginCommand: pluginCommandMocks.matchPluginCommand,
   executePluginCommand: pluginCommandMocks.executePluginCommand,
+}));
+
+const replyPipelineMocks = vi.hoisted(() => {
+  const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
+    queuedFinal: false,
+    counts: {} as DispatchReplyWithBufferedBlockDispatcherResult["counts"],
+  };
+  return {
+    finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
+      async () => dispatchReplyResult,
+    ),
+    createReplyPrefixOptions: vi.fn(() => ({ onModelSelected: () => {} })),
+    recordInboundSessionMetaSafe: vi.fn<RecordInboundSessionMetaSafeFn>(async () => undefined),
+  };
+});
+export const dispatchReplyWithBufferedBlockDispatcher =
+  replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher;
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+  finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
+}));
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+  dispatchReplyWithBufferedBlockDispatcher:
+    replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+}));
+vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
+  createReplyPrefixOptions: replyPipelineMocks.createReplyPrefixOptions,
+}));
+vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
+  recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
 }));
 
 const deliveryMocks = vi.hoisted(() => ({
@@ -48,7 +86,7 @@ const deliveryMocks = vi.hoisted(() => ({
 }));
 export const deliverReplies = deliveryMocks.deliverReplies;
 vi.mock("./bot/delivery.js", () => ({ deliverReplies: deliveryMocks.deliverReplies }));
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore: vi.fn(async () => []),
 }));
 

@@ -3,26 +3,27 @@ import {
   readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,
-} from "../../../src/agents/tools/common.js";
-import { handleTelegramAction } from "../../../src/agents/tools/telegram-actions.js";
-import { resolveReactionMessageId } from "../../../src/channels/plugins/actions/reaction-message-id.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import { handleTelegramAction } from "openclaw/plugin-sdk/agent-runtime";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-runtime";
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
-} from "../../../src/channels/plugins/actions/shared.js";
+} from "openclaw/plugin-sdk/channel-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-} from "../../../src/channels/plugins/types.js";
-import type { TelegramActionConfig } from "../../../src/config/types.telegram.js";
-import { readBooleanParam } from "../../../src/plugin-sdk/boolean-param.js";
-import { extractToolSend } from "../../../src/plugin-sdk/tool-send.js";
-import { resolveTelegramPollVisibility } from "../../../src/poll-params.js";
+} from "openclaw/plugin-sdk/channel-runtime";
+import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveTelegramPollVisibility } from "openclaw/plugin-sdk/telegram";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
   createTelegramActionGate,
   listEnabledTelegramAccounts,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
+import { resolveTelegramInlineButtons } from "./button-types.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 
 const providerId = "telegram";
@@ -30,12 +31,19 @@ const providerId = "telegram";
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
+  const buttons = resolveTelegramInlineButtons({
+    buttons: params.buttons as ReturnType<typeof resolveTelegramInlineButtons>,
+    interactive: params.interactive,
+  });
+  const hasButtons = Array.isArray(buttons) && buttons.length > 0;
+  const message = readStringParam(params, "message", {
+    required: !mediaUrl && !hasButtons,
+    allowEmpty: true,
+  });
   const caption = readStringParam(params, "caption", { allowEmpty: true });
   const content = message || caption || "";
   const replyTo = readStringParam(params, "replyTo");
   const threadId = readStringParam(params, "threadId");
-  const buttons = params.buttons;
   const asVoice = readBooleanParam(params, "asVoice");
   const silent = readBooleanParam(params, "silent");
   const forceDocument = readBooleanParam(params, "forceDocument");
@@ -120,14 +128,15 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
     return Array.from(actions);
   },
-  supportsButtons: ({ cfg }) => {
+  getCapabilities: ({ cfg }) => {
     const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
     if (accounts.length === 0) {
-      return false;
+      return [];
     }
-    return accounts.some((account) =>
+    const buttonsEnabled = accounts.some((account) =>
       isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
     );
+    return buttonsEnabled ? (["interactive", "buttons"] as const) : [];
   },
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
