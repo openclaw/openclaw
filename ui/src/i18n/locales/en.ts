@@ -16,6 +16,8 @@ export const en: TranslationMap = {
     theme: "Theme",
     resources: "Resources",
     search: "Search",
+    more: "more",
+    moreCount: "+{count} more",
   },
   nav: {
     chat: "Chat",
@@ -135,6 +137,13 @@ export const en: TranslationMap = {
     },
     attention: {
       title: "Attention",
+      skillsMissingDeps: "Skills with missing dependencies",
+      skillsBlocked: "{count} skills blocked",
+      cronJobsFailed: "{count} cron jobs failed",
+      gatewayError: "Gateway Error",
+      missingScope: "Missing operator.read scope",
+      missingScopeDesc:
+        "This connection does not have the operator.read scope. Some features may be unavailable.",
     },
     eventLog: {
       title: "Event Log",

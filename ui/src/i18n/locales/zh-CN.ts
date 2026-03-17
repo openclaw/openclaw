@@ -15,6 +15,8 @@ export const zh_CN: TranslationMap = {
     docs: "文档",
     resources: "资源",
     search: "搜索",
+    more: "更多",
+    moreCount: "+{count} 更多",
   },
   nav: {
     chat: "聊天",
@@ -133,6 +135,12 @@ export const zh_CN: TranslationMap = {
     },
     attention: {
       title: "注意事项",
+      skillsMissingDeps: "存在缺失依赖的技能",
+      skillsBlocked: "{count} 个技能被阻止",
+      cronJobsFailed: "{count} 个定时任务失败",
+      gatewayError: "网关错误",
+      missingScope: "缺少 operator.read 权限",
+      missingScopeDesc: "此连接没有 operator.read 权限。某些功能可能不可用。",
     },
     eventLog: {
       title: "事件日志",
