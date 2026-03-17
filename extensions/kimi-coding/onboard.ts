@@ -15,7 +15,7 @@ export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
   const models = { ...cfg.agents?.defaults?.models };
   models[KIMI_CODING_MODEL_REF] = {
     ...models[KIMI_CODING_MODEL_REF],
-    alias: models[KIMI_CODING_MODEL_REF]?.alias ?? "Kimi for Coding",
+    alias: models[KIMI_CODING_MODEL_REF]?.alias ?? "Kimi",
   };
 
   const defaultModel = buildKimiCodingProvider().models[0];
