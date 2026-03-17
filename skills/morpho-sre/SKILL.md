@@ -139,6 +139,10 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - `rca-provider-codex.sh`
   - `rca-provider-claude.sh`
   - `rca-provider-openclaw-agent.sh`
+- Use `references/dune/dunesql-cheatsheet.md` for DuneSQL types, functions, and
+  common patterns before writing onchain analytics queries.
+- Use `references/dune/dataset-discovery.md` when searching for decoded contract
+  tables or spellbook datasets.
 
 ## Wiz MCP
 
@@ -168,6 +172,42 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - `morpho-infra/docs/operations/erpc-operations.md`
   - `morpho-infra/docs/guides/observability-stack-onboarding.md`
   - `morpho-infra/docs/services/api-endpoints.md`
+
+## Dune CLI
+
+- Wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh`
+- Credential chain: `DUNE_API_KEY` env → Vault token (fast) → Vault K8s JWT (slow)
+- Vault path: `secret/data/openclaw-sre` (key: `DUNE_API_KEY`)
+- Read-only by default; mutation commands (`query create`, `query update`,
+  `query archive`) require `DUNE_ALLOW_MUTATIONS=1`.
+- Always outputs JSON by default (`--output json`).
+- The `--api-key` flag is blocked to prevent credential leakage via process args.
+- `docs search` subcommand works without authentication.
+- Manual checks:
+
+```bash
+# Probe credential resolution
+/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh --probe-auth
+
+# Run ad-hoc DuneSQL query
+/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh query run-sql \
+  --sql "SELECT block_number, block_time FROM ethereum.blocks ORDER BY block_number DESC LIMIT 5"
+
+# Search decoded tables for a contract
+/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh dataset search-by-contract \
+  --contract-address 0x1234... --include-schema
+
+# Search datasets by keyword
+/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh dataset search \
+  --query "morpho blue" --categories decoded --include-schema
+```
+
+- DuneSQL references (loaded on demand):
+  - `references/dune/dunesql-cheatsheet.md` — types, functions, common patterns
+  - `references/dune/dataset-discovery.md` — dataset search and contract lookup
+  - `references/dune/query-execution.md` — run, run-sql, execution results
+  - `references/dune/query-management.md` — create, get, update, archive
+  - `references/dune/docs-and-usage.md` — docs search and credit usage
 
 ## Incident Workflow
 
