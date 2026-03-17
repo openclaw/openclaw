@@ -557,6 +557,8 @@ describe("connectGateway", () => {
       host,
       expect.objectContaining({
         activeMinutes: 120,
+        includeGlobal: true,
+        includeUnknown: true,
         syncChatSnapshot: true,
       }),
     );
