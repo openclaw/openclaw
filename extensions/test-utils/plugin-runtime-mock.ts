@@ -115,6 +115,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       transcribeAudioFile:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"],
     },
+    webSearch: {
+      listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
+      search: vi.fn() as unknown as PluginRuntime["webSearch"]["search"],
+    },
     stt: {
       transcribeAudioFile: vi.fn() as unknown as PluginRuntime["stt"]["transcribeAudioFile"],
     },
