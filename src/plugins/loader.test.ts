@@ -850,69 +850,69 @@ describe("loadOpenClawPlugins", () => {
     expect(bundled?.status).toBe("disabled");
   });
 
-  it("loads bundled telegram plugin when enabled", () => {
+  it("handles bundled telegram plugin enablement and override rules", () => {
     setupBundledTelegramPlugin();
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: cachedBundledTelegramDir,
-      config: {
-        plugins: {
-          allow: ["telegram"],
-          entries: {
-            telegram: { enabled: true },
+    const cases = [
+      {
+        name: "loads bundled telegram plugin when enabled",
+        config: {
+          plugins: {
+            allow: ["telegram"],
+            entries: {
+              telegram: { enabled: true },
+            },
           },
+        } satisfies Parameters<typeof loadOpenClawPlugins>[0]["config"],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expectTelegramLoaded(registry);
         },
       },
-    });
-
-    expectTelegramLoaded(registry);
-  });
-
-  it("loads bundled channel plugins when channels.<id>.enabled=true", () => {
-    setupBundledTelegramPlugin();
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: cachedBundledTelegramDir,
-      config: {
-        channels: {
-          telegram: {
+      {
+        name: "loads bundled channel plugins when channels.<id>.enabled=true",
+        config: {
+          channels: {
+            telegram: {
+              enabled: true,
+            },
+          },
+          plugins: {
             enabled: true,
           },
-        },
-        plugins: {
-          enabled: true,
-        },
-      },
-    });
-
-    expectTelegramLoaded(registry);
-  });
-
-  it("still respects explicit disable via plugins.entries for bundled channels", () => {
-    setupBundledTelegramPlugin();
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: cachedBundledTelegramDir,
-      config: {
-        channels: {
-          telegram: {
-            enabled: true,
-          },
-        },
-        plugins: {
-          entries: {
-            telegram: { enabled: false },
-          },
+        } satisfies Parameters<typeof loadOpenClawPlugins>[0]["config"],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expectTelegramLoaded(registry);
         },
       },
-    });
+      {
+        name: "still respects explicit disable via plugins.entries for bundled channels",
+        config: {
+          channels: {
+            telegram: {
+              enabled: true,
+            },
+          },
+          plugins: {
+            entries: {
+              telegram: { enabled: false },
+            },
+          },
+        } satisfies Parameters<typeof loadOpenClawPlugins>[0]["config"],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+          expect(telegram?.status).toBe("disabled");
+          expect(telegram?.error).toBe("disabled in config");
+        },
+      },
+    ] as const;
 
-    const telegram = registry.plugins.find((entry) => entry.id === "telegram");
-    expect(telegram?.status).toBe("disabled");
-    expect(telegram?.error).toBe("disabled in config");
+    for (const testCase of cases) {
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: cachedBundledTelegramDir,
+        config: testCase.config,
+      });
+      testCase.assert(registry);
+    }
   });
 
   it("preserves package.json metadata for bundled memory plugins", () => {
