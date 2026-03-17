@@ -1,10 +1,10 @@
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-} from "../../../src/plugin-sdk-internal/channel-config.js";
-import { buildAgentSessionKey, type RoutePeer } from "../../../src/plugin-sdk-internal/core.js";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
@@ -23,7 +23,7 @@ import {
   resolveIMessageGroupToolPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-} from "../../../src/plugin-sdk-internal/imessage.js";
+} from "openclaw/plugin-sdk/imessage";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listIMessageAccountIds,

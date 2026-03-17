@@ -2,14 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-
-const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
-}));
-
 import {
   clearGatewaySubagentRuntime,
   createPluginRuntime,
@@ -18,20 +12,24 @@ import {
 
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockClear();
+    vi.restoreAllMocks();
     clearGatewaySubagentRuntime();
   });
 
   it("exposes runtime.system.runCommandWithTimeout by default", async () => {
     const commandResult = {
+      pid: 12345,
       stdout: "hello\n",
       stderr: "",
       code: 0,
       signal: null,
       killed: false,
+      noOutputTimedOut: false,
       termination: "exit" as const,
     };
-    runCommandWithTimeoutMock.mockResolvedValue(commandResult);
+    const runCommandWithTimeoutMock = vi
+      .spyOn(execModule, "runCommandWithTimeout")
+      .mockResolvedValue(commandResult);
 
     const runtime = createPluginRuntime();
     await expect(
@@ -41,7 +39,9 @@ describe("plugin runtime command execution", () => {
   });
 
   it("forwards runtime.system.runCommandWithTimeout errors", async () => {
-    runCommandWithTimeoutMock.mockRejectedValue(new Error("boom"));
+    const runCommandWithTimeoutMock = vi
+      .spyOn(execModule, "runCommandWithTimeout")
+      .mockRejectedValue(new Error("boom"));
     const runtime = createPluginRuntime();
     await expect(
       runtime.system.runCommandWithTimeout(["echo", "hello"], { timeoutMs: 1000 }),
@@ -53,6 +53,20 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     expect(runtime.events.onAgentEvent).toBe(onAgentEvent);
     expect(runtime.events.onSessionTranscriptUpdate).toBe(onSessionTranscriptUpdate);
+  });
+
+  it("exposes runtime.mediaUnderstanding helpers and keeps stt as an alias", () => {
+    const runtime = createPluginRuntime();
+    expect(typeof runtime.mediaUnderstanding.runFile).toBe("function");
+    expect(typeof runtime.mediaUnderstanding.describeImageFile).toBe("function");
+    expect(typeof runtime.mediaUnderstanding.describeVideoFile).toBe("function");
+    expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(runtime.stt.transcribeAudioFile);
+  });
+
+  it("exposes runtime.webSearch helpers", () => {
+    const runtime = createPluginRuntime();
+    expect(typeof runtime.webSearch.listProviders).toBe("function");
+    expect(typeof runtime.webSearch.search).toBe("function");
   });
 
   it("exposes runtime.system.requestHeartbeatNow", () => {

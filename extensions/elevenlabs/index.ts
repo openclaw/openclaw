@@ -1,5 +1,5 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildElevenLabsSpeechProvider } from "../../src/tts/providers/elevenlabs.js";
+import { buildElevenLabsSpeechProvider } from "openclaw/plugin-sdk/speech";
 
 const elevenLabsPlugin = {
   id: "elevenlabs",
