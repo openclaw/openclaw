@@ -1,5 +1,5 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ messageId: "imsg-1" }),
@@ -14,32 +14,37 @@ vi.mock("../send.js", () => ({
     sendMessageIMessageMock(to, message, opts),
 }));
 
-vi.mock("../../../../src/auto-reply/chunk.js", () => ({
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
   resolveChunkMode: () => resolveChunkModeMock(),
 }));
 
-vi.mock("../../../../src/config/config.js", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   loadConfig: () => ({}),
-}));
-
-vi.mock("../../../../src/config/markdown-tables.js", () => ({
   resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
 }));
 
-vi.mock("../../../../src/markdown/tables.js", () => ({
-  convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
-}));
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
+    "openclaw/plugin-sdk/text-runtime",
+  );
+  return {
+    ...actual,
+    convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
+  };
+});
 
-import { deliverReplies } from "./deliver.js";
+let deliverReplies: typeof import("./deliver.js").deliverReplies;
 
 describe("deliverReplies", () => {
   const runtime = { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv;
   const client = {} as Awaited<ReturnType<typeof import("../client.js").createIMessageRpcClient>>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     chunkTextWithModeMock.mockImplementation((text: string) => [text]);
+    ({ deliverReplies } = await import("./deliver.js"));
   });
 
   it("propagates payload replyToId through all text chunks", async () => {
