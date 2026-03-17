@@ -1041,4 +1041,24 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect(result.model?.baseUrl).toBe("https://api.anthropic.com");
   });
+
+  it("resolves inline model when config uses dots but query uses dashes", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "copilot-proxy": {
+            baseUrl: "http://localhost:4141/v1",
+            api: "openai-completions",
+            models: [{ id: "claude-haiku-4.5", name: "Claude Haiku 4.5" }],
+          },
+        },
+      },
+    };
+    // Query with dashes (normalized form), config has dots
+    const result = resolveModel("copilot-proxy", "claude-haiku-4-5", "/tmp/agent", cfg);
+    expect(result.error).toBeUndefined();
+    expect(result.model).toBeDefined();
+    // The resolved model should preserve the provider's original dot notation
+    expect(result.model?.id).toBe("claude-haiku-4.5");
+  });
 });

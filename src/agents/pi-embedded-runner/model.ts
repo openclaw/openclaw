@@ -12,6 +12,15 @@ import {
   buildSuppressedBuiltInModelError,
   shouldSuppressBuiltInModel,
 } from "../model-suppression.js";
+
+/**
+ * Compare model IDs treating dots and dashes as equivalent.
+ * Anthropic uses dashes (`claude-haiku-4-5`) but copilot-proxy and
+ * other providers may use dots (`claude-haiku-4.5`).
+ */
+function modelIdMatchesDotDash(a: string, b: string): boolean {
+  return a === b || a.replace(/\./g, "-") === b.replace(/\./g, "-");
+}
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
@@ -81,7 +90,9 @@ function applyConfiguredProviderOverrides(params: {
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }
-  const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
+  const configuredModel = providerConfig.models?.find((candidate) =>
+    modelIdMatchesDotDash(candidate.id, modelId),
+  );
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
@@ -184,10 +195,15 @@ export function resolveModelWithRegistry(params: {
   const inlineModels = buildInlineProviderModels(providers);
   const normalizedProvider = normalizeProviderId(provider);
   const inlineMatch = inlineModels.find(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+    (entry) =>
+      normalizeProviderId(entry.provider) === normalizedProvider &&
+      modelIdMatchesDotDash(entry.id, modelId),
   );
   if (inlineMatch?.api) {
-    return normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> });
+    // Preserve the provider's original model ID (e.g., dots for copilot-proxy)
+    // so the dispatched API call uses the format the provider expects.
+    const model = { ...inlineMatch, id: inlineMatch.id } as Model<Api>;
+    return normalizeResolvedModel({ provider, model });
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
