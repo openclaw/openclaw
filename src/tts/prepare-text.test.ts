@@ -21,6 +21,13 @@ describe("TTS text preparation – stripMarkdown", () => {
     );
   });
 
+  it("preserves underscores inside words while still stripping italic markers", () => {
+    expect(stripMarkdown("here_is_a_message")).toBe("here_is_a_message");
+    expect(stripMarkdown("use foo_bar_baz and _italic_ text")).toBe(
+      "use foo_bar_baz and italic text",
+    );
+  });
+
   it("strips inline code markers before TTS", () => {
     expect(stripMarkdown("Use `consistent hashing` for distribution")).toBe(
       "Use consistent hashing for distribution",
