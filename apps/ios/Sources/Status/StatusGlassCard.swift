@@ -2,6 +2,7 @@ import SwiftUI
 
 private struct StatusGlassCardModifier: ViewModifier {
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.mobileColors) private var colors
 
     let brighten: Bool
     let verticalPadding: CGFloat
@@ -17,11 +18,11 @@ private struct StatusGlassCardModifier: ViewModifier {
                     .overlay {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(
-                                .white.opacity(self.contrast == .increased ? 0.5 : (self.brighten ? 0.24 : 0.18)),
+                                self.colors.glassStroke.opacity(self.contrast == .increased ? 0.5 : (self.brighten ? 0.24 : 0.18)),
                                 lineWidth: self.contrast == .increased ? 1.0 : 0.5
                             )
                     }
-                    .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
+                    .shadow(color: self.colors.glassShadow, radius: 12, y: 6)
             }
     }
 }

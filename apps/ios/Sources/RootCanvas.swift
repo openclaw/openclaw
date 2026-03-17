@@ -57,11 +57,9 @@ struct RootCanvas: View {
         if gatewayConnected {
             return .none
         }
-        // On first run or explicit launch onboarding state, onboarding always wins.
         if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
             return .onboarding
         }
-        // Settings auto-open is a recovery path for previously-connected installs only.
         if !hasExistingGatewayConfig {
             return .settings
         }
@@ -80,7 +78,6 @@ struct RootCanvas: View {
         guard !showOnboarding else { return false }
         guard !hasPresentedSheet else { return false }
         guard !gatewayConnected else { return false }
-        // If a gateway target is already configured (manual or last-known), skip quick setup.
         guard !hasExistingGatewayConfig else { return false }
         return discoveredGatewayCount > 0
     }
@@ -129,7 +126,6 @@ struct RootCanvas: View {
                     .environment(self.gatewayController)
             case .chat:
                 ChatSheet(
-                    // Chat RPCs run on the operator session (read/write scopes).
                     gateway: self.appModel.operatorSession,
                     sessionKey: self.appModel.chatSessionKey,
                     agentName: self.appModel.activeAgentName,
@@ -531,7 +527,6 @@ private struct CanvasContent: View {
             onDisconnect: { self.appModel.disconnectGateway() },
             onOpenSettings: { self.openSettings() })
         .onAppear {
-            // Keep the runtime talk state aligned with persisted toggle state on cold launch.
             if self.talkEnabled != self.appModel.talkMode.isEnabled {
                 self.appModel.setTalkEnabled(self.talkEnabled)
             }

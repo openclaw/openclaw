@@ -14,11 +14,12 @@ struct HomeToolbar: View {
     var onSettingsTap: () -> Void
 
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.mobileColors) private var colors
 
     var body: some View {
         VStack(spacing: 0) {
             Rectangle()
-                .fill(.white.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.18 : 0.12)))
+                .fill(self.colors.glassStroke.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.18 : 0.12)))
                 .frame(height: self.contrast == .increased ? 1.0 : 0.6)
                 .allowsHitTesting(false)
 
@@ -65,7 +66,7 @@ struct HomeToolbar: View {
         .overlay(alignment: .top) {
             LinearGradient(
                 colors: [
-                    .white.opacity(self.brighten ? 0.10 : 0.06),
+                    self.colors.glassStroke.opacity(self.brighten ? 0.10 : 0.06),
                     .clear,
                 ],
                 startPoint: .top,
@@ -79,6 +80,7 @@ private struct HomeToolbarStatusButton: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.mobileColors) private var colors
 
     var gateway: StatusPill.GatewayState
     var voiceWakeEnabled: Bool
@@ -124,11 +126,11 @@ private struct HomeToolbarStatusButton: View {
             .padding(.vertical, 8)
             .background {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.black.opacity(self.brighten ? 0.12 : 0.18))
+                    .fill(self.colors.overlayFill.opacity(self.brighten ? 0.12 : 0.18))
                     .overlay {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(
-                                .white.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.22 : 0.16)),
+                                self.colors.glassStroke.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.22 : 0.16)),
                                 lineWidth: self.contrast == .increased ? 1.0 : 0.6)
                     }
             }
@@ -173,6 +175,7 @@ private struct HomeToolbarStatusButton: View {
 
 private struct HomeToolbarActionButton: View {
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.mobileColors) private var colors
 
     let systemImage: String
     let accessibilityLabel: String
@@ -189,7 +192,7 @@ private struct HomeToolbarActionButton: View {
                 .frame(width: 40, height: 40)
                 .background {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.black.opacity(self.brighten ? 0.12 : 0.18))
+                        .fill(self.colors.overlayFill.opacity(self.brighten ? 0.12 : 0.18))
                         .overlay {
                             if let tint {
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -208,7 +211,7 @@ private struct HomeToolbarActionButton: View {
                         .overlay {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .strokeBorder(
-                                    (self.tint ?? .white).opacity(
+                                    (self.tint ?? self.colors.glassStroke).opacity(
                                         self.isActive
                                             ? 0.34
                                             : (self.contrast == .increased ? 0.4 : (self.brighten ? 0.22 : 0.16))

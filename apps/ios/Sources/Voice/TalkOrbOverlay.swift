@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TalkOrbOverlay: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.mobileColors) private var colors
     @State private var pulse: Bool = false
 
     var body: some View {
@@ -31,7 +32,7 @@ struct TalkOrbOverlay: View {
                             colors: [
                                 seam.opacity(0.75 + (0.20 * mic)),
                                 seam.opacity(0.40),
-                                Color.black.opacity(0.55),
+                                self.colors.overlayFill.opacity(0.55),
                             ],
                             center: .center,
                             startRadius: 1,
@@ -42,7 +43,7 @@ struct TalkOrbOverlay: View {
                         Circle()
                             .stroke(seam.opacity(0.35), lineWidth: 1))
                     .shadow(color: seam.opacity(0.32), radius: 26, x: 0, y: 0)
-                    .shadow(color: Color.black.opacity(0.50), radius: 22, x: 0, y: 10)
+                    .shadow(color: self.colors.glassShadow, radius: 22, x: 0, y: 10)
             }
             .contentShape(Circle())
             .onTapGesture {
@@ -53,18 +54,18 @@ struct TalkOrbOverlay: View {
             if !agentName.isEmpty {
                 Text("Bot: \(agentName)")
                     .font(.system(.caption, design: .rounded).weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(0.70))
+                    .foregroundStyle(self.colors.text.opacity(0.70))
             }
 
             if !status.isEmpty, status != "Off" {
                 Text(status)
                     .font(.system(.footnote, design: .rounded).weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(0.92))
+                    .foregroundStyle(self.colors.text.opacity(0.92))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(
                         Capsule()
-                            .fill(Color.black.opacity(0.40))
+                            .fill(self.colors.overlayFill.opacity(0.40))
                             .overlay(
                                 Capsule().stroke(seam.opacity(0.22), lineWidth: 1)))
             }
