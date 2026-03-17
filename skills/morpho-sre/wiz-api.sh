@@ -400,7 +400,7 @@ cmd_vulns() {
 
   local query
   query='query($first: Int, $after: String, $filterBy: VulnerabilityFindingFilters) {
-    vulnerabilityFindings(first: $first, after: $after, filterBy: $filterBy, orderBy: { field: SEVERITY, direction: DESC }) {
+    vulnerabilityFindings(first: $first, after: $after, filterBy: $filterBy) {
       nodes {
         id
         name
@@ -410,7 +410,6 @@ cmd_vulns() {
         fixedVersion
         detailedName
         version
-        vulnerableAsset { id name type }
         firstDetectedAt
         lastDetectedAt
       }
@@ -501,7 +500,7 @@ cmd_cloud_config() {
 
   local query
   query='query($first: Int, $after: String, $filterBy: ConfigurationFindingFilters) {
-    configurationFindings(first: $first, after: $after, filterBy: $filterBy, orderBy: { field: SEVERITY, direction: DESC }) {
+    configurationFindings(first: $first, after: $after, filterBy: $filterBy) {
       nodes {
         id
         severity
@@ -540,24 +539,21 @@ cmd_k8s() {
 
   local query
   query='query($first: Int, $after: String, $filterBy: KubernetesClusterFilters) {
-    kubernetesClusterQueries {
-      clusters(first: $first, after: $after, filterBy: $filterBy) {
-        nodes {
-          id
-          name
-          cloudAccount { name }
-          issueAnalytics { criticalCount highCount mediumCount lowCount informationalCount }
-          podCount
-          serviceCount
-        }
-        pageInfo { hasNextPage endCursor }
+    kubernetesClusters(first: $first, after: $after, filterBy: $filterBy) {
+      nodes {
+        id
+        name
+        cloudAccount { name }
+        status
+        kind
       }
+      pageInfo { hasNextPage endCursor }
     }
   }'
 
   local vars_json
   vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson filterBy "$filter_json" '{ first: $first, filterBy: $filterBy }')"
-  paginated_query "$query" "$vars_json" '.data.kubernetesClusterQueries.clusters' "$max_pages"
+  paginated_query "$query" "$vars_json" '.data.kubernetesClusters' "$max_pages"
 }
 
 cmd_runtime() {
@@ -579,88 +575,95 @@ cmd_runtime() {
   fi
 
   local query
-  query='query($first: Int, $after: String, $filterBy: SecurityEventFilters) {
-    securityEvents(first: $first, after: $after, filterBy: $filterBy, orderBy: { field: CREATED_AT, direction: DESC }) {
-      nodes {
-        id
-        severity
-        type
-        description
-        sourceResource { id name type }
-        createdAt
+  query='query($first: Int, $after: String, $filterBy: CloudEventFilters) {
+    cloudEvents(first: $first, after: $after, filterBy: $filterBy) {
+      edges {
+        node {
+          ... on CloudEvent {
+            id
+            name
+            severity
+            category
+            cloudPlatform
+            kind
+            status
+            timestamp
+          }
+        }
       }
       pageInfo { hasNextPage endCursor }
     }
   }'
 
-  local vars_json
-  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson filterBy "$filter_json" '{ first: $first, filterBy: $filterBy }')"
-  paginated_query "$query" "$vars_json" '.data.securityEvents' "$max_pages"
+  # cloudEvents uses edges/node pattern — fetch pages manually and flatten
+  local page=0 all_nodes="[]" cursor="null"
+  while [[ "$page" -lt "$max_pages" ]]; do
+    local page_vars
+    if [[ "$cursor" == "null" ]]; then
+      page_vars="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson filterBy "$filter_json" '{ first: $first, filterBy: $filterBy }')"
+    else
+      page_vars="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson filterBy "$filter_json" --arg after "$cursor" '{ first: $first, filterBy: $filterBy, after: $after }')"
+    fi
+    local response
+    response="$(wiz_graphql_with_retry "$query" "$page_vars")"
+    local page_nodes
+    page_nodes="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -c '[.data.cloudEvents.edges[].node]')"
+    all_nodes="$(printf '%s\n%s\n' "$all_nodes" "$page_nodes" | "$WIZ_API_JQ_BIN" -sc '.[0] + .[1]')"
+    local has_next
+    has_next="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.data.cloudEvents.pageInfo.hasNextPage')"
+    if [[ "$has_next" != "true" ]]; then break; fi
+    local end_cursor
+    end_cursor="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.data.cloudEvents.pageInfo.endCursor')"
+    if [[ -z "$end_cursor" || "$end_cursor" == "null" ]]; then break; fi
+    cursor="$end_cursor"
+    page=$((page + 1))
+  done
+  printf '%s\n' "$all_nodes" | "$WIZ_API_JQ_BIN" -c '.'
 }
 
 cmd_summary() {
-  local issues_query='query {
-    issueAnalytics {
-      criticalCount
-      highCount
-      mediumCount
-      lowCount
-      informationalCount
-    }
+  local summary_query='query {
+    ic: issuesV2(first: 0, filterBy: {severity: [CRITICAL]}) { totalCount }
+    ih: issuesV2(first: 0, filterBy: {severity: [HIGH]}) { totalCount }
+    im: issuesV2(first: 0, filterBy: {severity: [MEDIUM]}) { totalCount }
+    il: issuesV2(first: 0, filterBy: {severity: [LOW]}) { totalCount }
+    ii: issuesV2(first: 0, filterBy: {severity: [INFORMATIONAL]}) { totalCount }
+    vc: vulnerabilityFindings(first: 0, filterBy: {severity: [CRITICAL]}) { totalCount }
+    vh: vulnerabilityFindings(first: 0, filterBy: {severity: [HIGH]}) { totalCount }
+    vm: vulnerabilityFindings(first: 0, filterBy: {severity: [MEDIUM]}) { totalCount }
+    vl: vulnerabilityFindings(first: 0, filterBy: {severity: [LOW]}) { totalCount }
+    cc: configurationFindings(first: 0, filterBy: {severity: [CRITICAL]}) { totalCount }
+    ch: configurationFindings(first: 0, filterBy: {severity: [HIGH]}) { totalCount }
+    cm: configurationFindings(first: 0, filterBy: {severity: [MEDIUM]}) { totalCount }
+    cl: configurationFindings(first: 0, filterBy: {severity: [LOW]}) { totalCount }
   }'
 
-  local vulns_query='query {
-    vulnerabilityFindingAggregates {
-      criticalCount
-      highCount
-      mediumCount
-      lowCount
-    }
-  }'
-
-  local config_query='query {
-    configurationFindingAggregates {
-      criticalCount
-      highCount
-      mediumCount
-      lowCount
-    }
-  }'
-
-  local issues_resp vulns_resp config_resp timestamp
+  local timestamp resp
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  resp="$(wiz_graphql_with_retry "$summary_query" "{}")"
 
-  issues_resp="$(wiz_graphql_with_retry "$issues_query" "{}")"
-  vulns_resp="$(wiz_graphql_with_retry "$vulns_query" "{}")"
-  config_resp="$(wiz_graphql_with_retry "$config_query" "{}")"
-
-  "$WIZ_API_JQ_BIN" -nc \
-    --argjson issues "$issues_resp" \
-    --argjson vulns "$vulns_resp" \
-    --argjson config "$config_resp" \
-    --arg timestamp "$timestamp" \
-    '{
-      issues: {
-        critical: ($issues.data.issueAnalytics.criticalCount // 0),
-        high: ($issues.data.issueAnalytics.highCount // 0),
-        medium: ($issues.data.issueAnalytics.mediumCount // 0),
-        low: ($issues.data.issueAnalytics.lowCount // 0),
-        informational: ($issues.data.issueAnalytics.informationalCount // 0)
-      },
-      vulnerabilities: {
-        critical: ($vulns.data.vulnerabilityFindingAggregates.criticalCount // 0),
-        high: ($vulns.data.vulnerabilityFindingAggregates.highCount // 0),
-        medium: ($vulns.data.vulnerabilityFindingAggregates.mediumCount // 0),
-        low: ($vulns.data.vulnerabilityFindingAggregates.lowCount // 0)
-      },
-      configurationFindings: {
-        critical: ($config.data.configurationFindingAggregates.criticalCount // 0),
-        high: ($config.data.configurationFindingAggregates.highCount // 0),
-        medium: ($config.data.configurationFindingAggregates.mediumCount // 0),
-        low: ($config.data.configurationFindingAggregates.lowCount // 0)
-      },
-      timestamp: $timestamp
-    }'
+  printf '%s\n' "$resp" | "$WIZ_API_JQ_BIN" -c --arg timestamp "$timestamp" '{
+    issues: {
+      critical: .data.ic.totalCount,
+      high: .data.ih.totalCount,
+      medium: .data.im.totalCount,
+      low: .data.il.totalCount,
+      informational: .data.ii.totalCount
+    },
+    vulnerabilities: {
+      critical: .data.vc.totalCount,
+      high: .data.vh.totalCount,
+      medium: .data.vm.totalCount,
+      low: .data.vl.totalCount
+    },
+    configurationFindings: {
+      critical: .data.cc.totalCount,
+      high: .data.ch.totalCount,
+      medium: .data.cm.totalCount,
+      low: .data.cl.totalCount
+    },
+    timestamp: $timestamp
+  }'
 }
 
 usage() {

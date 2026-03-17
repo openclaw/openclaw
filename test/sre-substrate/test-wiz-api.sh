@@ -284,8 +284,8 @@ for arg in "$@"; do
       ;;
   esac
 done
-# Return the query payload as data so tests can inspect it
-response="{\"data\":{\"vulnerabilityFindings\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"issues\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"graphSearch\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"configurationFindings\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"kubernetesClusterQueries\":{\"clusters\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}}},\"securityEvents\":{\"nodes\":[],\"pageInfo\":{\"hasNextPage\":false}},\"_query\":$(printf '%s' "$data_payload" | jq -c '.query // ""')}}"
+# Return mock data matching all subcommand query patterns
+response="$(jq -nc '{data:{vulnerabilityFindings:{nodes:[],pageInfo:{hasNextPage:false}},issuesV2:{nodes:[],pageInfo:{hasNextPage:false}},graphSearch:{nodes:[],pageInfo:{hasNextPage:false}},configurationFindings:{nodes:[],pageInfo:{hasNextPage:false}},kubernetesClusters:{nodes:[],pageInfo:{hasNextPage:false}},cloudEvents:{edges:[],pageInfo:{hasNextPage:false}},ic:{totalCount:0},ih:{totalCount:0},im:{totalCount:0},il:{totalCount:0},ii:{totalCount:0},vc:{totalCount:0},vh:{totalCount:0},vm:{totalCount:0},vl:{totalCount:0},cc:{totalCount:0},ch:{totalCount:0},cm:{totalCount:0},cl:{totalCount:0}}}')"
 if [[ -n "$output_file" ]]; then
   printf '%s' "$response" >"$output_file"
   printf '200'
