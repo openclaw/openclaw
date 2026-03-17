@@ -8,7 +8,14 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
-const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
   const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
@@ -271,6 +278,20 @@ describe("sanitizeToolCallInputs", () => {
       { role: "user", content: "hello" },
     ]);
 
+    const out = sanitizeToolCallInputs(input);
+    expect(out.map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("repairs snake_case tool_use blocks missing input (#48915)", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call_1", name: "read" }],
+      },
+      { role: "user", content: "hello" },
+    ]);
+
+    // tool_use block without input should be dropped, just like camelCase variants
     const out = sanitizeToolCallInputs(input);
     expect(out.map((m) => m.role)).toEqual(["user"]);
   });
