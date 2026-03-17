@@ -7,6 +7,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
+  GENERIC_MODEL_ERROR_USER_MESSAGE,
   isCompactionFailureError,
   isContextOverflowError,
   isBillingErrorMessage,
@@ -627,7 +628,7 @@ export async function runAgentTurnWithFallback(params: {
           ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
           : isRoleOrderingError
             ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-            : "⚠️ I hit a model error before replying. Please try again.";
+            : GENERIC_MODEL_ERROR_USER_MESSAGE;
 
       return {
         kind: "final",

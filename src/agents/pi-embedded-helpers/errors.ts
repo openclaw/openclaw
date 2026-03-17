@@ -38,6 +38,8 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 }
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
+export const GENERIC_MODEL_ERROR_USER_MESSAGE =
+  "⚠️ I hit a model error before replying. Please try again.";
 
 const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
 const OVERLOADED_ERROR_USER_MESSAGE =

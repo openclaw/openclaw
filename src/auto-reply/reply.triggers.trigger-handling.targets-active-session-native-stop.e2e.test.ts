@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { GENERIC_MODEL_ERROR_USER_MESSAGE } from "../agents/pi-embedded-helpers.js";
 import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
@@ -153,7 +154,7 @@ describe("trigger handling", () => {
       const errorCases = [
         {
           error: "sandbox is not defined.",
-          expected: "⚠️ I hit a model error before replying. Please try again.",
+          expected: GENERIC_MODEL_ERROR_USER_MESSAGE,
         },
         {
           error: "Context window exceeded",
