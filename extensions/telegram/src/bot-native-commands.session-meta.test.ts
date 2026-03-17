@@ -71,13 +71,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     resolveConfiguredBindingRoute: persistentBindingMocks.resolveConfiguredBindingRoute,
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
     recordInboundSessionMetaSafe: vi.fn(
-      async (params: {
-        cfg: OpenClawConfig;
-        agentId: string;
-        sessionKey: string;
-        ctx: unknown;
-        onError?: (error: unknown) => void;
-      }) => {
+      async (params: Parameters<typeof actual.recordInboundSessionMetaSafe>[0]) => {
         const storePath = sessionMocks.resolveStorePath(params.cfg.session?.store, {
           agentId: params.agentId,
         });
