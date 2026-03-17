@@ -21,17 +21,20 @@ export {
   formatApiKeyPreview,
   normalizeApiKeyInput,
   validateApiKeyInput,
-} from "../commands/auth-choice.api-key.js";
+} from "../plugins/provider-auth-input.js";
 export {
   ensureApiKeyFromOptionEnvOrPrompt,
   normalizeSecretInputModeInput,
   promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
-} from "../commands/auth-choice.apply-helpers.js";
-export { buildTokenProfileId, validateAnthropicSetupToken } from "../commands/auth-token.js";
+} from "../plugins/provider-auth-input.js";
+export {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "../plugins/provider-auth-token.js";
 export { applyAuthProfileConfig, buildApiKeyCredential } from "../plugins/provider-auth-helpers.js";
 export { githubCopilotLoginCommand } from "../providers/github-copilot-auth.js";
-export { loginOpenAICodexOAuth } from "../commands/openai-codex-oauth.js";
+export { loginOpenAICodexOAuth } from "../plugins/provider-openai-codex-oauth.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export { coerceSecretRef } from "../config/types.secrets.js";
 export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";

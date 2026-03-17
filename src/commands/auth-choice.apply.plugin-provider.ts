@@ -8,7 +8,7 @@ import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
+import type { ProviderAuthMethod, ProviderAuthOptionBag } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -97,7 +97,7 @@ export async function runProviderPluginAuthMethod(params: {
     workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,
-    opts: params.opts,
+    opts: params.opts as ProviderAuthOptionBag | undefined,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
     isRemote,
@@ -173,7 +173,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     workspaceDir,
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: false,
-    opts: params.opts,
+    opts: params.opts as ProviderAuthOptionBag | undefined,
   });
 
   let nextConfig = applied.config;
@@ -260,7 +260,7 @@ export async function applyAuthChoicePluginProvider(
     workspaceDir,
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: false,
-    opts: params.opts,
+    opts: params.opts as ProviderAuthOptionBag | undefined,
   });
   nextConfig = applied.config;
 
