@@ -227,6 +227,12 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   /**
    * Execute a single async handler with the configured timeout.
    * Throws on timeout; callers catch via handleHookError.
+   *
+   * NOTE: On timeout, the underlying handler promise is NOT cancelled — it
+   * continues running in the background until it settles.  The current plugin
+   * hook contract (`() => Promise<T>`) does not accept an `AbortSignal`, so
+   * cooperative cancellation is not yet possible.  If the plugin API evolves
+   * to accept a signal, wire it through here for proper cleanup.
    */
   async function callHandlerWithTimeout<T>(
     fn: () => Promise<T>,
