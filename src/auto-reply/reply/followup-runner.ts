@@ -275,6 +275,7 @@ export function createFollowupRunner(params: {
           providerUsed: fallbackProvider,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
+          callCount: runResult.meta?.agentMeta?.callCount,
           logLabel: "followup",
         });
       }
