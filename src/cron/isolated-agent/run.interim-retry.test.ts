@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   makeIsolatedAgentTurnParams,
@@ -89,5 +90,40 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
+  });
+
+  it("does not retry raw-stdout cron requests after a successful tool result", async () => {
+    usePayloadTextExtraction();
+    const transcriptPath = "/tmp/transcript.jsonl";
+    const toolResultText = '{"action":"send","payload":{"ok":true,"messageId":"670"}}';
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "toolResult",
+          isError: false,
+          content: [{ type: "text", text: toolResultText }],
+        },
+      })}\n`,
+      "utf8",
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+
+    mockFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        message: "执行脚本，只返回原始 stdout。",
+      }),
+    );
+    expect(result.status).toBe("ok");
+    expect(result.outputText).toBe(toolResultText);
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    fs.rmSync(transcriptPath, { force: true });
   });
 });

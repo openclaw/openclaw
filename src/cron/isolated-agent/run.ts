@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -218,6 +219,59 @@ function appendCronDeliveryInstruction(params: {
     return params.commandBody;
   }
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+}
+
+function isRawStdoutCronRequest(message: string) {
+  return /raw stdout|原始 stdout|原始输出/i.test(message);
+}
+
+async function readLatestSuccessfulToolResultText(sessionFile: string, runStartedAt: number) {
+  try {
+    const raw = await fs.promises.readFile(sessionFile, "utf8");
+    const lines = raw.split("\n");
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index]?.trim();
+      if (!line) {
+        continue;
+      }
+      let entry: Record<string, unknown>;
+      try {
+        entry = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (entry.type !== "message") {
+        continue;
+      }
+      const message = entry.message as Record<string, unknown> | undefined;
+      if (message?.role !== "toolResult" || message.isError === true) {
+        continue;
+      }
+      const timestamp =
+        typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+      if (Number.isFinite(timestamp) && timestamp < runStartedAt) {
+        continue;
+      }
+      const content = Array.isArray(message.content) ? message.content : [];
+      const text = content
+        .map((item) =>
+          typeof item === "object" &&
+          item &&
+          "text" in item &&
+          typeof item.text === "string" &&
+          item.text.trim()
+            ? item.text.trim()
+            : "",
+        )
+        .find(Boolean);
+      if (text) {
+        return text;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -551,6 +605,8 @@ export async function runCronIsolatedAgentTurn(params: {
   let fallbackModel = model;
   const runStartedAt = Date.now();
   let runEndedAt = runStartedAt;
+  const rawStdoutCronRequest = isRawStdoutCronRequest(params.message);
+  let rawStdoutToolResultText: string | undefined;
   try {
     const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
     const resolvedVerboseLevel =
@@ -678,6 +734,12 @@ export async function runCronIsolatedAgentTurn(params: {
     if (!runResult) {
       throw new Error("cron isolated run returned no result");
     }
+    if (rawStdoutCronRequest) {
+      rawStdoutToolResultText = await readLatestSuccessfulToolResultText(
+        sessionFile,
+        runStartedAt,
+      );
+    }
 
     // Guardrail for cron jobs: if the first turn is only an interim ack
     // (e.g. "on it") and no descendants are active, run one focused follow-up
@@ -699,6 +761,7 @@ export async function runCronIsolatedAgentTurn(params: {
         },
       );
       const shouldRetryInterimAck =
+        !rawStdoutCronRequest &&
         !interimRunResult.meta?.error &&
         !interimRunResult.didSendViaMessagingTool &&
         !interimPayloadHasStructuredContent &&
@@ -800,6 +863,10 @@ export async function runCronIsolatedAgentTurn(params: {
   const firstText = payloads[0]?.text ?? "";
   let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   let outputText = pickLastNonEmptyTextFromPayloads(payloads);
+  if (!outputText?.trim() && rawStdoutToolResultText) {
+    outputText = rawStdoutToolResultText;
+    summary = rawStdoutToolResultText;
+  }
   let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
   const deliveryPayload = pickLastDeliverablePayload(payloads);
   let deliveryPayloads =
