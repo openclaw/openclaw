@@ -334,7 +334,9 @@ async function resolveTelegramCommandAuth(params: {
           // Channel posts have no human sender identity, so explicit chat allow is the auth source.
           {
             configured: true,
-            allowed: Boolean(channelPolicy?.allowlistEnabled && channelPolicy.allowed),
+            allowed: Boolean(
+              channelPolicy?.allowlistEnabled && channelPolicy.allowed && channelPolicy.groupConfig,
+            ),
           },
         ]
       : []
