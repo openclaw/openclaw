@@ -116,7 +116,7 @@ describe("zalouser setup wizard", () => {
 
   it("allows an empty quickstart DM allowlist with a warning", async () => {
     const runtime = createRuntimeEnv();
-    const note = vi.fn(async () => {});
+    const note = vi.fn(async (_message: string, _title?: string) => {});
     const prompter = createTestWizardPrompter({
       note,
       confirm: vi.fn(async ({ message }: { message: string }) => {
@@ -172,7 +172,7 @@ describe("zalouser setup wizard", () => {
 
   it("allows an empty group allowlist with a warning", async () => {
     const runtime = createRuntimeEnv();
-    const note = vi.fn(async () => {});
+    const note = vi.fn(async (_message: string, _title?: string) => {});
     const prompter = createTestWizardPrompter({
       note,
       confirm: vi.fn(async ({ message }: { message: string }) => {

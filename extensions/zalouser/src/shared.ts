@@ -25,7 +25,7 @@ export const zalouserMeta = {
   aliases: ["zlu"],
   order: 85,
   quickstartAllowFrom: true,
-} as const;
+} satisfies ChannelPlugin<ResolvedZalouserAccount>["meta"];
 
 export function createZalouserPluginBase(params: {
   setupWizard: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setupWizard"]>;
