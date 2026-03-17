@@ -14,6 +14,13 @@ const SECRET_TARGET_CALLSITES = [
   "src/commands/status.scan.ts",
 ] as const;
 
+function hasSupportedTargetIdsWiring(source: string): boolean {
+  return (
+    /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
+    /targetIds:\s*scopedTargets\.targetIds/m.test(source)
+  );
+}
+
 describe("command secret resolution coverage", () => {
   it.each(SECRET_TARGET_CALLSITES)(
     "routes target-id command path through shared gateway resolver: %s",
@@ -21,7 +28,7 @@ describe("command secret resolution coverage", () => {
       const absolutePath = path.join(process.cwd(), relativePath);
       const source = await fs.readFile(absolutePath, "utf8");
       expect(source).toContain("resolveCommandSecretRefsViaGateway");
-      expect(source).toContain("targetIds: get");
+      expect(hasSupportedTargetIdsWiring(source)).toBe(true);
       expect(source).toContain("resolveCommandSecretRefsViaGateway({");
     },
   );

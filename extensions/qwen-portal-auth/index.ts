@@ -1,3 +1,5 @@
+import { ensureAuthProfileStore, listProfilesForProvider } from "openclaw/plugin-sdk/agent-runtime";
+import { QWEN_OAUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildOauthProviderAuthResult,
   emptyPluginConfigSchema,
@@ -5,17 +7,14 @@ import {
   type ProviderAuthContext,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/qwen-portal-auth";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../../src/agents/auth-profiles.js";
-import { QWEN_OAUTH_MARKER } from "../../src/agents/model-auth-markers.js";
-import { refreshQwenPortalCredentials } from "../../src/providers/qwen-portal-oauth.js";
+import { refreshQwenPortalCredentials } from "openclaw/plugin-sdk/qwen-portal-auth";
 import { loginQwenPortalOAuth } from "./oauth.js";
+import { buildQwenPortalProvider, QWEN_PORTAL_BASE_URL } from "./provider-catalog.js";
 
 const PROVIDER_ID = "qwen-portal";
 const PROVIDER_LABEL = "Qwen";
 const DEFAULT_MODEL = "qwen-portal/coder-model";
-const DEFAULT_BASE_URL = "https://portal.qwen.ai/v1";
-const DEFAULT_CONTEXT_WINDOW = 128000;
-const DEFAULT_MAX_TOKENS = 8192;
+const DEFAULT_BASE_URL = QWEN_PORTAL_BASE_URL;
 
 function normalizeBaseUrl(value: string | undefined): string {
   const raw = value?.trim() || DEFAULT_BASE_URL;
@@ -23,39 +22,11 @@ function normalizeBaseUrl(value: string | undefined): string {
   return withProtocol.endsWith("/v1") ? withProtocol : `${withProtocol.replace(/\/+$/, "")}/v1`;
 }
 
-function buildModelDefinition(params: {
-  id: string;
-  name: string;
-  input: Array<"text" | "image">;
-}) {
-  return {
-    id: params.id,
-    name: params.name,
-    reasoning: false,
-    input: params.input,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
-  };
-}
-
 function buildProviderCatalog(params: { baseUrl: string; apiKey: string }) {
   return {
+    ...buildQwenPortalProvider(),
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
-    api: "openai-completions" as const,
-    models: [
-      buildModelDefinition({
-        id: "coder-model",
-        name: "Qwen Coder",
-        input: ["text"],
-      }),
-      buildModelDefinition({
-        id: "vision-model",
-        name: "Qwen Vision",
-        input: ["text", "image"],
-      }),
-    ],
   };
 }
 

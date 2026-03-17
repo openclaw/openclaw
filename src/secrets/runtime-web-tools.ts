@@ -315,11 +315,13 @@ export async function resolveRuntimeWebTools(params: {
   const tools = isRecord(params.sourceConfig.tools) ? params.sourceConfig.tools : undefined;
   const web = isRecord(tools?.web) ? tools.web : undefined;
   const search = isRecord(web?.search) ? web.search : undefined;
-  const providers = resolvePluginWebSearchProviders({
-    config: params.sourceConfig,
-    env: params.context.env,
-    bundledAllowlistCompat: true,
-  });
+  const providers = search
+    ? resolvePluginWebSearchProviders({
+        config: params.sourceConfig,
+        env: params.context.env,
+        bundledAllowlistCompat: true,
+      })
+    : [];
 
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",

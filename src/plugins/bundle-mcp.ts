@@ -28,12 +28,18 @@ export type EnabledBundleMcpConfigResult = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
 };
+export type BundleMcpRuntimeSupport = {
+  hasSupportedStdioServer: boolean;
+  unsupportedServerNames: string[];
+  diagnostics: string[];
+};
 
 const MANIFEST_PATH_BY_FORMAT: Record<PluginBundleFormat, string> = {
   claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   codex: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
   cursor: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
 };
+const CLAUDE_PLUGIN_ROOT_PLACEHOLDER = "${CLAUDE_PLUGIN_ROOT}";
 
 function normalizePathList(value: unknown): string[] {
   if (typeof value === "string") {
@@ -105,7 +111,7 @@ function resolveBundleMcpConfigPaths(params: {
   return mergeUniquePathLists(defaults, declared);
 }
 
-function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
+export function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
   if (!isRecord(raw)) {
     return {};
   }
@@ -131,34 +137,66 @@ function isExplicitRelativePath(value: string): boolean {
   return value === "." || value === ".." || value.startsWith("./") || value.startsWith("../");
 }
 
+function expandBundleRootPlaceholders(value: string, rootDir: string): string {
+  if (!value.includes(CLAUDE_PLUGIN_ROOT_PLACEHOLDER)) {
+    return value;
+  }
+  return value.split(CLAUDE_PLUGIN_ROOT_PLACEHOLDER).join(rootDir);
+}
+
 function absolutizeBundleMcpServer(params: {
+  rootDir: string;
   baseDir: string;
   server: BundleMcpServerConfig;
 }): BundleMcpServerConfig {
   const next: BundleMcpServerConfig = { ...params.server };
 
+  if (typeof next.cwd !== "string" && typeof next.workingDirectory !== "string") {
+    next.cwd = params.baseDir;
+  }
+
   const command = next.command;
-  if (typeof command === "string" && isExplicitRelativePath(command)) {
-    next.command = path.resolve(params.baseDir, command);
+  if (typeof command === "string") {
+    const expanded = expandBundleRootPlaceholders(command, params.rootDir);
+    next.command = isExplicitRelativePath(expanded)
+      ? path.resolve(params.baseDir, expanded)
+      : expanded;
   }
 
   const cwd = next.cwd;
-  if (typeof cwd === "string" && !path.isAbsolute(cwd)) {
-    next.cwd = path.resolve(params.baseDir, cwd);
+  if (typeof cwd === "string") {
+    const expanded = expandBundleRootPlaceholders(cwd, params.rootDir);
+    next.cwd = path.isAbsolute(expanded) ? expanded : path.resolve(params.baseDir, expanded);
   }
 
   const workingDirectory = next.workingDirectory;
-  if (typeof workingDirectory === "string" && !path.isAbsolute(workingDirectory)) {
-    next.workingDirectory = path.resolve(params.baseDir, workingDirectory);
+  if (typeof workingDirectory === "string") {
+    const expanded = expandBundleRootPlaceholders(workingDirectory, params.rootDir);
+    next.workingDirectory = path.isAbsolute(expanded)
+      ? expanded
+      : path.resolve(params.baseDir, expanded);
   }
 
   if (Array.isArray(next.args)) {
     next.args = next.args.map((entry) => {
-      if (typeof entry !== "string" || !isExplicitRelativePath(entry)) {
+      if (typeof entry !== "string") {
         return entry;
       }
-      return path.resolve(params.baseDir, entry);
+      const expanded = expandBundleRootPlaceholders(entry, params.rootDir);
+      if (!isExplicitRelativePath(expanded)) {
+        return expanded;
+      }
+      return path.resolve(params.baseDir, expanded);
     });
+  }
+
+  if (isRecord(next.env)) {
+    next.env = Object.fromEntries(
+      Object.entries(next.env).map(([key, value]) => [
+        key,
+        typeof value === "string" ? expandBundleRootPlaceholders(value, params.rootDir) : value,
+      ]),
+    );
   }
 
   return next;
@@ -190,7 +228,7 @@ function loadBundleFileBackedMcpConfig(params: {
       mcpServers: Object.fromEntries(
         Object.entries(servers).map(([serverName, server]) => [
           serverName,
-          absolutizeBundleMcpServer({ baseDir, server }),
+          absolutizeBundleMcpServer({ rootDir: params.rootDir, baseDir, server }),
         ]),
       ),
     };
@@ -211,7 +249,7 @@ function loadBundleInlineMcpConfig(params: {
     mcpServers: Object.fromEntries(
       Object.entries(servers).map(([serverName, server]) => [
         serverName,
-        absolutizeBundleMcpServer({ baseDir: params.baseDir, server }),
+        absolutizeBundleMcpServer({ rootDir: params.baseDir, baseDir: params.baseDir, server }),
       ]),
     ),
   };
@@ -252,11 +290,33 @@ function loadBundleMcpConfig(params: {
     merged,
     loadBundleInlineMcpConfig({
       raw: manifestLoaded.raw,
-      baseDir: path.dirname(path.join(params.rootDir, manifestRelativePath)),
+      baseDir: params.rootDir,
     }),
   ) as BundleMcpConfig;
 
   return { config: merged, diagnostics: [] };
+}
+
+export function inspectBundleMcpRuntimeSupport(params: {
+  pluginId: string;
+  rootDir: string;
+  bundleFormat: PluginBundleFormat;
+}): BundleMcpRuntimeSupport {
+  const loaded = loadBundleMcpConfig(params);
+  const unsupportedServerNames: string[] = [];
+  let hasSupportedStdioServer = false;
+  for (const [serverName, server] of Object.entries(loaded.config.mcpServers)) {
+    if (typeof server.command === "string" && server.command.trim().length > 0) {
+      hasSupportedStdioServer = true;
+      continue;
+    }
+    unsupportedServerNames.push(serverName);
+  }
+  return {
+    hasSupportedStdioServer,
+    unsupportedServerNames,
+    diagnostics: loaded.diagnostics,
+  };
 }
 
 export function loadEnabledBundleMcpConfig(params: {

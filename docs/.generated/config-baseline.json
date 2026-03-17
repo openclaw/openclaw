@@ -8035,7 +8035,21 @@
         "storage"
       ],
       "label": "Browser Profile Driver",
-      "help": "Per-profile browser driver mode. Use \"openclaw\" (or legacy \"clawd\") for CDP-based profiles, or use \"existing-session\" for host-local Chrome MCP attachment.",
+      "help": "Per-profile browser driver mode. Use \"openclaw\" (or legacy \"clawd\") for CDP-based profiles, or use \"existing-session\" for host-local Chrome DevTools MCP attachment.",
+      "hasChildren": false
+    },
+    {
+      "path": "browser.profiles.*.userDataDir",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "storage"
+      ],
+      "label": "Browser Profile User Data Dir",
+      "help": "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for host-local Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory.",
       "hasChildren": false
     },
     {
@@ -32141,6 +32155,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.silentErrorReplies",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.streaming",
       "kind": "channel",
       "type": [
@@ -34135,6 +34159,21 @@
       ],
       "label": "Telegram Retry Min Delay (ms)",
       "help": "Minimum retry delay in ms for Telegram outbound calls.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.silentErrorReplies",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Telegram Silent Error Replies",
+      "help": "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
       "hasChildren": false
     },
     {
