@@ -24,6 +24,7 @@ const workspaceSeedMocks = vi.hoisted(() => ({
 const spawnMock = vi.hoisted(() => vi.fn());
 const webRuntimeMocks = vi.hoisted(() => ({
   DEFAULT_WEB_APP_PORT: 3100,
+  cleanupManagedWebRuntimeBackup: vi.fn(),
   ensureManagedWebRuntime: vi.fn(async () => ({ ready: true, reason: "ready" })),
   evaluateMajorVersionTransition: vi.fn(() => ({
     previousMajor: 2,
@@ -100,6 +101,8 @@ vi.mock("./web-runtime.js", () => ({
   startManagedWebRuntime: webRuntimeMocks.startManagedWebRuntime,
   stopManagedWebRuntime: webRuntimeMocks.stopManagedWebRuntime,
   waitForWebRuntime: webRuntimeMocks.waitForWebRuntime,
+  cleanupManagedWebRuntimeBackup: webRuntimeMocks.cleanupManagedWebRuntimeBackup,
+  readLastLogLines: vi.fn(() => undefined),
 }));
 
 import {

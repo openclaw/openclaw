@@ -8,6 +8,7 @@ import {
   readFileSync,
   readlinkSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -24,6 +25,7 @@ import { listPortListeners, type PortProcess } from "./ports.js";
 export const DEFAULT_WEB_APP_PORT = 3100;
 const WEB_RUNTIME_DIRNAME = "web-runtime";
 const WEB_RUNTIME_APP_DIRNAME = "app";
+const WEB_RUNTIME_APP_BACKUP_DIRNAME = "app.prev";
 const WEB_RUNTIME_MANIFEST_FILENAME = "manifest.json";
 const WEB_RUNTIME_PROCESS_FILENAME = "process.json";
 const WEB_APP_PROBE_ATTEMPTS = 20;
@@ -128,6 +130,22 @@ function parseOptionalPositiveInt(value: string | number | undefined): number | 
 
 function ensureParentDir(filePath: string): void {
   mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+export function readLastLogLines(
+  stateDir: string,
+  filename: string,
+  maxLines = 8,
+): string | undefined {
+  const logPath = path.join(stateDir, "logs", filename);
+  try {
+    const content = readFileSync(logPath, "utf-8");
+    const lines = content.split(/\r?\n/).filter(Boolean);
+    const tail = lines.slice(-maxLines);
+    return tail.length > 0 ? tail.join("\n") : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readJsonFile<T>(filePath: string): T | null {
@@ -241,6 +259,10 @@ export function resolveManagedWebRuntimeDir(stateDir: string): string {
 
 export function resolveManagedWebRuntimeAppDir(stateDir: string): string {
   return path.join(resolveManagedWebRuntimeDir(stateDir), WEB_RUNTIME_APP_DIRNAME);
+}
+
+function resolveManagedWebRuntimeBackupDir(stateDir: string): string {
+  return path.join(resolveManagedWebRuntimeDir(stateDir), WEB_RUNTIME_APP_BACKUP_DIRNAME);
 }
 
 export function resolveManagedWebRuntimeServerPath(stateDir: string): string {
@@ -370,9 +392,15 @@ export async function probeWebRuntime(port: number): Promise<WebProbeResult> {
   }
 }
 
-export async function waitForWebRuntime(port: number): Promise<WebProbeResult> {
+export async function waitForWebRuntime(
+  port: number,
+  pid?: number,
+): Promise<WebProbeResult> {
   let lastResult: WebProbeResult = { ok: false, reason: "web runtime did not respond" };
   for (let attempt = 0; attempt < WEB_APP_PROBE_ATTEMPTS; attempt += 1) {
+    if (typeof pid === "number" && pid > 0 && !isProcessAlive(pid)) {
+      return { ok: false, reason: `web runtime process exited (pid ${pid})` };
+    }
     const result = await probeWebRuntime(port);
     if (result.ok) {
       return result;
@@ -719,7 +747,17 @@ export function installManagedWebRuntime(params: {
   flattenPnpmStandaloneDeps(standaloneDir);
 
   mkdirSync(runtimeDir, { recursive: true });
-  rmSync(runtimeAppDir, { recursive: true, force: true });
+
+  const backupDir = resolveManagedWebRuntimeBackupDir(params.stateDir);
+  rmSync(backupDir, { recursive: true, force: true });
+  if (existsSync(runtimeAppDir)) {
+    try {
+      renameSync(runtimeAppDir, backupDir);
+    } catch {
+      rmSync(runtimeAppDir, { recursive: true, force: true });
+    }
+  }
+
   cpSync(sourceAppDir, runtimeAppDir, { recursive: true, force: true, dereference: true });
 
   dereferenceRuntimeNodeModules(runtimeAppDir, standaloneDir);
@@ -743,6 +781,25 @@ export function installManagedWebRuntime(params: {
     runtimeServerPath,
     manifest,
   };
+}
+
+export function rollbackManagedWebRuntime(stateDir: string): boolean {
+  const runtimeAppDir = resolveManagedWebRuntimeAppDir(stateDir);
+  const backupDir = resolveManagedWebRuntimeBackupDir(stateDir);
+  if (!existsSync(backupDir)) {
+    return false;
+  }
+  try {
+    rmSync(runtimeAppDir, { recursive: true, force: true });
+    renameSync(backupDir, runtimeAppDir);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function cleanupManagedWebRuntimeBackup(stateDir: string): void {
+  rmSync(resolveManagedWebRuntimeBackupDir(stateDir), { recursive: true, force: true });
 }
 
 export async function stopManagedWebRuntime(params: {
@@ -896,11 +953,42 @@ export async function ensureManagedWebRuntime(params: {
     };
   }
 
-  const probe = await waitForWebRuntime(params.port);
-  return {
-    ready: probe.ok,
-    reason: probe.reason,
-  };
+  const probe = await waitForWebRuntime(params.port, start.pid);
+  if (probe.ok) {
+    cleanupManagedWebRuntimeBackup(params.stateDir);
+    return { ready: true, reason: probe.reason };
+  }
+
+  const errLog = readLastLogLines(params.stateDir, "web-app.err.log", 6);
+  const diagnosticReason = errLog
+    ? `${probe.reason}\n--- web-app.err.log ---\n${errLog}`
+    : probe.reason;
+
+  const backupDir = resolveManagedWebRuntimeBackupDir(params.stateDir);
+  if (existsSync(backupDir)) {
+    await stopManagedWebRuntime({
+      stateDir: params.stateDir,
+      port: params.port,
+      includeLegacyStandalone: true,
+    });
+
+    const rolled = rollbackManagedWebRuntime(params.stateDir);
+    if (rolled) {
+      const retryStart = doStart({
+        stateDir: params.stateDir,
+        port: params.port,
+        gatewayPort: params.gatewayPort,
+      });
+      if (retryStart.started) {
+        const retryProbe = await waitForWebRuntime(params.port, retryStart.pid);
+        if (retryProbe.ok) {
+          return { ready: true, reason: "rolled back to previous version" };
+        }
+      }
+    }
+  }
+
+  return { ready: false, reason: diagnosticReason };
 }
 
 export function resolveOpenClawCommandOrThrow(): string {

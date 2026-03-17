@@ -11,9 +11,11 @@ import { VERSION } from "../version.js";
 import { applyCliProfileEnv } from "./profile.js";
 import {
   DEFAULT_WEB_APP_PORT,
+  cleanupManagedWebRuntimeBackup,
   ensureManagedWebRuntime,
   evaluateMajorVersionTransition,
   readLastKnownWebPort,
+  readLastLogLines,
   readManagedWebRuntimeManifest,
   resolveCliPackageRoot,
   resolveManagedWebRuntimeServerPath,
@@ -488,6 +490,8 @@ export async function updateWebRuntimeCommand(
     throw new Error(`Web runtime update failed: ${summary.reason}`);
   }
 
+  cleanupManagedWebRuntimeBackup(stateDir);
+
   await promptAndOpenWebUi({
     webPort: selectedPort,
     json: opts.json,
@@ -621,14 +625,23 @@ export async function startWebRuntimeCommand(
     );
   }
 
-  const probe = await waitForWebRuntime(selectedPort);
+  const probe = await waitForWebRuntime(selectedPort, startResult.pid);
+
+  let probeReason = probe.reason;
+  if (!probe.ok) {
+    const errLog = readLastLogLines(stateDir, "web-app.err.log", 6);
+    if (errLog) {
+      probeReason = `${probe.reason}\n--- web-app.err.log ---\n${errLog}`;
+    }
+  }
+
   const summary: StartWebRuntimeSummary = {
     profile,
     webPort: selectedPort,
     stoppedPids: stopResult.stoppedPids,
     skippedForeignPids: stopResult.skippedForeignPids,
     started: probe.ok,
-    reason: probe.reason,
+    reason: probeReason,
     gatewayRestarted: gatewayResult.restarted,
     gatewayError: daemonless ? undefined : gatewayResult.error,
   };
@@ -658,6 +671,8 @@ export async function startWebRuntimeCommand(
   if (!summary.started) {
     throw new Error(`Web runtime failed readiness probe: ${summary.reason}`);
   }
+
+  cleanupManagedWebRuntimeBackup(stateDir);
 
   await promptAndOpenWebUi({
     webPort: selectedPort,
