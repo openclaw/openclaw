@@ -12,10 +12,6 @@ type GuardedSource = {
 
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
   {
-    path: "extensions/discord/src/plugin-shared.ts",
-    forbiddenPatterns: [/openclaw\/plugin-sdk\/discord/, /plugin-sdk-internal\/discord/],
-  },
-  {
     path: "extensions/discord/src/shared.ts",
     forbiddenPatterns: [/openclaw\/plugin-sdk\/discord/, /plugin-sdk-internal\/discord/],
   },
