@@ -90,6 +90,17 @@ export type MattermostAccountConfig = {
      */
     allowedSourceIps?: string[];
   };
+  /** Retry configuration for DM channel creation */
+  dmChannelRetry?: {
+    /** Maximum number of retry attempts (default: 3) */
+    maxRetries?: number;
+    /** Initial delay in milliseconds before first retry (default: 1000) */
+    initialDelayMs?: number;
+    /** Maximum delay in milliseconds between retries (default: 10000) */
+    maxDelayMs?: number;
+    /** Timeout for each individual request in milliseconds (default: 30000) */
+    timeoutMs?: number;
+  };
 };
 
 export type MattermostConfig = {
