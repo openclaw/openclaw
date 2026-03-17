@@ -42,9 +42,9 @@ vi.mock("../../plugins/runtime.js", () => ({
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 
 async function importAcpBindings(scope: string) {
-  return await importFreshModule<typeof import("./acp-bindings.js")>(
+  return await importFreshModule<typeof import("./acp-binding-registry.js")>(
     import.meta.url,
-    `./acp-bindings.js?scope=${scope}`,
+    `./acp-binding-registry.js?scope=${scope}`,
   );
 }
 
@@ -105,7 +105,7 @@ function createDiscordAcpPlugin(overrides?: {
     );
   return {
     id: "discord",
-    acpBindings: {
+    bindings: {
       compileConfiguredBinding,
       matchInboundConversation,
     },
@@ -141,8 +141,27 @@ describe("plugin ACP binding registry", () => {
 
     expect(resolved?.spec.channel).toBe("discord");
     expect(resolved?.spec.backend).toBe("acpx");
-    expect(plugin.acpBindings.compileConfiguredBinding).toHaveBeenCalledTimes(1);
+    expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps compatibility with legacy acpBindings channel providers", async () => {
+    const plugin = {
+      id: "discord",
+      acpBindings: createDiscordAcpPlugin().bindings,
+    };
+    getChannelPluginMock.mockReturnValue(plugin);
+    const acpBindings = await importAcpBindings("legacy-provider");
+
+    const resolved = acpBindings.resolveConfiguredAcpBindingRecord({
+      cfg: createConfig() as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1479098716916023408",
+    });
+
+    expect(resolved?.spec.channel).toBe("discord");
+    expect(plugin.acpBindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
   });
 
   it("resolves configured ACP bindings from canonical conversation refs", async () => {
@@ -165,6 +184,13 @@ describe("plugin ACP binding registry", () => {
       conversationId: "1479098716916023408",
     });
     expect(resolved?.configuredBinding.spec.channel).toBe("discord");
+    expect(resolved?.statefulTarget).toEqual({
+      kind: "stateful",
+      driverId: "acp",
+      sessionKey: resolved?.configuredBinding.record.targetSessionKey,
+      agentId: "codex",
+      label: undefined,
+    });
   });
 
   it("primes compiled ACP bindings from the binding agent workspace once", async () => {
@@ -295,6 +321,6 @@ describe("plugin ACP binding registry", () => {
       conversationId: "1479098716916023408",
     });
 
-    expect(plugin.acpBindings.compileConfiguredBinding).toHaveBeenCalledTimes(2);
+    expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(2);
   });
 });

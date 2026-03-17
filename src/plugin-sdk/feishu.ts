@@ -32,6 +32,9 @@ export type {
   ChannelOutboundAdapter,
 } from "../channels/plugins/types.js";
 export type {
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
   ChannelAcpBindingAdapter,
   ChannelAcpBindingConversationRef,
   ChannelAcpBindingMatch,

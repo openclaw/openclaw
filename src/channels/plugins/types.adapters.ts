@@ -541,39 +541,46 @@ export type ChannelAllowlistAdapter = {
   supportsScope?: (params: { scope: "dm" | "group" | "all" }) => boolean;
 };
 
-export type ChannelAcpBindingConversationRef = {
+export type ChannelConfiguredBindingConversationRef = {
   conversationId: string;
   parentConversationId?: string;
 };
 
-export type ChannelAcpBindingMatch = ChannelAcpBindingConversationRef & {
+export type ChannelConfiguredBindingMatch = ChannelConfiguredBindingConversationRef & {
   matchPriority?: number;
 };
 
-export type ChannelAcpBindingAdapter = {
+export type ChannelConfiguredBindingProvider = {
   compileConfiguredBinding?: (params: {
     binding: AgentAcpBinding;
     conversationId: string;
-  }) => ChannelAcpBindingConversationRef | null;
+  }) => ChannelConfiguredBindingConversationRef | null;
   matchInboundConversation?: (params: {
     binding: AgentAcpBinding;
-    compiledBinding: ChannelAcpBindingConversationRef;
+    compiledBinding: ChannelConfiguredBindingConversationRef;
     conversationId: string;
     parentConversationId?: string;
-  }) => ChannelAcpBindingMatch | null;
+  }) => ChannelConfiguredBindingMatch | null;
   // Compatibility bridge for third-party plugins that still implement the
-  // earlier ACP adapter shape.
+  // earlier ACP-specific adapter shape.
   normalizeConfiguredBindingTarget?: (params: {
     binding: AgentAcpBinding;
     conversationId: string;
-  }) => ChannelAcpBindingConversationRef | null;
+  }) => ChannelConfiguredBindingConversationRef | null;
   matchConfiguredBinding?: (params: {
     binding: AgentAcpBinding;
     bindingConversationId: string;
     conversationId: string;
     parentConversationId?: string;
-  }) => ChannelAcpBindingMatch | null;
+  }) => ChannelConfiguredBindingMatch | null;
 };
+
+/** @deprecated Use ChannelConfiguredBindingConversationRef. */
+export type ChannelAcpBindingConversationRef = ChannelConfiguredBindingConversationRef;
+/** @deprecated Use ChannelConfiguredBindingMatch. */
+export type ChannelAcpBindingMatch = ChannelConfiguredBindingMatch;
+/** @deprecated Use ChannelConfiguredBindingProvider. */
+export type ChannelAcpBindingAdapter = ChannelConfiguredBindingProvider;
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   resolveDmPolicy?: (

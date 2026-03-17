@@ -7,8 +7,8 @@ import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runt
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import {
-  ensureConfiguredAcpRouteReady,
-  resolveConfiguredAcpRoute,
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   getSessionBindingService,
@@ -458,7 +458,7 @@ export async function preflightDiscordMessage(
     }) ?? undefined;
   const configuredRoute =
     threadBinding == null
-      ? resolveConfiguredAcpRoute({
+      ? resolveConfiguredBindingRoute({
           cfg: freshCfg,
           route,
           conversation: {
@@ -469,9 +469,9 @@ export async function preflightDiscordMessage(
           },
         })
       : null;
-  const configuredBinding = configuredRoute?.configuredBinding ?? null;
+  const configuredBinding = configuredRoute?.bindingResolution ?? null;
   if (!threadBinding && configuredBinding) {
-    threadBinding = configuredBinding.record;
+    threadBinding = configuredBinding.configuredBinding.record;
   }
   if (
     shouldIgnoreBoundThreadWebhookMessage({
@@ -866,13 +866,13 @@ export async function preflightDiscordMessage(
     return null;
   }
   if (configuredBinding) {
-    const ensured = await ensureConfiguredAcpRouteReady({
+    const ensured = await ensureConfiguredBindingRouteReady({
       cfg: freshCfg,
-      configuredBinding,
+      bindingResolution: configuredBinding,
     });
     if (!ensured.ok) {
       logVerbose(
-        `discord: configured ACP binding unavailable for channel ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+        `discord: configured ACP binding unavailable for channel ${configuredBinding.configuredBinding.spec.conversationId}: ${ensured.error}`,
       );
       return null;
     }

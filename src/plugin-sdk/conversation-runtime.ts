@@ -1,5 +1,34 @@
 // Public pairing/session-binding helpers for plugins that manage conversation ownership.
 
+export {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+  type ConfiguredBindingRouteResult,
+} from "../channels/plugins/binding-routing.js";
+export {
+  primeConfiguredBindingRegistry,
+  resolveConfiguredBinding,
+  resolveConfiguredBindingRecord,
+  resolveConfiguredBindingRecordForConversation,
+  resolveConfiguredBindingSpecBySessionKey,
+} from "../channels/plugins/binding-registry.js";
+export {
+  ensureConfiguredBindingTargetReady,
+  ensureConfiguredBindingTargetSession,
+  resetConfiguredBindingTargetInPlace,
+} from "../channels/plugins/binding-targets.js";
+export type {
+  ConfiguredBindingConversation,
+  ConfiguredBindingResolution,
+  CompiledConfiguredBinding,
+  StatefulBindingTargetDescriptor,
+} from "../channels/plugins/binding-types.js";
+export type {
+  StatefulBindingTargetDriver,
+  StatefulBindingTargetReadyResult,
+  StatefulBindingTargetResetResult,
+  StatefulBindingTargetSessionResult,
+} from "../channels/plugins/stateful-target-drivers.js";
 export * from "../acp/persistent-bindings.route.js";
 export {
   type BindingStatus,

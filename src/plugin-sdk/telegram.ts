@@ -13,6 +13,9 @@ export type {
   TelegramNetworkConfig,
 } from "../config/types.js";
 export type {
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
   ChannelAcpBindingAdapter,
   ChannelAcpBindingConversationRef,
   ChannelAcpBindingMatch,

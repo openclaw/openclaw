@@ -492,7 +492,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         silent: silent ?? undefined,
       }),
   },
-  acpBindings: {
+  bindings: {
     compileConfiguredBinding: ({ conversationId }) =>
       normalizeDiscordAcpConversationId(conversationId),
     matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>

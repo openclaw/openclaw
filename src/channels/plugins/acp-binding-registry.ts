@@ -26,21 +26,22 @@ import {
   normalizeAccountId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import type { AcpBindingResolution, CompiledAcpBinding } from "./acp-binding-types.js";
+import { resolveChannelConfiguredBindingProvider } from "./binding-provider.js";
+import type { CompiledConfiguredBinding, ConfiguredBindingResolution } from "./binding-types.js";
 import { getChannelPluginCatalogEntry } from "./catalog.js";
 import { getChannelPlugin } from "./index.js";
 import type {
-  ChannelAcpBindingAdapter,
-  ChannelAcpBindingConversationRef,
-  ChannelAcpBindingMatch,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+  ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
 
 type ChannelPluginLike = NonNullable<ReturnType<typeof getChannelPlugin>>;
 
 type CompiledAcpBindingRegistry = {
-  rulesByChannel: Map<ConfiguredAcpBindingChannel, CompiledAcpBinding[]>;
-  exactSessionKeys: Map<string, CompiledAcpBinding>;
-  wildcardRulesByChannel: Map<ConfiguredAcpBindingChannel, CompiledAcpBinding[]>;
+  rulesByChannel: Map<ConfiguredAcpBindingChannel, CompiledConfiguredBinding[]>;
+  exactSessionKeys: Map<string, CompiledConfiguredBinding>;
+  wildcardRulesByChannel: Map<ConfiguredAcpBindingChannel, CompiledConfiguredBinding[]>;
 };
 
 type CachedCompiledAcpBindingRegistry = {
@@ -186,8 +187,8 @@ function resolveConfiguredBindingChannelPluginSnapshot(params: {
         registry,
         channel: normalized,
       });
-      if (plugin?.acpBindings) {
-        params.context.channelPluginCache.set(normalized, plugin);
+      if (resolveChannelConfiguredBindingProvider(plugin)) {
+        params.context.channelPluginCache.set(normalized, plugin ?? null);
         return plugin;
       }
     } catch {
@@ -222,7 +223,7 @@ function resolveConfiguredBindingChannelPlugin(params: {
 function resolveConfiguredBindingAdapter(params: {
   context: ConfiguredBindingCompilerContext;
   channel: string;
-}): { channel: ConfiguredAcpBindingChannel; adapter: ChannelAcpBindingAdapter } | null {
+}): { channel: ConfiguredAcpBindingChannel; provider: ChannelConfiguredBindingProvider } | null {
   const normalized = params.channel.trim().toLowerCase();
   if (!normalized) {
     return null;
@@ -231,17 +232,18 @@ function resolveConfiguredBindingAdapter(params: {
     context: params.context,
     channel: normalized,
   });
-  const adapter = plugin?.acpBindings;
+  const provider = resolveChannelConfiguredBindingProvider(plugin);
   if (
-    !adapter ||
-    !(adapter.compileConfiguredBinding || adapter.normalizeConfiguredBindingTarget) ||
-    !(adapter.matchInboundConversation || adapter.matchConfiguredBinding)
+    !plugin ||
+    !provider ||
+    !(provider.compileConfiguredBinding || provider.normalizeConfiguredBindingTarget) ||
+    !(provider.matchInboundConversation || provider.matchConfiguredBinding)
   ) {
     return null;
   }
   return {
     channel: plugin.id,
-    adapter,
+    provider,
   };
 }
 
@@ -273,16 +275,16 @@ function resolveBindingConversationId(binding: AgentAcpBinding): string | null {
 }
 
 function compileConfiguredBindingTarget(params: {
-  adapter: ChannelAcpBindingAdapter;
+  provider: ChannelConfiguredBindingProvider;
   binding: AgentAcpBinding;
   conversationId: string;
-}): ChannelAcpBindingConversationRef | null {
+}): ChannelConfiguredBindingConversationRef | null {
   return (
-    params.adapter.compileConfiguredBinding?.({
+    params.provider.compileConfiguredBinding?.({
       binding: params.binding,
       conversationId: params.conversationId,
     }) ??
-    params.adapter.normalizeConfiguredBindingTarget?.({
+    params.provider.normalizeConfiguredBindingTarget?.({
       binding: params.binding,
       conversationId: params.conversationId,
     }) ??
@@ -291,18 +293,18 @@ function compileConfiguredBindingTarget(params: {
 }
 
 function matchCompiledBindingConversation(params: {
-  rule: CompiledAcpBinding;
+  rule: CompiledConfiguredBinding;
   conversationId: string;
   parentConversationId?: string;
-}): ChannelAcpBindingMatch | null {
+}): ChannelConfiguredBindingMatch | null {
   return (
-    params.rule.adapter.matchInboundConversation?.({
+    params.rule.provider.matchInboundConversation?.({
       binding: params.rule.binding,
       compiledBinding: params.rule.target,
       conversationId: params.conversationId,
       parentConversationId: params.parentConversationId,
     }) ??
-    params.rule.adapter.matchConfiguredBinding?.({
+    params.rule.provider.matchConfiguredBinding?.({
       binding: params.rule.binding,
       bindingConversationId: params.rule.bindingConversationId,
       conversationId: params.conversationId,
@@ -355,10 +357,10 @@ function compileConfiguredBindingRule(params: {
   cfg: OpenClawConfig;
   channel: ConfiguredAcpBindingChannel;
   binding: AgentAcpBinding;
-  target: ChannelAcpBindingConversationRef;
+  target: ChannelConfiguredBindingConversationRef;
   bindingConversationId: string;
-  adapter: ChannelAcpBindingAdapter;
-}): CompiledAcpBinding {
+  provider: ChannelConfiguredBindingProvider;
+}): CompiledConfiguredBinding {
   const agentId = pickFirstExistingAgentId(params.cfg, params.binding.agentId ?? "main");
   const runtimeDefaults = resolveAgentRuntimeAcpDefaults({
     cfg: params.cfg,
@@ -366,6 +368,13 @@ function compileConfiguredBindingRule(params: {
   });
   const bindingOverrides = normalizeBindingConfig(params.binding.acp);
   const mode = normalizeMode(bindingOverrides.mode ?? runtimeDefaults.mode);
+  const cwd =
+    bindingOverrides.cwd ??
+    runtimeDefaults.cwd ??
+    resolveConfiguredBindingWorkspaceCwd({
+      cfg: params.cfg,
+      agentId,
+    });
   return {
     channel: params.channel,
     accountPattern: normalizeText(params.binding.match.accountId),
@@ -375,23 +384,37 @@ function compileConfiguredBindingRule(params: {
     agentId,
     acpAgentId: normalizeText(runtimeDefaults.acpAgentId),
     mode,
-    cwd:
-      bindingOverrides.cwd ??
-      runtimeDefaults.cwd ??
-      resolveConfiguredBindingWorkspaceCwd({
-        cfg: params.cfg,
-        agentId,
-      }),
+    cwd,
     backend: bindingOverrides.backend ?? runtimeDefaults.backend,
     label: bindingOverrides.label,
-    adapter: params.adapter,
+    provider: params.provider,
+    statefulTarget: {
+      kind: "stateful",
+      driverId: "acp",
+      sessionKey: buildConfiguredAcpSessionKey({
+        channel: params.channel,
+        accountId:
+          resolveExactAccountId(normalizeText(params.binding.match.accountId)) ??
+          DEFAULT_ACCOUNT_ID,
+        conversationId: params.target.conversationId,
+        parentConversationId: params.target.parentConversationId,
+        agentId,
+        acpAgentId: normalizeText(runtimeDefaults.acpAgentId),
+        mode,
+        cwd,
+        backend: bindingOverrides.backend ?? runtimeDefaults.backend,
+        label: bindingOverrides.label,
+      }),
+      agentId,
+      label: bindingOverrides.label,
+    },
   };
 }
 
 function materializeConfiguredBindingSpec(params: {
-  rule: CompiledAcpBinding;
+  rule: CompiledConfiguredBinding;
   accountId: string;
-  conversation: ChannelAcpBindingConversationRef;
+  conversation: ChannelConfiguredBindingConversationRef;
 }): ConfiguredAcpBindingSpec {
   return {
     channel: params.rule.channel,
@@ -408,8 +431,8 @@ function materializeConfiguredBindingSpec(params: {
 }
 
 function pushCompiledRule(
-  target: Map<ConfiguredAcpBindingChannel, CompiledAcpBinding[]>,
-  rule: CompiledAcpBinding,
+  target: Map<ConfiguredAcpBindingChannel, CompiledConfiguredBinding[]>,
+  rule: CompiledConfiguredBinding,
 ) {
   const existing = target.get(rule.channel);
   if (existing) {
@@ -421,9 +444,12 @@ function pushCompiledRule(
 
 function compileConfiguredAcpBindingRegistry(cfg: OpenClawConfig): CompiledAcpBindingRegistry {
   const context = createConfiguredBindingCompilerContext(cfg);
-  const rulesByChannel = new Map<ConfiguredAcpBindingChannel, CompiledAcpBinding[]>();
-  const exactSessionKeys = new Map<string, CompiledAcpBinding>();
-  const wildcardRulesByChannel = new Map<ConfiguredAcpBindingChannel, CompiledAcpBinding[]>();
+  const rulesByChannel = new Map<ConfiguredAcpBindingChannel, CompiledConfiguredBinding[]>();
+  const exactSessionKeys = new Map<string, CompiledConfiguredBinding>();
+  const wildcardRulesByChannel = new Map<
+    ConfiguredAcpBindingChannel,
+    CompiledConfiguredBinding[]
+  >();
 
   for (const binding of listAcpBindings(cfg)) {
     const bindingConversationId = resolveBindingConversationId(binding);
@@ -440,7 +466,7 @@ function compileConfiguredAcpBindingRegistry(cfg: OpenClawConfig): CompiledAcpBi
     }
 
     const target = compileConfiguredBindingTarget({
-      adapter: resolvedChannel.adapter,
+      provider: resolvedChannel.provider,
       binding,
       conversationId: bindingConversationId,
     });
@@ -454,7 +480,7 @@ function compileConfiguredAcpBindingRegistry(cfg: OpenClawConfig): CompiledAcpBi
       binding,
       target,
       bindingConversationId,
-      adapter: resolvedChannel.adapter,
+      provider: resolvedChannel.provider,
     });
     pushCompiledRule(rulesByChannel, rule);
 
@@ -526,9 +552,9 @@ function parseConfiguredBindingSessionKey(sessionKey: string): {
 }
 
 function resolveFromRule(params: {
-  rule: CompiledAcpBinding;
+  rule: CompiledConfiguredBinding;
   accountId: string;
-  conversation: ChannelAcpBindingConversationRef;
+  conversation: ChannelConfiguredBindingConversationRef;
 }): ResolvedConfiguredAcpBinding {
   const spec = materializeConfiguredBindingSpec({
     rule: params.rule,
@@ -610,8 +636,12 @@ export function resolveConfiguredAcpBindingRecordForConversation(params: {
     return null;
   }
 
-  let wildcardMatch: { rule: CompiledAcpBinding; match: ChannelAcpBindingMatch } | null = null;
-  let exactMatch: { rule: CompiledAcpBinding; match: ChannelAcpBindingMatch } | null = null;
+  let wildcardMatch: {
+    rule: CompiledConfiguredBinding;
+    match: ChannelConfiguredBindingMatch;
+  } | null = null;
+  let exactMatch: { rule: CompiledConfiguredBinding; match: ChannelConfiguredBindingMatch } | null =
+    null;
 
   for (const rule of rules) {
     const accountMatchPriority = resolveAccountMatchPriority(
@@ -655,7 +685,7 @@ export function resolveConfiguredAcpBindingRecordForConversation(params: {
 export function resolveConfiguredAcpBinding(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
-}): AcpBindingResolution | null {
+}): ConfiguredBindingResolution | null {
   const conversation = toConfiguredBindingConversationRef(params.conversation);
   if (!conversation) {
     return null;
@@ -666,8 +696,12 @@ export function resolveConfiguredAcpBinding(params: {
     return null;
   }
 
-  let wildcardMatch: { rule: CompiledAcpBinding; match: ChannelAcpBindingMatch } | null = null;
-  let exactMatch: { rule: CompiledAcpBinding; match: ChannelAcpBindingMatch } | null = null;
+  let wildcardMatch: {
+    rule: CompiledConfiguredBinding;
+    match: ChannelConfiguredBindingMatch;
+  } | null = null;
+  let exactMatch: { rule: CompiledConfiguredBinding; match: ChannelConfiguredBindingMatch } | null =
+    null;
   for (const rule of rules) {
     const accountMatchPriority = resolveAccountMatchPriority(
       rule.accountPattern,
@@ -709,6 +743,16 @@ export function resolveConfiguredAcpBinding(params: {
       accountId: conversation.accountId,
       conversation: resolved.match,
     }),
+    statefulTarget: {
+      ...resolved.rule.statefulTarget,
+      sessionKey: buildConfiguredAcpSessionKey(
+        materializeConfiguredBindingSpec({
+          rule: resolved.rule,
+          accountId: conversation.accountId,
+          conversation: resolved.match,
+        }),
+      ),
+    },
   };
 }
 
@@ -753,3 +797,10 @@ export function resolveConfiguredAcpBindingSpecBySessionKey(params: {
 
   return null;
 }
+
+export const primeConfiguredBindingRegistry = primeConfiguredAcpBindingRegistry;
+export const resolveConfiguredBindingRecord = resolveConfiguredAcpBindingRecord;
+export const resolveConfiguredBindingRecordForConversation =
+  resolveConfiguredAcpBindingRecordForConversation;
+export const resolveConfiguredBinding = resolveConfiguredAcpBinding;
+export const resolveConfiguredBindingSpecBySessionKey = resolveConfiguredAcpBindingSpecBySessionKey;

@@ -333,7 +333,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       }),
     }),
   },
-  acpBindings: {
+  bindings: {
     compileConfiguredBinding: ({ conversationId }) =>
       normalizeTelegramAcpConversationId(conversationId),
     matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>

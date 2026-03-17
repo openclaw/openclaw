@@ -11,17 +11,17 @@ import {
 } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
-type ResolveConfiguredAcpBindingRecordFn =
-  typeof import("openclaw/plugin-sdk/conversation-runtime").resolveConfiguredAcpRoute;
-type EnsureConfiguredAcpBindingSessionFn =
-  typeof import("openclaw/plugin-sdk/conversation-runtime").ensureConfiguredAcpRouteReady;
+type ResolveConfiguredBindingRouteFn =
+  typeof import("openclaw/plugin-sdk/conversation-runtime").resolveConfiguredBindingRoute;
+type EnsureConfiguredBindingRouteReadyFn =
+  typeof import("openclaw/plugin-sdk/conversation-runtime").ensureConfiguredBindingRouteReady;
 
 const persistentBindingMocks = vi.hoisted(() => ({
-  resolveConfiguredAcpBindingRecord: vi.fn<ResolveConfiguredAcpBindingRecordFn>((params) => ({
-    configuredBinding: null,
+  resolveConfiguredAcpBindingRecord: vi.fn<ResolveConfiguredBindingRouteFn>((params) => ({
+    bindingResolution: null,
     route: params.route,
   })),
-  ensureConfiguredAcpBindingSession: vi.fn<EnsureConfiguredAcpBindingSessionFn>(async () => ({
+  ensureConfiguredAcpBindingSession: vi.fn<EnsureConfiguredBindingRouteReadyFn>(async () => ({
     ok: true,
   })),
 }));
@@ -30,6 +30,8 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
+    resolveConfiguredBindingRoute: persistentBindingMocks.resolveConfiguredAcpBindingRecord,
+    ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredAcpBindingSession,
     resolveConfiguredAcpRoute: persistentBindingMocks.resolveConfiguredAcpBindingRecord,
     ensureConfiguredAcpRouteReady: persistentBindingMocks.ensureConfiguredAcpBindingSession,
   };
@@ -151,6 +153,36 @@ function createStatusCommand(cfg: OpenClawConfig) {
 }
 function setConfiguredBinding(channelId: string, boundSessionKey: string) {
   persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockImplementation((params) => ({
+    bindingResolution: {
+      configuredBinding: {
+        spec: {
+          channel: "discord",
+          accountId: params.accountId,
+          conversationId: channelId,
+          parentConversationId: params.parentConversationId,
+          agentId: "codex",
+          mode: "persistent",
+        },
+        record: {
+          bindingId: `config:acp:discord:${params.accountId}:${channelId}`,
+          targetSessionKey: boundSessionKey,
+          targetKind: "session",
+          conversation: {
+            channel: "discord",
+            accountId: params.accountId,
+            conversationId: channelId,
+          },
+          status: "active",
+          boundAt: 0,
+        },
+      },
+      statefulTarget: {
+        kind: "stateful",
+        driverId: "acp",
+        sessionKey: boundSessionKey,
+        agentId: "codex",
+      },
+    },
     configuredBinding: {
       spec: {
         channel: "discord",
@@ -236,6 +268,7 @@ describe("Discord native plugin command dispatch", () => {
     clearPluginCommands();
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReset();
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockImplementation((params) => ({
+      bindingResolution: null,
       configuredBinding: null,
       route: params.route,
     }));

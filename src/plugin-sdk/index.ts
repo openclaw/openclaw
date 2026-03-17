@@ -15,6 +15,9 @@ export type {
   ChannelStatusIssue,
 } from "../channels/plugins/types.js";
 export type {
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+  ChannelConfiguredBindingProvider,
   ChannelAcpBindingAdapter,
   ChannelAcpBindingConversationRef,
   ChannelAcpBindingMatch,
@@ -22,10 +25,20 @@ export type {
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupAdapter, ChannelSetupInput } from "../channels/plugins/types.js";
 export type {
+  ConfiguredBindingConversation,
+  ConfiguredBindingResolution,
+  CompiledConfiguredBinding,
+  StatefulBindingTargetDescriptor,
   AcpBindingConversation,
   AcpBindingResolution,
   CompiledAcpBinding,
-} from "../channels/plugins/acp-binding-types.js";
+} from "../channels/plugins/binding-types.js";
+export type {
+  StatefulBindingTargetDriver,
+  StatefulBindingTargetReadyResult,
+  StatefulBindingTargetResetResult,
+  StatefulBindingTargetSessionResult,
+} from "../channels/plugins/stateful-target-drivers.js";
 export type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,

@@ -822,7 +822,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
       });
     },
   },
-  acpBindings: {
+  bindings: {
     compileConfiguredBinding: ({ conversationId }) =>
       normalizeFeishuAcpConversationId(conversationId),
     matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>

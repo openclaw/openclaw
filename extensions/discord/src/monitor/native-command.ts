@@ -24,8 +24,8 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runti
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import {
-  ensureConfiguredAcpRouteReady,
-  resolveConfiguredAcpRoute,
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
@@ -1622,7 +1622,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const threadBinding = isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined;
   const configuredRoute =
     threadBinding == null
-      ? resolveConfiguredAcpRoute({
+      ? resolveConfiguredBindingRoute({
           cfg,
           route,
           conversation: {
@@ -1633,16 +1633,16 @@ async function dispatchDiscordCommandInteraction(params: {
           },
         })
       : null;
-  const configuredBinding = configuredRoute?.configuredBinding ?? null;
+  const configuredBinding = configuredRoute?.bindingResolution ?? null;
   const commandName = command.nativeName ?? command.key;
   if (configuredBinding && !shouldBypassConfiguredAcpEnsure(commandName)) {
-    const ensured = await ensureConfiguredAcpRouteReady({
+    const ensured = await ensureConfiguredBindingRouteReady({
       cfg,
-      configuredBinding,
+      bindingResolution: configuredBinding,
     });
     if (!ensured.ok) {
       logVerbose(
-        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.configuredBinding.spec.conversationId}: ${ensured.error}`,
       );
       await respond("Configured ACP binding is unavailable right now. Please try again.");
       return;

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const managerMocks = vi.hoisted(() => ({
@@ -31,8 +32,9 @@ vi.mock("../channels/plugins/acp-bindings.js", () => ({
   resolveConfiguredAcpBindingSpecBySessionKey:
     resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey,
 }));
-
-import { resetConfiguredAcpBindingSessionInPlace } from "../channels/plugins/acp-binding-sessions.js";
+type AcpBindingSessionsModule = typeof import("../channels/plugins/acp-binding-sessions.js");
+let acpBindingSessions: AcpBindingSessionsModule;
+let acpBindingSessionsImportScope = 0;
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -41,7 +43,13 @@ const baseCfg = {
   },
 } satisfies OpenClawConfig;
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  acpBindingSessionsImportScope += 1;
+  acpBindingSessions = await importFreshModule<AcpBindingSessionsModule>(
+    import.meta.url,
+    `../channels/plugins/acp-binding-sessions.js?scope=${acpBindingSessionsImportScope}`,
+  );
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
     metaCleared: false,
@@ -67,7 +75,7 @@ describe("resetConfiguredAcpBindingSessionInPlace", () => {
       throw new Error("configured binding resolution should be skipped");
     });
 
-    const result = await resetConfiguredAcpBindingSessionInPlace({
+    const result = await acpBindingSessions.resetConfiguredAcpBindingSessionInPlace({
       cfg: baseCfg,
       sessionKey,
       reason: "reset",

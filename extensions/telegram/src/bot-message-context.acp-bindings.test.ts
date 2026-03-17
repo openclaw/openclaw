@@ -3,10 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const ensureConfiguredAcpRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredAcpRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../src/channels/plugins/acp-routing.js", () => ({
-  ensureConfiguredAcpRouteReady: (...args: unknown[]) => ensureConfiguredAcpRouteReadyMock(...args),
-  resolveConfiguredAcpRoute: (...args: unknown[]) => resolveConfiguredAcpRouteMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    ensureConfiguredAcpRouteReady: (...args: unknown[]) =>
+      ensureConfiguredAcpRouteReadyMock(...args),
+    resolveConfiguredAcpRoute: (...args: unknown[]) => resolveConfiguredAcpRouteMock(...args),
+    ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
+      ensureConfiguredAcpRouteReadyMock(...args),
+    resolveConfiguredBindingRoute: (...args: unknown[]) => resolveConfiguredAcpRouteMock(...args),
+  };
+});
 
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
@@ -44,6 +52,15 @@ function createConfiguredTelegramBinding() {
 function createConfiguredTelegramRoute() {
   const configuredBinding = createConfiguredTelegramBinding();
   return {
+    bindingResolution: {
+      configuredBinding,
+      statefulTarget: {
+        kind: "stateful",
+        driverId: "acp",
+        sessionKey: configuredBinding.record.targetSessionKey,
+        agentId: configuredBinding.spec.agentId,
+      },
+    },
     configuredBinding,
     boundSessionKey: configuredBinding.record.targetSessionKey,
     route: {

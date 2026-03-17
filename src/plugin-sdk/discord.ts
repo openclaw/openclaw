@@ -18,6 +18,9 @@ export type {
   ThreadBindingTargetKind,
 } from "../../extensions/discord/src/monitor/thread-bindings.js";
 export type {
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
   ChannelAcpBindingAdapter,
   ChannelAcpBindingConversationRef,
   ChannelAcpBindingMatch,

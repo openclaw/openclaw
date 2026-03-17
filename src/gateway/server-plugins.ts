@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
-import { primeConfiguredAcpBindingRegistry } from "../channels/plugins/acp-bindings.js";
+import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -417,7 +417,7 @@ export function loadGatewayPlugins(params: {
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
-  primeConfiguredAcpBindingRegistry({ cfg: params.cfg });
+  primeConfiguredBindingRegistry({ cfg: params.cfg });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
   if ((params.logDiagnostics ?? true) && pluginRegistry.diagnostics.length > 0) {
