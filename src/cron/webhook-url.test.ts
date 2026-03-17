@@ -81,6 +81,15 @@ describe("normalizeHttpWebhookUrl", () => {
     expect(normalizeHttpWebhookUrl("http://secret.internal/hook")).toBeNull();
   });
 
+  it("rejects 0.0.0.0", () => {
+    expect(normalizeHttpWebhookUrl("http://0.0.0.0/hook")).toBeNull();
+  });
+
+  it("rejects IPv4-mapped IPv6 loopback", () => {
+    expect(normalizeHttpWebhookUrl("http://[::ffff:127.0.0.1]/hook")).toBeNull();
+    expect(normalizeHttpWebhookUrl("http://[::ffff:7f00:1]/hook")).toBeNull();
+  });
+
   it("allows public IPs", () => {
     expect(normalizeHttpWebhookUrl("https://8.8.8.8/hook")).toBe("https://8.8.8.8/hook");
   });
