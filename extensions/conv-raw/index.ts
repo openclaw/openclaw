@@ -31,6 +31,9 @@ export type ConvRawPluginConfig = {
   trackedChats?: string[];
   thresholds?: Record<string, number>;
   defaultThreshold?: number;
+  botName?: string;
+  timezoneOffset?: number;
+  compactModel?: string;
 };
 
 // ============================================================================
@@ -39,16 +42,25 @@ export type ConvRawPluginConfig = {
 
 const DEFAULT_TRACKED_GROUPS = new Set<string>([]);
 const DEFAULT_THRESHOLD = 60;
+const DEFAULT_BOT_NAME = "Assistant";
+const DEFAULT_TIMEZONE_OFFSET = 0; // UTC
+const DEFAULT_COMPACT_MODEL = "qwen3.5-plus";
 
 function getConfigDefaults(config?: ConvRawPluginConfig): {
   trackedGroups: Set<string>;
   thresholds: Record<string, number>;
   defaultThreshold: number;
+  botName: string;
+  timezoneOffset: number;
+  compactModel: string;
 } {
   const trackedGroups = new Set(config?.trackedChats ?? DEFAULT_TRACKED_GROUPS);
   const thresholds = config?.thresholds ?? {};
   const defaultThreshold = config?.defaultThreshold ?? DEFAULT_THRESHOLD;
-  return { trackedGroups, thresholds, defaultThreshold };
+  const botName = config?.botName ?? DEFAULT_BOT_NAME;
+  const timezoneOffset = config?.timezoneOffset ?? DEFAULT_TIMEZONE_OFFSET;
+  const compactModel = config?.compactModel ?? DEFAULT_COMPACT_MODEL;
+  return { trackedGroups, thresholds, defaultThreshold, botName, timezoneOffset, compactModel };
 }
 
 // ============================================================================
@@ -64,10 +76,10 @@ function getSafeWorkspaceRoot(): string {
   return path.join(homePath, ".openclaw", "workspace");
 }
 
-function getTimestamp(ms?: number): string {
+function getTimestamp(ms?: number, timezoneOffset: number = DEFAULT_TIMEZONE_OFFSET): string {
   const now = ms ? new Date(ms) : new Date();
-  const cn = new Date(now.getTime() + 8 * 3600 * 1000);
-  return `${String(cn.getUTCHours()).padStart(2, "0")}:${String(cn.getUTCMinutes()).padStart(2, "0")}`;
+  const adjusted = new Date(now.getTime() + timezoneOffset * 3600 * 1000);
+  return `${String(adjusted.getUTCHours()).padStart(2, "0")}:${String(adjusted.getUTCMinutes()).padStart(2, "0")}`;
 }
 
 function ensureDir(chatId: string): string {
@@ -219,8 +231,10 @@ export class ConvRawEngine implements ContextEngine {
         fs.writeFileSync(rawPath, `# Conv-Raw: ${chatId}\n\n`, "utf-8");
       }
 
-      const time = getTimestamp(timestamp);
-      const entry = `**[${time} +8] ${senderName}:** ${content.slice(0, MAX_CONTENT_CHARS)}\n`;
+      const { timezoneOffset } = getConfigDefaults(this.config);
+      const time = getTimestamp(timestamp, timezoneOffset);
+      const tzSign = timezoneOffset >= 0 ? "+" : "";
+      const entry = `**[${time} ${tzSign}${timezoneOffset}] ${senderName}:** ${content.slice(0, MAX_CONTENT_CHARS)}\n`;
 
       if (!atomicAppendWrite(rawPath, entry)) {
         console.error(`[Conv-Raw] Atomic write failed for user message`);
@@ -253,8 +267,10 @@ export class ConvRawEngine implements ContextEngine {
       const dir = ensureDir(chatId);
       const rawPath = path.join(dir, "raw.md");
 
-      const time = getTimestamp(timestamp);
-      const entry = `**[${time} +8] 木匠:** ${content.slice(0, MAX_CONTENT_CHARS)}\n\n---\n\n`;
+      const { timezoneOffset, botName } = getConfigDefaults(this.config);
+      const time = getTimestamp(timestamp, timezoneOffset);
+      const tzSign = timezoneOffset >= 0 ? "+" : "";
+      const entry = `**[${time} ${tzSign}${timezoneOffset}] ${botName}:** ${content.slice(0, MAX_CONTENT_CHARS)}\n\n---\n\n`;
 
       if (!atomicAppendWrite(rawPath, entry)) {
         console.error(`[Conv-Raw] Atomic write failed for bot reply`);
@@ -293,15 +309,17 @@ export class ConvRawEngine implements ContextEngine {
         fs.writeFileSync(rawPath, `# Conv-Raw: ${chatId}\n\n`, "utf-8");
       }
 
-      const time = getTimestamp(params.message.timestamp);
+      const { timezoneOffset, botName } = getConfigDefaults(this.config);
+      const time = getTimestamp(params.message.timestamp, timezoneOffset);
+      const tzSign = timezoneOffset >= 0 ? "+" : "";
       const role = params.message.role;
       const senderName =
-        role === "user" || role === "tool" ? (params.message.name ?? "User") : "木匠";
+        role === "user" || role === "tool" ? (params.message.name ?? "User") : botName;
 
       const entry =
         role === "user" || role === "tool"
-          ? `**[${time} +8] ${senderName}:** ${content.slice(0, MAX_CONTENT_CHARS)}\n`
-          : `**[${time} +8] ${senderName}:** ${content.slice(0, MAX_CONTENT_CHARS)}\n\n---\n\n`;
+          ? `**[${time} ${tzSign}${timezoneOffset}] ${senderName}:** ${content.slice(0, MAX_CONTENT_CHARS)}\n`
+          : `**[${time} ${tzSign}${timezoneOffset}] ${senderName}:** ${content.slice(0, MAX_CONTENT_CHARS)}\n\n---\n\n`;
 
       if (!atomicAppendWrite(rawPath, entry)) {
         return { ingested: false };
@@ -357,9 +375,10 @@ export class ConvRawEngine implements ContextEngine {
         taskPrompt = fs.readFileSync(promptPath, "utf-8").replace(/{chatId}/g, cleanId);
       }
 
+      const { compactModel } = getConfigDefaults(this.config);
       const jobName = `conv-raw-compact-${cleanId.slice(0, 8)}`;
       const truncatedPrompt = taskPrompt.slice(0, 3500).replace(/'/g, "'\\''");
-      const cmd = `openclaw cron add --name "${jobName}" --at "1m" --message '${truncatedPrompt}' --model "bailian/qwen3.5-plus" --session isolated --no-deliver --delete-after-run --timeout-seconds 300`;
+      const cmd = `openclaw cron add --name "${jobName}" --at "1m" --message '${truncatedPrompt}' --model "${compactModel}" --session isolated --no-deliver --delete-after-run --timeout-seconds 300`;
 
       spawn(cmd, {
         cwd: workspace,
@@ -436,9 +455,10 @@ export class ConvRawEngine implements ContextEngine {
           taskPrompt = fs.readFileSync(promptPath, "utf-8").replace(/{chatId}/g, cleanId);
         }
 
+        const { compactModel } = getConfigDefaults(this.config);
         const jobName = `conv-raw-compact-${cleanId.slice(0, 8)}`;
         const truncatedPrompt = taskPrompt.slice(0, 3500).replace(/'/g, "'\\''");
-        const cmd = `openclaw cron add --name "${jobName}" --at "1m" --message '${truncatedPrompt}' --model "bailian/qwen3.5-plus" --session isolated --no-deliver --delete-after-run --timeout-seconds 300`;
+        const cmd = `openclaw cron add --name "${jobName}" --at "1m" --message '${truncatedPrompt}' --model "${compactModel}" --session isolated --no-deliver --delete-after-run --timeout-seconds 300`;
 
         spawn(cmd, {
           cwd: workspace,

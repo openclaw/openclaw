@@ -21,6 +21,21 @@
       "defaultThreshold": {
         "type": "number",
         "default": 60
+      },
+      "botName": {
+        "type": "string",
+        "default": "Assistant",
+        "description": "Bot name for conversation logs"
+      },
+      "timezoneOffset": {
+        "type": "number",
+        "default": 0,
+        "description": "UTC timezone offset in hours (e.g., 8 for CST)"
+      },
+      "compactModel": {
+        "type": "string",
+        "default": "qwen3.5-plus",
+        "description": "Model to use for conversation compaction"
       }
     }
   }
