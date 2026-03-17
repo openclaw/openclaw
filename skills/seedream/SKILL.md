@@ -14,6 +14,7 @@ Generate high-quality images from text prompts using BytePlus Seedream models. T
 ## When to Use This Skill
 
 Use this skill when:
+
 - Users want to create images from text descriptions
 - Users need to generate artwork in various artistic styles
 - Users want to create visual content for creative projects
@@ -24,11 +25,11 @@ Use this skill when:
 
 ## Model Versions
 
-| Version | Model Name | Release Date | Recommendation | Best For |
-|---------|------------|--------------|----------------|----------|
-| 4.0 | seedream-4-0-250828 | August 2025 | ⭐⭐⭐ | Daily use, quick generation |
-| 4.5 | seedream-4-5-251128 | November 2025 | ⭐⭐⭐⭐ | Detail-oriented work, complex scenes |
-| 5.0 | seedream-5-0-260128 | 2026 | ⭐⭐⭐⭐⭐ | Highest quality, best creativity, tools support |
+| Version | Model Name          | Release Date  | Recommendation | Best For                                        |
+| ------- | ------------------- | ------------- | -------------- | ----------------------------------------------- |
+| 4.0     | seedream-4-0-250828 | August 2025   | ⭐⭐⭐         | Daily use, quick generation                     |
+| 4.5     | seedream-4-5-251128 | November 2025 | ⭐⭐⭐⭐       | Detail-oriented work, complex scenes            |
+| 5.0     | seedream-5-0-260128 | 2026          | ⭐⭐⭐⭐⭐     | Highest quality, best creativity, tools support |
 
 ## Features
 
@@ -99,23 +100,23 @@ python seedream_image_generate.py --list-versions
 
 ## Command Line Options
 
-| Option | Shortcut | Description | Default |
-|--------|----------|-------------|---------|
-| `--prompt` | `-p` | Image description text (required) | - |
-| `--version` | `-v` | Version selection: `4.0`, `4.5`, `5.0` | `5.0` |
-| `--size` | `-s` | Image dimensions | `2048x2048` |
-| `--image` | `-i` | Single reference image URL | - |
-| `--images` | - | Multiple reference image URLs (space separated) | - |
-| `--group` | `-g` | Enable batch image generation | `false` |
-| `--max-images` | - | Maximum images for batch generation | `15` |
-| `--output-format` | - | Output format: `png` or `jpeg` (5.0 only) | `jpeg` |
-| `--response-format` | - | Response format: `url` or `b64_json` | `url` |
-| `--stream` | - | Enable streaming output | `false` |
-| `--web-search` | - | Enable web search tool (5.0 only) | `false` |
-| `--optimize-prompt-mode` | - | Prompt optimization mode: `standard` or `fast` | - |
-| `--timeout` | `-t` | Timeout in seconds | `1200` |
-| `--no-watermark` | - | Disable watermark | `false` |
-| `--list-versions` | - | List all supported versions | - |
+| Option                   | Shortcut | Description                                     | Default     |
+| ------------------------ | -------- | ----------------------------------------------- | ----------- |
+| `--prompt`               | `-p`     | Image description text (required)               | -           |
+| `--version`              | `-v`     | Version selection: `4.0`, `4.5`, `5.0`          | `5.0`       |
+| `--size`                 | `-s`     | Image dimensions                                | `2048x2048` |
+| `--image`                | `-i`     | Single reference image URL                      | -           |
+| `--images`               | -        | Multiple reference image URLs (space separated) | -           |
+| `--group`                | `-g`     | Enable batch image generation                   | `false`     |
+| `--max-images`           | -        | Maximum images for batch generation             | `15`        |
+| `--output-format`        | -        | Output format: `png` or `jpeg` (5.0 only)       | `jpeg`      |
+| `--response-format`      | -        | Response format: `url` or `b64_json`            | `url`       |
+| `--stream`               | -        | Enable streaming output                         | `false`     |
+| `--web-search`           | -        | Enable web search tool (5.0 only)               | `false`     |
+| `--optimize-prompt-mode` | -        | Prompt optimization mode: `standard` or `fast`  | -           |
+| `--timeout`              | `-t`     | Timeout in seconds                              | `1200`      |
+| `--no-watermark`         | -        | Disable watermark                               | `false`     |
+| `--list-versions`        | -        | List all supported versions                     | -           |
 
 ## Python API Usage
 
@@ -136,7 +137,7 @@ async def main():
             "output_format": "png"  # 5.0 only
         }
     ], version="5.0")
-    
+
     print(result)
 
 asyncio.run(main())
@@ -145,18 +146,21 @@ asyncio.run(main())
 ## Version Selection Guide
 
 ### Choose 4.0 if:
+
 - You need quick daily generation
 - Quality requirements are not extremely high
 - You need faster generation speed
 - Simple scenes and styles
 
 ### Choose 4.5 if:
+
 - You want richer details
 - You're working with complex scenes
 - You need better style reproduction
 - You have moderate quality requirements
 
 ### Choose 5.0 (Recommended) if:
+
 - You want the highest quality
 - You need breakthrough creative expression
 - You have extreme detail requirements
@@ -169,44 +173,50 @@ asyncio.run(main())
 ## Prompt Engineering Tips
 
 ### Basic Prompt Structure
+
 ```
 [Subject Description] + [Style/Art Movement] + [Lighting/Atmosphere] + [Quality/Resolution]
 ```
 
 ### Advanced Prompts (Optimized for 5.0)
+
 ```
 [Subject Description], [Creative Style/Art Movement], [Unique Perspective/Composition], [Special Lighting/Atmosphere], [Emphasizing 5.0 creative expression]
 ```
 
 ## Parameter Support by Version
 
-| Parameter | Seedream 4.0 | Seedream 4.5 | Seedream 5.0 | Description |
-|-----------|--------------|--------------|-------------------|-------------|
-| model | ✅ | ✅ | ✅ | Model name |
-| prompt | ✅ | ✅ | ✅ | Prompt (required) |
-| image | ✅ | ✅ | ✅ | Reference image(s) |
-| size | ✅ | ✅ | ✅ | Image dimensions |
-| sequential_image_generation | ✅ | ✅ | ✅ | Batch generation control |
-| sequential_image_generation_options | ✅ | ✅ | ✅ | Batch generation config |
-| response_format | ✅ | ✅ | ✅ | Response format (url/b64_json) |
-| watermark | ✅ | ✅ | ✅ | Watermark (true/false) |
-| stream | ✅ | ✅ | ✅ | Streaming output |
-| optimize_prompt_options | ✅ | ✅ | ✅ | Prompt optimization config |
-| **tools** | ❌ | ❌ | **✅** | Tool configuration (5.0 only) |
-| **output_format** | ❌ | ❌ | **✅** | Output format (png/jpeg, 5.0 only) |
+| Parameter                           | Seedream 4.0 | Seedream 4.5 | Seedream 5.0 | Description                        |
+| ----------------------------------- | ------------ | ------------ | ------------ | ---------------------------------- |
+| model                               | ✅           | ✅           | ✅           | Model name                         |
+| prompt                              | ✅           | ✅           | ✅           | Prompt (required)                  |
+| image                               | ✅           | ✅           | ✅           | Reference image(s)                 |
+| size                                | ✅           | ✅           | ✅           | Image dimensions                   |
+| sequential_image_generation         | ✅           | ✅           | ✅           | Batch generation control           |
+| sequential_image_generation_options | ✅           | ✅           | ✅           | Batch generation config            |
+| response_format                     | ✅           | ✅           | ✅           | Response format (url/b64_json)     |
+| watermark                           | ✅           | ✅           | ✅           | Watermark (true/false)             |
+| stream                              | ✅           | ✅           | ✅           | Streaming output                   |
+| optimize_prompt_options             | ✅           | ✅           | ✅           | Prompt optimization config         |
+| **tools**                           | ❌           | ❌           | **✅**       | Tool configuration (5.0 only)      |
+| **output_format**                   | ❌           | ❌           | **✅**       | Output format (png/jpeg, 5.0 only) |
 
 ## FAQ
 
 ### Q: What's the difference between the versions?
+
 A: 4.0 is for quick daily use, 4.5 offers better details for complex scenes, and 5.0 provides the highest quality with unique tools support.
 
 ### Q: How long are generated URLs valid?
+
 A: URLs are valid for 24 hours. Please download and save your images promptly.
 
 ### Q: What image formats are supported for references?
+
 A: Common formats like JPG and PNG are supported, provided via URL or Base64.
 
 ### Q: Can I use multiple versions in one call?
+
 A: Currently, only one version per call. For comparisons, make separate calls for different versions.
 
 ## License
