@@ -235,8 +235,15 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
     return null;
   }
 
+  // Total tokens that count toward context window usage:
+  //   input (uncached new tokens) + cacheRead + cacheWrite
+  // Using only `input` here would give ~0% when caching is heavy, because
+  // the API reports just the uncached portion in the input field.
+  const totalInput = input + cacheRead + cacheWrite;
   const contextPercent =
-    contextWindow && input > 0 ? Math.min(Math.round((input / contextWindow) * 100), 100) : null;
+    contextWindow && totalInput > 0
+      ? Math.min(Math.round((totalInput / contextWindow) * 100), 100)
+      : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
