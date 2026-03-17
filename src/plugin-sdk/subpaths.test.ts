@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
+import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
 import * as lineSdk from "openclaw/plugin-sdk/line";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
 import * as nostrSdk from "openclaw/plugin-sdk/nostr";
@@ -68,6 +69,12 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports runtime helpers from the dedicated subpath", () => {
     expect(typeof runtimeSdk.createLoggerBackedRuntime).toBe("function");
+  });
+
+  it("exports shared lazy runtime helpers from the dedicated subpath", () => {
+    expect(typeof lazyRuntimeSdk.createLazyRuntimeSurface).toBe("function");
+    expect(typeof lazyRuntimeSdk.createLazyRuntimeModule).toBe("function");
+    expect(typeof lazyRuntimeSdk.createLazyRuntimeNamedExport).toBe("function");
   });
 
   it("exports provider setup helpers from the dedicated subpath", () => {
