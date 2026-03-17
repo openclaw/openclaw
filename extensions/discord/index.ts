@@ -1,19 +1,13 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/discord";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/discord";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { discordPlugin } from "./src/channel.js";
 import { setDiscordRuntime } from "./src/runtime.js";
 import { registerDiscordSubagentHooks } from "./src/subagent-hooks.js";
 
-const plugin = {
+export default defineChannelPluginEntry({
   id: "discord",
   name: "Discord",
   description: "Discord channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setDiscordRuntime(api.runtime);
-    api.registerChannel({ plugin: discordPlugin });
-    registerDiscordSubagentHooks(api);
-  },
-};
-
-export default plugin;
+  plugin: discordPlugin,
+  setRuntime: setDiscordRuntime,
+  registerFull: registerDiscordSubagentHooks,
+});

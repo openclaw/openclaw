@@ -256,7 +256,7 @@ Enable with `tools.loopDetection.enabled: true` (default is `false`).
 
 ### `web_search`
 
-Search the web using Perplexity, Brave, Gemini, Grok, or Kimi.
+Search the web using Brave, Firecrawl, Gemini, Grok, Kimi, or Perplexity.
 
 Core parameters:
 
@@ -316,7 +316,10 @@ Common parameters:
   Notes:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - All actions accept optional `profile` parameter for multi-instance support.
-- When `profile` is omitted, uses `browser.defaultProfile` (defaults to "chrome").
+- Omit `profile` for the safe default: isolated OpenClaw-managed browser (`openclaw`).
+- Use `profile="user"` for the real local host browser when existing logins/cookies matter and the user is present to click/approve any attach prompt.
+- `profile="user"` is host-only; do not combine it with sandbox/node targets.
+- When `profile` is omitted, uses `browser.defaultProfile` (defaults to `openclaw`).
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).
 - Remote profiles are attach-only (no start/stop/reset).
@@ -396,6 +399,30 @@ Notes:
 
 - Only available when `agents.defaults.imageModel` is configured (primary or fallbacks), or when an implicit image model can be inferred from your default model + configured auth (best-effort pairing).
 - Uses the image model directly (independent of the main chat model).
+
+### `image_generate`
+
+Generate one or more images with the configured image-generation model.
+
+Core parameters:
+
+- `action` (optional: `generate` or `list`; default `generate`)
+- `prompt` (required)
+- `image` or `images` (optional reference image path/URL for edit mode)
+- `model` (optional provider/model override)
+- `size` (optional size hint)
+- `resolution` (optional `1K|2K|4K` hint)
+- `count` (optional, `1-4`, default `1`)
+
+Notes:
+
+- Only available when `agents.defaults.imageGenerationModel` is configured.
+- Use `action: "list"` to inspect registered providers, default models, supported model ids, sizes, resolutions, and edit support.
+- Returns local `MEDIA:<path>` lines so channels can deliver the generated files directly.
+- Uses the image-generation model directly (independent of the main chat model).
+- Google-backed flows support reference-image edits plus explicit `1K|2K|4K` resolution hints.
+- When editing and `resolution` is omitted, OpenClaw infers a draft/final resolution from the input image size.
+- This is the built-in replacement for the old sample `nano-banana-pro` skill workflow. Use `agents.defaults.imageGenerationModel`, not `skills.entries`, for stock image generation.
 
 ### `pdf`
 
