@@ -5,10 +5,12 @@ export {
   resolveSandboxPruneConfig,
   resolveSandboxScope,
 } from "./sandbox/config.js";
+export { computeSandboxConfigHash } from "./sandbox/config-hash.js";
 export {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
+  SANDBOX_AGENT_WORKSPACE_MOUNT,
 } from "./sandbox/constants.js";
 export { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 export {
@@ -27,10 +29,18 @@ export {
   type SandboxBrowserInfo,
   type SandboxContainerInfo,
 } from "./sandbox/manage.js";
+export { readRegistry, updateRegistry } from "./sandbox/registry.js";
 export {
   formatSandboxToolPolicyBlockedMessage,
   resolveSandboxRuntimeStatus,
 } from "./sandbox/runtime-status.js";
+export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+export {
+  resolveSandboxAgentId,
+  resolveSandboxScopeKey,
+  slugifySessionKey,
+} from "./sandbox/shared.js";
+export { validateBindMounts } from "./sandbox/validate-sandbox-security.js";
 
 export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";

@@ -6,23 +6,24 @@ import type {
   SandboxBackendFactory,
   SandboxBackendHandle,
   SandboxBackendManager,
+  SandboxConfig,
+  SandboxDockerConfig,
 } from "openclaw/plugin-sdk/sandbox";
-import { buildDockerExecArgs } from "../../../src/agents/bash-tools.shared.js";
-import { computeSandboxConfigHash } from "../../../src/agents/sandbox/config-hash.js";
-import { resolveSandboxConfigForAgent } from "../../../src/agents/sandbox/config.js";
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "../../../src/agents/sandbox/constants.js";
-import { readRegistry, updateRegistry } from "../../../src/agents/sandbox/registry.js";
-import { sanitizeEnvVars } from "../../../src/agents/sandbox/sanitize-env-vars.js";
 import {
+  computeSandboxConfigHash,
+  defaultRuntime,
+  formatCliCommand,
+  markOpenClawExecEnv,
+  readRegistry,
   resolveSandboxAgentId,
+  resolveSandboxConfigForAgent,
   resolveSandboxScopeKey,
+  SANDBOX_AGENT_WORKSPACE_MOUNT,
+  sanitizeEnvVars,
   slugifySessionKey,
-} from "../../../src/agents/sandbox/shared.js";
-import type { SandboxConfig, SandboxDockerConfig } from "../../../src/agents/sandbox/types.js";
-import { validateBindMounts } from "../../../src/agents/sandbox/validate-sandbox-security.js";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import { markOpenClawExecEnv } from "../../../src/infra/openclaw-exec-env.js";
-import { defaultRuntime } from "../../../src/runtime.js";
+  updateRegistry,
+  validateBindMounts,
+} from "openclaw/plugin-sdk/sandbox";
 import {
   assertAppleContainerSystemRunning,
   inspectAppleContainer,
@@ -36,6 +37,39 @@ const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 type CreateAppleContainerSandboxBackendFactoryParams = {
   pluginConfig: ResolvedAppleContainerPluginConfig;
 };
+
+function buildAppleContainerExecArgs(params: {
+  containerName: string;
+  command: string;
+  workdir?: string;
+  env: Record<string, string>;
+  tty: boolean;
+}): string[] {
+  const args = ["exec", "-i"];
+  if (params.tty) {
+    args.push("-t");
+  }
+  if (params.workdir) {
+    args.push("--workdir", params.workdir);
+  }
+  for (const [key, value] of Object.entries(params.env)) {
+    // Skip PATH; handled via OPENCLAW_PREPEND_PATH to avoid poisoning the
+    // container's executable lookup with host paths.
+    if (key === "PATH") {
+      continue;
+    }
+    args.push("--env", `${key}=${value}`);
+  }
+  const hasCustomPath = typeof params.env.PATH === "string" && params.env.PATH.length > 0;
+  if (hasCustomPath) {
+    args.push("--env", `OPENCLAW_PREPEND_PATH=${params.env.PATH}`);
+  }
+  const pathExport = hasCustomPath
+    ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
+    : "";
+  args.push(params.containerName, "/bin/sh", "-lc", `${pathExport}${params.command}`);
+  return args;
+}
 
 function normalizeDockerLimit(value?: string | number): string | undefined {
   if (value === undefined || value === null) {
@@ -293,23 +327,12 @@ class AppleContainerSandboxBackendImpl {
         return {
           argv: [
             this.params.pluginConfig.command,
-            ...buildDockerExecArgs({
+            ...buildAppleContainerExecArgs({
               containerName: this.params.containerName,
               command,
               workdir: workdir ?? this.params.createParams.cfg.docker.workdir,
               env,
               tty: usePty,
-            }).map((entry, index) => {
-              if (index === 0) {
-                return "exec";
-              }
-              if (entry === "-e") {
-                return "--env";
-              }
-              if (entry === "-w") {
-                return "--workdir";
-              }
-              return entry;
             }),
           ],
           env: process.env,

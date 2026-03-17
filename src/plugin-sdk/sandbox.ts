@@ -13,7 +13,9 @@ export type {
   SandboxBackendManager,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
+  SandboxConfig,
   SandboxContext,
+  SandboxDockerConfig,
   SandboxResolvedPath,
   SandboxSshConfig,
   SshSandboxSession,
@@ -25,18 +27,32 @@ export {
   buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  computeSandboxConfigHash,
   createRemoteShellSandboxFsBridge,
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   getSandboxBackendFactory,
   getSandboxBackendManager,
+  readRegistry,
   registerSandboxBackend,
   requireSandboxBackendFactory,
+  resolveSandboxAgentId,
+  resolveSandboxConfigForAgent,
+  resolveSandboxScopeKey,
   runSshSandboxCommand,
+  SANDBOX_AGENT_WORKSPACE_MOUNT,
+  sanitizeEnvVars,
   shellEscape,
+  slugifySessionKey,
+  updateRegistry,
   uploadDirectoryToSshTarget,
+  validateBindMounts,
 } from "../agents/sandbox.js";
+
+export { formatCliCommand } from "../cli/command-format.js";
+export { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+export { defaultRuntime } from "../runtime.js";
 
 export {
   runPluginCommandWithTimeout,
