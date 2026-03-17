@@ -42,6 +42,9 @@ export type SpeechVoiceOption = {
   name?: string;
   category?: string;
   description?: string;
+  locale?: string;
+  gender?: string;
+  personalities?: string[];
 };
 
 export type SpeechListVoicesRequest = {

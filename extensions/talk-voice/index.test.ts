@@ -110,6 +110,39 @@ describe("talk-voice plugin", () => {
     });
   });
 
+  it("surfaces richer provider voice metadata when available", async () => {
+    const { command, runtime } = createHarness({
+      talk: {
+        provider: "microsoft",
+        providers: {
+          microsoft: {},
+        },
+      },
+    });
+    vi.mocked(runtime.tts.listVoices).mockResolvedValue([
+      {
+        id: "en-US-AvaNeural",
+        name: "Ava",
+        category: "General",
+        locale: "en-US",
+        gender: "Female",
+        personalities: ["Friendly", "Positive"],
+        description: "Friendly, Positive",
+      },
+    ]);
+
+    const result = await command.handler(createCommandContext("list"));
+
+    expect(result).toEqual({
+      text:
+        "Microsoft voices: 1\n\n" +
+        "- Ava · General\n" +
+        "  id: en-US-AvaNeural\n" +
+        "  meta: en-US · Female · Friendly, Positive\n" +
+        "  note: Friendly, Positive",
+    });
+  });
+
   it("writes canonical talk provider config and legacy elevenlabs voice id", async () => {
     const { command, runtime } = createHarness({
       talk: {
