@@ -181,3 +181,60 @@ export async function fetchBlueBubblesHistory(
   // If none of the API paths worked, return empty history
   return { entries: [], resolved: false };
 }
+
+/**
+ * Fetch a single message by GUID from BlueBubbles API.
+ * Used as a fallback when the reply cache misses and the webhook
+ * did not include the quoted message body.
+ */
+export async function fetchBlueBubblesMessageByGuid(
+  messageGuid: string,
+  opts: BlueBubblesChatOpts = {},
+): Promise<{ text?: string; sender?: string } | null> {
+  const trimmed = messageGuid.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  let baseUrl: string;
+  let password: string;
+  try {
+    ({ baseUrl, password } = resolveAccount(opts));
+  } catch {
+    return null;
+  }
+
+  // Strip part-index prefix (e.g. "p:0/msg-guid" → "msg-guid")
+  const bareGuid = trimmed.includes("/") ? trimmed.split("/").pop()! : trimmed;
+
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
+    path: `/api/v1/message/${encodeURIComponent(bareGuid)}`,
+    password,
+  });
+
+  try {
+    const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, opts.timeoutMs ?? 5000);
+    if (!res.ok) {
+      return null;
+    }
+    const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!data) {
+      return null;
+    }
+    // Response may be { data: { ... } } or direct message object
+    const msg = (data["data"] as Record<string, unknown> | undefined) ?? data;
+    const text =
+      (typeof msg["text"] === "string" ? msg["text"].trim() : undefined) ||
+      (typeof msg["body"] === "string" ? msg["body"].trim() : undefined) ||
+      undefined;
+    const handle = msg["handle"] as Record<string, unknown> | undefined;
+    const sender =
+      (typeof handle?.["address"] === "string" ? handle["address"].trim() : undefined) ||
+      (typeof msg["sender"] === "string" ? msg["sender"].trim() : undefined) ||
+      (msg["is_from_me"] === true || msg["isFromMe"] === true ? "me" : undefined);
+    return text || sender ? { text, sender } : null;
+  } catch {
+    return null;
+  }
+}
