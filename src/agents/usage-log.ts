@@ -112,6 +112,11 @@ async function appendRecord(file: string, entry: TokenUsageRecord): Promise<void
 // the same process so they do not all contend on the cross-process file lock.
 const writeQueues = new Map<string, Promise<void>>();
 
+/** Exposed for testing only — returns the current number of live queue entries. */
+export function _testOnly_getWriteQueueSize(): number {
+  return writeQueues.size;
+}
+
 export async function recordTokenUsage(params: {
   workspaceDir: string;
   runId?: string;
@@ -171,9 +176,19 @@ export async function recordTokenUsage(params: {
 
   const queued = writeQueues.get(file) ?? Promise.resolve();
   const next = queued.then(() => appendRecord(file, entry));
-  writeQueues.set(
-    file,
-    next.catch(() => {}),
-  );
+  // Suppress rejection so the Map value never holds a rejected promise, which
+  // would cause unhandled-rejection noise for any future .then() chained on it.
+  const stored = next.catch(() => {});
+  writeQueues.set(file, stored);
+  // Remove the entry once it settles.  Check identity first: if another call
+  // already enqueued a new write for the same path, writeQueues now holds that
+  // newer promise and must not be deleted — the newer entry owns its own cleanup.
+  // This prevents unbounded Map growth in long-lived processes that write to
+  // many ephemeral workspace directories.
+  void stored.then(() => {
+    if (writeQueues.get(file) === stored) {
+      writeQueues.delete(file);
+    }
+  });
   await next;
 }
