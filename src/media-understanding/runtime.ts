@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { getMediaUnderstandingProvider } from "./providers/index.js";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
@@ -88,6 +90,38 @@ export async function describeImageFile(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<RunMediaUnderstandingFileResult> {
   return await runMediaUnderstandingFile({ ...params, capability: "image" });
+}
+
+export async function describeImageFileWithModel(params: {
+  filePath: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  mime?: string;
+  provider: string;
+  model: string;
+  prompt: string;
+  maxTokens?: number;
+  timeoutMs?: number;
+}) {
+  const timeoutMs = params.timeoutMs ?? 30_000;
+  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
+  const provider = getMediaUnderstandingProvider(params.provider, providerRegistry);
+  if (!provider?.describeImage) {
+    throw new Error(`Provider does not support image analysis: ${params.provider}`);
+  }
+  const buffer = await fs.readFile(params.filePath);
+  return await provider.describeImage({
+    buffer,
+    fileName: path.basename(params.filePath),
+    mime: params.mime,
+    provider: params.provider,
+    model: params.model,
+    prompt: params.prompt,
+    maxTokens: params.maxTokens,
+    timeoutMs,
+    cfg: params.cfg,
+    agentDir: params.agentDir ?? "",
+  });
 }
 
 export async function describeVideoFile(params: {
