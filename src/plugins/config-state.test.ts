@@ -84,14 +84,14 @@ describe("normalizePluginsConfig", () => {
         "voice-call": {
           subagent: {
             allowModelOverride: true,
-            allowedModels: [" anthropic/claude-haiku-4-6 ", "", "openai/gpt-4.1-mini"],
+            allowedModels: [" anthropic/claude-haiku-4-5 ", "", "openai/gpt-4.1-mini"],
           },
         },
       },
     });
     expect(result.entries["voice-call"]?.subagent).toEqual({
       allowModelOverride: true,
-      allowedModels: ["anthropic/claude-haiku-4-6", "openai/gpt-4.1-mini"],
+      allowedModels: ["anthropic/claude-haiku-4-5", "openai/gpt-4.1-mini"],
     });
   });
 

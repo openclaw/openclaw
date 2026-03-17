@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { normalizeModelRef } from "../agents/model-selection.js";
+import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -149,15 +149,18 @@ function authorizeFallbackModelOverride(params: {
       reason: `plugin "${pluginId}" is not trusted for fallback provider/model override requests.`,
     };
   }
-  if (!params.provider || !params.model) {
+  if (policy.allowAnyModel || policy.allowedModels.size === 0) {
+    return { allowed: true };
+  }
+  const requestedModelRef = resolveRequestedFallbackModelRef(params);
+  if (!requestedModelRef) {
     return {
       allowed: false,
-      reason: "fallback provider/model overrides must include both provider and model values.",
+      reason:
+        "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
     };
   }
-  const normalizedRequest = normalizeModelRef(params.provider, params.model);
-  const requestedModelRef = `${normalizedRequest.provider}/${normalizedRequest.model}`;
-  if (policy.allowAnyModel || policy.allowedModels.has(requestedModelRef)) {
+  if (policy.allowedModels.has(requestedModelRef)) {
     return { allowed: true };
   }
   return {
@@ -166,10 +169,30 @@ function authorizeFallbackModelOverride(params: {
   };
 }
 
+function resolveRequestedFallbackModelRef(params: {
+  provider?: string;
+  model?: string;
+}): string | null {
+  if (params.provider && params.model) {
+    const normalizedRequest = normalizeModelRef(params.provider, params.model);
+    return `${normalizedRequest.provider}/${normalizedRequest.model}`;
+  }
+  const rawModel = params.model?.trim();
+  if (!rawModel || !rawModel.includes("/")) {
+    return null;
+  }
+  const parsed = parseModelRef(rawModel, "");
+  if (!parsed?.provider || !parsed.model) {
+    return null;
+  }
+  return `${parsed.provider}/${parsed.model}`;
+}
+
 // ── Internal gateway dispatch for plugin runtime ────────────────────
 
 function createSyntheticOperatorClient(params?: {
   allowModelOverride?: boolean;
+  scopes?: string[];
 }): GatewayRequestOptions["client"] {
   return {
     connect: {
@@ -182,7 +205,7 @@ function createSyntheticOperatorClient(params?: {
         mode: GATEWAY_CLIENT_MODES.BACKEND,
       },
       role: "operator",
-      scopes: [WRITE_SCOPE],
+      scopes: params?.scopes ?? [WRITE_SCOPE],
     },
     internal: {
       allowModelOverride: params?.allowModelOverride === true,
@@ -204,6 +227,7 @@ async function dispatchGatewayMethod<T>(
   params: Record<string, unknown>,
   options?: {
     allowSyntheticModelOverride?: boolean;
+    syntheticScopes?: string[];
   },
 ): Promise<T> {
   const scope = getPluginRuntimeGatewayRequestScope();
@@ -227,6 +251,7 @@ async function dispatchGatewayMethod<T>(
       scope?.client ??
       createSyntheticOperatorClient({
         allowModelOverride: options?.allowSyntheticModelOverride === true,
+        scopes: options?.syntheticScopes,
       }),
     isWebchatConnect,
     respond: (ok, payload, error) => {
@@ -321,10 +346,16 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return getSessionMessages(params);
     },
     async deleteSession(params) {
-      await dispatchGatewayMethod("sessions.delete", {
-        key: params.sessionKey,
-        deleteTranscript: params.deleteTranscript ?? true,
-      });
+      await dispatchGatewayMethod(
+        "sessions.delete",
+        {
+          key: params.sessionKey,
+          deleteTranscript: params.deleteTranscript ?? true,
+        },
+        {
+          syntheticScopes: [ADMIN_SCOPE],
+        },
+      );
     },
   };
 }

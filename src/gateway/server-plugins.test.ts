@@ -21,6 +21,19 @@ vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
 }));
 
+vi.mock("../channels/registry.js", () => ({
+  CHAT_CHANNEL_ORDER: [],
+  CHANNEL_IDS: [],
+  listChatChannels: () => [],
+  listChatChannelAliases: () => [],
+  getChatChannelMeta: () => null,
+  normalizeChatChannelId: () => null,
+  normalizeChannelId: () => null,
+  normalizeAnyChannelId: () => null,
+  formatChannelPrimerLine: () => "",
+  formatChannelSelectionLine: () => "",
+}));
+
 const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   plugins: [],
   tools: [],
@@ -210,7 +223,7 @@ describe("loadGatewayPlugins", () => {
         sessionKey: "s-override",
         message: "use the override",
         provider: "anthropic",
-        model: "claude-haiku-4-6",
+        model: "claude-haiku-4-5",
         deliver: false,
       }),
     );
@@ -219,7 +232,7 @@ describe("loadGatewayPlugins", () => {
       sessionKey: "s-override",
       message: "use the override",
       provider: "anthropic",
-      model: "claude-haiku-4-6",
+      model: "claude-haiku-4-5",
       deliver: false,
     });
   });
@@ -234,7 +247,7 @@ describe("loadGatewayPlugins", () => {
         sessionKey: "s-fallback-override",
         message: "use the override",
         provider: "anthropic",
-        model: "claude-haiku-4-6",
+        model: "claude-haiku-4-5",
         deliver: false,
       }),
     ).rejects.toThrow(
@@ -250,7 +263,7 @@ describe("loadGatewayPlugins", () => {
           "voice-call": {
             subagent: {
               allowModelOverride: true,
-              allowedModels: ["anthropic/claude-haiku-4-6"],
+              allowedModels: ["anthropic/claude-haiku-4-5"],
             },
           },
         },
@@ -264,7 +277,7 @@ describe("loadGatewayPlugins", () => {
         sessionKey: "s-trusted-override",
         message: "use trusted override",
         provider: "anthropic",
-        model: "claude-haiku-4-6",
+        model: "claude-haiku-4-5",
         deliver: false,
       }),
     );
@@ -272,8 +285,41 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedParams()).toMatchObject({
       sessionKey: "s-trusted-override",
       provider: "anthropic",
-      model: "claude-haiku-4-6",
+      model: "claude-haiku-4-5",
     });
+  });
+
+  test("allows trusted fallback model-only overrides when the model ref is canonical", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-model-only-override"));
+    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+
+    await gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      runtime.run({
+        sessionKey: "s-model-only-override",
+        message: "use trusted model-only override",
+        model: "anthropic/claude-haiku-4-5",
+        deliver: false,
+      }),
+    );
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-model-only-override",
+      model: "anthropic/claude-haiku-4-5",
+    });
+    expect(getLastDispatchedParams()).not.toHaveProperty("provider");
   });
 
   test("uses least-privilege synthetic fallback scopes without admin", async () => {
@@ -289,6 +335,19 @@ describe("loadGatewayPlugins", () => {
 
     expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+  });
+
+  test("keeps admin scope for fallback session deletion", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-delete-session"));
+
+    await runtime.deleteSession({
+      sessionKey: "s-delete",
+      deleteTranscript: true,
+    });
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
   });
 
   test("can prefer setup-runtime channel plugins during startup loads", async () => {

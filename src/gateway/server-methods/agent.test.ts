@@ -312,7 +312,7 @@ describe("gateway agent handler", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         provider: "anthropic",
-        model: "claude-haiku-4-6",
+        model: "claude-haiku-4-5",
         idempotencyKey: "test-idem-model-override",
       },
       {
@@ -329,7 +329,7 @@ describe("gateway agent handler", () => {
     expect(lastCall?.[0]).toEqual(
       expect.objectContaining({
         provider: "anthropic",
-        model: "claude-haiku-4-6",
+        model: "claude-haiku-4-5",
       }),
     );
   });
@@ -345,7 +345,7 @@ describe("gateway agent handler", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         provider: "anthropic",
-        model: "claude-haiku-4-6",
+        model: "claude-haiku-4-5",
         idempotencyKey: "test-idem-model-override-write",
       },
       {
@@ -378,7 +378,7 @@ describe("gateway agent handler", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         provider: "anthropic",
-        model: "claude-haiku-4-6",
+        model: "claude-haiku-4-5",
         idempotencyKey: "test-idem-model-override-internal",
       },
       {
@@ -398,7 +398,7 @@ describe("gateway agent handler", () => {
     expect(lastCall?.[0]).toEqual(
       expect.objectContaining({
         provider: "anthropic",
-        model: "claude-haiku-4-6",
+        model: "claude-haiku-4-5",
         senderIsOwner: false,
       }),
     );

@@ -789,7 +789,7 @@ describe("agentCommand", () => {
     const parseModelRefSpy = vi.spyOn(modelSelectionModule, "parseModelRef");
     parseModelRefSpy.mockImplementationOnce(() => ({
       provider: "anthropic\u001b[31m",
-      model: "claude-haiku-4-6\u001b[32m",
+      model: "claude-haiku-4-5\u001b[32m",
     }));
     try {
       await withTempHome(async (home) => {
@@ -805,12 +805,12 @@ describe("agentCommand", () => {
             {
               message: "use disallowed override",
               sessionKey: "agent:main:subagent:sanitized-override-error",
-              model: "claude-haiku-4-6",
+              model: "claude-haiku-4-5",
             },
             runtime,
           ),
         ).rejects.toThrow(
-          'Model override "anthropic/claude-haiku-4-6" is not allowed for agent "main".',
+          'Model override "anthropic/claude-haiku-4-5" is not allowed for agent "main".',
         );
       });
     } finally {

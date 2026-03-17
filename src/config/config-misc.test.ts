@@ -101,7 +101,7 @@ describe("plugins.entries.*.subagent", () => {
           "voice-call": {
             subagent: {
               allowModelOverride: true,
-              allowedModels: ["anthropic/claude-haiku-4-6"],
+              allowedModels: ["anthropic/claude-haiku-4-5"],
             },
           },
         },
