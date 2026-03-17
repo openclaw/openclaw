@@ -120,10 +120,14 @@ function targetsRuntimeWebResolution(params: {
 function collectConfiguredTargetRefPaths(params: {
   config: OpenClawConfig;
   targetIds: Set<string>;
+  allowedPaths?: ReadonlySet<string>;
 }): Set<string> {
   const defaults = params.config.secrets?.defaults;
   const configuredTargetRefPaths = new Set<string>();
   for (const target of discoverConfigSecretTargetsByIds(params.config, params.targetIds)) {
+    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
+      continue;
+    }
     const { ref } = resolveSecretInputRef({
       value: target.value,
       refValue: target.refValue,
@@ -449,11 +453,13 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   commandName: string;
   targetIds: Set<string>;
   mode?: CommandSecretResolutionModeInput;
+  allowedPaths?: ReadonlySet<string>;
 }): Promise<ResolveCommandSecretsResult> {
   const mode = normalizeCommandSecretResolutionMode(params.mode);
   const configuredTargetRefPaths = collectConfiguredTargetRefPaths({
     config: params.config,
     targetIds: params.targetIds,
+    allowedPaths: params.allowedPaths,
   });
   if (configuredTargetRefPaths.size === 0) {
     return {
@@ -498,6 +504,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         targetIds: params.targetIds,
         preflightDiagnostics: preflight.diagnostics,
         mode,
+        allowedPaths: params.allowedPaths,
       });
       const recoveredLocally = Object.values(fallback.targetStatesByPath).some(
         (state) => state === "resolved_local",
@@ -556,6 +563,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     resolvedConfig,
     targetIds: params.targetIds,
     inactiveRefPaths,
+    allowedPaths: params.allowedPaths,
   });
   let diagnostics = dedupeDiagnostics(parsed.diagnostics);
   const targetStatesByPath = buildTargetStatesByPath({

@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
+import { defaultRuntime } from "../../runtime.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
@@ -16,13 +17,54 @@ function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boole
   );
 }
 
+const loggedMessageActionErrors = new Set<string>();
+
+function logMessageActionError(params: {
+  pluginId: string;
+  operation: "listActions" | "getCapabilities";
+  error: unknown;
+}) {
+  const message = params.error instanceof Error ? params.error.message : String(params.error);
+  const key = `${params.pluginId}:${params.operation}:${message}`;
+  if (loggedMessageActionErrors.has(key)) {
+    return;
+  }
+  loggedMessageActionErrors.add(key);
+  const stack = params.error instanceof Error && params.error.stack ? params.error.stack : null;
+  defaultRuntime.error?.(
+    `[message-actions] ${params.pluginId}.actions.${params.operation} failed: ${stack ?? message}`,
+  );
+}
+
+function runListActionsSafely(params: {
+  pluginId: string;
+  cfg: OpenClawConfig;
+  listActions: NonNullable<ChannelActions["listActions"]>;
+}): ChannelMessageActionName[] {
+  try {
+    const listed = params.listActions({ cfg: params.cfg });
+    return Array.isArray(listed) ? listed : [];
+  } catch (error) {
+    logMessageActionError({
+      pluginId: params.pluginId,
+      operation: "listActions",
+      error,
+    });
+    return [];
+  }
+}
+
 export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
-    const list = plugin.actions?.listActions?.({ cfg });
-    if (!list) {
+    if (!plugin.actions?.listActions) {
       continue;
     }
+    const list = runListActionsSafely({
+      pluginId: plugin.id,
+      cfg,
+      listActions: plugin.actions.listActions,
+    });
     for (const action of list) {
       actions.add(action);
     }
@@ -30,11 +72,21 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
-function listCapabilities(
-  actions: ChannelActions,
-  cfg: OpenClawConfig,
-): readonly ChannelMessageCapability[] {
-  return actions.getCapabilities?.({ cfg }) ?? [];
+function listCapabilities(params: {
+  pluginId: string;
+  actions: ChannelActions;
+  cfg: OpenClawConfig;
+}): readonly ChannelMessageCapability[] {
+  try {
+    return params.actions.getCapabilities?.({ cfg: params.cfg }) ?? [];
+  } catch (error) {
+    logMessageActionError({
+      pluginId: params.pluginId,
+      operation: "getCapabilities",
+      error,
+    });
+    return [];
+  }
 }
 
 export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
@@ -43,7 +95,11 @@ export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMess
     if (!plugin.actions) {
       continue;
     }
-    for (const capability of listCapabilities(plugin.actions, cfg)) {
+    for (const capability of listCapabilities({
+      pluginId: plugin.id,
+      actions: plugin.actions,
+      cfg,
+    })) {
       capabilities.add(capability);
     }
   }
@@ -58,7 +114,15 @@ export function listChannelMessageCapabilitiesForChannel(params: {
     return [];
   }
   const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
-  return plugin?.actions ? Array.from(listCapabilities(plugin.actions, params.cfg)) : [];
+  return plugin?.actions
+    ? Array.from(
+        listCapabilities({
+          pluginId: plugin.id,
+          actions: plugin.actions,
+          cfg: params.cfg,
+        }),
+      )
+    : [];
 }
 
 export function channelSupportsMessageCapability(
@@ -95,3 +159,9 @@ export async function dispatchChannelMessageAction(
   }
   return await plugin.actions.handleAction(ctx);
 }
+
+export const __testing = {
+  resetLoggedMessageActionErrors() {
+    loggedMessageActionErrors.clear();
+  },
+};

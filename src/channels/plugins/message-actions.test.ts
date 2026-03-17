@@ -1,13 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
+  __testing,
   channelSupportsMessageCapability,
   channelSupportsMessageCapabilityForChannel,
+  listChannelMessageActions,
   listChannelMessageCapabilities,
   listChannelMessageCapabilitiesForChannel,
 } from "./message-actions.js";
@@ -56,8 +59,12 @@ function activateMessageActionTestRegistry() {
 }
 
 describe("message action capability checks", () => {
+  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    __testing.resetLoggedMessageActionErrors();
+    errorSpy.mockClear();
   });
 
   it("aggregates capabilities across plugins", () => {
@@ -121,5 +128,37 @@ describe("message action capability checks", () => {
     expect(channelSupportsMessageCapabilityForChannel({ cfg: {} as OpenClawConfig }, "cards")).toBe(
       false,
     );
+  });
+
+  it("skips crashing action/capability discovery paths and logs once", () => {
+    const crashingPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        label: "Discord",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        listActions: () => {
+          throw new Error("boom");
+        },
+        getCapabilities: () => {
+          throw new Error("boom");
+        },
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "discord", source: "test", plugin: crashingPlugin }]),
+    );
+
+    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+
+    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(2);
   });
 });

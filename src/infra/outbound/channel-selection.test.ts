@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock("./channel-resolution.js", () => ({
 }));
 
 import {
+  __testing,
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
@@ -38,6 +40,8 @@ function makePlugin(params: {
 }
 
 describe("listConfiguredMessageChannels", () => {
+  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+
   beforeEach(() => {
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
@@ -45,6 +49,8 @@ describe("listConfiguredMessageChannels", () => {
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
       id: channel,
     }));
+    __testing.resetLoggedChannelSelectionErrors();
+    errorSpy.mockClear();
   });
 
   it("skips unknown plugin ids and plugins without accounts", async () => {
@@ -92,6 +98,20 @@ describe("listConfiguredMessageChannels", () => {
     ]);
 
     await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual([]);
+  });
+
+  it("skips plugin accounts whose resolveAccount throws", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({
+        id: "discord",
+        resolveAccount: () => {
+          throw new Error("boom");
+        },
+      }),
+    ]);
+
+    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });
 

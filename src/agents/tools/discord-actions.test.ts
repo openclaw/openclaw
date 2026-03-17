@@ -211,6 +211,24 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
+  it("threads provided cfg into readMessages calls", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+        },
+      },
+    } as OpenClawConfig;
+    await handleDiscordMessagingAction(
+      "readMessages",
+      { channelId: "C1" },
+      enableAllActions,
+      {},
+      cfg,
+    );
+    expect(readMessagesDiscord).toHaveBeenCalledWith("C1", expect.any(Object), { cfg });
+  });
+
   it("adds normalized timestamps to fetchMessage payloads", async () => {
     fetchMessageDiscord.mockResolvedValueOnce({
       id: "1",
@@ -227,6 +245,24 @@ describe("handleDiscordMessagingAction", () => {
     const expectedMs = Date.parse("2026-01-15T11:00:00.000Z");
     expect(payload.message?.timestampMs).toBe(expectedMs);
     expect(payload.message?.timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("threads provided cfg into fetchMessage calls", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+        },
+      },
+    } as OpenClawConfig;
+    await handleDiscordMessagingAction(
+      "fetchMessage",
+      { guildId: "G1", channelId: "C1", messageId: "M1" },
+      enableAllActions,
+      {},
+      cfg,
+    );
+    expect(fetchMessageDiscord).toHaveBeenCalledWith("C1", "M1", { cfg });
   });
 
   it("adds normalized timestamps to listPins payloads", async () => {
@@ -338,12 +374,17 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(createThreadDiscord).toHaveBeenCalledWith("C1", {
-      name: "Forum thread",
-      messageId: undefined,
-      autoArchiveMinutes: undefined,
-      content: "Initial forum post body",
-    });
+    expect(createThreadDiscord).toHaveBeenCalledWith(
+      "C1",
+      {
+        name: "Forum thread",
+        messageId: undefined,
+        autoArchiveMinutes: undefined,
+        content: "Initial forum post body",
+        appliedTags: undefined,
+      },
+      {},
+    );
   });
 });
 

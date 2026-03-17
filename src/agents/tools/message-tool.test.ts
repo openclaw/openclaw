@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
@@ -8,6 +8,11 @@ import { createMessageTool } from "./message-tool.js";
 
 const mocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(),
+  loadConfig: vi.fn(() => ({})),
+  resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+  })),
 }));
 
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
@@ -19,6 +24,18 @@ vi.mock("../../infra/outbound/message-action-runner.js", async () => {
     runMessageAction: mocks.runMessageAction,
   };
 });
+
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: mocks.loadConfig,
+  };
+});
+
+vi.mock("../../cli/command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
+}));
 
 function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
   mocks.runMessageAction.mockClear();
@@ -40,6 +57,15 @@ function getToolProperties(tool: ReturnType<typeof createMessageTool>) {
 function getActionEnum(properties: Record<string, unknown>) {
   return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
 }
+
+beforeEach(() => {
+  mocks.runMessageAction.mockReset();
+  mocks.loadConfig.mockReset().mockReturnValue({});
+  mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+  }));
+});
 
 function createChannelPlugin(params: {
   id: string;
@@ -100,6 +126,49 @@ async function executeSend(params: {
       }
     | undefined;
 }
+
+describe("message tool secret scoping", () => {
+  it("scopes command-time secret resolution to the selected channel/account", async () => {
+    mockSendResult({ channel: "discord", to: "discord:123" });
+    mocks.loadConfig.mockReturnValue({
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
+          accounts: {
+            ops: { token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" } },
+            chat: { token: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" } },
+          },
+        },
+        slack: {
+          botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+        },
+      },
+    });
+
+    const tool = createMessageTool({
+      currentChannelProvider: "discord",
+      agentAccountId: "ops",
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "channel:123",
+      message: "hi",
+    });
+
+    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
+      targetIds?: Set<string>;
+      allowedPaths?: Set<string>;
+    };
+    expect(secretResolveCall.targetIds).toBeInstanceOf(Set);
+    expect(
+      [...(secretResolveCall.targetIds ?? [])].every((id) => id.startsWith("channels.discord.")),
+    ).toBe(true);
+    expect(secretResolveCall.allowedPaths).toEqual(
+      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
+    );
+  });
+});
 
 describe("message tool agent routing", () => {
   it("derives agentId from the session key", async () => {
