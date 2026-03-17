@@ -371,6 +371,11 @@ export function convertMessagesToInputItems(
           // Skip tool calls without valid name - this can happen when switching models
           // and the context contains function_response from a different model format
           if (!callIdRaw || !toolName) {
+            // Track skipped callId so function_call_output can skip it too
+            if (callIdRaw) {
+              const [skippedId] = callIdRaw.split("|", 2);
+              skippedCallIds.add(skippedId);
+            }
             continue;
           }
           const [callId, itemId] = callIdRaw.split("|", 2);
@@ -415,8 +420,8 @@ export function convertMessagesToInputItems(
     const parts = Array.isArray(m.content) ? contentToOpenAIParts(m.content, modelOverride) : [];
     const textOutput = contentToText(m.content);
     const imageParts = parts.filter((part) => part.type === "input_image");
-    // Skip if callId is empty (no corresponding function_call)
-    if (!callId) {
+    // Skip if callId was skipped in function_call (model switch scenario)
+    if (skippedCallIds.has(callId)) {
       continue;
     }
     items.push({
