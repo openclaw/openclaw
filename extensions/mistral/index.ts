@@ -1,4 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "mistral";
 
@@ -13,7 +16,28 @@ const mistralPlugin = {
       label: "Mistral",
       docsPath: "/providers/models",
       envVars: ["MISTRAL_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "Mistral API key",
+          hint: "API key",
+          optionKey: "mistralApiKey",
+          flagName: "--mistral-api-key",
+          envVar: "MISTRAL_API_KEY",
+          promptMessage: "Enter Mistral API key",
+          defaultModel: MISTRAL_DEFAULT_MODEL_REF,
+          expectedProviders: ["mistral"],
+          applyConfig: (cfg) => applyMistralConfig(cfg),
+          wizard: {
+            choiceId: "mistral-api-key",
+            choiceLabel: "Mistral API key",
+            groupId: "mistral",
+            groupLabel: "Mistral AI",
+            groupHint: "API key",
+          },
+        }),
+      ],
       capabilities: {
         transcriptToolCallIdMode: "strict9",
         transcriptToolCallIdModelHints: [
@@ -27,6 +51,7 @@ const mistralPlugin = {
         ],
       },
     });
+    api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
   },
 };
 

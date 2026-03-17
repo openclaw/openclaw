@@ -1,8 +1,12 @@
+import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
+import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import {
+  buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
-  createScopedAccountConfigAccessors,
   collectAllowlistProviderRestrictSendersWarnings,
-} from "openclaw/plugin-sdk/compat";
+} from "../../../src/plugin-sdk-internal/channel-config.js";
+import { buildAgentSessionKey, type RoutePeer } from "../../../src/plugin-sdk-internal/core.js";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
@@ -12,35 +16,33 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   getChatChannelMeta,
-  listSignalAccountIds,
   looksLikeSignalTargetId,
   normalizeE164,
   normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
   setAccountEnabledInConfigSection,
   SignalConfigSchema,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
+} from "../../../src/plugin-sdk-internal/signal.js";
+import {
+  listSignalAccountIds,
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
   type ResolvedSignalAccount,
-} from "openclaw/plugin-sdk/signal";
-import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+} from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
+import {
+  looksLikeUuid,
+  resolveSignalPeerId,
+  resolveSignalRecipient,
+  resolveSignalSender,
+} from "./identity.js";
+import { signalConfigAccessors, signalSetupWizard } from "./plugin-shared.js";
 import type { SignalProbe } from "./probe.js";
 import { getSignalRuntime } from "./runtime.js";
-import { createSignalSetupWizardProxy, signalSetupAdapter } from "./setup-core.js";
-
-async function loadSignalChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
-const signalSetupWizard = createSignalSetupWizardProxy(async () => ({
-  signalSetupWizard: (await loadSignalChannelRuntime()).signalSetupWizard,
-}));
+import { signalSetupAdapter } from "./setup-core.js";
 
 const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => getSignalRuntime().channel.signal.messageActions?.listActions?.(ctx) ?? [],
@@ -54,18 +56,6 @@ const signalMessageActions: ChannelMessageActionAdapter = {
     return ma.handleAction(ctx);
   },
 };
-
-const signalConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
-  resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    allowFrom
-      .map((entry) => String(entry).trim())
-      .filter(Boolean)
-      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-      .filter(Boolean),
-  resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
-});
 
 type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
 
@@ -134,6 +124,88 @@ function parseSignalExplicitTarget(raw: string) {
   return {
     to: normalized,
     chatType: inferSignalTargetChatType(normalized),
+  };
+}
+
+function buildSignalBaseSessionKey(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  agentId: string;
+  accountId?: string | null;
+  peer: RoutePeer;
+}) {
+  return buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: "signal",
+    accountId: params.accountId,
+    peer: params.peer,
+    dmScope: params.cfg.session?.dmScope ?? "main",
+    identityLinks: params.cfg.session?.identityLinks,
+  });
+}
+
+function resolveSignalOutboundSessionRoute(params: {
+  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+  agentId: string;
+  accountId?: string | null;
+  target: string;
+}) {
+  const stripped = params.target.replace(/^signal:/i, "").trim();
+  const lowered = stripped.toLowerCase();
+  if (lowered.startsWith("group:")) {
+    const groupId = stripped.slice("group:".length).trim();
+    if (!groupId) {
+      return null;
+    }
+    const peer: RoutePeer = { kind: "group", id: groupId };
+    const baseSessionKey = buildSignalBaseSessionKey({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      accountId: params.accountId,
+      peer,
+    });
+    return {
+      sessionKey: baseSessionKey,
+      baseSessionKey,
+      peer,
+      chatType: "group" as const,
+      from: `group:${groupId}`,
+      to: `group:${groupId}`,
+    };
+  }
+
+  let recipient = stripped.trim();
+  if (lowered.startsWith("username:")) {
+    recipient = stripped.slice("username:".length).trim();
+  } else if (lowered.startsWith("u:")) {
+    recipient = stripped.slice("u:".length).trim();
+  }
+  if (!recipient) {
+    return null;
+  }
+
+  const uuidCandidate = recipient.toLowerCase().startsWith("uuid:")
+    ? recipient.slice("uuid:".length)
+    : recipient;
+  const sender = resolveSignalSender({
+    sourceUuid: looksLikeUuid(uuidCandidate) ? uuidCandidate : null,
+    sourceNumber: looksLikeUuid(uuidCandidate) ? null : recipient,
+  });
+  const peerId = sender ? resolveSignalPeerId(sender) : recipient;
+  const displayRecipient = sender ? resolveSignalRecipient(sender) : recipient;
+  const peer: RoutePeer = { kind: "direct", id: peerId };
+  const baseSessionKey = buildSignalBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    accountId: params.accountId,
+    peer,
+  });
+  return {
+    sessionKey: baseSessionKey,
+    baseSessionKey,
+    peer,
+    chatType: "direct" as const,
+    from: `signal:${displayRecipient}`,
+    to: `signal:${displayRecipient}`,
   };
 }
 
@@ -283,11 +355,14 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         groupPolicy: account.config.groupPolicy,
       };
     },
-    resolveConfigEdit: ({ scope, pathPrefix, writeTarget }) => ({
-      pathPrefix,
-      writeTarget,
-      readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
-      writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
+      channelId: "signal",
+      normalize: ({ cfg, accountId, values }) =>
+        signalConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+      resolvePaths: (scope) => ({
+        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
+        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
+      }),
     }),
   },
   security: {
@@ -320,6 +395,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     normalizeTarget: normalizeSignalMessagingTarget,
     parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
     inferTargetChatType: ({ to }) => inferSignalTargetChatType(to),
+    resolveOutboundSessionRoute: (params) => resolveSignalOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeSignalTargetId,
       hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",

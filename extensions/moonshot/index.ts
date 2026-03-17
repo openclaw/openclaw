@@ -1,4 +1,3 @@
-import { buildMoonshotProvider } from "../../src/agents/models-config.providers.static.js";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -9,7 +8,15 @@ import {
   setScopedCredentialValue,
 } from "../../src/agents/tools/web-search-plugin-factory.js";
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  applyMoonshotConfig,
+  applyMoonshotConfigCn,
+  MOONSHOT_DEFAULT_MODEL_REF,
+} from "./onboard.js";
+import { buildMoonshotProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "moonshot";
 
@@ -24,7 +31,48 @@ const moonshotPlugin = {
       label: "Moonshot",
       docsPath: "/providers/moonshot",
       envVars: ["MOONSHOT_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "Moonshot API key (.ai)",
+          hint: "Kimi K2.5",
+          optionKey: "moonshotApiKey",
+          flagName: "--moonshot-api-key",
+          envVar: "MOONSHOT_API_KEY",
+          promptMessage: "Enter Moonshot API key",
+          defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
+          expectedProviders: ["moonshot"],
+          applyConfig: (cfg) => applyMoonshotConfig(cfg),
+          wizard: {
+            choiceId: "moonshot-api-key",
+            choiceLabel: "Moonshot API key (.ai)",
+            groupId: "moonshot",
+            groupLabel: "Moonshot AI (Kimi K2.5)",
+            groupHint: "Kimi K2.5",
+          },
+        }),
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key-cn",
+          label: "Moonshot API key (.cn)",
+          hint: "Kimi K2.5",
+          optionKey: "moonshotApiKey",
+          flagName: "--moonshot-api-key",
+          envVar: "MOONSHOT_API_KEY",
+          promptMessage: "Enter Moonshot API key (.cn)",
+          defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
+          expectedProviders: ["moonshot"],
+          applyConfig: (cfg) => applyMoonshotConfigCn(cfg),
+          wizard: {
+            choiceId: "moonshot-api-key-cn",
+            choiceLabel: "Moonshot API key (.cn)",
+            groupId: "moonshot",
+            groupLabel: "Moonshot AI (Kimi K2.5)",
+            groupHint: "Kimi K2.5",
+          },
+        }),
+      ],
       catalog: {
         order: "simple",
         run: async (ctx) => {
@@ -52,6 +100,7 @@ const moonshotPlugin = {
         return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
       },
     });
+    api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "kimi",

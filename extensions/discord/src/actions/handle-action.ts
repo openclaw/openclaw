@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -9,7 +10,6 @@ import { handleDiscordAction } from "../../../../src/agents/tools/discord-action
 import { resolveReactionMessageId } from "../../../../src/channels/plugins/actions/reaction-message-id.js";
 import type { ChannelMessageActionContext } from "../../../../src/channels/plugins/types.js";
 import { normalizeInteractiveReply } from "../../../../src/interactive/payload.js";
-import { readBooleanParam } from "../../../../src/plugin-sdk/boolean-param.js";
 import { buildDiscordInteractiveComponents } from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";

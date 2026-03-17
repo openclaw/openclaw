@@ -24,6 +24,7 @@ export type NormalizedPluginsConfig = {
 };
 
 export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
+  "amazon-bedrock",
   "anthropic",
   "byteplus",
   "cloudflare-ai-gateway",
@@ -32,7 +33,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "google",
   "huggingface",
   "kilocode",
-  "kimi-coding",
+  "kimi",
   "minimax",
   "mistral",
   "modelstudio",
@@ -61,6 +62,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
 
 const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
   "openai-codex": "openai",
+  "kimi-coding": "kimi",
   "minimax-portal-auth": "minimax",
 };
 

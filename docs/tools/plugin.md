@@ -57,6 +57,18 @@ openclaw plugins install ./my-bundle
 openclaw plugins install ./my-bundle.tgz
 ```
 
+For Claude marketplace installs, list the marketplace first, then install by
+marketplace entry name:
+
+```bash
+openclaw plugins marketplace list <marketplace-name>
+openclaw plugins install <plugin-name>@<marketplace-name>
+```
+
+OpenClaw resolves known Claude marketplace names from
+`~/.claude/plugins/known_marketplaces.json`. You can also pass an explicit
+marketplace source with `--marketplace`.
+
 ## Architecture
 
 OpenClaw's plugin system has four layers:
@@ -85,6 +97,96 @@ The important design boundary:
 That split lets OpenClaw validate config, explain missing/disabled plugins, and
 build UI/schema hints before the full runtime is active.
 
+## Capability ownership model
+
+OpenClaw treats a native plugin as the ownership boundary for a **company** or a
+**feature**, not as a grab bag of unrelated integrations.
+
+That means:
+
+- a company plugin should usually own all of that company's OpenClaw-facing
+  surfaces
+- a feature plugin should usually own the full feature surface it introduces
+- channels should consume shared core capabilities instead of re-implementing
+  provider behavior ad hoc
+
+Examples:
+
+- the bundled `openai` plugin owns OpenAI model-provider behavior and OpenAI
+  speech + media-understanding behavior
+- the bundled `elevenlabs` plugin owns ElevenLabs speech behavior
+- the bundled `microsoft` plugin owns Microsoft speech behavior
+- the bundled `google`, `minimax`, `mistral`, `moonshot`, and `zai` plugins own
+  their media-understanding backends
+- the `voice-call` plugin is a feature plugin: it owns call transport, tools,
+  CLI, routes, and runtime, but it consumes core TTS/STT capability instead of
+  inventing a second speech stack
+
+The intended end state is:
+
+- OpenAI lives in one plugin even if it spans text models, speech, images, and
+  future video
+- another vendor can do the same for its own surface area
+- channels do not care which vendor plugin owns the provider; they consume the
+  shared capability contract exposed by core
+
+This is the key distinction:
+
+- **plugin** = ownership boundary
+- **capability** = core contract that multiple plugins can implement or consume
+
+So if OpenClaw adds a new domain such as video, the first question is not
+"which provider should hardcode video handling?" The first question is "what is
+the core video capability contract?" Once that contract exists, vendor plugins
+can register against it and channel/feature plugins can consume it.
+
+If the capability does not exist yet, the right move is usually:
+
+1. define the missing capability in core
+2. expose it through the plugin API/runtime in a typed way
+3. wire channels/features against that capability
+4. let vendor plugins register implementations
+
+This keeps ownership explicit while avoiding core behavior that depends on a
+single vendor or a one-off plugin-specific code path.
+
+### Capability layering
+
+Use this mental model when deciding where code belongs:
+
+- **core capability layer**: shared orchestration, policy, fallback, config
+  merge rules, delivery semantics, and typed contracts
+- **vendor plugin layer**: vendor-specific APIs, auth, model catalogs, speech
+  synthesis, image generation, future video backends, usage endpoints
+- **channel/feature plugin layer**: Slack/Discord/voice-call/etc. integration
+  that consumes core capabilities and presents them on a surface
+
+For example, TTS follows this shape:
+
+- core owns reply-time TTS policy, fallback order, prefs, and channel delivery
+- `openai`, `elevenlabs`, and `microsoft` own synthesis implementations
+- `voice-call` consumes the telephony TTS runtime helper
+
+That same pattern should be preferred for future capabilities.
+
+### Capability example: video understanding
+
+OpenClaw already treats image/audio/video understanding as one shared
+capability. The same ownership model applies there:
+
+1. core defines the media-understanding contract
+2. vendor plugins register `describeImage`, `transcribeAudio`, and
+   `describeVideo` as applicable
+3. channels and feature plugins consume the shared core behavior instead of
+   wiring directly to vendor code
+
+That avoids baking one provider's video assumptions into core. The plugin owns
+the vendor surface; core owns the capability contract and fallback behavior.
+
+If OpenClaw adds a new domain later, such as video generation, use the same
+sequence again: define the core capability first, then let vendor plugins
+register implementations against it.
+
 ## Compatible bundles
 
 OpenClaw also recognizes two compatible external bundle layouts:
@@ -93,6 +195,10 @@ OpenClaw also recognizes two compatible external bundle layouts:
 - Claude-style bundles: `.claude-plugin/plugin.json` or the default Claude
   component layout without a manifest
 - Cursor-style bundles: `.cursor-plugin/plugin.json`
+
+Claude marketplace entries can point at any of these compatible bundles, or at
+native OpenClaw plugin sources. OpenClaw resolves the marketplace entry first,
+then runs the normal install path for the resolved source.
 
 They are shown in the plugin list as `format=bundle`, with a subtype of
 `codex` or `claude` in verbose/info output.
@@ -177,6 +283,8 @@ Important trust note:
 - Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
 - Moonshot provider runtime — bundled as `moonshot` (enabled by default)
 - NVIDIA provider catalog — bundled as `nvidia` (enabled by default)
+- ElevenLabs speech provider — bundled as `elevenlabs` (enabled by default)
+- Microsoft speech provider — bundled as `microsoft` (enabled by default; legacy `edge` input maps here)
 - OpenAI provider runtime — bundled as `openai` (enabled by default; owns both `openai` and `openai-codex`)
 - OpenCode Go provider capabilities — bundled as `opencode-go` (enabled by default)
 - OpenCode Zen provider capabilities — bundled as `opencode` (enabled by default)
@@ -202,6 +310,8 @@ Native OpenClaw plugins can register:
 - Gateway HTTP routes
 - Agent tools
 - CLI commands
+- Speech providers
+- Web search providers
 - Background services
 - Context engines
 - Provider auth flows and model catalogs
@@ -213,12 +323,70 @@ Native OpenClaw plugins can register:
 Native OpenClaw plugins run **in‑process** with the Gateway, so treat them as trusted code.
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 
+Think of these registrations as **capability claims**. A plugin is not supposed
+to reach into random internals and "just make it work." It should register
+against explicit surfaces that OpenClaw understands, validates, and can expose
+consistently across config, onboarding, status, docs, and runtime behavior.
+
+## Contracts and enforcement
+
+The plugin API surface is intentionally typed and centralized in
+`OpenClawPluginApi`. That contract defines the supported registration points and
+the runtime helpers a plugin may rely on.
+
+Why this matters:
+
+- plugin authors get one stable internal standard
+- core can reject duplicate ownership such as two plugins registering the same
+  provider id
+- startup can surface actionable diagnostics for malformed registration
+- contract tests can enforce bundled-plugin ownership and prevent silent drift
+
+There are two layers of enforcement:
+
+1. **runtime registration enforcement**
+   The plugin registry validates registrations as plugins load. Examples:
+   duplicate provider ids, duplicate speech provider ids, and malformed
+   registrations produce plugin diagnostics instead of undefined behavior.
+2. **contract tests**
+   Bundled plugins are captured in contract registries during test runs so
+   OpenClaw can assert ownership explicitly. Today this is used for model
+   providers, speech providers, web search providers, and bundled registration
+   ownership.
+
+The practical effect is that OpenClaw knows, up front, which plugin owns which
+surface. That lets core and channels compose seamlessly because ownership is
+declared, typed, and testable rather than implicit.
+
+### What belongs in a contract
+
+Good plugin contracts are:
+
+- typed
+- small
+- capability-specific
+- owned by core
+- reusable by multiple plugins
+- consumable by channels/features without vendor knowledge
+
+Bad plugin contracts are:
+
+- vendor-specific policy hidden in core
+- one-off plugin escape hatches that bypass the registry
+- channel code reaching straight into a vendor implementation
+- ad hoc runtime objects that are not part of `OpenClawPluginApi` or
+  `api.runtime`
+
+When in doubt, raise the abstraction level: define the capability first, then
+let plugins plug into it.
+
 ## Provider runtime hooks
 
 Provider plugins now have two layers:
 
 - manifest metadata: `providerAuthEnvVars` for cheap env-auth lookup before
-  runtime load
+  runtime load, plus `providerAuthChoices` for cheap onboarding/auth-choice
+  labels and CLI flag metadata before runtime load
 - config-time hooks: `catalog` / legacy `discovery`
 - runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
@@ -228,8 +396,11 @@ needing a whole custom inference transport.
 
 Use manifest `providerAuthEnvVars` when the provider has env-based credentials
 that generic auth/status/model-picker paths should see without loading plugin
-runtime. Keep provider runtime `envVars` for operator-facing hints such as
-onboarding labels or OAuth client-id/client-secret setup vars.
+runtime. Use manifest `providerAuthChoices` when onboarding/auth-choice CLI
+surfaces should know the provider's choice id, group labels, and simple
+one-flag auth wiring without loading provider runtime. Keep provider runtime
+`envVars` for operator-facing hints such as onboarding labels or OAuth
+client-id/client-secret setup vars.
 
 ### Hook order
 
@@ -499,25 +670,103 @@ to think of as short-lived performance caches, not persistence.
 
 ## Runtime helpers
 
-Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
+Plugins can access selected core helpers via `api.runtime`. For TTS:
 
 ```ts
+const clip = await api.runtime.tts.textToSpeech({
+  text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
 const result = await api.runtime.tts.textToSpeechTelephony({
   text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
+const voices = await api.runtime.tts.listVoices({
+  provider: "elevenlabs",
   cfg: api.config,
 });
 ```
 
 Notes:
 
-- Uses core `messages.tts` configuration (OpenAI or ElevenLabs).
+- `textToSpeech` returns the normal core TTS output payload for file/voice-note surfaces.
+- Uses core `messages.tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
-- Edge TTS is not supported for telephony.
+- `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
+- Voice listings can include richer metadata such as locale, gender, and personality tags for provider-aware pickers.
+- OpenAI and ElevenLabs support telephony today. Microsoft does not.
 
-For STT/transcription, plugins can call:
+Plugins can also register speech providers via `api.registerSpeechProvider(...)`.
 
 ```ts
-const { text } = await api.runtime.stt.transcribeAudioFile({
+api.registerSpeechProvider({
+  id: "acme-speech",
+  label: "Acme Speech",
+  isConfigured: ({ config }) => Boolean(config.messages?.tts),
+  synthesize: async (req) => {
+    return {
+      audioBuffer: Buffer.from([]),
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+      voiceCompatible: false,
+    };
+  },
+});
+```
+
+Notes:
+
+- Keep TTS policy, fallback, and reply delivery in core.
+- Use speech providers for vendor-owned synthesis behavior.
+- Legacy Microsoft `edge` input is normalized to the `microsoft` provider id.
+- The preferred ownership model is company-oriented: one vendor plugin can own
+  text, speech, image, and future media providers as OpenClaw adds those
+  capability contracts.
+
+For image/audio/video understanding, plugins register one typed
+media-understanding provider instead of a generic key/value bag:
+
+```ts
+api.registerMediaUnderstandingProvider({
+  id: "google",
+  capabilities: ["image", "audio", "video"],
+  describeImage: async (req) => ({ text: "..." }),
+  transcribeAudio: async (req) => ({ text: "..." }),
+  describeVideo: async (req) => ({ text: "..." }),
+});
+```
+
+Notes:
+
+- Keep orchestration, fallback, config, and channel wiring in core.
+- Keep vendor behavior in the provider plugin.
+- Additive expansion should stay typed: new optional methods, new optional
+  result fields, new optional capabilities.
+- If OpenClaw adds a new capability such as video generation later, define the
+  core capability contract first, then let vendor plugins register against it.
+
+For media-understanding runtime helpers, plugins can call:
+
+```ts
+const image = await api.runtime.mediaUnderstanding.describeImageFile({
+  filePath: "/tmp/inbound-photo.jpg",
+  cfg: api.config,
+  agentDir: "/tmp/agent",
+});
+
+const video = await api.runtime.mediaUnderstanding.describeVideoFile({
+  filePath: "/tmp/inbound-video.mp4",
+  cfg: api.config,
+});
+```
+
+For audio transcription, plugins can use either the media-understanding runtime
+or the older STT alias:
+
+```ts
+const { text } = await api.runtime.mediaUnderstanding.transcribeAudioFile({
   filePath: "/tmp/inbound-audio.ogg",
   cfg: api.config,
   // Optional when MIME cannot be inferred reliably:
@@ -527,8 +776,11 @@ const { text } = await api.runtime.stt.transcribeAudioFile({
 
 Notes:
 
+- `api.runtime.mediaUnderstanding.*` is the preferred shared surface for
+  image/audio/video understanding.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
+- `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
 ## Gateway HTTP routes
 
@@ -567,14 +819,14 @@ Notes:
 Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
 authoring plugins:
 
-- `openclaw/plugin-sdk/core` for generic plugin APIs, provider auth types, and shared helpers.
+- `openclaw/plugin-sdk/core` for generic plugin APIs, provider auth types, and shared helpers such as routing/session utilities and logger-backed runtimes.
 - `openclaw/plugin-sdk/compat` for bundled/internal plugin code that needs broader shared runtime helpers than `core`.
-- `openclaw/plugin-sdk/telegram` for Telegram channel plugins.
-- `openclaw/plugin-sdk/discord` for Discord channel plugins.
-- `openclaw/plugin-sdk/slack` for Slack channel plugins.
-- `openclaw/plugin-sdk/signal` for Signal channel plugins.
-- `openclaw/plugin-sdk/imessage` for iMessage channel plugins.
-- `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugins.
+- `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/signal` for Signal channel plugin types and shared channel-facing helpers. Built-in Signal implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/imessage` for iMessage channel plugin types and shared channel-facing helpers. Built-in iMessage implementation internals stay private to the bundled extension.
+- `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugin types and shared channel-facing helpers. Built-in WhatsApp implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/line` for LINE channel plugins.
 - `openclaw/plugin-sdk/msteams` for the bundled Microsoft Teams plugin surface.
 - Bundled extension-specific subpaths are also available:
@@ -822,6 +1074,37 @@ instead of the full plugin entry. This keeps startup and setup lighter
 when your main plugin entry also wires tools, hooks, or other runtime-only
 code.
 
+Optional: `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`
+can opt a channel plugin into the same `setupEntry` path during the gateway's
+pre-listen startup phase, even when the channel is already configured.
+
+Use this only when `setupEntry` fully covers the startup surface that must exist
+before the gateway starts listening. In practice, that means the setup entry
+must register every channel-owned capability that startup depends on, such as:
+
+- channel registration itself
+- any HTTP routes that must be available before the gateway starts listening
+- any gateway methods, tools, or services that must exist during that same window
+
+If your full entry still owns any required startup capability, do not enable
+this flag. Keep the plugin on the default behavior and let OpenClaw load the
+full entry during startup.
+
+Example:
+
+```json
+{
+  "name": "@scope/my-channel",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "setupEntry": "./setup-entry.ts",
+    "startup": {
+      "deferConfiguredChannelFullLoadUntilAfterListen": true
+    }
+  }
+}
+```
+
 ### Channel catalog metadata
 
 Channel plugins can advertise setup/discovery metadata via `openclaw.channel` and
@@ -1059,11 +1342,49 @@ Plugins export either:
 - `on(...)` for typed lifecycle hooks
 - `registerChannel`
 - `registerProvider`
+- `registerSpeechProvider`
+- `registerMediaUnderstandingProvider`
+- `registerWebSearchProvider`
 - `registerHttpRoute`
 - `registerCommand`
 - `registerCli`
 - `registerContextEngine`
 - `registerService`
+
+In practice, `register(api)` is also where a plugin declares **ownership**.
+That ownership should map cleanly to either:
+
+- a vendor surface such as OpenAI, ElevenLabs, or Microsoft
+- a feature surface such as Voice Call
+
+Avoid splitting one vendor's capabilities across unrelated plugins unless there
+is a strong product reason to do so. The default should be one plugin per
+vendor/feature, with core capability contracts separating shared orchestration
+from vendor-specific behavior.
+
+## Adding a new capability
+
+When a plugin needs behavior that does not fit the current API, do not bypass
+the plugin system with a private reach-in. Add the missing capability.
+
+Recommended sequence:
+
+1. define the core contract
+   Decide what shared behavior core should own: policy, fallback, config merge,
+   lifecycle, channel-facing semantics, and runtime helper shape.
+2. add typed plugin registration/runtime surfaces
+   Extend `OpenClawPluginApi` and/or `api.runtime` with the smallest useful
+   typed seam.
+3. wire core + channel/feature consumers
+   Channels and feature plugins should consume the new capability through core,
+   not by importing a vendor implementation directly.
+4. register vendor implementations
+   Vendor plugins then register their backends against the capability.
+5. add contract coverage
+   Add tests so ownership and registration shape stay explicit over time.
+
+This is how OpenClaw stays opinionated without becoming hardcoded to one
+provider's worldview.
 
 Context engine plugins can also register a runtime-owned context manager:
 
@@ -1265,6 +1586,16 @@ Do not prompt from `runNonInteractive`. Reject missing inputs with actionable
 errors instead.
 
 ### Provider wizard metadata
+
+Provider auth/onboarding metadata can live in two layers:
+
+- manifest `providerAuthChoices`: cheap labels, grouping, `--auth-choice`
+  ids, and simple CLI flag metadata available before runtime load
+- runtime `wizard.setup` / `auth[].wizard`: richer behavior that depends on
+  loaded provider code
+
+Use manifest metadata for static labels/flags. Use runtime wizard metadata when
+setup depends on dynamic auth methods, method fallback, or runtime validation.
 
 `wizard.setup` controls how the provider appears in grouped onboarding:
 
@@ -1722,6 +2053,7 @@ Publishing contract:
 
 - Plugin `package.json` must include `openclaw.extensions` with one or more entry files.
 - Optional: `openclaw.setupEntry` may point at a lightweight setup-only entry for disabled or still-unconfigured channel setup.
+- Optional: `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen` may opt a channel plugin into using `setupEntry` during pre-listen gateway startup, but only when that setup entry completely covers the plugin's startup-critical surface.
 - Entry files can be `.js` or `.ts` (jiti loads TS at runtime).
 - `openclaw plugins install <npm-spec>` uses `npm pack`, extracts into `~/.openclaw/extensions/<id>/`, and enables it in config.
 - Config key stability: scoped packages are normalized to the **unscoped** id for `plugins.entries.*`.

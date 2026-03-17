@@ -16,7 +16,6 @@ import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
@@ -26,8 +25,19 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import type {
+  SpeechProviderConfiguredContext,
+  SpeechListVoicesRequest,
+  SpeechProviderId,
+  SpeechSynthesisRequest,
+  SpeechSynthesisResult,
+  SpeechTelephonySynthesisRequest,
+  SpeechTelephonySynthesisResult,
+  SpeechVoiceOption,
+} from "../tts/provider-types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -108,6 +118,13 @@ export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "
 
 export type ProviderAuthResult = {
   profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
+  /**
+   * Optional config patch to merge after credentials are written.
+   *
+   * Use this for provider-owned onboarding defaults such as
+   * `models.providers.<id>` entries, default aliases, or agent model helpers.
+   * The caller still persists auth-profile bindings separately.
+   */
   configPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
   notes?: string[];
@@ -843,6 +860,30 @@ export type WebSearchProviderPlugin = {
   createTool: (ctx: WebSearchProviderContext) => WebSearchProviderToolDefinition | null;
 };
 
+export type PluginWebSearchProviderEntry = WebSearchProviderPlugin & {
+  pluginId: string;
+};
+
+export type SpeechProviderPlugin = {
+  id: SpeechProviderId;
+  label: string;
+  aliases?: string[];
+  models?: readonly string[];
+  voices?: readonly string[];
+  isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
+  synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
+  synthesizeTelephony?: (
+    req: SpeechTelephonySynthesisRequest,
+  ) => Promise<SpeechTelephonySynthesisResult>;
+  listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
+};
+
+export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
+  pluginId: string;
+};
+
+export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
+
 export type OpenClawPluginGatewayMethod = {
   method: string;
   handler: GatewayRequestHandler;
@@ -1155,7 +1196,6 @@ export type OpenClawPluginService = {
 
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
-  dock?: ChannelDock;
 };
 
 export type OpenClawPluginDefinition = {
@@ -1202,6 +1242,8 @@ export type OpenClawPluginApi = {
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
+  registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
+  registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
   /**

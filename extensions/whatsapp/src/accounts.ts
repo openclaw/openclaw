@@ -1,16 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveOAuthDir } from "../../../src/config/paths.js";
+import {
+  type OpenClawConfig,
+  createAccountListHelpers,
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveAccountEntry,
+  resolveUserPath,
+} from "../../../src/plugin-sdk-internal/accounts.js";
 import type {
   DmPolicy,
   GroupPolicy,
-  OpenClawConfig,
   WhatsAppAccountConfig,
-} from "openclaw/plugin-sdk/whatsapp";
-import { createAccountListHelpers } from "../../../src/channels/plugins/account-helpers.js";
-import { resolveOAuthDir } from "../../../src/config/paths.js";
-import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { resolveUserPath } from "../../../src/utils.js";
+} from "../../../src/plugin-sdk-internal/whatsapp.js";
 import { hasWebCredsSync } from "./auth-store.js";
 
 export type ResolvedWhatsAppAccount = {

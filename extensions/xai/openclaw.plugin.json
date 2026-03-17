@@ -4,6 +4,21 @@
   "providerAuthEnvVars": {
     "xai": ["XAI_API_KEY"]
   },
+  "providerAuthChoices": [
+    {
+      "provider": "xai",
+      "method": "api-key",
+      "choiceId": "xai-api-key",
+      "choiceLabel": "xAI API key",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key",
+      "optionKey": "xaiApiKey",
+      "cliFlag": "--xai-api-key",
+      "cliOption": "--xai-api-key <key>",
+      "cliDescription": "xAI API key"
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
