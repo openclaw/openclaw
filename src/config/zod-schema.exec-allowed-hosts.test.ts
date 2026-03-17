@@ -54,4 +54,17 @@ describe("tools.exec.allowedHosts Zod validation", () => {
     const result = parseExecConfig({ host: "node", allowedHosts: ["node"] });
     expect(result.success).toBe(true);
   });
+
+  it("accepts allowedHosts without host (host inherited from global config)", () => {
+    // An agent-only block with allowedHosts but no host is valid — host is
+    // inherited from global tools.exec.host at runtime. Validation must not
+    // assume the default sandbox host in this case.
+    const result = parseExecConfig({ allowedHosts: ["gateway", "sandbox"] });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts allowedHosts: [gateway, sandbox] without host", () => {
+    const result = parseExecConfig({ allowedHosts: ["gateway", "sandbox"], security: "allowlist" });
+    expect(result.success).toBe(true);
+  });
 });

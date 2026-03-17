@@ -444,7 +444,13 @@ function addAllowedHostsRefinement<T extends z.ZodObject<typeof ToolExecBaseShap
     if (!val.allowedHosts) {
       return;
     }
-    const base = val.host ?? "sandbox";
+    // Only validate when host is explicitly set in this block.
+    // If host is absent, it may be inherited from global config — we cannot
+    // validate without the resolved host, so defer to runtime validation.
+    if (!val.host) {
+      return;
+    }
+    const base = val.host;
     if (base === "sandbox" && val.allowedHosts.some((h) => h !== "sandbox")) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
