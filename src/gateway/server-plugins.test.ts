@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { PluginRegistry } from "../plugins/registry.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -56,12 +57,19 @@ function getLastDispatchedParams(): Record<string, unknown> | undefined {
   return call?.req?.params as Record<string, unknown> | undefined;
 }
 
+function getLastDispatchedClientScopes(): string[] {
+  const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
+  const scopes = call?.client?.connect?.scopes;
+  return Array.isArray(scopes) ? scopes : [];
+}
+
 async function importServerPluginsModule(): Promise<ServerPluginsModule> {
   return import("./server-plugins.js");
 }
 
 async function createSubagentRuntime(
   serverPlugins: ServerPluginsModule,
+  cfg: Record<string, unknown> = {},
 ): Promise<PluginRuntime["subagent"]> {
   const log = {
     info: vi.fn(),
@@ -71,7 +79,7 @@ async function createSubagentRuntime(
   };
   loadOpenClawPlugins.mockReturnValue(createRegistry([]));
   serverPlugins.loadGatewayPlugins({
-    cfg: {},
+    cfg,
     workspaceDir: "/tmp",
     log,
     coreGatewayHandlers: {},
@@ -183,18 +191,29 @@ describe("loadGatewayPlugins", () => {
     expect(typeof subagent?.getSession).toBe("function");
   });
 
-  test("forwards provider and model overrides for agent runs", async () => {
+  test("forwards provider and model overrides when the request scope is authorized", async () => {
     const serverPlugins = await importServerPluginsModule();
     const runtime = await createSubagentRuntime(serverPlugins);
-    serverPlugins.setFallbackGatewayContext(createTestContext("forward-overrides"));
+    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+    const scope = {
+      context: createTestContext("request-scope-forward-overrides"),
+      client: {
+        connect: {
+          scopes: ["operator.admin"],
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
 
-    await runtime.run({
-      sessionKey: "s-override",
-      message: "use the override",
-      provider: "anthropic",
-      model: "claude-haiku-4-6",
-      deliver: false,
-    });
+    await gatewayScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.run({
+        sessionKey: "s-override",
+        message: "use the override",
+        provider: "anthropic",
+        model: "claude-haiku-4-6",
+        deliver: false,
+      }),
+    );
 
     expect(getLastDispatchedParams()).toMatchObject({
       sessionKey: "s-override",
@@ -203,6 +222,73 @@ describe("loadGatewayPlugins", () => {
       model: "claude-haiku-4-6",
       deliver: false,
     });
+  });
+
+  test("rejects provider/model overrides for fallback runs without explicit authorization", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-deny-overrides"));
+
+    await expect(
+      runtime.run({
+        sessionKey: "s-fallback-override",
+        message: "use the override",
+        provider: "anthropic",
+        model: "claude-haiku-4-6",
+        deliver: false,
+      }),
+    ).rejects.toThrow(
+      "provider/model override requires plugin identity in fallback subagent runs.",
+    );
+  });
+
+  test("allows trusted fallback provider/model overrides when plugin config is explicit", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-6"],
+            },
+          },
+        },
+      },
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-trusted-overrides"));
+    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+
+    await gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      runtime.run({
+        sessionKey: "s-trusted-override",
+        message: "use trusted override",
+        provider: "anthropic",
+        model: "claude-haiku-4-6",
+        deliver: false,
+      }),
+    );
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-trusted-override",
+      provider: "anthropic",
+      model: "claude-haiku-4-6",
+    });
+  });
+
+  test("uses least-privilege synthetic fallback scopes without admin", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-least-privilege"));
+
+    await runtime.run({
+      sessionKey: "s-synthetic",
+      message: "run synthetic",
+      deliver: false,
+    });
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
   test("can prefer setup-runtime channel plugins during startup loads", async () => {

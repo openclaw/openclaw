@@ -78,6 +78,37 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries["voice-call"]?.hooks).toBeUndefined();
   });
 
+  it("normalizes plugin subagent override policy settings", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          subagent: {
+            allowModelOverride: true,
+            allowedModels: [" anthropic/claude-haiku-4-6 ", "", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.subagent).toEqual({
+      allowModelOverride: true,
+      allowedModels: ["anthropic/claude-haiku-4-6", "openai/gpt-4.1-mini"],
+    });
+  });
+
+  it("drops invalid plugin subagent override policy values", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          subagent: {
+            allowModelOverride: "nope",
+            allowedModels: [42, null],
+          } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.subagent).toBeUndefined();
+  });
+
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
       allow: ["openai-codex", "minimax-portal-auth"],
