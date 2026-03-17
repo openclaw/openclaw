@@ -1787,6 +1787,138 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("session:patch hook fires with correct context", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-patch-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-hook-test",
+          updatedAt: Date.now(),
+          label: "original-label",
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    const { ws } = await openClient();
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "updated-label",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "patch",
+        sessionKey: expect.stringMatching(/agent:main:main/),
+        context: expect.objectContaining({
+          sessionEntry: expect.objectContaining({
+            sessionId: "sess-hook-test",
+            label: "updated-label",
+          }),
+          patch: expect.objectContaining({
+            label: "updated-label",
+          }),
+          cfg: expect.any(Object),
+        }),
+      }),
+    );
+
+    ws.close();
+  });
+
+  test("session:patch hook does not fire for webchat clients", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-webchat-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}`, {
+      headers: { origin: `http://127.0.0.1:${harness.port}` },
+    });
+    trackConnectChallengeNonce(ws);
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await connectOk(ws, {
+      client: {
+        id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+      scopes: ["operator.admin"],
+    });
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "should-not-trigger-hook",
+    });
+
+    expect(patched.ok).toBe(false);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    ws.close();
+  });
+
+  test("session:patch hook only fires after successful patch", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-success-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-success-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    // Test 1: Invalid patch (missing key) - hook should not fire
+    const invalidPatch = await rpcReq(ws, "sessions.patch", {
+      // Missing required 'key' parameter
+      label: "should-fail",
+    });
+
+    expect(invalidPatch.ok).toBe(false);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    // Test 2: Valid patch - hook should fire
+    const validPatch = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "should-succeed",
+    });
+
+    expect(validPatch.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "patch",
+      }),
+    );
+
+    ws.close();
+  });
+
   test("control-ui client can delete sessions even in webchat mode", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-control-ui-delete-"));
     const storePath = path.join(dir, "sessions.json");
