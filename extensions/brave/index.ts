@@ -1,16 +1,15 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import {
   createPluginBackedWebSearchProvider,
   getTopLevelCredentialValue,
   setTopLevelCredentialValue,
 } from "openclaw/plugin-sdk/provider-web-search";
 
-const bravePlugin = {
+export default definePluginEntry({
   id: "brave",
   name: "Brave Plugin",
   description: "Bundled Brave plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "brave",
@@ -26,6 +25,4 @@ const bravePlugin = {
       }),
     );
   },
-};
-
-export default bravePlugin;
+});
