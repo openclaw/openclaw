@@ -2420,9 +2420,10 @@ main() {
     # Install gateway daemon for fresh installs (not upgrades)
     if [[ "$is_upgrade" != "true" ]]; then
         install_gateway_daemon_if_needed
+    else
+        # Only refresh gateway service on upgrades (not fresh installs)
+        refresh_gateway_service_if_loaded
     fi
-
-    refresh_gateway_service_if_loaded
 
     # Step 6: Run doctor for migrations on upgrades and git installs
     local run_doctor_after=false
