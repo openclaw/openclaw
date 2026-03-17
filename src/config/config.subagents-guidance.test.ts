@@ -24,6 +24,28 @@ describe("subagent config validation guidance", () => {
     }
   });
 
+  it('suggests "allowAgents" when a per-agent subagents block uses "allowlist"', () => {
+    const result = validateConfigObjectRaw({
+      agents: {
+        list: [
+          {
+            id: "main",
+            subagents: {
+              allowlist: ["research"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find((entry) => entry.path === "agents.list.0.subagents");
+      expect(issue?.message).toContain('Use "allowAgents" here');
+      expect(issue?.message).toContain("sessions_spawn");
+    }
+  });
+
   it("explains that spawn permissions do not belong under agents.defaults.subagents", () => {
     const result = validateConfigObjectRaw({
       agents: {
