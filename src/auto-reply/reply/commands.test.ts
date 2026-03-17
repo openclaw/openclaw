@@ -463,46 +463,50 @@ describe("/approve command", () => {
     }
   });
 
-  it("rejects gateway clients without approvals scope", async () => {
+  it("enforces gateway approval scopes", async () => {
     const cfg = {
       commands: { text: true },
     } as OpenClawConfig;
-    const params = buildParams("/approve abc allow-once", cfg, {
-      Provider: "webchat",
-      Surface: "webchat",
-      GatewayClientScopes: ["operator.write"],
-    });
-
-    callGatewayMock.mockResolvedValue({ ok: true });
-
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("requires operator.approvals");
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("allows gateway clients with approvals or admin scopes", async () => {
-    const cfg = {
-      commands: { text: true },
-    } as OpenClawConfig;
-    const scopeCases = [["operator.approvals"], ["operator.admin"]];
-    for (const scopes of scopeCases) {
+    const cases = [
+      {
+        scopes: ["operator.write"],
+        expectedText: "requires operator.approvals",
+        expectedGatewayCalls: 0,
+      },
+      {
+        scopes: ["operator.approvals"],
+        expectedText: "Exec approval allow-once submitted",
+        expectedGatewayCalls: 1,
+      },
+      {
+        scopes: ["operator.admin"],
+        expectedText: "Exec approval allow-once submitted",
+        expectedGatewayCalls: 1,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      callGatewayMock.mockReset();
       callGatewayMock.mockResolvedValue({ ok: true });
       const params = buildParams("/approve abc allow-once", cfg, {
         Provider: "webchat",
         Surface: "webchat",
-        GatewayClientScopes: scopes,
+        GatewayClientScopes: testCase.scopes,
       });
 
       const result = await handleCommands(params);
-      expect(result.shouldContinue).toBe(false);
-      expect(result.reply?.text).toContain("Exec approval allow-once submitted");
-      expect(callGatewayMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          method: "exec.approval.resolve",
-          params: { id: "abc", decision: "allow-once" },
-        }),
+      expect(result.shouldContinue, String(testCase.scopes)).toBe(false);
+      expect(result.reply?.text, String(testCase.scopes)).toContain(testCase.expectedText);
+      expect(callGatewayMock, String(testCase.scopes)).toHaveBeenCalledTimes(
+        testCase.expectedGatewayCalls,
       );
+      if (testCase.expectedGatewayCalls > 0) {
+        expect(callGatewayMock, String(testCase.scopes)).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            method: "exec.approval.resolve",
+            params: { id: "abc", decision: "allow-once" },
+          }),
+        );
+      }
     }
   });
 });
