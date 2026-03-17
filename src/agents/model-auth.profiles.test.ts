@@ -245,6 +245,29 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("hasAvailableAuthForProvider returns true for custom ollama provider markers", async () => {
+    await withEnvAsync({ OLLAMA_API_KEY: undefined }, async () => {
+      await expect(
+        hasAvailableAuthForProvider({
+          provider: "ollama-remote",
+          store: { version: 1, profiles: {} },
+          cfg: {
+            models: {
+              providers: {
+                "ollama-remote": {
+                  api: "ollama",
+                  baseUrl: "http://localhost:11434",
+                  apiKey: "ollama-local",
+                  models: [{ id: "llama3" }],
+                },
+              },
+            },
+          },
+        }),
+      ).resolves.toBe(true);
+    });
+  });
+
   it("resolves Synthetic API key from env", async () => {
     await withEnvAsync({ [envVar("SYNTHETIC", "API", "KEY")]: "synthetic-test-key" }, async () => {
       // pragma: allowlist secret
@@ -505,5 +528,88 @@ describe("getApiKeyForModel", () => {
         expect(resolved?.source).toContain("VOLCANO_ENGINE_API_KEY");
       },
     );
+  });
+});
+
+// COMBINED FIX for #43945: Tests for Ollama local marker auth + privacy gate
+describe("Combined Ollama Auth + Privacy Gate", () => {
+  function createOllamaConfig(provider: string, baseUrl: string = "http://192.168.178.122:11434") {
+    return {
+      models: {
+        providers: {
+          [provider]: {
+            api: "ollama",
+            baseUrl,
+            apiKey: "ollama-local",
+          },
+        },
+      },
+    };
+  }
+
+  it("resolves ollama marker with privacy gate", async () => {
+    const config = createOllamaConfig("ollama-remote");
+
+    const result = await resolveApiKeyForProvider({
+      provider: "ollama-remote",
+      cfg: config as never,
+    });
+
+    expect(result.apiKey).toBe("ollama-local");
+    expect(result.mode).toBe("marker"); // Enhanced typing
+    expect(result.source).toContain("ollama-local marker");
+  });
+
+  it("hasAvailable works with ollama marker auth", async () => {
+    const config = createOllamaConfig("ollama-local");
+
+    const available = await hasAvailableAuthForProvider({
+      provider: "ollama-local",
+      cfg: config as never,
+    });
+
+    expect(available).toBe(true);
+  });
+
+  it("hasAvailable blocks non-ollama providers", async () => {
+    const config = {
+      models: {
+        providers: {
+          "non-ollama": {
+            api: "openai", // Not ollama!
+            baseUrl: "http://localhost:11434",
+            apiKey: "ollama-local",
+          },
+        },
+      },
+    };
+
+    const available = await hasAvailableAuthForProvider({
+      provider: "non-ollama",
+      cfg: config as never,
+    });
+
+    expect(available).toBe(false);
+  });
+
+  it("blocks wrong marker value", async () => {
+    const config = {
+      models: {
+        providers: {
+          "wrong-marker": {
+            api: "ollama",
+            baseUrl: "http://localhost:11434",
+            apiKey: "wrong-marker-value", // Not 'ollama-local'
+          },
+        },
+      },
+    };
+
+    const available = await hasAvailableAuthForProvider({
+      provider: "wrong-marker",
+      cfg: config as never,
+    });
+
+    expect(available).toBe(false);
   });
 });

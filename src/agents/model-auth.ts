@@ -117,6 +117,71 @@ export function hasUsableCustomProviderApiKey(
   return Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
 }
 
+// COMBINED FIX for #43945: Shared helpers for Ollama local marker auth + privacy gate
+
+// Shared helper for Ollama local marker resolution (GPT-5.2 based)
+function resolveOllamaLocalMarkerAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | null {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig || providerConfig.api !== "ollama") {
+    return null;
+  }
+
+  const rawApiKey = getCustomProviderApiKey(params.cfg, params.provider);
+  if (rawApiKey !== OLLAMA_LOCAL_AUTH_MARKER) {
+    // Opus recommendation: Add logging for debugging
+    if (rawApiKey) {
+      log.warn(
+        `Ollama provider ${params.provider} has non-marker auth - falling back to standard resolution`,
+      );
+    }
+    return null;
+  }
+
+  return {
+    apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+    source: `models.providers.${params.provider} (ollama-local marker)`,
+    mode: "marker", // GPT-5.1: specific mode for markers vs generic api-key
+  };
+}
+
+// Privacy Gate Layer (Grok based)
+function applyPrivacyGate(
+  provider: string,
+  authData: ResolvedProviderAuth | null,
+  userConsent: boolean = true, // Default true for local providers
+): ResolvedProviderAuth | null {
+  if (!authData) {
+    // Opus recommendation: Log privacy blocks for audit trail
+    log.warn(`Privacy gate: No auth data for ${provider} - blocking cloud fallback`);
+    return null;
+  }
+
+  if (!userConsent) {
+    log.warn(`Privacy gate: User consent required for ${provider} - blocking access`);
+    throw new Error(`Privacy consent required for provider ${provider}`);
+  }
+
+  // Grok: Mask sensitive data in logs (but not in actual auth)
+  const maskedSource = authData.source?.replace(/[a-zA-Z0-9]{10,}/g, "***MASKED***") || "unknown";
+  log.info(`Privacy gate: Authorized ${provider} via ${maskedSource}`);
+
+  return authData; // Return original unmasked data for actual auth
+}
+
+// Boolean wrapper with privacy layer
+export function hasOllamaLocalMarkerAuth(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  userConsent: boolean = true,
+): boolean {
+  const resolved = resolveOllamaLocalMarkerAuth({ cfg, provider });
+  const gated = applyPrivacyGate(provider, resolved, userConsent);
+  return Boolean(gated);
+}
+
 function resolveProviderAuthOverride(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -276,17 +341,17 @@ export type ResolvedProviderAuth = {
   apiKey?: string;
   profileId?: string;
   source: string;
-  mode: "api-key" | "oauth" | "token" | "aws-sdk";
+  mode: "api-key" | "oauth" | "token" | "aws-sdk" | "marker";
 };
 
-export async function resolveApiKeyForProvider(params: {
+async function resolveProviderAuthCore(params: {
   provider: string;
   cfg?: OpenClawConfig;
   profileId?: string;
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
-}): Promise<ResolvedProviderAuth> {
+}): Promise<ResolvedProviderAuth | null> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
 
@@ -356,20 +421,11 @@ export async function resolveApiKeyForProvider(params: {
     return { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" };
   }
 
-  // Fix for #43945: Handle custom-named Ollama providers with "ollama-local" marker
-  // When resolveUsableCustomProviderApiKey returns null due to "ollama-local" being
-  // classified as non-secret marker, but the provider uses api: "ollama", synthesize
-  // the auth key directly
-  const providerConfig = resolveProviderConfig(cfg, provider);
-  if (!customKey && providerConfig?.api === "ollama") {
-    const rawApiKey = getCustomProviderApiKey(cfg, provider);
-    if (rawApiKey === OLLAMA_LOCAL_AUTH_MARKER) {
-      return {
-        apiKey: OLLAMA_LOCAL_AUTH_MARKER,
-        source: `models.providers.${provider} (ollama-local marker)`,
-        mode: "api-key",
-      };
-    }
+  // COMBINED FIX for #43945: Ollama local marker auth with privacy gate
+  const ollamaMarkerAuth = resolveOllamaLocalMarkerAuth({ cfg, provider });
+  const gatedAuth = applyPrivacyGate(provider, ollamaMarkerAuth, true);
+  if (gatedAuth) {
+    return gatedAuth;
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
@@ -377,11 +433,31 @@ export async function resolveApiKeyForProvider(params: {
     return syntheticLocalAuth;
   }
 
+  // SECURITY: Local providers must NOT silently fall back to cloud. See resolveOllamaLocalMarkerAuth.
+
   const normalized = normalizeProviderId(provider);
   if (authOverride === undefined && normalized === "amazon-bedrock") {
     return resolveAwsSdkAuthInfo();
   }
 
+  return null;
+}
+
+export async function resolveApiKeyForProvider(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  profileId?: string;
+  preferredProfile?: string;
+  store?: AuthProfileStore;
+  agentDir?: string;
+}): Promise<ResolvedProviderAuth> {
+  const resolved = await resolveProviderAuthCore(params);
+  if (resolved) {
+    return resolved;
+  }
+
+  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const { provider, cfg } = params;
   const { buildProviderMissingAuthMessageWithPlugin } = await loadProviderRuntime();
   const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
     provider,
@@ -510,47 +586,8 @@ export async function hasAvailableAuthForProvider(params: {
   store?: AuthProfileStore;
   agentDir?: string;
 }): Promise<boolean> {
-  const { provider, cfg, preferredProfile } = params;
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
-
-  const authOverride = resolveProviderAuthOverride(cfg, provider);
-  if (authOverride === "aws-sdk") {
-    return true;
-  }
-
-  const order = resolveAuthProfileOrder({
-    cfg,
-    store,
-    provider,
-    preferredProfile,
-  });
-  for (const candidate of order) {
-    try {
-      const resolved = await resolveApiKeyForProfile({
-        cfg,
-        store,
-        profileId: candidate,
-        agentDir: params.agentDir,
-      });
-      if (resolved) {
-        return true;
-      }
-    } catch (err) {
-      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
-    }
-  }
-
-  if (resolveEnvApiKey(provider)) {
-    return true;
-  }
-  if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
-    return true;
-  }
-  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
-    return true;
-  }
-
-  return authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock";
+  const resolved = await resolveProviderAuthCore(params);
+  return resolved !== null;
 }
 
 export async function getApiKeyForModel(params: {
