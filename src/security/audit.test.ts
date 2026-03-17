@@ -348,7 +348,7 @@ description: test skill
     expect(summary?.detail).toContain("trust model: personal assistant");
   });
 
-  it("evaluates non-loopback gateway auth presence", async () => {
+  it("evaluates gateway auth presence and rate-limit guardrails", async () => {
     const cases = [
       {
         name: "flags non-loopback bind without auth as critical",
@@ -432,52 +432,47 @@ description: test skill
           expectNoFinding(res, "gateway.bind_no_auth");
         },
       },
+      {
+        name: "warns when auth has no rate limit",
+        run: async () =>
+          audit(
+            {
+              gateway: {
+                bind: "lan",
+                auth: { token: "secret" },
+              },
+            },
+            { env: {} },
+          ),
+        assert: (res: SecurityAuditReport) => {
+          expect(hasFinding(res, "gateway.auth_no_rate_limit", "warn")).toBe(true);
+        },
+      },
+      {
+        name: "does not warn when auth rate limit is configured",
+        run: async () =>
+          audit(
+            {
+              gateway: {
+                bind: "lan",
+                auth: {
+                  token: "secret",
+                  rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
+                },
+              },
+            },
+            { env: {} },
+          ),
+        assert: (res: SecurityAuditReport) => {
+          expectNoFinding(res, "gateway.auth_no_rate_limit");
+        },
+      },
     ] as const;
 
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await testCase.run();
         testCase.assert(res);
-      }),
-    );
-  });
-
-  it("evaluates gateway auth rate-limit warning based on configuration", async () => {
-    const cases: Array<{
-      name: string;
-      cfg: OpenClawConfig;
-      expectWarn: boolean;
-    }> = [
-      {
-        name: "no rate limit",
-        cfg: {
-          gateway: {
-            bind: "lan",
-            auth: { token: "secret" },
-          },
-        },
-        expectWarn: true,
-      },
-      {
-        name: "rate limit configured",
-        cfg: {
-          gateway: {
-            bind: "lan",
-            auth: {
-              token: "secret",
-              rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
-            },
-          },
-        },
-        expectWarn: false,
-      },
-    ];
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg, { env: {} });
-        expect(hasFinding(res, "gateway.auth_no_rate_limit", "warn"), testCase.name).toBe(
-          testCase.expectWarn,
-        );
       }),
     );
   });
