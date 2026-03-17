@@ -596,6 +596,13 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
     });
 
+    // Extract active skill names for per-skill token attribution in the LLM proxy.
+    const activeSkillNames: string[] = params.skillsSnapshot?.skills?.length
+      ? params.skillsSnapshot.skills.map((s) => s.name)
+      : skillEntries?.length
+        ? skillEntries.map((e) => e.skill.name)
+        : [];
+
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
       await resolveBootstrapContextForRun({
@@ -1041,17 +1048,22 @@ export async function runEmbeddedAttempt(
         params.streamParams,
         params.thinkLevel,
         sessionAgentId,
+        activeSkillNames.length > 0 ? activeSkillNames : undefined,
       );
 
       // Forward sender identity as HTTP headers so downstream LLM proxies can
       // attribute token usage to individual users (e.g. Telegram sender).
       if (params.senderId || params.senderUsername) {
         const senderHeaders: Record<string, string> = {};
-        if (params.senderId) senderHeaders["X-TG-User-Id"] = params.senderId;
-        if (params.senderUsername) senderHeaders["X-TG-Username"] = params.senderUsername;
+        if (params.senderId) {
+          senderHeaders["X-TG-User-Id"] = params.senderId;
+        }
+        if (params.senderUsername) {
+          senderHeaders["X-TG-Username"] = params.senderUsername;
+        }
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
-          return inner!(model, context, {
+          return inner(model, context, {
             ...options,
             headers: { ...senderHeaders, ...options?.headers },
           });
