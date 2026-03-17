@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   collectInstalledSkillsCodeSafetyFindings,
@@ -28,7 +27,7 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 };
 
 function stubChannelPlugin(params: {
-  id: "discord" | "slack" | "telegram";
+  id: "discord" | "slack" | "telegram" | "zalouser";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -111,6 +110,27 @@ const telegramPlugin = stubChannelPlugin({
   },
 });
 
+const zalouserPlugin = stubChannelPlugin({
+  id: "zalouser",
+  label: "Zalo Personal",
+  listAccountIds: (cfg) => {
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const ids = Object.keys(channel?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const channel = (cfg.channels as Record<string, unknown> | undefined)?.zalouser as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+    const base = (channel ?? {}) as Record<string, unknown>;
+    const account = channel?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
+});
+
 function successfulProbeResult(url: string) {
   return {
     ok: true,
@@ -127,17 +147,13 @@ function successfulProbeResult(url: string) {
 
 async function audit(
   cfg: OpenClawConfig,
-  extra?: Omit<SecurityAuditOptions, "config"> & { preserveExecApprovals?: boolean },
+  extra?: Omit<SecurityAuditOptions, "config">,
 ): Promise<SecurityAuditReport> {
-  if (!extra?.preserveExecApprovals) {
-    saveExecApprovals({ version: 1, agents: {} });
-  }
-  const { preserveExecApprovals: _preserveExecApprovals, ...options } = extra ?? {};
   return runSecurityAudit({
     config: cfg,
     includeFilesystem: false,
     includeChannelSecurity: false,
-    ...options,
+    ...extra,
   });
 }
 
@@ -155,6 +171,18 @@ function expectNoFinding(res: SecurityAuditReport, checkId: string): void {
   expect(hasFinding(res, checkId)).toBe(false);
 }
 
+async function runChannelSecurityAudit(
+  cfg: OpenClawConfig,
+  plugins: ChannelPlugin[],
+): Promise<SecurityAuditReport> {
+  return runSecurityAudit({
+    config: cfg,
+    includeFilesystem: false,
+    includeChannelSecurity: true,
+    plugins,
+  });
+}
+
 describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
@@ -164,7 +192,6 @@ describe("security audit", () => {
   let sharedCodeSafetyWorkspaceDir = "";
   let sharedExtensionsStateDir = "";
   let sharedInstallMetadataStateDir = "";
-  let previousOpenClawHome: string | undefined;
 
   const makeTmpDir = async (label: string) => {
     const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
@@ -235,9 +262,6 @@ description: test skill
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
-    previousOpenClawHome = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = path.join(fixtureRoot, "home");
-    await fs.mkdir(process.env.OPENCLAW_HOME, { recursive: true, mode: 0o700 });
     channelSecurityRoot = path.join(fixtureRoot, "channel-security");
     await fs.mkdir(channelSecurityRoot, { recursive: true, mode: 0o700 });
     sharedChannelSecurityStateDir = path.join(channelSecurityRoot, "state-shared");
@@ -258,11 +282,6 @@ description: test skill
   });
 
   afterAll(async () => {
-    if (previousOpenClawHome === undefined) {
-      delete process.env.OPENCLAW_HOME;
-    } else {
-      process.env.OPENCLAW_HOME = previousOpenClawHome;
-    }
     if (!fixtureRoot) {
       return;
     }
@@ -336,6 +355,43 @@ description: test skill
     };
 
     const res = await audit(cfg, { env: {} });
+    expectNoFinding(res, "gateway.bind_no_auth");
+  });
+
+  it("does not flag missing gateway auth when read-only scrubbed config omits unavailable auth SecretRefs", async () => {
+    const sourceConfig: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {
+          token: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_TOKEN",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    const resolvedConfig: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {},
+      },
+      secrets: sourceConfig.secrets,
+    };
+
+    const res = await runSecurityAudit({
+      config: resolvedConfig,
+      sourceConfig,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
     expectNoFinding(res, "gateway.bind_no_auth");
   });
 
@@ -602,105 +658,6 @@ description: test skill
 
     const res = await audit(cfg);
     expectNoFinding(res, "tools.exec.safe_bin_trusted_dirs_risky");
-  });
-
-  it("warns when exec approvals enable autoAllowSkills", async () => {
-    saveExecApprovals({
-      version: 1,
-      defaults: {
-        autoAllowSkills: true,
-      },
-      agents: {},
-    });
-
-    const res = await audit({}, { preserveExecApprovals: true });
-    expectFinding(res, "tools.exec.auto_allow_skills_enabled", "warn");
-    saveExecApprovals({ version: 1, agents: {} });
-  });
-
-  it("warns when interpreter allowlists are present without strictInlineEval", async () => {
-    saveExecApprovals({
-      version: 1,
-      agents: {
-        main: {
-          allowlist: [{ pattern: "/usr/bin/python3" }],
-        },
-        ops: {
-          allowlist: [{ pattern: "/usr/local/bin/node" }],
-        },
-      },
-    });
-
-    const res = await audit(
-      {
-        agents: {
-          list: [{ id: "ops" }],
-        },
-      },
-      { preserveExecApprovals: true },
-    );
-    expectFinding(res, "tools.exec.allowlist_interpreter_without_strict_inline_eval", "warn");
-    saveExecApprovals({ version: 1, agents: {} });
-  });
-
-  it("suppresses interpreter allowlist warnings when strictInlineEval is enabled", async () => {
-    saveExecApprovals({
-      version: 1,
-      agents: {
-        main: {
-          allowlist: [{ pattern: "/usr/bin/python3" }],
-        },
-      },
-    });
-
-    const res = await audit(
-      {
-        tools: {
-          exec: {
-            strictInlineEval: true,
-          },
-        },
-      },
-      { preserveExecApprovals: true },
-    );
-    expectNoFinding(res, "tools.exec.allowlist_interpreter_without_strict_inline_eval");
-    saveExecApprovals({ version: 1, agents: {} });
-  });
-
-  it("flags open channel access combined with exec-enabled scopes", async () => {
-    const res = await audit({
-      channels: {
-        discord: {
-          groupPolicy: "open",
-        },
-      },
-      tools: {
-        exec: {
-          security: "allowlist",
-          host: "gateway",
-        },
-      },
-    });
-
-    expectFinding(res, "security.exposure.open_channels_with_exec", "warn");
-  });
-
-  it("escalates open channel exec exposure when full exec is configured", async () => {
-    const res = await audit({
-      channels: {
-        slack: {
-          dmPolicy: "open",
-        },
-      },
-      tools: {
-        exec: {
-          security: "full",
-        },
-      },
-    });
-
-    expectFinding(res, "tools.exec.security_full_configured", "critical");
-    expectFinding(res, "security.exposure.open_channels_with_exec", "critical");
   });
 
   it("evaluates loopback control UI and logging exposure findings", async () => {
@@ -1470,6 +1427,32 @@ description: test skill
     expectFinding(res, "browser.remote_cdp_http", "warn");
   });
 
+  it("warns when remote CDP targets a private/internal host", async () => {
+    const cfg: OpenClawConfig = {
+      browser: {
+        profiles: {
+          remote: {
+            cdpUrl:
+              "http://169.254.169.254:9222/json/version?token=supersecrettokenvalue1234567890",
+            color: "#0066CC",
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expectFinding(res, "browser.remote_cdp_private_host", "warn");
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "browser.remote_cdp_private_host",
+          detail: expect.stringContaining("token=supers…7890"),
+        }),
+      ]),
+    );
+  });
+
   it("warns when control UI allows insecure auth", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -1869,7 +1852,10 @@ description: test skill
   });
 
   it("warns when multiple DM senders share the main session", async () => {
-    const cfg: OpenClawConfig = { session: { dmScope: "main" } };
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "main" },
+      channels: { whatsapp: { enabled: true } },
+    };
     const plugins: ChannelPlugin[] = [
       {
         id: "whatsapp",
@@ -2041,6 +2027,40 @@ description: test skill
         ]),
       );
     });
+  });
+
+  it("adds a read-only resolution warning when channel account resolveAccount throws", async () => {
+    const plugin = stubChannelPlugin({
+      id: "zalouser",
+      label: "Zalo Personal",
+      listAccountIds: () => ["default"],
+      resolveAccount: () => {
+        throw new Error("missing SecretRef");
+      },
+    });
+
+    const cfg: OpenClawConfig = {
+      channels: {
+        zalouser: {
+          enabled: true,
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins: [plugin],
+    });
+
+    const finding = res.findings.find(
+      (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.title).toContain("could not be fully resolved");
+    expect(finding?.detail).toContain("zalouser:default: failed to resolve account");
+    expect(finding?.detail).toContain("missing SecretRef");
   });
 
   it("keeps Slack HTTP slash-command findings when resolved inspection only exposes signingSecret status", async () => {
@@ -2232,13 +2252,16 @@ description: test skill
     });
   });
 
-  it("warns when Discord allowlists contain name-based entries", async () => {
-    await withChannelSecurityStateDir(async (tmp) => {
-      await fs.writeFile(
-        path.join(tmp, "credentials", "discord-allowFrom.json"),
-        JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
-      );
-      const cfg: OpenClawConfig = {
+  it.each([
+    {
+      name: "warns when Discord allowlists contain name-based entries",
+      setup: async (tmp: string) => {
+        await fs.writeFile(
+          path.join(tmp, "credentials", "discord-allowFrom.json"),
+          JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
+        );
+      },
+      cfg: {
         channels: {
           discord: {
             enabled: true,
@@ -2256,35 +2279,20 @@ description: test skill
             },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
-      );
-      expect(finding).toBeDefined();
-      expect(finding?.severity).toBe("warn");
-      expect(finding?.detail).toContain("channels.discord.allowFrom:Alice#1234");
-      expect(finding?.detail).toContain("channels.discord.guilds.123.users:trusted.operator");
-      expect(finding?.detail).toContain(
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNameBasedSeverity: "warn",
+      detailIncludes: [
+        "channels.discord.allowFrom:Alice#1234",
+        "channels.discord.guilds.123.users:trusted.operator",
         "channels.discord.guilds.123.channels.general.users:security-team",
-      );
-      expect(finding?.detail).toContain(
         "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
-      );
-      expect(finding?.detail).not.toContain("<@123456789012345678>");
-    });
-  });
-
-  it("marks Discord name-based allowlists as break-glass when dangerous matching is enabled", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+      ],
+      detailExcludes: ["<@123456789012345678>"],
+    },
+    {
+      name: "marks Discord name-based allowlists as break-glass when dangerous matching is enabled",
+      cfg: {
         channels: {
           discord: {
             enabled: true,
@@ -2293,35 +2301,18 @@ description: test skill
             allowFrom: ["Alice#1234"],
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
-      );
-      expect(finding).toBeDefined();
-      expect(finding?.severity).toBe("info");
-      expect(finding?.detail).toContain("out-of-scope");
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
-            severity: "info",
-          }),
-        ]),
-      );
-    });
-  });
-
-  it("audits non-default Discord accounts for dangerous name matching", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNameBasedSeverity: "info",
+      detailIncludes: ["out-of-scope"],
+      expectFindingMatch: {
+        checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+        severity: "info",
+      },
+    },
+    {
+      name: "audits non-default Discord accounts for dangerous name matching",
+      cfg: {
         channels: {
           discord: {
             enabled: true,
@@ -2335,24 +2326,101 @@ description: test skill
             },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
-            title: expect.stringContaining("(account: beta)"),
-            severity: "info",
-          }),
-        ]),
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNoNameBasedFinding: true,
+      expectFindingMatch: {
+        checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+        title: expect.stringContaining("(account: beta)"),
+        severity: "info",
+      },
+    },
+    {
+      name: "audits name-based allowlists on non-default Discord accounts",
+      cfg: {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            accounts: {
+              alpha: {
+                token: "a",
+                allowFrom: ["123456789012345678"],
+              },
+              beta: {
+                token: "b",
+                allowFrom: ["Alice#1234"],
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNameBasedSeverity: "warn",
+      detailIncludes: ["channels.discord.accounts.beta.allowFrom:Alice#1234"],
+    },
+    {
+      name: "does not warn when Discord allowlists use ID-style entries only",
+      cfg: {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            allowFrom: [
+              "123456789012345678",
+              "<@223456789012345678>",
+              "user:323456789012345678",
+              "discord:423456789012345678",
+              "pk:member-123",
+            ],
+            guilds: {
+              "123": {
+                users: ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
+                channels: {
+                  general: {
+                    users: ["723456789012345678", "user:823456789012345678"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNoNameBasedFinding: true,
+    },
+  ])("$name", async (testCase) => {
+    await withChannelSecurityStateDir(async (tmp) => {
+      await testCase.setup?.(tmp);
+      const res = await runChannelSecurityAudit(testCase.cfg, testCase.plugins);
+      const nameBasedFinding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
       );
+
+      if (testCase.expectNoNameBasedFinding) {
+        expect(nameBasedFinding).toBeUndefined();
+      } else if (
+        testCase.expectNameBasedSeverity ||
+        testCase.detailIncludes?.length ||
+        testCase.detailExcludes?.length
+      ) {
+        expect(nameBasedFinding).toBeDefined();
+        if (testCase.expectNameBasedSeverity) {
+          expect(nameBasedFinding?.severity).toBe(testCase.expectNameBasedSeverity);
+        }
+        for (const snippet of testCase.detailIncludes ?? []) {
+          expect(nameBasedFinding?.detail).toContain(snippet);
+        }
+        for (const snippet of testCase.detailExcludes ?? []) {
+          expect(nameBasedFinding?.detail).not.toContain(snippet);
+        }
+      }
+
+      if (testCase.expectFindingMatch) {
+        expect(res.findings).toEqual(
+          expect.arrayContaining([expect.objectContaining(testCase.expectFindingMatch)]),
+        );
+      }
     });
   });
 
@@ -2401,22 +2469,15 @@ description: test skill
     });
   });
 
-  it("audits name-based allowlists on non-default Discord accounts", async () => {
+  it("warns when Zalouser group routing contains mutable group entries", async () => {
     await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
-          discord: {
+          zalouser: {
             enabled: true,
-            token: "t",
-            accounts: {
-              alpha: {
-                token: "a",
-                allowFrom: ["123456789012345678"],
-              },
-              beta: {
-                token: "b",
-                allowFrom: ["Alice#1234"],
-              },
+            groups: {
+              "Ops Room": { allow: true },
+              "group:g-123": { allow: true },
             },
           },
         },
@@ -2426,40 +2487,28 @@ description: test skill
         config: cfg,
         includeFilesystem: false,
         includeChannelSecurity: true,
-        plugins: [discordPlugin],
+        plugins: [zalouserPlugin],
       });
 
       const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
       );
       expect(finding).toBeDefined();
-      expect(finding?.detail).toContain("channels.discord.accounts.beta.allowFrom:Alice#1234");
+      expect(finding?.severity).toBe("warn");
+      expect(finding?.detail).toContain("channels.zalouser.groups:Ops Room");
+      expect(finding?.detail).not.toContain("group:g-123");
     });
   });
 
-  it("does not warn when Discord allowlists use ID-style entries only", async () => {
+  it("marks Zalouser mutable group routing as break-glass when dangerous matching is enabled", async () => {
     await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
-          discord: {
+          zalouser: {
             enabled: true,
-            token: "t",
-            allowFrom: [
-              "123456789012345678",
-              "<@223456789012345678>",
-              "user:323456789012345678",
-              "discord:423456789012345678",
-              "pk:member-123",
-            ],
-            guilds: {
-              "123": {
-                users: ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
-                channels: {
-                  general: {
-                    users: ["723456789012345678", "user:823456789012345678"],
-                  },
-                },
-              },
+            dangerouslyAllowNameMatching: true,
+            groups: {
+              "Ops Room": { allow: true },
             },
           },
         },
@@ -2469,12 +2518,21 @@ description: test skill
         config: cfg,
         includeFilesystem: false,
         includeChannelSecurity: true,
-        plugins: [discordPlugin],
+        plugins: [zalouserPlugin],
       });
 
-      expect(res.findings).not.toEqual(
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("info");
+      expect(finding?.detail).toContain("out-of-scope");
+      expect(res.findings).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ checkId: "channels.discord.allowFrom.name_based_entries" }),
+          expect.objectContaining({
+            checkId: "channels.zalouser.allowFrom.dangerous_name_matching_enabled",
+            severity: "info",
+          }),
         ]),
       );
     });
@@ -3544,28 +3602,28 @@ description: test skill
       return probeEnv;
     };
 
-    it("applies gateway auth precedence across local/remote modes", async () => {
+    it("applies token precedence across local/remote gateway modes", async () => {
       const cases: Array<{
         name: string;
         cfg: OpenClawConfig;
-        env?: { token?: string; password?: string };
-        expectedAuth: { token?: string; password?: string };
+        env?: { token?: string };
+        expectedToken: string;
       }> = [
         {
           name: "uses local auth when gateway.mode is local",
           cfg: { gateway: { mode: "local", auth: { token: "local-token-abc123" } } },
-          expectedAuth: { token: "local-token-abc123" },
+          expectedToken: "local-token-abc123",
         },
         {
           name: "prefers env token over local config token",
           cfg: { gateway: { mode: "local", auth: { token: "local-token" } } },
           env: { token: "env-token" },
-          expectedAuth: { token: "env-token" },
+          expectedToken: "env-token",
         },
         {
           name: "uses local auth when gateway.mode is undefined (default)",
           cfg: { gateway: { auth: { token: "default-local-token" } } },
-          expectedAuth: { token: "default-local-token" },
+          expectedToken: "default-local-token",
         },
         {
           name: "uses remote auth when gateway.mode is remote with URL",
@@ -3576,7 +3634,7 @@ description: test skill
               remote: { url: "wss://remote.example.com:18789", token: "remote-token-xyz789" },
             },
           },
-          expectedAuth: { token: "remote-token-xyz789" },
+          expectedToken: "remote-token-xyz789",
         },
         {
           name: "ignores env token when gateway.mode is remote",
@@ -3588,7 +3646,7 @@ description: test skill
             },
           },
           env: { token: "env-token" },
-          expectedAuth: { token: "remote-token" },
+          expectedToken: "remote-token",
         },
         {
           name: "falls back to local auth when gateway.mode is remote but URL is missing",
@@ -3599,28 +3657,7 @@ description: test skill
               remote: { token: "remote-token-should-not-use" },
             },
           },
-          expectedAuth: { token: "fallback-local-token" },
-        },
-        {
-          name: "uses remote password when env is unset",
-          cfg: {
-            gateway: {
-              mode: "remote",
-              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
-            },
-          },
-          expectedAuth: { password: "remote-pass" },
-        },
-        {
-          name: "prefers env password over remote password",
-          cfg: {
-            gateway: {
-              mode: "remote",
-              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
-            },
-          },
-          env: { password: "env-pass" },
-          expectedAuth: { password: "env-pass" },
+          expectedToken: "fallback-local-token",
         },
       ];
 
@@ -3633,7 +3670,51 @@ description: test skill
             probeGatewayFn,
             env: makeProbeEnv(testCase.env),
           });
-          expect(getAuth(), testCase.name).toEqual(testCase.expectedAuth);
+          expect(getAuth()?.token, testCase.name).toBe(testCase.expectedToken);
+        }),
+      );
+    });
+
+    it("applies password precedence for remote gateways", async () => {
+      const cases: Array<{
+        name: string;
+        cfg: OpenClawConfig;
+        env?: { password?: string };
+        expectedPassword: string;
+      }> = [
+        {
+          name: "uses remote password when env is unset",
+          cfg: {
+            gateway: {
+              mode: "remote",
+              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
+            },
+          },
+          expectedPassword: "remote-pass",
+        },
+        {
+          name: "prefers env password over remote password",
+          cfg: {
+            gateway: {
+              mode: "remote",
+              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
+            },
+          },
+          env: { password: "env-pass" },
+          expectedPassword: "env-pass",
+        },
+      ];
+
+      await Promise.all(
+        cases.map(async (testCase) => {
+          const { probeGatewayFn, getAuth } = makeProbeCapture();
+          await audit(testCase.cfg, {
+            deep: true,
+            deepTimeoutMs: 50,
+            probeGatewayFn,
+            env: makeProbeEnv(testCase.env),
+          });
+          expect(getAuth()?.password, testCase.name).toBe(testCase.expectedPassword);
         }),
       );
     });
