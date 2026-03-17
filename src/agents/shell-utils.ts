@@ -47,9 +47,14 @@ export function getShellConfig(): { shell: string; args: string[] } {
   if (overrideShell) {
     const name = normalizeShellName(overrideShell);
     if (name) {
-      const shellPath = path.isAbsolute(overrideShell)
-        ? overrideShell
-        : (resolveShellFromPath(name) ?? name);
+      let shellPath: string;
+      if (path.isAbsolute(overrideShell)) {
+        shellPath = overrideShell;
+      } else if (overrideShell.includes(path.sep) || overrideShell.includes("/")) {
+        shellPath = path.resolve(overrideShell);
+      } else {
+        shellPath = resolveShellFromPath(name) ?? name;
+      }
       return { shell: shellPath, args: ["-c"] };
     }
   }
