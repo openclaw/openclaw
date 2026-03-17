@@ -291,4 +291,19 @@ describe("plugin contract registry", () => {
       expect.any(Function),
     );
   });
+
+  it("tracks speech registrations on bundled provider plugins", () => {
+    expect(findRegistrationForPlugin("openai")).toMatchObject({
+      providerIds: ["openai", "openai-codex"],
+      speechProviderIds: ["openai"],
+    });
+    expect(findRegistrationForPlugin("elevenlabs")).toMatchObject({
+      providerIds: [],
+      speechProviderIds: ["elevenlabs"],
+    });
+    expect(findRegistrationForPlugin("microsoft")).toMatchObject({
+      providerIds: [],
+      speechProviderIds: ["microsoft"],
+    });
+  });
 });
