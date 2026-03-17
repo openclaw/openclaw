@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
@@ -470,6 +471,27 @@ export async function runMemoryFlushIfNeeded(params: {
     cfg: params.cfg,
     nowMs: memoryFlushNowMs,
   });
+  // Ensure the memory directory and target file exist before the flush agent
+  // run starts.  The flush agent is given both `read` and `write` tools and
+  // the LLM will typically `read` the target file first to decide whether to
+  // append.  If the file does not exist yet the read tool's `fs.access` call
+  // throws ENOENT and the error surfaces as a noisy "[tools] read failed"
+  // log entry (see #48599).
+  const workspaceDir = params.followupRun.run.workspaceDir;
+  if (workspaceDir) {
+    try {
+      const targetAbsPath = path.resolve(workspaceDir, memoryFlushWritePath);
+      await fs.promises.mkdir(path.dirname(targetAbsPath), { recursive: true });
+      // Create the file only if it does not already exist (wx = exclusive create).
+      const handle = await fs.promises.open(targetAbsPath, "wx");
+      await handle.close();
+    } catch (err) {
+      // EEXIST is expected when the file already exists; ignore it.
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+        logVerbose(`memoryFlush: failed to ensure target file: ${String(err)}`);
+      }
+    }
+  }
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
     memoryFlushSettings.systemPrompt,
