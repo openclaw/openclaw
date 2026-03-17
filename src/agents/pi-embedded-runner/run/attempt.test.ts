@@ -1,9 +1,15 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { PluginHookAgentEndEvent } from "../../../plugins/types.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import {
   buildAfterTurnRuntimeContext,
+  buildAgentEndFinalLlmOutcome,
+  buildAgentEndHookEvent,
   composeSystemPromptWithHookContext,
+  decodeHtmlEntitiesInObject,
+  findAttemptAssistantMessage,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
@@ -11,7 +17,6 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldInjectOllamaCompatNumCtx,
-  decodeHtmlEntitiesInObject,
   wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnTrimToolCallNames,
@@ -63,6 +68,33 @@ async function invokeWrappedTestStream(
 ): Promise<FakeWrappedStream> {
   const wrappedFn = wrap(baseFn);
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+}
+
+function createAssistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+    api: "openai-responses" as AssistantMessage["api"],
+    provider: "openai" as AssistantMessage["provider"],
+    model: "gpt-4.1",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+    ...overrides,
+  };
 }
 
 describe("resolvePromptBuildHookResult", () => {
@@ -222,6 +254,209 @@ describe("resolveAttemptFsWorkspaceOnly", () => {
     ).toBe(false);
   });
 });
+
+describe("buildAgentEndHookEvent", () => {
+  it("includes optional finalLlmOutcome in the agent_end payload", () => {
+    const event: PluginHookAgentEndEvent = buildAgentEndHookEvent({
+      messages: [{ role: "assistant", content: "done" }] as never,
+      success: true,
+      durationMs: 42,
+      finalLlmOutcome: {
+        ok: true,
+        source: "provider",
+        provider: "openai",
+        model: "gpt-4.1",
+      },
+    });
+
+    expect(event).toEqual({
+      messages: [{ role: "assistant", content: "done" }],
+      success: true,
+      error: undefined,
+      durationMs: 42,
+      finalLlmOutcome: {
+        ok: true,
+        source: "provider",
+        provider: "openai",
+        model: "gpt-4.1",
+      },
+    });
+  });
+
+  it("keeps legacy agent_end consumers working when finalLlmOutcome is omitted", () => {
+    const event = buildAgentEndHookEvent({
+      messages: [{ role: "assistant", content: "done" }] as never,
+      success: true,
+      durationMs: 42,
+    });
+    const consumeLegacy = ({ messages, success, error, durationMs }: PluginHookAgentEndEvent) => ({
+      messages,
+      success,
+      error,
+      durationMs,
+    });
+
+    expect(consumeLegacy(event)).toEqual({
+      messages: [{ role: "assistant", content: "done" }],
+      success: true,
+      error: undefined,
+      durationMs: 42,
+    });
+    expect("finalLlmOutcome" in event).toBe(false);
+  });
+});
+
+describe("buildAgentEndFinalLlmOutcome", () => {
+  it("marks successful terminal provider completions with ok=true", () => {
+    expect(
+      buildAgentEndFinalLlmOutcome({
+        provider: "openai",
+        modelId: "gpt-4.1",
+        lastAssistant: createAssistantMessage(),
+        promptError: null,
+        promptErrorSource: null,
+        providerCallStarted: true,
+        aborted: false,
+        timedOut: false,
+      }),
+    ).toEqual({
+      ok: true,
+      source: "provider",
+      provider: "openai",
+      model: "gpt-4.1",
+      stopReason: "stop",
+    });
+  });
+
+  it("reports prompt-build failures with source=prompt and ok=false", () => {
+    expect(
+      buildAgentEndFinalLlmOutcome({
+        provider: "openai",
+        modelId: "gpt-4.1",
+        lastAssistant: undefined,
+        promptError: new Error("prompt assembly failed"),
+        promptErrorSource: "prompt",
+        providerCallStarted: false,
+        aborted: false,
+        timedOut: false,
+      }),
+    ).toEqual({
+      ok: false,
+      source: "prompt",
+      errorMessage: "prompt assembly failed",
+    });
+  });
+
+  it("reports structured provider failures with statusCode when available", () => {
+    const providerError = Object.assign(new Error("Unauthorized"), {
+      status: 401,
+      statusText: "Unauthorized",
+    });
+
+    expect(
+      buildAgentEndFinalLlmOutcome({
+        provider: "deepseek",
+        modelId: "deepseek-v3.2-speciale",
+        lastAssistant: undefined,
+        promptError: providerError,
+        promptErrorSource: "prompt",
+        providerCallStarted: true,
+        aborted: false,
+        timedOut: false,
+      }),
+    ).toEqual({
+      ok: false,
+      source: "provider",
+      provider: "deepseek",
+      model: "deepseek-v3.2-speciale",
+      statusCode: 401,
+      statusText: "Unauthorized",
+      errorMessage: "Unauthorized",
+    });
+  });
+
+  it("prefers runner failure when compaction abort happens after a successful provider reply", () => {
+    expect(
+      buildAgentEndFinalLlmOutcome({
+        provider: "openai",
+        modelId: "gpt-4.1",
+        lastAssistant: createAssistantMessage(),
+        promptError: new Error("compaction wait aborted"),
+        promptErrorSource: "compaction",
+        providerCallStarted: true,
+        aborted: false,
+        timedOut: false,
+      }),
+    ).toEqual({
+      ok: false,
+      source: "runner",
+      provider: "openai",
+      model: "gpt-4.1",
+      stopReason: undefined,
+      errorMessage: "compaction wait aborted",
+    });
+  });
+
+  it("marks terminal assistant provider failures even when promptError is null", () => {
+    const outcome = buildAgentEndFinalLlmOutcome({
+      provider: "openai",
+      modelId: "gpt-4.1",
+      lastAssistant: createAssistantMessage({
+        stopReason: "error",
+        errorMessage:
+          '401 {"error":{"type":"auth_error","message":"Unauthorized"}} Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz123456',
+      }),
+      promptError: null,
+      promptErrorSource: null,
+      providerCallStarted: true,
+      aborted: false,
+      timedOut: false,
+    });
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      source: "provider",
+      provider: "openai",
+      model: "gpt-4.1",
+      stopReason: "error",
+    });
+    expect(outcome?.errorMessage).toContain("Unauthorized");
+    expect(outcome?.errorMessage).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
+  });
+});
+
+describe("findAttemptAssistantMessage", () => {
+  it("returns the assistant message emitted during the current attempt", () => {
+    const olderAssistant = createAssistantMessage({ timestamp: 100 });
+    const currentAssistant = createAssistantMessage({ timestamp: 250, model: "gpt-4.1-mini" });
+
+    expect(
+      findAttemptAssistantMessage({
+        messages: [
+          olderAssistant,
+          { role: "user", content: "retry", timestamp: 150 } as never,
+          currentAssistant,
+        ] as never,
+        promptStartedAt: 200,
+      }),
+    ).toBe(currentAssistant);
+  });
+
+  it("ignores historical assistant turns when the current attempt failed before emitting one", () => {
+    const olderAssistant = createAssistantMessage({ timestamp: 100 });
+
+    expect(
+      findAttemptAssistantMessage({
+        messages: [
+          olderAssistant,
+          { role: "user", content: "retry", timestamp: 150 } as never,
+        ] as never,
+        promptStartedAt: 200,
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("wrapStreamFnTrimToolCallNames", () => {
   async function invokeWrappedStream(
     baseFn: (...args: never[]) => unknown,

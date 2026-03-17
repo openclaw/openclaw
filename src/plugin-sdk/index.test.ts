@@ -74,6 +74,7 @@ describe("plugin-sdk exports", () => {
     const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));
 
     try {
+      const packageDir = path.join(fixtureDir, "openclaw");
       const buildScriptPath = path.join(fixtureDir, "build-plugin-sdk.mjs");
       await fs.writeFile(
         buildScriptPath,
@@ -100,7 +101,6 @@ await build(${JSON.stringify({
         expect(module).toBeTypeOf("object");
       }
 
-      const packageDir = path.join(fixtureDir, "openclaw");
       const consumerDir = path.join(fixtureDir, "consumer");
       const consumerEntry = path.join(consumerDir, "import-plugin-sdk.mjs");
 

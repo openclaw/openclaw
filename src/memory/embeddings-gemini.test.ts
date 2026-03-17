@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as authModule from "../agents/model-auth.js";
 import {
   buildGeminiEmbeddingRequest,
   buildGeminiTextEmbeddingRequest,
@@ -11,10 +10,20 @@ import {
 } from "./embeddings-gemini.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
-vi.mock("../agents/model-auth.js", async () => {
-  const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
-  return createModelAuthMockModule();
-});
+const { requireApiKeyMock, resolveApiKeyForProviderMock } = vi.hoisted(() => ({
+  resolveApiKeyForProviderMock: vi.fn(),
+  requireApiKeyMock: vi.fn((auth: { apiKey?: string; mode?: string }, provider: string) => {
+    if (auth?.apiKey) {
+      return auth.apiKey;
+    }
+    throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
+  }),
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  requireApiKey: requireApiKeyMock,
+}));
 
 const createGeminiFetchMock = (embeddingValues = [1, 2, 3]) =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
@@ -47,12 +56,13 @@ function magnitude(values: number[]) {
 }
 
 afterEach(() => {
-  vi.resetAllMocks();
+  resolveApiKeyForProviderMock.mockReset();
+  requireApiKeyMock.mockClear();
   vi.unstubAllGlobals();
 });
 
 function mockResolvedProviderKey(apiKey = "test-key") {
-  vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+  resolveApiKeyForProviderMock.mockResolvedValue({
     apiKey,
     mode: "api-key",
     source: "test",

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -15,6 +15,7 @@ import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import { redactSensitiveText } from "../../../logging/redact.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import {
@@ -24,6 +25,8 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
+  PluginHookAgentEndEvent,
+  PluginHookAgentEndFinalLlmOutcome,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
@@ -61,12 +64,15 @@ import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
+import { sanitizeForConsole } from "../../pi-embedded-error-observation.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
+  formatAssistantErrorText,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
+  sanitizeUserFacingText,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
@@ -1316,6 +1322,225 @@ export function buildAfterTurnRuntimeContext(params: {
   };
 }
 
+function isAssistantRunMessage(message: AgentMessage | undefined): message is AssistantMessage {
+  return message?.role === "assistant";
+}
+
+function readNestedErrorProperty<T>(
+  value: unknown,
+  reader: (candidate: unknown) => T | undefined,
+  seen: Set<object> = new Set(),
+): T | undefined {
+  const direct = reader(value);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  if (seen.has(value)) {
+    return undefined;
+  }
+  seen.add(value);
+  const candidate = value as {
+    cause?: unknown;
+    error?: unknown;
+    response?: unknown;
+  };
+  return (
+    readNestedErrorProperty(candidate.error, reader, seen) ??
+    readNestedErrorProperty(candidate.cause, reader, seen) ??
+    readNestedErrorProperty(candidate.response, reader, seen)
+  );
+}
+
+function readStructuredStatusCode(value: unknown): number | undefined {
+  return readNestedErrorProperty(value, (candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return undefined;
+    }
+    const raw =
+      (candidate as { status?: unknown; statusCode?: unknown }).statusCode ??
+      (candidate as { status?: unknown }).status;
+    if (typeof raw === "number" && Number.isInteger(raw) && raw > 0) {
+      return raw;
+    }
+    if (typeof raw === "string" && /^\d+$/.test(raw.trim())) {
+      return Number(raw.trim());
+    }
+    return undefined;
+  });
+}
+
+function readStructuredStatusText(value: unknown): string | undefined {
+  return readNestedErrorProperty(value, (candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      return undefined;
+    }
+    const raw = (candidate as { statusText?: unknown }).statusText;
+    if (typeof raw !== "string") {
+      return undefined;
+    }
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+  });
+}
+
+function sanitizeAgentEndOutcomeErrorMessage(params: {
+  raw?: string;
+  assistant?: AssistantMessage;
+}): string | undefined {
+  const base = params.assistant
+    ? (formatAssistantErrorText(params.assistant, {
+        provider: params.assistant.provider,
+        model: params.assistant.model,
+      }) ?? params.assistant.errorMessage)
+    : params.raw;
+  const sanitized = sanitizeUserFacingText(base ?? "", { errorContext: true }).trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  const redacted = redactSensitiveText(sanitized, { mode: "tools" });
+  return sanitizeForConsole(redacted, 280);
+}
+
+export function buildAgentEndFinalLlmOutcome(params: {
+  provider: string;
+  modelId: string;
+  lastAssistant?: AssistantMessage;
+  promptError: unknown;
+  promptErrorSource: "prompt" | "compaction" | null;
+  providerCallStarted: boolean;
+  aborted: boolean;
+  timedOut: boolean;
+}): PluginHookAgentEndFinalLlmOutcome | undefined {
+  const runnerFailure =
+    params.promptErrorSource === "compaction" ||
+    params.aborted ||
+    params.timedOut ||
+    isRunnerAbortError(params.promptError) ||
+    isTimeoutError(params.promptError);
+
+  if (params.promptError && runnerFailure) {
+    return {
+      ok: false,
+      source: "runner",
+      provider: params.provider,
+      model: params.modelId,
+      stopReason: params.lastAssistant?.stopReason === "aborted" ? "aborted" : undefined,
+      errorMessage: sanitizeAgentEndOutcomeErrorMessage({
+        raw: describeUnknownError(params.promptError),
+      }),
+    };
+  }
+
+  if (params.lastAssistant) {
+    const provider = params.lastAssistant.provider || params.provider;
+    const model = params.lastAssistant.model || params.modelId;
+    if (
+      params.lastAssistant.stopReason === "error" ||
+      params.lastAssistant.stopReason === "aborted"
+    ) {
+      const source =
+        params.lastAssistant.stopReason === "aborted" && (params.aborted || params.timedOut)
+          ? "runner"
+          : "provider";
+      return {
+        ok: false,
+        source,
+        provider,
+        model,
+        stopReason: params.lastAssistant.stopReason,
+        errorMessage: sanitizeAgentEndOutcomeErrorMessage({
+          assistant: params.lastAssistant,
+        }),
+      };
+    }
+    return {
+      ok: true,
+      source: "provider",
+      provider,
+      model,
+      stopReason: params.lastAssistant.stopReason,
+    };
+  }
+
+  if (params.promptError) {
+    const source = params.providerCallStarted ? "provider" : "prompt";
+    const outcome: PluginHookAgentEndFinalLlmOutcome = {
+      ok: false,
+      source,
+      errorMessage: sanitizeAgentEndOutcomeErrorMessage({
+        raw: describeUnknownError(params.promptError),
+      }),
+    };
+    if (source !== "prompt") {
+      outcome.provider = params.provider;
+      outcome.model = params.modelId;
+    }
+    const statusCode = readStructuredStatusCode(params.promptError);
+    if (statusCode !== undefined) {
+      outcome.statusCode = statusCode;
+    }
+    const statusText = readStructuredStatusText(params.promptError);
+    if (statusText) {
+      outcome.statusText = statusText;
+    }
+    return outcome;
+  }
+
+  if (params.aborted || params.timedOut) {
+    return {
+      ok: false,
+      source: "runner",
+      provider: params.provider,
+      model: params.modelId,
+      stopReason: "aborted",
+      errorMessage: params.timedOut ? "LLM request timed out." : "Request aborted.",
+    };
+  }
+
+  if (params.providerCallStarted) {
+    return {
+      ok: true,
+      source: "provider",
+      provider: params.provider,
+      model: params.modelId,
+    };
+  }
+
+  return undefined;
+}
+
+export function findAttemptAssistantMessage(params: {
+  messages: AgentMessage[];
+  promptStartedAt: number;
+}): AssistantMessage | undefined {
+  return params.messages
+    .slice()
+    .toReversed()
+    .find(
+      (message): message is AssistantMessage =>
+        isAssistantRunMessage(message) && message.timestamp >= params.promptStartedAt,
+    );
+}
+
+export function buildAgentEndHookEvent(params: {
+  messages: AgentMessage[];
+  success: boolean;
+  error?: string;
+  durationMs?: number;
+  finalLlmOutcome?: PluginHookAgentEndFinalLlmOutcome;
+}): PluginHookAgentEndEvent {
+  return {
+    messages: params.messages,
+    success: params.success,
+    error: params.error,
+    durationMs: params.durationMs,
+    ...(params.finalLlmOutcome ? { finalLlmOutcome: params.finalLlmOutcome } : {}),
+  };
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -2344,6 +2569,7 @@ export async function runEmbeddedAttempt(
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
+      let lastAssistant: AssistantMessage | undefined;
       const onAbort = () => {
         const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
         const timeout = reason ? isTimeoutError(reason) : false;
@@ -2373,10 +2599,10 @@ export async function runEmbeddedAttempt(
 
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
+      let providerCallStarted = false;
+      const promptStartedAt = Date.now();
       const prePromptMessageCount = activeSession.messages.length;
       try {
-        const promptStartedAt = Date.now();
-
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
         let effectivePrompt = prependBootstrapPromptWarning(
@@ -2542,6 +2768,7 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
+          providerCallStarted = true;
           if (imageResult.images.length > 0) {
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
@@ -2755,19 +2982,34 @@ export async function runEmbeddedAttempt(
               : undefined,
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
+        lastAssistant = findAttemptAssistantMessage({
+          messages: messagesSnapshot,
+          promptStartedAt,
+        });
 
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await
         // Run even on compaction timeout so plugins can log/cleanup
         if (hookRunner?.hasHooks("agent_end")) {
+          const finalLlmOutcome = buildAgentEndFinalLlmOutcome({
+            provider: params.provider,
+            modelId: params.modelId,
+            lastAssistant,
+            promptError,
+            promptErrorSource,
+            providerCallStarted,
+            aborted,
+            timedOut,
+          });
           hookRunner
             .runAgentEnd(
-              {
+              buildAgentEndHookEvent({
                 messages: messagesSnapshot,
                 success: !aborted && !promptError,
                 error: promptError ? describeUnknownError(promptError) : undefined,
                 durationMs: Date.now() - promptStartedAt,
-              },
+                finalLlmOutcome,
+              }),
               {
                 agentId: hookAgentId,
                 sessionKey: params.sessionKey,
@@ -2805,11 +3047,6 @@ export async function runEmbeddedAttempt(
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
-
-      const lastAssistant = messagesSnapshot
-        .slice()
-        .toReversed()
-        .find((m) => m.role === "assistant");
 
       const toolMetasNormalized = toolMetas
         .filter(
