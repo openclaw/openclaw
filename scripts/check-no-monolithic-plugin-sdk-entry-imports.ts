@@ -68,6 +68,27 @@ function collectSharedExtensionSourceFiles(): string[] {
   return collectPluginSourceFiles(path.join(process.cwd(), "extensions", "shared"));
 }
 
+function collectBundledExtensionSourceFiles(): string[] {
+  const extensionsDir = path.join(process.cwd(), "extensions");
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(extensionsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === "shared") {
+      continue;
+    }
+    for (const srcFile of collectPluginSourceFiles(path.join(extensionsDir, entry.name))) {
+      files.push(srcFile);
+    }
+  }
+  return files;
+}
+
 function main() {
   const discovery = discoverOpenClawPlugins({});
   const bundledCandidates = discovery.candidates.filter((c) => c.origin === "bundled");
@@ -80,6 +101,9 @@ function main() {
   }
   for (const sharedFile of collectSharedExtensionSourceFiles()) {
     filesToCheck.add(sharedFile);
+  }
+  for (const extensionFile of collectBundledExtensionSourceFiles()) {
+    filesToCheck.add(extensionFile);
   }
 
   const monolithicOffenders: string[] = [];

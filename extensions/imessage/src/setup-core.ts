@@ -10,13 +10,13 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "../../../src/terminal/links.js";
 import type {
   ChannelSetupAdapter,
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
