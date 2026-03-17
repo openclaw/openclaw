@@ -2795,6 +2795,9 @@ module.exports = {
       expect(loaded?.origin).toBe("global");
       expect(overridden?.origin).toBe("bundled");
       expect(overridden?.error).toContain("overridden by global plugin");
+      expect(
+        registry.diagnostics.some((diag) => String(diag.message).includes("duplicate plugin id")),
+      ).toBe(false);
     });
   });
 

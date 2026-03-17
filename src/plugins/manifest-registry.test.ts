@@ -159,7 +159,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 
-  it("reports explicit installed globals as the effective duplicate winner", () => {
+  it("suppresses duplicate warning for explicit installed globals that override bundled plugins", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
     const manifest = { id: "zalouser", configSchema: { type: "object" } };
@@ -192,11 +192,7 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("bundled plugin will be overridden by global plugin"),
-      ),
-    ).toBe(true);
+    expect(countDuplicateWarnings(registry)).toBe(0);
   });
 
   it("preserves provider auth env metadata from plugin manifests", () => {
