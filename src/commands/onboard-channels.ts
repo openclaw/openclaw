@@ -34,6 +34,7 @@ import type {
   ChannelSetupStatus,
   SetupChannelsOptions,
 } from "./channel-setup/types.js";
+import { canWriteAccountScopedSoulFile } from "./channel-soul-file-config.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
 type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
@@ -854,6 +855,134 @@ export async function setupChannels(
       accountIdsByChannel,
       resolveAdapter: getVisibleSetupFlowAdapter,
     });
+  }
+
+  next = await maybeConfigureSoulFiles({
+    cfg: next,
+    selection,
+    prompter,
+    accountIdsByChannel,
+    resolvePlugin: getVisibleChannelPlugin,
+  });
+
+  return next;
+}
+
+export async function maybeConfigureSoulFiles(params: {
+  cfg: OpenClawConfig;
+  selection: ChannelChoice[];
+  prompter: WizardPrompter;
+  accountIdsByChannel: Map<ChannelChoice, string>;
+  resolvePlugin?: (channel: ChannelChoice) => ChannelSetupPlugin | undefined;
+}): Promise<OpenClawConfig> {
+  const { cfg, selection, prompter, accountIdsByChannel, resolvePlugin } = params;
+
+  if (selection.length === 0) {
+    return cfg;
+  }
+
+  const wantsSoulConfig = await prompter.confirm({
+    message: "Configure custom SOUL (personality) files for channels?",
+    initialValue: false,
+  });
+
+  if (!wantsSoulConfig) {
+    return cfg;
+  }
+
+  let next = cfg;
+  const unsupportedLabels: string[] = [];
+
+  for (const channel of selection) {
+    const accountId = accountIdsByChannel.get(channel) ?? DEFAULT_ACCOUNT_ID;
+    const accountLabel = accountId === DEFAULT_ACCOUNT_ID ? channel : `${channel}:${accountId}`;
+
+    if (!canWriteAccountScopedSoulFile({ channel, accountId })) {
+      unsupportedLabels.push(accountLabel);
+      continue;
+    }
+
+    const plugin = resolvePlugin?.(channel);
+    const account = plugin?.config.resolveAccount(next, accountId) as
+      | { soulFile?: string; name?: string }
+      | undefined;
+
+    const existingSoulFile = account?.soulFile;
+    const useCustomSoul = await prompter.confirm({
+      message: `Use custom SOUL file for ${accountLabel}?${existingSoulFile ? ` (current: ${existingSoulFile})` : ""}`,
+      initialValue: false,
+    });
+
+    if (!useCustomSoul) {
+      continue;
+    }
+
+    const defaultSoulName = `SOUL.${accountId === DEFAULT_ACCOUNT_ID ? channel : accountId}.md`;
+    const soulFileName = await prompter.text({
+      message: `SOUL filename for ${accountLabel}`,
+      initialValue: existingSoulFile ?? defaultSoulName,
+      validate: (input) => {
+        const trimmed = input.trim();
+        if (!trimmed) {
+          return "Filename cannot be empty";
+        }
+        if (!trimmed.endsWith(".md")) {
+          return "Filename must end with .md";
+        }
+        if (trimmed.includes("/") || trimmed.includes("\\")) {
+          return "Filename must not contain path separators";
+        }
+        if (trimmed.startsWith(".")) {
+          return "Filename must not start with a dot";
+        }
+        return undefined;
+      },
+    });
+
+    if (!soulFileName?.trim()) {
+      continue;
+    }
+
+    const channelConfig = next.channels?.[channel as keyof typeof next.channels] as
+      | { accounts?: Record<string, unknown> }
+      | undefined;
+
+    next = {
+      ...next,
+      channels: {
+        ...next.channels,
+        [channel]: {
+          ...channelConfig,
+          accounts: {
+            ...channelConfig?.accounts,
+            [accountId]: {
+              ...(channelConfig?.accounts?.[accountId] as Record<string, unknown> | undefined),
+              soulFile: soulFileName.trim(),
+            },
+          },
+        },
+      },
+    };
+
+    await prompter.note(
+      [
+        `SOUL file: ${soulFileName}`,
+        `Config path: channels.${channel}.accounts.${accountId}.soulFile`,
+        "",
+        "Create this file in your workspace directory with your custom personality.",
+      ].join("\n"),
+      `${accountLabel} SOUL configured`,
+    );
+  }
+
+  if (unsupportedLabels.length > 0) {
+    await prompter.note(
+      [
+        "Skipped SOUL file setup for channels that do not support account-scoped soulFile config:",
+        ...unsupportedLabels.map((label) => `- ${label}`),
+      ].join("\n"),
+      "Channel SOUL files",
+    );
   }
 
   return next;

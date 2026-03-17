@@ -339,4 +339,101 @@ describe("channelsAddCommand", () => {
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
+
+  it("stores a per-account soul file when --soul is provided", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await channelsAddCommand(
+      {
+        channel: "slack",
+        account: "work",
+        botToken: "xoxb-1",
+        appToken: "xapp-1",
+        soul: "SOUL.work.md",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(configMocks.writeConfigFile.mock.calls[0]?.[0]).toMatchObject({
+      channels: {
+        slack: {
+          accounts: {
+            work: {
+              botToken: "xoxb-1",
+              appToken: "xapp-1",
+              soulFile: "SOUL.work.md",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects --soul for channels without account-scoped soulFile support", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "msteams",
+        pluginId: "@openclaw/msteams-plugin",
+        meta: {
+          id: "msteams",
+          label: "Microsoft Teams",
+          selectionLabel: "Microsoft Teams",
+          docsPath: "/channels/msteams",
+          blurb: "teams channel",
+        },
+        install: {
+          npmSpec: "@openclaw/msteams",
+        },
+      },
+    ]);
+
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "msteams",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "msteams",
+              label: "Microsoft Teams",
+              docsPath: "/channels/msteams",
+            }),
+            setup: {
+              applyAccountConfig: vi.fn(({ cfg }) => ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  msteams: { enabled: true },
+                },
+              })),
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    await channelsAddCommand(
+      {
+        channel: "msteams",
+        soul: "SOUL.msteams.md",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Channel msteams does not support account-scoped SOUL files via --soul in its current config shape.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
 });
