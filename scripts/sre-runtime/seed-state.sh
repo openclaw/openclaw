@@ -286,17 +286,16 @@ EOF
 }
 
 resolve_cron_channels() {
-  # Build the list of monitoring channels that need cron jobs.
-  # Uses OPENCLAW_SRE_SLACK_INCIDENT_CHANNELS when set (env-aware),
-  # otherwise falls back to both platform + staging channels.
-  # bug-report is excluded — it is reactive-only, no cron needed.
-  if [ -n "$SLACK_INCIDENT_CHANNELS_RAW" ]; then
-    printf '%s' "$SLACK_INCIDENT_CHANNELS_RAW" \
+  # OPENCLAW_SRE_CRON_CHANNELS controls which channels get heartbeat cron jobs.
+  # Separate from OPENCLAW_SRE_SLACK_INCIDENT_CHANNELS (reactive intake).
+  # Dev: staging-infra-monitoring, Prd: platform-monitoring.
+  local cron_channels_raw="${OPENCLAW_SRE_CRON_CHANNELS:-}"
+  if [ -n "$cron_channels_raw" ]; then
+    printf '%s' "$cron_channels_raw" \
       | tr ',\n' '\n' \
       | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
       | grep -v '^$' \
       | sed 's/^#*//' \
-      | grep -v '^bug-report$' \
       | sort -u
   else
     printf '%s\n' "platform-monitoring" "staging-infra-monitoring"
