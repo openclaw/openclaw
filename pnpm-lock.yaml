@@ -389,6 +389,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/findoo-alpha-plugin:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+      openclaw:
+        specifier: '>=2026.1.0'
+        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
+    devDependencies:
+      openfinclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/findoo-backtest-plugin:
     dependencies:
       '@sinclair/typebox':
@@ -423,19 +436,6 @@ importers:
 
   extensions/findoo-datahub-slim-plugin:
     dependencies:
-      openclaw:
-        specifier: '>=2026.1.0'
-        version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
-    devDependencies:
-      openfinclaw:
-        specifier: workspace:*
-        version: link:../..
-
-  extensions/findoo-alpha-plugin:
-    dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.48
-        version: 0.34.48
       openclaw:
         specifier: '>=2026.1.0'
         version: 2026.3.2(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(hono@4.12.5)(node-llama-cpp@3.16.2(typescript@5.9.3))
@@ -617,6 +617,13 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
+      adm-zip:
+        specifier: ^0.5.16
+        version: 0.5.16
+    devDependencies:
+      '@types/adm-zip':
+        specifier: ^0.5.8
+        version: 0.5.8
 
   extensions/signal:
     devDependencies:
@@ -3821,6 +3828,9 @@ packages:
   '@tybys/wasm-util@0.10.1':
     resolution: {integrity: sha512-9tTaPJLSiejZKx+Bmog4uSubteqTvFrVrURwkmHixBo0G4seD0zUxp98E1DzUBJxLQ3NPwXrGKDiVjwx/DpPsg==}
 
+  '@types/adm-zip@0.5.8':
+    resolution: {integrity: sha512-RVVH7QvZYbN+ihqZ4kX/dMiowf6o+Jk1fNwiSdx0NahBJLU787zkULhGhJM8mf/obmLGmgdMM0bXsQTmyfbR7Q==}
+
   '@types/aws-lambda@8.10.160':
     resolution: {integrity: sha512-uoO4QVQNWFPJMh26pXtmtrRfGshPUSpMZGUyUQY20FhfHEElEBOPKgVmFs1z+kbpyBsRs2JnoOPT7++Z4GA9pA==}
 
@@ -4134,6 +4144,10 @@ packages:
     resolution: {integrity: sha512-1r+tmPT9Oe2Ulv5b4r7O2hCCq5CHVru/H2tcPeTpZek9jR1zBQoBfZ/RcK+9sC9/mnDvWYO5R7Iae64v2LMO+A==}
     engines: {node: '>=18'}
     hasBin: true
+
+  adm-zip@0.5.16:
+    resolution: {integrity: sha512-TGw5yVi4saajsSEgz25grObGHEUaDrniwvA2qwSC060KfqGPdglhvPMA2lPIoxs3PQIItj2iag35fONcQqgUaQ==}
+    engines: {node: '>=12.0'}
 
   agent-base@6.0.2:
     resolution: {integrity: sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==}
@@ -11598,6 +11612,10 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
+  '@types/adm-zip@0.5.8':
+    dependencies:
+      '@types/node': 25.3.5
+
   '@types/aws-lambda@8.10.160': {}
 
   '@types/body-parser@1.19.6':
@@ -12001,6 +12019,8 @@ snapshots:
       - bare-abort-controller
       - react-native-b4a
       - zod
+
+  adm-zip@0.5.16: {}
 
   agent-base@6.0.2:
     dependencies:
