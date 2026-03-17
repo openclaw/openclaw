@@ -176,9 +176,9 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
-  search: "Search",
-  navigation: "Navigation",
-  skills: "Skills",
+  search: t("common.search"),
+  navigation: t("nav.navigation"),
+  skills: t("nav.skills"),
 };
 
 function focusInput(el: Element | undefined) {
