@@ -2877,6 +2877,44 @@ module.exports = {
     }
   });
 
+  it("loads bundled plugins when manifest metadata opts into default enablement", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "profile-aware",
+      body: `module.exports = { id: "profile-aware", register() {} };`,
+      dir: bundledDir,
+      filename: "index.cjs",
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "profile-aware",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: bundledDir,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    const bundledPlugin = registry.plugins.find((entry) => entry.id === "profile-aware");
+    expect(bundledPlugin?.origin).toBe("bundled");
+    expect(bundledPlugin?.status).toBe("loaded");
+  });
+
   it("keeps scoped and unscoped plugin ids distinct", () => {
     useNoBundledPlugins();
     const scoped = writePlugin({

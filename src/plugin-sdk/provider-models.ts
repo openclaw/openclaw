@@ -81,6 +81,14 @@ export {
   buildHuggingfaceModelDefinition,
 } from "../agents/huggingface-models.js";
 export { discoverKilocodeModels } from "../agents/kilocode-models.js";
+export {
+  buildChutesModelDefinition,
+  CHUTES_BASE_URL,
+  CHUTES_DEFAULT_MODEL_ID,
+  CHUTES_DEFAULT_MODEL_REF,
+  CHUTES_MODEL_CATALOG,
+  discoverChutesModels,
+} from "../agents/chutes-models.js";
 export { resolveOllamaApiBase } from "../agents/ollama-models.js";
 export {
   buildSyntheticModelDefinition,

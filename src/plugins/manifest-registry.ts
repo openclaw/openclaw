@@ -35,6 +35,7 @@ export type PluginManifestRecord = {
   name?: string;
   description?: string;
   version?: string;
+  enabledByDefault?: boolean;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
@@ -154,6 +155,7 @@ function buildRecord(params: {
     description:
       normalizeManifestLabel(params.manifest.description) ?? params.candidate.packageDescription,
     version: normalizeManifestLabel(params.manifest.version) ?? params.candidate.packageVersion,
+    enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
     format: params.candidate.format ?? "openclaw",
     bundleFormat: params.candidate.bundleFormat,
     kind: params.manifest.kind,
