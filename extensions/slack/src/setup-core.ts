@@ -1,9 +1,7 @@
+import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
 import {
-  applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   type OpenClawConfig,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -38,15 +36,8 @@ function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawCon
   });
 }
 
-export const slackSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
+export const slackSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
+  channelKey: channel,
   validateInput: ({ accountId, input }) => {
     if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
       return "Slack env tokens can only be used for the default account.";
@@ -56,59 +47,14 @@ export const slackSetupAdapter: ChannelSetupAdapter = {
     }
     return null;
   },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          slack: {
-            ...next.channels?.slack,
-            enabled: true,
-            ...(input.useEnv
-              ? {}
-              : {
-                  ...(input.botToken ? { botToken: input.botToken } : {}),
-                  ...(input.appToken ? { appToken: input.appToken } : {}),
-                }),
-          },
+  buildPatch: (input) =>
+    input.useEnv
+      ? {}
+      : {
+          ...(input.botToken ? { botToken: input.botToken } : {}),
+          ...(input.appToken ? { appToken: input.appToken } : {}),
         },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        slack: {
-          ...next.channels?.slack,
-          enabled: true,
-          accounts: {
-            ...next.channels?.slack?.accounts,
-            [accountId]: {
-              ...next.channels?.slack?.accounts?.[accountId],
-              enabled: true,
-              ...(input.botToken ? { botToken: input.botToken } : {}),
-              ...(input.appToken ? { appToken: input.appToken } : {}),
-            },
-          },
-        },
-      },
-    };
-  },
-};
+});
 
 type SlackAllowFromResolverParams = {
   cfg: OpenClawConfig;
