@@ -12,20 +12,24 @@ import {
   supabaseDelete,
   supabaseRpc,
   type SupabaseResult,
+  type SupabaseClient,
 } from "../supabase/client.js";
 
 /**
+ * Generate session key for workflow execution.
+ * Format: agent:main:workflow:<workflow-name>
+ * Replaces spaces with dashes in workflow name.
+ */
+function generateWorkflowSessionKey(workflowName: string): string {
+  const sanitizedName = workflowName.replace(/\s+/g, "-").toLowerCase();
+  return `agent:main:${sanitizedName}`;
+}
+
+/**
  * Session configuration for workflow steps.
- * Controls token optimization through isolated sessions and minimal context.
+ * Simple configuration - session key is auto-generated from workflow name.
  */
 export interface SessionConfig {
-  /**
-   * Session target strategy:
-   * - 'isolated': Fresh session for this step (max token savings)
-   * - 'reuse': Reuse existing session from workflow
-   * - 'main': Use main session (full context, higher token cost)
-   */
-  target: "isolated" | "reuse" | "main";
   /**
    * Context mode for prompt building:
    * - 'minimal': Only current step input (90-96% token savings)
@@ -44,6 +48,8 @@ export interface SessionConfig {
 /**
  * Workflow chain step definition.
  * Each step can have its own session configuration for token optimization.
+ *
+ * trueChain is used for recursive execution - it's ALWAYS executed after the current step.
  */
 export interface WorkflowChainStep {
   /** Unique step identifier */
@@ -62,6 +68,14 @@ export interface WorkflowChainStep {
   sessionConfig?: SessionConfig;
   /** Optional delivery config for step output */
   delivery?: CronDelivery;
+
+  // Recursive chain field
+  /** Next steps to execute after this step (recursive execution) */
+  trueChain?: WorkflowChainStep[];
+  /** Deprecated - kept for backward compatibility only */
+  falseChain?: WorkflowChainStep[];
+  /** Deprecated - not used in recursive model */
+  condition?: string;
 }
 
 /**
@@ -131,6 +145,8 @@ export interface StepExecutionResult {
   };
   /** Execution duration in ms */
   durationMs: number;
+  /** Additional metadata (for If/Else branching, etc.) */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -184,14 +200,31 @@ export class WorkflowExecutor {
 
   /**
    * Execute a complete workflow chain.
+   *
+   * Handles trueChain recursion - after each step, if trueChain exists,
+   * execute it recursively with the step's output as input.
+   *
+   * Session key format: agent:main:workflow:<workflow-name>
+   * (spaces in workflow name are replaced with dashes)
    */
   async executeWorkflow(
     workflowId: string,
     steps: WorkflowChainStep[],
-    initialContext?: Partial<WorkflowExecutionContext> & { sessionKey?: string },
+    initialContext?: Partial<WorkflowExecutionContext> & {
+      sessionKey?: string;
+      workflowName?: string;
+    },
   ): Promise<WorkflowExecutionResult> {
     const timestamp = Date.now();
     const startTime = Date.now();
+
+    // Generate workflow session key if not provided
+    // Priority: explicit sessionKey > generated from workflowName > undefined
+    let effectiveSessionKey = initialContext?.sessionKey;
+    if (!effectiveSessionKey && initialContext?.workflowName) {
+      effectiveSessionKey = generateWorkflowSessionKey(initialContext.workflowName);
+      logInfo(`[workflow:${workflowId}] Generated session key: ${effectiveSessionKey}`);
+    }
 
     const context: WorkflowExecutionContext = {
       workflowId,
@@ -203,8 +236,8 @@ export class WorkflowExecutor {
     };
 
     // Store base session key from cron job for "main" target steps
-    if (initialContext?.sessionKey) {
-      context.sharedData.baseSessionKey = initialContext.sessionKey;
+    if (effectiveSessionKey) {
+      context.sharedData.baseSessionKey = effectiveSessionKey;
     }
 
     const stepResults: StepExecutionResult[] = [];
@@ -234,6 +267,55 @@ export class WorkflowExecutor {
 
         // Store result in context for next steps
         context.stepResults[step.nodeId] = result.output;
+
+        // ✅ RECURSIVE: Execute trueChain if exists
+        if (step.trueChain && step.trueChain.length > 0) {
+          logInfo(
+            `[workflow:${workflowId}] Executing trueChain for step ${step.nodeId} (${step.trueChain.length} steps)`,
+          );
+
+          const trueChainResult = await this.executeWorkflow(
+            `${workflowId}:${step.nodeId}:trueChain`,
+            step.trueChain,
+            {
+              sharedData: context.sharedData,
+              sessions: context.sessions,
+              sessionKey: initialContext?.sessionKey,
+              workflowName: initialContext?.workflowName, // Pass workflowName to recursive calls
+            },
+          );
+
+          if (!trueChainResult.success) {
+            workflowSuccess = false;
+            workflowError = trueChainResult.error;
+            break;
+          }
+
+          // Merge trueChain results
+          stepResults.push(...trueChainResult.stepResults);
+
+          // Update context with final output from trueChain
+          const finalTrueChainOutput =
+            trueChainResult.stepResults[trueChainResult.stepResults.length - 1]?.output;
+          if (finalTrueChainOutput) {
+            context.stepResults[`${step.nodeId}:trueChain`] = finalTrueChainOutput;
+          }
+
+          // Merge token tracking
+          if (trueChainResult.tokenTracking) {
+            this.tokenTracking.inputTokens += trueChainResult.tokenTracking.inputTokens;
+            this.tokenTracking.outputTokens += trueChainResult.tokenTracking.outputTokens;
+            this.tokenTracking.totalTokens += trueChainResult.tokenTracking.totalTokens;
+            this.tokenTracking.cacheReadTokens += trueChainResult.tokenTracking.cacheReadTokens;
+            this.tokenTracking.cacheWriteTokens += trueChainResult.tokenTracking.cacheWriteTokens;
+
+            // Merge step breakdown
+            Object.assign(
+              this.tokenTracking.stepBreakdown,
+              trueChainResult.tokenTracking.stepBreakdown,
+            );
+          }
+        }
       }
 
       // Get final output from last successful step
@@ -277,6 +359,8 @@ export class WorkflowExecutor {
 
   /**
    * Execute a single workflow step.
+   *
+   * After executing the step, if trueChain exists, execute it recursively.
    */
   async executeStep(
     step: WorkflowChainStep,
@@ -291,9 +375,13 @@ export class WorkflowExecutor {
       }
 
       // Handle agent prompt operations
-      const sessionConfig = step.sessionConfig ?? { target: "isolated", contextMode: "minimal" };
+      const sessionConfig = step.sessionConfig ?? {
+        contextMode: "minimal",
+        model: undefined,
+        thinking: undefined,
+      };
 
-      // Determine session strategy
+      // Determine session (uses baseSessionKey from workflow name)
       const sessionInfo = await this.getOrCreateSession(
         context.workflowId,
         context.timestamp,
@@ -304,6 +392,10 @@ export class WorkflowExecutor {
 
       // Build prompt based on context mode
       const prompt = this.buildPrompt(step, context, sessionConfig);
+
+      if (step?.prompt) {
+        logInfo(`[workflow-prompt]: ${prompt}`);
+      }
 
       // Execute the step
       const result = await this.executeAgentPrompt(step, prompt, sessionInfo, context);
@@ -316,7 +408,6 @@ export class WorkflowExecutor {
       }
 
       // Deliver step output if step has delivery config
-      // This allows each workflow step to announce its result to a channel
       if (step.delivery && step.delivery.mode !== "none") {
         try {
           await this.deliverStepOutput(step, result.output, context);
@@ -328,6 +419,7 @@ export class WorkflowExecutor {
         }
       }
 
+      // ✅ Return basic result - trueChain is handled by executeWorkflow()
       return {
         nodeId: step.nodeId,
         success: true,
@@ -372,28 +464,35 @@ export class WorkflowExecutor {
     logDebug(`[workflow:${context.workflowId}] Executing agent prompt for step ${step.nodeId}`);
 
     // Create a temporary job object for the isolated agent runner
+    const now = Date.now();
     const tempJob = {
       id: `${context.workflowId}:${step.nodeId}`,
       name: step.label,
       agentId,
-      sessionTarget: sessionConfig.target as "main" | "isolated",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron" as const, expr: "* * * * *", tz: "UTC" as const, staggerMs: 0 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
       sessionKey: sessionInfo.sessionKey,
+      state: {},
       payload: {
         kind: "agentTurn" as const,
         message: prompt,
-        model: sessionConfig.model,
-        thinking: sessionConfig.thinking === "on" ? "enabled" : undefined,
+        model: (sessionConfig as SessionConfig).model,
+        thinking: (sessionConfig as SessionConfig).thinking === "on" ? "enabled" : undefined,
       },
       delivery: {
         mode: "none" as const,
       },
-    };
+    } satisfies import("../../cron/types.js").CronJob;
 
     try {
       const result = await runCronIsolatedAgentTurn({
         cfg: this.config,
         deps: this.deps,
-        job: tempJob as unknown,
+        job: tempJob,
         message: prompt,
         sessionKey: sessionInfo.sessionKey,
         agentId,
@@ -519,7 +618,7 @@ export class WorkflowExecutor {
    * Execute Supabase SELECT operation.
    */
   private async executeSupabaseSelect(
-    client: unknown,
+    client: SupabaseClient,
     config: SupabaseWorkflowStep,
   ): Promise<SupabaseResult> {
     if (!config.table) {
@@ -539,7 +638,7 @@ export class WorkflowExecutor {
    * Execute Supabase INSERT operation.
    */
   private async executeSupabaseInsert(
-    client: unknown,
+    client: SupabaseClient,
     config: SupabaseWorkflowStep,
   ): Promise<SupabaseResult> {
     if (!config.table) {
@@ -559,7 +658,7 @@ export class WorkflowExecutor {
    * Execute Supabase UPDATE operation.
    */
   private async executeSupabaseUpdate(
-    client: unknown,
+    client: SupabaseClient,
     config: SupabaseWorkflowStep,
   ): Promise<SupabaseResult> {
     if (!config.table) {
@@ -583,7 +682,7 @@ export class WorkflowExecutor {
    * Execute Supabase DELETE operation.
    */
   private async executeSupabaseDelete(
-    client: unknown,
+    client: SupabaseClient,
     config: SupabaseWorkflowStep,
   ): Promise<SupabaseResult> {
     if (!config.table) {
@@ -603,7 +702,7 @@ export class WorkflowExecutor {
    * Execute Supabase RPC operation.
    */
   private async executeSupabaseRpc(
-    client: unknown,
+    client: SupabaseClient,
     config: SupabaseWorkflowStep,
   ): Promise<SupabaseResult> {
     if (!config.functionName) {
@@ -614,30 +713,6 @@ export class WorkflowExecutor {
       function: config.functionName,
       params: config.args,
     });
-  }
-
-  /**
-   * Create or get isolated session for a step.
-   */
-  async createIsolatedSession(
-    workflowId: string,
-    timestamp: number,
-    nodeId: string,
-    _config: SessionConfig,
-  ): Promise<{ sessionId: string; sessionKey: string }> {
-    const sessionKey = `workflow:${workflowId}:${timestamp}:${nodeId}`;
-    const sessionId = crypto.randomUUID();
-
-    // Store session info for reuse tracking
-    this.activeSessions.set(sessionKey, {
-      sessionId,
-      sessionKey,
-      createdAt: Date.now(),
-    });
-
-    logDebug(`[workflow:${workflowId}] Created isolated session for ${nodeId}: ${sessionKey}`);
-
-    return { sessionId, sessionKey };
   }
 
   /**
@@ -740,7 +815,12 @@ export class WorkflowExecutor {
   }
 
   /**
-   * Get or create session based on config.
+   * Get or create session for workflow step.
+   *
+   * Session key is auto-generated from workflow name:
+   * Format: agent:main:workflow:<workflow-name>
+   *
+   * All steps in the same workflow share the same session key.
    */
   private async getOrCreateSession(
     workflowId: string,
@@ -749,43 +829,31 @@ export class WorkflowExecutor {
     config: SessionConfig,
     context: WorkflowExecutionContext,
   ): Promise<{ sessionId: string; sessionKey: string }> {
-    if (config.target === "main") {
-      // Use the base session key from cron job (e.g., agent:main:main)
-      // This ensures all steps inject into the same chat thread
-      const baseSessionKey = context.sharedData.baseSessionKey as string | undefined;
-      const sessionKey = baseSessionKey || `workflow:${workflowId}:main`;
-      // Store in context so subsequent steps with "reuse" can find it
-      if (!context.sessions.has(nodeId)) {
-        context.sessions.set(nodeId, sessionKey);
-        this.activeSessions.set(sessionKey, {
-          sessionId: "main",
-          sessionKey,
-          createdAt: Date.now(),
-        });
+    // Get base session key (generated from workflow name)
+    const baseSessionKey = context.sharedData.baseSessionKey as string | undefined;
+    const sessionKey = baseSessionKey || `workflow:${workflowId}`;
+
+    // Check if we already have a session for this workflow
+    const existingSessionKey = context.sessions.get("workflow");
+    if (existingSessionKey) {
+      const session = this.activeSessions.get(existingSessionKey);
+      if (session) {
+        logDebug(`[workflow:${workflowId}] Reusing session: ${existingSessionKey}`);
+        return { sessionId: session.sessionId, sessionKey: existingSessionKey };
       }
-      return { sessionId: "main", sessionKey };
     }
 
-    if (config.target === "reuse") {
-      // Try to reuse existing session from workflow
-      const existingSessionKey = Array.from(context.sessions.entries()).find(([key]) =>
-        key.startsWith(`workflow:${workflowId}`),
-      )?.[1];
+    // Create new session for this workflow
+    const sessionId = crypto.randomUUID();
+    this.activeSessions.set(sessionKey, {
+      sessionId,
+      sessionKey,
+      createdAt: Date.now(),
+    });
+    context.sessions.set("workflow", sessionKey);
 
-      if (existingSessionKey) {
-        const session = this.activeSessions.get(existingSessionKey);
-        if (session) {
-          logDebug(`[workflow:${workflowId}] Reusing session: ${existingSessionKey}`);
-          return { sessionId: session.sessionId, sessionKey: existingSessionKey };
-        }
-      }
-      // Fall through to create new isolated session if reuse not found
-    }
-
-    // Create new isolated session
-    const sessionInfo = await this.createIsolatedSession(workflowId, timestamp, nodeId, config);
-    context.sessions.set(nodeId, sessionInfo.sessionKey);
-    return sessionInfo;
+    logDebug(`[workflow:${workflowId}] Created session: ${sessionKey}`);
+    return { sessionId, sessionKey };
   }
 
   /**

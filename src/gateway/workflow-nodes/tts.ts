@@ -22,7 +22,7 @@ export const ttsHandler: WorkflowNodeHandler = {
 
     try {
       // Render template with {{input}} replacement
-      const rawText = (config.ttsText as string) || context.currentInput || "";
+      const rawText = (config.text as string) || context.currentInput || "";
       const text = renderTemplate(rawText, context.currentInput, context.variables);
 
       if (!text) {
@@ -33,7 +33,7 @@ export const ttsHandler: WorkflowNodeHandler = {
         };
       }
 
-      const provider = config.ttsProvider as string | undefined;
+      const provider = config.provider;
 
       // Load config and convert
       const cfg = loadConfig();

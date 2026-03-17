@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 
 // Mock session store so we can control what entries exist.
 const mockStore: Record<string, Record<string, unknown>> = {};

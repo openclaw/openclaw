@@ -17,6 +17,9 @@ const WF_CHAIN_PREFIX = "__wf_chain__:";
 /**
  * Extended cron job configuration for workflow chains.
  * Allows defining a sequence of steps with individual session configs.
+ *
+ * Each step can have trueChain[] for recursive execution.
+ * trueChain is ALWAYS executed after the step completes (linear chain, no branching).
  */
 export interface WorkflowCronJob {
   /** Job ID */
@@ -101,32 +104,12 @@ export function parseWorkflowChainFromDescription(
  */
 export function parseSessionConfig(config: unknown, defaultConfig?: SessionConfig): SessionConfig {
   const baseConfig: SessionConfig = defaultConfig ?? {
-    target: "isolated",
     contextMode: "minimal",
   };
-
-  if (typeof config === "string") {
-    // Parse shorthand: "isolated:minimal" or "reuse:full" or "main"
-    const parts = config.split(":");
-    const target = parts[0] as SessionConfig["target"];
-    const contextMode = parts[1] as SessionConfig["contextMode"] | undefined;
-
-    if (["isolated", "reuse", "main"].includes(target)) {
-      return {
-        ...baseConfig,
-        target,
-        contextMode:
-          contextMode && ["minimal", "full", "custom"].includes(contextMode)
-            ? contextMode
-            : baseConfig.contextMode,
-      };
-    }
-  }
 
   if (typeof config === "object" && config !== null) {
     const obj = config as Partial<SessionConfig>;
     return {
-      target: obj.target ?? baseConfig.target,
       contextMode: obj.contextMode ?? baseConfig.contextMode,
       model: obj.model,
       maxTokens: obj.maxTokens,
@@ -207,6 +190,8 @@ export async function executeWorkflowCronJob(
       `Steps: ${job.workflowChain.length}, Trigger: ${triggerReason ?? "scheduled"}`,
   );
 
+  logInfo(`[workflow-chain]: ${JSON.stringify(job.workflowChain)}`);
+
   try {
     // Initialize workflow executor
     const executor = new WorkflowExecutor(config, deps);
@@ -215,12 +200,14 @@ export async function executeWorkflowCronJob(
     // Workflow chains always run in isolated/reuse sessions (agentTurn required).
     // The job's sessionTarget determines delivery: "main" → announce to main session,
     // "isolated" → announce to delivery.to or last channel.
-    const steps = job.workflowChain.map((step, index) => ({
+    //
+    // trueChain recursion: Each step can have trueChain[] which will be executed
+    // recursively after the step completes (linear chain, no branching).
+    const steps = job.workflowChain.map((step, _index) => ({
       ...step,
       sessionConfig: step.sessionConfig ??
         job.defaultSessionConfig ?? {
-          // First step creates isolated session, subsequent steps reuse it
-          target: index === 0 ? "isolated" : "reuse",
+          // Simple config - session key is auto-generated from workflow name
           contextMode: "minimal",
         },
       // Ensure payload kind is agentTurn for workflow steps
@@ -228,8 +215,10 @@ export async function executeWorkflowCronJob(
     }));
 
     // Execute workflow with session key from cron job
+    // If no sessionKey is provided, generate one from workflow name: agent:main:workflow:<name>
     const result = await executor.executeWorkflow(workflowId, steps, {
       sessionKey: job.sessionKey,
+      workflowName: job.name, // Used to generate session key if sessionKey is not provided
     });
 
     const durationMs = Date.now() - startTime;
@@ -315,7 +304,6 @@ export async function handleWorkflowSessionLifecycle(
 }> {
   const executor = new WorkflowExecutor(config, deps);
   const defaultConfig: SessionConfig = sessionConfig ?? {
-    target: "isolated",
     contextMode: "minimal",
   };
 
@@ -451,14 +439,7 @@ export function validateWorkflowChain(chain: WorkflowChainStep[]): {
 
     // Validate session config if present
     if (step.sessionConfig) {
-      const validTargets = ["isolated", "reuse", "main"];
       const validContextModes = ["minimal", "full", "custom"];
-
-      if (!validTargets.includes(step.sessionConfig.target)) {
-        errors.push(
-          `Step ${index} (${step.nodeId}): invalid session target '${step.sessionConfig.target}'`,
-        );
-      }
 
       if (!validContextModes.includes(step.sessionConfig.contextMode)) {
         errors.push(

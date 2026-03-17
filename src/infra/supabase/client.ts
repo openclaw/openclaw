@@ -6,6 +6,9 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { logInfo, logWarn, logError } from "../../logger.js";
 
+// Re-export SupabaseClient type for workflow usage
+export type { SupabaseClient };
+
 export interface SupabaseInstanceConfig {
   url: string;
   key: string;

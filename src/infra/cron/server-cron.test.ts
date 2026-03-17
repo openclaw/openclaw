@@ -11,26 +11,8 @@ import {
 } from "./server-cron.js";
 
 describe("parseSessionConfig", () => {
-  it("should parse string shorthand config", () => {
-    expect(parseSessionConfig("isolated:minimal")).toEqual({
-      target: "isolated",
-      contextMode: "minimal",
-    });
-
-    expect(parseSessionConfig("reuse:full")).toEqual({
-      target: "reuse",
-      contextMode: "full",
-    });
-
-    expect(parseSessionConfig("main")).toEqual({
-      target: "main",
-      contextMode: "minimal", // default
-    });
-  });
-
   it("should parse object config", () => {
     const config: SessionConfig = {
-      target: "isolated",
       contextMode: "minimal",
       model: "test/model",
       maxTokens: 1000,
@@ -42,18 +24,15 @@ describe("parseSessionConfig", () => {
 
   it("should merge with default config", () => {
     const defaultConfig: SessionConfig = {
-      target: "reuse",
       contextMode: "full",
     };
 
-    const result = parseSessionConfig("isolated:minimal", defaultConfig);
-    expect(result.target).toBe("isolated");
+    const result = parseSessionConfig({ contextMode: "minimal" }, defaultConfig);
     expect(result.contextMode).toBe("minimal");
   });
 
   it("should return default config for invalid input", () => {
     const defaultConfig: SessionConfig = {
-      target: "isolated",
       contextMode: "minimal",
     };
 
@@ -101,7 +80,6 @@ describe("createWorkflowCronJob", () => {
     const steps: WorkflowChainStep[] = [{ nodeId: "step1", actionType: "test", label: "Test" }];
 
     const defaultSessionConfig: SessionConfig = {
-      target: "isolated",
       contextMode: "minimal",
       model: "test/model",
     };
@@ -204,15 +182,14 @@ describe("validateWorkflowChain", () => {
         actionType: "test",
         label: "Test",
         sessionConfig: {
-          target: "invalid" as unknown,
-          contextMode: "minimal",
+          contextMode: "minimal" as "custom" | "full" | "minimal",
         },
       },
     ];
 
     const result = validateWorkflowChain(steps);
     expect(result.valid).toBe(false);
-    expect(result.errors.some((e) => e.includes("invalid session target"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("invalid"))).toBe(true);
   });
 
   it("should reject invalid maxTokens", () => {
@@ -222,7 +199,6 @@ describe("validateWorkflowChain", () => {
         actionType: "test",
         label: "Test",
         sessionConfig: {
-          target: "isolated",
           contextMode: "minimal",
           maxTokens: -100,
         },
@@ -241,9 +217,8 @@ describe("validateWorkflowChain", () => {
         actionType: "test",
         label: "Test",
         sessionConfig: {
-          target: "isolated",
           contextMode: "minimal",
-          thinking: "maybe" as unknown,
+          thinking: "maybe" as "on" | "off" | undefined,
         },
       },
     ];
@@ -280,27 +255,27 @@ describe("Integration: Workflow with session configs", () => {
         nodeId: "fetch",
         actionType: "fetch",
         label: "Fetch data",
-        sessionConfig: { target: "isolated", contextMode: "minimal" },
+        sessionConfig: { contextMode: "minimal" },
       },
       {
         nodeId: "analyze",
         actionType: "analyze",
         label: "Analyze data",
-        sessionConfig: { target: "reuse", contextMode: "full" },
+        sessionConfig: { contextMode: "full" },
       },
       {
         nodeId: "report",
         actionType: "report",
         label: "Generate report",
-        sessionConfig: { target: "main", contextMode: "custom" },
+        sessionConfig: { contextMode: "custom" },
       },
     ];
 
     const job = createWorkflowCronJob("mixed-workflow", "Mixed Workflow", schedule, steps);
 
     expect(job.workflowChain.length).toBe(3);
-    expect(job.workflowChain[0].sessionConfig?.target).toBe("isolated");
-    expect(job.workflowChain[1].sessionConfig?.target).toBe("reuse");
-    expect(job.workflowChain[2].sessionConfig?.target).toBe("main");
+    expect(job.workflowChain[0].sessionConfig?.contextMode).toBe("minimal");
+    expect(job.workflowChain[1].sessionConfig?.contextMode).toBe("full");
+    expect(job.workflowChain[2].sessionConfig?.contextMode).toBe("custom");
   });
 });

@@ -1,18 +1,13 @@
 /**
  * Workflow Nodes - Type Definitions
  *
- * Standardized interfaces for workflow node execution
+ * Simplified interfaces for recursive chain execution
  */
 
 /**
  * Execution status returned by node handlers
  */
-export type NodeExecutionStatus = "success" | "error" | "branched";
-
-/**
- * Branch taken by If/Else node
- */
-export type BranchDirection = "true" | "false";
+export type NodeExecutionStatus = "success" | "error";
 
 /**
  * Output from a node execution
@@ -26,9 +21,6 @@ export interface NodeOutput {
 
   /** Error message if status is "error" */
   error?: string;
-
-  /** Branch taken (for If/Else nodes only) */
-  branchTaken?: BranchDirection;
 
   /** Additional metadata for logging/debugging */
   metadata?: Record<string, unknown>;
@@ -64,61 +56,82 @@ export interface NodeInput {
  * Node configuration - varies by node type
  */
 export interface NodeConfig {
-  // Common
-  [key: string]: unknown;
-
-  // Agent Prompt
+  /** Agent ID for agent-prompt nodes */
   agentId?: string;
+  /** Prompt template for agent-prompt nodes */
   prompt?: string;
-
-  // Send Message
+  /** Message body for send-message nodes */
   body?: string;
+  /** Channel for send-message nodes */
   channel?: string;
+  /** Recipient ID for send-message nodes */
   recipientId?: string;
+  /** Account ID for send-message nodes */
   accountId?: string;
-
-  // If/Else
+  /** Condition expression (deprecated - not used in recursive model) */
   condition?: string;
+  /** Next steps in chain (recursive execution) */
   trueChain?: WorkflowChainStep[];
+  /** Deprecated - kept for backward compatibility only */
   falseChain?: WorkflowChainStep[];
-
-  // Execute Tool
-  toolName?: string;
-  toolArgs?: Record<string, unknown>;
-
-  // Remote Invoke
-  nodeId?: string;
-  command?: string;
-  params?: Record<string, unknown>;
-
-  // TTS
-  text?: string;
-  voiceId?: string;
-  provider?: string;
-
-  // Delay
+  /** Delay duration in ms */
   durationMs?: number;
-
-  // Custom JS
+  /** Custom JS code */
   code?: string;
+  /** Tool name for execute-tool */
+  toolName?: string;
+  /** Tool arguments */
+  toolArgs?: Record<string, unknown>;
+  /** TTS text */
+  text?: string;
+  /** TTS voice ID */
+  voiceId?: string;
+  /** TTS provider */
+  provider?: string;
+  /** Remote invoke node ID */
+  nodeId?: string;
+  /** Remote invoke command */
+  command?: string;
+  /** Remote invoke parameters */
+  params?: Record<string, unknown>;
 }
 
 /**
  * Workflow chain step (from UI serialization)
+ *
+ * Each step can have a trueChain for recursive execution.
+ * The trueChain is ALWAYS executed after the current step completes.
  */
 export interface WorkflowChainStep {
+  /** Unique step identifier */
   nodeId: string;
+  /** Type of action to execute */
   actionType: string;
+  /** Human-readable label */
   label: string;
+  /** Agent ID for agent-prompt nodes */
   agentId?: string;
+  /** Prompt template for agent-prompt nodes */
   prompt?: string;
+  /** Message body for send-message nodes */
   body?: string;
+  /** Channel for send-message nodes */
   channel?: string;
+  /** Recipient ID for send-message nodes */
   recipientId?: string;
+  /** Account ID for send-message nodes */
   accountId?: string;
+  /** Condition expression (deprecated - not used in recursive model) */
   condition?: string;
+  /** Next steps in chain (recursive execution) */
   trueChain?: WorkflowChainStep[];
+  /** Deprecated - kept for backward compatibility only */
   falseChain?: WorkflowChainStep[];
+  /** Delivery configuration */
+  delivery?: import("../../cron/types.js").CronDelivery;
+  /** Session configuration */
+  sessionConfig?: import("../../infra/cron/workflow-executor.js").SessionConfig;
+  /** Node-specific configuration */
   config?: NodeConfig;
 }
 

@@ -177,7 +177,7 @@ export const customJSHandler: WorkflowNodeHandler = {
     const { nodeId, label, config } = input;
 
     try {
-      const code = config.jsCode as string | undefined;
+      const code = config.code;
 
       if (!code) {
         return {

@@ -59,8 +59,8 @@ export interface WorkflowChainStep {
 
   // If/Else Branching
   condition?: string;
-  trueChain?: WorkflowChainStep[];
-  falseChain?: WorkflowChainStep[];
+  trueChain?: WorkflowChainStep[]; // If/Else: true branch | Other nodes: next step in sequence
+  falseChain?: WorkflowChainStep[]; // If/Else: false branch only
 
   // Execute Tool
   toolName?: string;
@@ -96,7 +96,6 @@ export interface WorkflowChainStep {
 
   // NEW: Session Configuration (passed from trigger)
   sessionConfig?: {
-    target: "isolated" | "reuse" | "main";
     contextMode: "minimal" | "full" | "custom";
     model?: string;
     maxTokens?: number;
@@ -122,9 +121,6 @@ function extractChainFromTrigger(
   const triggerNode = nodes.find((n) => n.id === triggerId);
   const sessionConfig = (triggerNode?.data as any)?.sessionConfig
     ? {
-        target:
-          ((triggerNode?.data as any).sessionConfig.target as "isolated" | "reuse" | "main") ||
-          "isolated",
         contextMode:
           ((triggerNode?.data as any).sessionConfig.contextMode as "minimal" | "full" | "custom") ||
           "minimal",
@@ -304,7 +300,8 @@ function extractNodeChain(
       const nextStep = extractNodeChain(nextEdge.target, nodes, edges, visited);
 
       if (nextStep) {
-        // Store as single next step in trueChain array (for compatibility)
+        // Store next step in trueChain
+        // For non-If/Else nodes, trueChain represents the next step in sequence
         step.trueChain = [nextStep];
       }
     }
@@ -466,6 +463,8 @@ export function useWorkflows() {
         continue;
       }
 
+      console.log("[WORKFLOW DEBUG] NODES ", JSON.stringify(nodes));
+
       // BFS lấy toàn bộ chuỗi action nodes từ trigger này
       const chain = extractChainFromTrigger(trigger.id, nodes, edges);
       console.log("[WORKFLOW DEBUG] Extracted chain from trigger:", {
@@ -489,7 +488,7 @@ export function useWorkflows() {
           ? `${WF_CHAIN_PREFIX}${JSON.stringify(chain, null, 2)}`
           : `Generated from Workflow Editor (trigger: ${trigger.id})`;
 
-      console.log("[WORKFLOW DEBUG] Chain description:", description.substring(0, 1000));
+      console.log("[WORKFLOW DEBUG] Chain description:", description);
       console.log("[WORKFLOW DEBUG] Full chain structure:", JSON.stringify(chain, null, 2));
 
       // agentId từ bước đầu tiên (nếu là agent-prompt)
@@ -503,7 +502,6 @@ export function useWorkflows() {
         // Extract session config from trigger node
         const sessionConfig = trigger.data?.sessionConfig as
           | {
-              target?: "isolated" | "reuse" | "main";
               contextMode?: "minimal" | "full" | "custom";
               model?: string;
               maxTokens?: number;
@@ -532,7 +530,7 @@ export function useWorkflows() {
             enabled: true,
             agentId,
             schedule: { kind: "cron", expr: cronExpr },
-            sessionTarget: sessionConfig?.target || "isolated",
+            sessionTarget: "isolated",
             wakeMode: "now",
             payload: { kind: "agentTurn", message: firstPrompt },
           };
@@ -543,7 +541,7 @@ export function useWorkflows() {
             description,
             enabled: true,
             schedule: { kind: "cron", expr: cronExpr },
-            sessionTarget: sessionConfig?.target || "isolated",
+            sessionTarget: "isolated",
             wakeMode: "now",
             payload: { kind: "systemEvent", text: firstStep.body || "Hello from workflow!" },
             delivery: { mode: "announce" },
@@ -570,7 +568,6 @@ export function useWorkflows() {
             cronExpr,
             sessionConfig: sessionConfig
               ? {
-                  target: sessionConfig.target || "isolated",
                   contextMode:
                     ((trigger.data as any)?.contextMode as "minimal" | "full" | "custom") ||
                     "minimal",
@@ -592,7 +589,6 @@ export function useWorkflows() {
         // Extract session config from trigger node
         const sessionConfig = trigger.data?.sessionConfig as
           | {
-              target?: "isolated" | "reuse" | "main";
               contextMode?: "minimal" | "full" | "custom";
               model?: string;
               maxTokens?: number;
@@ -620,7 +616,7 @@ export function useWorkflows() {
           enabled: true,
           agentId,
           schedule: { kind: "event", type: "chat-message" }, // Event-based schedule
-          sessionTarget: sessionConfig?.target || "isolated",
+          sessionTarget: "isolated",
           wakeMode: "now",
           payload: {
             kind: "agentTurn",
@@ -642,7 +638,6 @@ export function useWorkflows() {
             matchKeyword,
             sessionConfig: sessionConfig
               ? {
-                  target: sessionConfig.target || "isolated",
                   contextMode:
                     ((trigger.data as any)?.contextMode as "minimal" | "full" | "custom") ||
                     "minimal",

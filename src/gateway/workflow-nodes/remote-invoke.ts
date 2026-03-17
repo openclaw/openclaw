@@ -46,7 +46,7 @@ export const remoteInvokeHandler: WorkflowNodeHandler = {
     const { nodeId, label, config } = input;
 
     try {
-      const targetNodeId = config.targetNodeId as string;
+      const targetNodeId = config.nodeId as string;
       const command = config.command;
       const params = config.params;
 

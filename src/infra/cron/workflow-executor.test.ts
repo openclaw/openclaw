@@ -66,7 +66,6 @@ describe("WorkflowExecutor", () => {
       };
 
       const sessionConfig: SessionConfig = {
-        target: "isolated",
         contextMode: "minimal",
       };
 
@@ -99,7 +98,6 @@ describe("WorkflowExecutor", () => {
       };
 
       const sessionConfig: SessionConfig = {
-        target: "isolated",
         contextMode: "minimal",
       };
 
@@ -131,7 +129,6 @@ describe("WorkflowExecutor", () => {
       };
 
       const sessionConfig: SessionConfig = {
-        target: "isolated",
         contextMode: "full",
       };
 
@@ -197,12 +194,12 @@ describe("WorkflowExecutor", () => {
 describe("SessionConfig parsing", () => {
   it("should accept valid session configs", () => {
     const configs: SessionConfig[] = [
-      { target: "isolated", contextMode: "minimal" },
-      { target: "reuse", contextMode: "full" },
-      { target: "main", contextMode: "custom" },
-      { target: "isolated", contextMode: "minimal", model: "test/model" },
-      { target: "isolated", contextMode: "minimal", maxTokens: 1000 },
-      { target: "isolated", contextMode: "minimal", thinking: "on" },
+      { contextMode: "minimal" },
+      { contextMode: "full" },
+      { contextMode: "custom" },
+      { contextMode: "minimal", model: "test/model" },
+      { contextMode: "minimal", maxTokens: 1000 },
+      { contextMode: "minimal", thinking: "on" },
     ];
 
     configs.forEach((config) => {
@@ -231,7 +228,6 @@ describe("WorkflowChainStep validation", () => {
         actionType: "summarize",
         label: "Third step",
         sessionConfig: {
-          target: "isolated",
           contextMode: "minimal",
         },
       },
@@ -240,6 +236,6 @@ describe("WorkflowChainStep validation", () => {
     expect(steps.length).toBe(3);
     expect(steps[0].nodeId).toBe("step1");
     expect(steps[1].prompt).toBe("Do something");
-    expect(steps[2].sessionConfig?.target).toBe("isolated");
+    expect(steps[2].sessionConfig?.contextMode).toBe("minimal");
   });
 });

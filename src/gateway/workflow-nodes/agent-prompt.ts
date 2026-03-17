@@ -2,6 +2,8 @@
  * Agent Prompt Node Handler
  *
  * Executes an AI agent prompt and returns the response
+ *
+ * Simple and clean - no chain handling (done by executor)
  */
 
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
@@ -13,33 +15,30 @@ export const agentPromptHandler: WorkflowNodeHandler = {
   actionType: "agent-prompt",
 
   async execute(input: NodeInput, context: ExecutionContext): Promise<NodeOutput> {
-    const { nodeId, label, config, previousOutput, deps } = input;
+    const { nodeId, label, config, deps } = input;
     const { cfg, cliDeps, abortSignal } = deps;
 
     try {
       // Render template with {{input}} replacement
-      const rawPrompt = config.prompt || previousOutput || "Ping from Workflow";
+      const rawPrompt = config.prompt || input.previousOutput || "Ping from Workflow";
       const prompt = renderTemplate(rawPrompt, context.currentInput, context.variables);
 
       // Resolve agent ID
-      const agentId = config.agentId || undefined;
-      const resolvedAgentId = agentId || "default";
+      const agentId = config.agentId || "default";
 
-      const now = Date.now();
-
-      // Create job object for cron execution
+      // Create minimal job object for cron execution
       const job: CronJob = {
         id: `workflow:${nodeId}`,
         name: label,
         enabled: true,
-        createdAtMs: now,
-        updatedAtMs: now,
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
         schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
         sessionTarget: "isolated" as const,
         wakeMode: "now" as const,
         payload: { kind: "agentTurn", message: prompt },
         state: {},
-        agentId: resolvedAgentId,
+        agentId,
       };
 
       // Execute agent turn
@@ -49,7 +48,7 @@ export const agentPromptHandler: WorkflowNodeHandler = {
         job,
         message: prompt,
         abortSignal,
-        agentId: resolvedAgentId,
+        agentId,
         sessionKey: `workflow:${nodeId}`,
         lane: "workflow",
       });
@@ -61,7 +60,7 @@ export const agentPromptHandler: WorkflowNodeHandler = {
           metadata: {
             nodeId,
             label,
-            agentId: resolvedAgentId,
+            agentId,
           },
         };
       }
@@ -74,7 +73,7 @@ export const agentPromptHandler: WorkflowNodeHandler = {
         metadata: {
           nodeId,
           label,
-          agentId: resolvedAgentId,
+          agentId,
           sessionId: result.sessionId,
           outputLength: outputText.length,
         },

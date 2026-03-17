@@ -8,7 +8,6 @@ import { agentPromptHandler } from "./agent-prompt.js";
 import { customJSHandler } from "./custom-js.js";
 import { delayHandler } from "./delay.js";
 import { executeToolHandler } from "./execute-tool.js";
-import { ifElseHandler } from "./if-else.js";
 import { remoteInvokeHandler } from "./remote-invoke.js";
 import { sendMessageHandler } from "./send-message.js";
 import { ttsHandler } from "./tts.js";
@@ -20,7 +19,6 @@ import type { WorkflowNodeHandler } from "./types.js";
 export const workflowNodeRegistry: Map<string, WorkflowNodeHandler> = new Map([
   ["agent-prompt", agentPromptHandler],
   ["send-message", sendMessageHandler],
-  ["if-else", ifElseHandler],
   ["execute-tool", executeToolHandler],
   ["remote-invoke", remoteInvokeHandler],
   ["tts", ttsHandler],

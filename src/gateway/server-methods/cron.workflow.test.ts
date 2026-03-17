@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   parseWorkflowChainFromDescription,
   executeWorkflowCronJob,
@@ -99,7 +99,6 @@ __wf_chain__:[{"nodeId":"step1","actionType":"agent-prompt","label":"Step 1"}]`;
           actionType: "agent-prompt",
           label: "Step 1",
           sessionConfig: {
-            target: "isolated",
             contextMode: "minimal",
             model: "gpt-4",
             maxTokens: 1000,
@@ -108,7 +107,6 @@ __wf_chain__:[{"nodeId":"step1","actionType":"agent-prompt","label":"Step 1"}]`;
       ];
 
       expect(chain[0].sessionConfig).toBeDefined();
-      expect(chain[0].sessionConfig?.target).toBe("isolated");
       expect(chain[0].sessionConfig?.contextMode).toBe("minimal");
     });
   });

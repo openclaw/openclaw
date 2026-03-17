@@ -220,19 +220,6 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
               </span>
 
               <div style={styles.field}>
-                <span style={styles.label}>Session Target</span>
-                <select
-                  style={styles.select}
-                  value={(data.sessionTarget as string) || "isolated"}
-                  onChange={(e) => handleChange("sessionTarget", e.target.value)}
-                >
-                  <option value="isolated">Isolated (New session per execution)</option>
-                  <option value="reuse">Reuse (Same session for all steps)</option>
-                  <option value="main">Main (Use main agent session)</option>
-                </select>
-              </div>
-
-              <div style={styles.field}>
                 <span style={styles.label}>Context Mode</span>
                 <select
                   style={styles.select}
@@ -280,8 +267,9 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
 
               <div style={{ ...styles.infoBox, marginTop: 12 }}>
                 <strong>💰 Cost Optimization:</strong>
-                <br />• Isolated + Minimal = ~90% token reduction
+                <br />• Minimal context = ~90% token reduction
                 <br />• Thinking Off = 2x faster, lower cost
+                <br />• Session key auto-generated from workflow name
               </div>
             </div>
           </>
@@ -323,19 +311,6 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
               </span>
 
               <div style={styles.field}>
-                <span style={styles.label}>Session Target</span>
-                <select
-                  style={styles.select}
-                  value={(data.sessionTarget as string) || "isolated"}
-                  onChange={(e) => handleChange("sessionTarget", e.target.value)}
-                >
-                  <option value="isolated">Isolated (New session per execution)</option>
-                  <option value="reuse">Reuse (Same session for all steps)</option>
-                  <option value="main">Main (Use main agent session)</option>
-                </select>
-              </div>
-
-              <div style={styles.field}>
                 <span style={styles.label}>Context Mode</span>
                 <select
                   style={styles.select}
@@ -383,8 +358,9 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
 
               <div style={{ ...styles.infoBox, marginTop: 12 }}>
                 <strong>💰 Cost Optimization:</strong>
-                <br />• Isolated + Minimal = ~90% token reduction
+                <br />• Minimal context = ~90% token reduction
                 <br />• Thinking Off = 2x faster, lower cost
+                <br />• Session key auto-generated from workflow name
               </div>
             </div>
           </>

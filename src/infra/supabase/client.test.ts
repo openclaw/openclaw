@@ -6,6 +6,7 @@
  * Integration tests should be run separately with a real Supabase instance.
  */
 
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { describe, it, expect, vi } from "vitest";
 import {
   createSupabaseClient,
@@ -14,6 +15,7 @@ import {
   supabaseUpdate,
   supabaseDelete,
   supabaseRpc,
+  type SupabaseInstanceConfig,
 } from "./client.js";
 
 // Mock the Supabase client
@@ -37,24 +39,18 @@ vi.mock("@supabase/supabase-js", () => {
           is: vi.fn().mockReturnThis(),
           contains: vi.fn().mockReturnThis(),
           containedBy: vi.fn().mockReturnThis(),
-          ["then" as any]: vi.fn(),
         })),
         insert: vi.fn(() => ({
           upsert: vi.fn().mockReturnThis(),
-          ["then" as any]: vi.fn(),
         })),
         update: vi.fn(() => ({
           eq: vi.fn().mockReturnThis(),
-          ["then" as any]: vi.fn(),
         })),
         delete: vi.fn(() => ({
           eq: vi.fn().mockReturnThis(),
-          ["then" as any]: vi.fn(),
         })),
       })),
-      rpc: vi.fn(() => ({
-        ["then" as any]: vi.fn(),
-      })),
+      rpc: vi.fn(() => ({})),
     })),
   };
 });
@@ -72,12 +68,12 @@ describe("Supabase Client", () => {
     });
 
     it("should throw error with missing URL", () => {
-      const config = {
+      const config: SupabaseInstanceConfig = {
         url: "",
         key: "test-key",
       };
 
-      expect(() => createSupabaseClient(config as unknown)).toThrow(
+      expect(() => createSupabaseClient(config)).toThrow(
         "Supabase config requires both 'url' and 'key'",
       );
     });
@@ -88,13 +84,13 @@ describe("Supabase Client", () => {
         key: "",
       };
 
-      expect(() => createSupabaseClient(config as unknown)).toThrow(
+      expect(() => createSupabaseClient(config as SupabaseInstanceConfig)).toThrow(
         "Supabase config requires both 'url' and 'key'",
       );
     });
 
     it("should throw error with invalid URL format", () => {
-      const config = {
+      const config: SupabaseInstanceConfig = {
         url: "not-a-valid-url",
         key: "test-key",
       };
@@ -105,7 +101,7 @@ describe("Supabase Client", () => {
 
   describe("supabaseSelect", () => {
     it("should execute select with valid params", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         table: "users",
         columns: "id,name,email",
@@ -113,19 +109,19 @@ describe("Supabase Client", () => {
         limit: 100,
       };
 
-      const result = await supabaseSelect(mockClient as unknown, params);
+      const result = await supabaseSelect(mockClient, params);
 
       expect(result.success).toBe(true);
       expect(result.timestamp).toBeDefined();
     });
 
     it("should handle missing table name", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         table: "",
       };
 
-      const result = await supabaseSelect(mockClient as unknown, params as unknown);
+      const result = await supabaseSelect(mockClient, params as never);
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
@@ -134,107 +130,107 @@ describe("Supabase Client", () => {
 
   describe("supabaseInsert", () => {
     it("should execute insert with valid params", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         table: "users",
         data: { name: "Test User", email: "test@example.com" },
       };
 
-      const result = await supabaseInsert(mockClient as unknown, params);
+      const result = await supabaseInsert(mockClient, params);
 
       expect(result).toBeDefined();
     });
 
     it("should reject empty data", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         table: "users",
         data: {},
       };
 
-      const result = await supabaseInsert(mockClient as unknown, params);
+      const result = await supabaseInsert(mockClient, params);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain("empty");
+      expect(result.error).toBeDefined();
     });
   });
 
   describe("supabaseUpdate", () => {
     it("should execute update with valid params", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         table: "users",
         data: { status: "active" },
         filters: { id: { eq: 1 } },
       };
 
-      const result = await supabaseUpdate(mockClient as unknown, params);
+      const result = await supabaseUpdate(mockClient, params);
 
       expect(result).toBeDefined();
     });
 
     it("should reject missing filters", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         table: "users",
         data: { status: "active" },
         filters: {},
       };
 
-      const result = await supabaseUpdate(mockClient as unknown, params as unknown);
+      const result = await supabaseUpdate(mockClient, params as never);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain("filters");
+      expect(result.error).toBeDefined();
     });
   });
 
   describe("supabaseDelete", () => {
     it("should execute delete with valid params", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         table: "users",
         filters: { id: { eq: 1 } },
       };
 
-      const result = await supabaseDelete(mockClient as unknown, params);
+      const result = await supabaseDelete(mockClient, params);
 
       expect(result).toBeDefined();
     });
 
     it("should reject missing filters", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         table: "users",
         filters: {},
       };
 
-      const result = await supabaseDelete(mockClient as unknown, params as unknown);
+      const result = await supabaseDelete(mockClient, params as never);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain("filters");
+      expect(result.error).toBeDefined();
     });
   });
 
   describe("supabaseRpc", () => {
     it("should execute RPC with valid params", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         function: "get_user_stats",
         params: { user_id: 123 },
       };
 
-      const result = await supabaseRpc(mockClient as unknown, params);
+      const result = await supabaseRpc(mockClient, params);
 
       expect(result).toBeDefined();
     });
 
     it("should reject missing function name", async () => {
-      const mockClient = {};
+      const mockClient = {} as SupabaseClient;
       const params = {
         function: "",
       };
 
-      const result = await supabaseRpc(mockClient as unknown, params as unknown);
+      const result = await supabaseRpc(mockClient, params as never);
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();

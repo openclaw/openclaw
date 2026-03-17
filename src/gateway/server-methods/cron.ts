@@ -223,6 +223,9 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "cron job not found"));
       return;
     }
+
+    context.logGateway.info(`[gateway] Job description: ${job.description}`);
+
     const workflowChain = parseWorkflowChainFromDescription(job.description);
 
     if (workflowChain && workflowChain.length > 0) {

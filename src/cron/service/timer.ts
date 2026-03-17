@@ -556,7 +556,40 @@ export async function onTimer(state: CronServiceState) {
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      const now = state.deps.nowMs();
+
+      // 🔍 DEBUG LOG: Before finding due jobs
+      state.deps.log.info(
+        {
+          totalJobs: state.store?.jobs.length ?? 0,
+          enabledJobs: state.store?.jobs.filter((j) => j.enabled).length ?? 0,
+          nowMs: now,
+          nextWakeAtMs: nextWakeAtMs(state),
+        },
+        `cron: [ON-TIMER] Starting timer tick`,
+      );
+
       const due = findDueJobs(state);
+
+      // 🔍 DEBUG LOG: Due jobs found
+      state.deps.log.info(
+        {
+          dueJobsCount: due.length,
+          dueJobIds: due.map((j) => j.id),
+          dueJobs: due.map((j) => ({
+            id: j.id,
+            name: j.name,
+            enabled: j.enabled,
+            scheduleKind: j.schedule.kind,
+            nextRunAtMs: j.state.nextRunAtMs,
+            lastRunAtMs: j.state.lastRunAtMs,
+            lastRunStatus: j.state.lastRunStatus,
+            runningAtMs: j.state.runningAtMs,
+            hasWorkflowChain: j.description?.includes("__wf_chain__"),
+          })),
+        },
+        `cron: [ON-TIMER] Found due jobs`,
+      );
 
       if (due.length === 0) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
@@ -566,15 +599,23 @@ export async function onTimer(state: CronServiceState) {
         if (changed) {
           await persist(state);
         }
+        state.deps.log.debug({}, `cron: [ON-TIMER] No due jobs, rearming timer`);
         return [];
       }
 
-      const now = state.deps.nowMs();
       for (const job of due) {
         job.state.runningAtMs = now;
         job.state.lastError = undefined;
       }
       await persist(state);
+
+      state.deps.log.info(
+        {
+          dueJobsCount: due.length,
+          nowMs: now,
+        },
+        `cron: [ON-TIMER] Starting execution of due jobs`,
+      );
 
       return due.map((j) => ({
         id: j.id,
@@ -588,18 +629,77 @@ export async function onTimer(state: CronServiceState) {
     }): Promise<TimedCronRunOutcome> => {
       const { id, job } = params;
       const startedAt = state.deps.nowMs();
+
+      // 🔍 DEBUG LOG: Job execution started
+      state.deps.log.info(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          jobEnabled: job.enabled,
+          scheduleKind: job.schedule.kind,
+          scheduleExpr: job.schedule.kind === "cron" ? job.schedule.expr : undefined,
+          nextRunAtMs: job.state.nextRunAtMs,
+          runningAtMs: job.state.runningAtMs,
+          lastRunAtMs: job.state.lastRunAtMs,
+          lastRunStatus: job.state.lastRunStatus,
+          sessionTarget: job.sessionTarget,
+          wakeMode: job.wakeMode,
+          payloadKind: job.payload.kind,
+          payloadMessage:
+            job.payload.kind === "agentTurn" ? job.payload.message?.substring(0, 100) : undefined,
+          hasWorkflowChain: job.description?.includes("__wf_chain__"),
+          workflowChainPreview: job.description?.includes("__wf_chain__")
+            ? job.description.substring(
+                job.description.indexOf("__wf_chain__"),
+                job.description.indexOf("__wf_chain__") + 200,
+              )
+            : undefined,
+        },
+        `cron: [RUN-DUE-JOB] Starting execution`,
+      );
+
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
 
       try {
+        state.deps.log.info(
+          {
+            jobId: job.id,
+            jobName: job.name,
+            timeoutMs: jobTimeoutMs ?? null,
+          },
+          `cron: [RUN-DUE-JOB] Executing job with timeout`,
+        );
+
         const result = await executeJobCoreWithTimeout(state, job);
+
+        state.deps.log.info(
+          {
+            jobId: job.id,
+            jobName: job.name,
+            status: result.status,
+            durationMs: state.deps.nowMs() - startedAt,
+            delivered: result.delivered,
+            sessionId: result.sessionId,
+            sessionKey: result.sessionKey,
+            error: result.error,
+          },
+          `cron: [RUN-DUE-JOB] Execution completed`,
+        );
+
         return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
       } catch (err) {
         const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
         state.deps.log.warn(
-          { jobId: id, jobName: job.name, timeoutMs: jobTimeoutMs ?? null },
-          `cron: job failed: ${errorText}`,
+          {
+            jobId: id,
+            jobName: job.name,
+            timeoutMs: jobTimeoutMs ?? null,
+            error: errorText,
+            errorStack: err instanceof Error ? err.stack : undefined,
+          },
+          `cron: [RUN-DUE-JOB] Job failed: ${errorText}`,
         );
         return {
           jobId: id,
@@ -697,7 +797,29 @@ function findDueJobs(state: CronServiceState): CronJob[] {
     return [];
   }
   const now = state.deps.nowMs();
-  return collectRunnableJobs(state, now);
+
+  // 🔍 DEBUG LOG: Finding due jobs
+  state.deps.log.debug(
+    {
+      totalJobs: state.store.jobs.length,
+      nowMs: now,
+      nowIso: new Date(now).toISOString(),
+    },
+    `cron: [FIND-DUE-JOBS] Scanning for due jobs`,
+  );
+
+  const dueJobs = collectRunnableJobs(state, now);
+
+  // 🔍 DEBUG LOG: Due jobs result
+  state.deps.log.debug(
+    {
+      dueCount: dueJobs.length,
+      dueJobIds: dueJobs.map((j) => j.id),
+    },
+    `cron: [FIND-DUE-JOBS] Found ${dueJobs.length} due jobs`,
+  );
+
+  return dueJobs;
 }
 
 function isRunnableJob(params: {
@@ -710,19 +832,24 @@ function isRunnableJob(params: {
   if (!job.state) {
     job.state = {};
   }
+
+  // Check 1: Enabled
   if (!job.enabled) {
     return false;
   }
+
+  // Check 2: Not in skip list
   if (params.skipJobIds?.has(job.id)) {
     return false;
   }
+
+  // Check 3: Not already running
   if (typeof job.state.runningAtMs === "number") {
     return false;
   }
+
+  // Check 4: One-shot jobs with terminal status
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && job.state.lastStatus) {
-    // One-shot with terminal status: skip unless it's a transient-error retry.
-    // Retries have nextRunAtMs > lastRunAtMs (scheduled after the failed run) (#24355).
-    // ok/skipped or error-without-retry always skip (#13845).
     const lastRun = job.state.lastRunAtMs;
     const nextRun = job.state.nextRunAtMs;
     if (
@@ -732,12 +859,17 @@ function isRunnableJob(params: {
       typeof lastRun === "number" &&
       nextRun > lastRun
     ) {
-      return nowMs >= nextRun;
+      const isDue = nowMs >= nextRun;
+      return isDue;
     }
     return false;
   }
+
+  // Check 5: Next run time is due
   const next = job.state.nextRunAtMs;
-  return typeof next === "number" && Number.isFinite(next) && nowMs >= next;
+  const isDue = typeof next === "number" && Number.isFinite(next) && nowMs >= next;
+
+  return isDue;
 }
 
 function collectRunnableJobs(
@@ -748,14 +880,39 @@ function collectRunnableJobs(
   if (!state.store) {
     return [];
   }
-  return state.store.jobs.filter((job) =>
-    isRunnableJob({
+
+  const runnableJobs = state.store.jobs.filter((job) => {
+    const isRunnable = isRunnableJob({
       job,
       nowMs,
       skipJobIds: opts?.skipJobIds,
       skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
-    }),
-  );
+    });
+
+    // Log why job is not runnable (only for enabled jobs)
+    if (!isRunnable && job.enabled) {
+      state.deps.log.debug(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          enabled: job.enabled,
+          scheduleKind: job.schedule.kind,
+          nextRunAtMs: job.state.nextRunAtMs,
+          runningAtMs: job.state.runningAtMs,
+          lastRunAtMs: job.state.lastRunAtMs,
+          lastRunStatus: job.state.lastRunStatus,
+          nowMs,
+          timeUntilDue:
+            typeof job.state.nextRunAtMs === "number" ? job.state.nextRunAtMs - nowMs : undefined,
+        },
+        `cron: [COLLECT-RUNNABLE] Job not runnable`,
+      );
+    }
+
+    return isRunnable;
+  });
+
+  return runnableJobs;
 }
 
 export async function runMissedJobs(

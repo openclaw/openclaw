@@ -1,17 +1,31 @@
 /**
  * Workflow Chain Executor
  *
- * Executes a workflow chain with support for branching
+ * Simple, clean recursive execution with trueChain support
+ *
+ * Architecture:
+ * - Each node executes and returns output
+ * - If node has trueChain, execute it recursively with the output as input
+ * - Chain continues until all steps complete or error occurs
  */
 
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getNodeHandler } from "./registry.js";
-import type { WorkflowChainStep, NodeOutput, ExecutionContext, WorkflowDeps } from "./types.js";
+import type {
+  WorkflowChainStep,
+  NodeOutput,
+  ExecutionContext,
+  NodeInput,
+  WorkflowDeps,
+} from "./types.js";
 
 const logger = createSubsystemLogger("workflow-executor");
 
 /**
- * Execute a single node in the chain
+ * Execute a single node
+ *
+ * Note: trueChain handling is done by executeNode(), not by individual handlers.
+ * Handlers only need to return their output - they don't need to know about chaining.
  */
 async function executeNode(
   step: WorkflowChainStep,
@@ -39,21 +53,29 @@ async function executeNode(
     };
   }
 
-  const input = {
+  // Prepare input for handler
+  const input: NodeInput = {
     nodeId: step.nodeId,
     label: step.label,
     actionType: step.actionType,
     previousOutput: context.currentInput,
-    config: step.config || {
+    config: {
       agentId: step.agentId,
       prompt: step.prompt,
       body: step.body,
       channel: step.channel,
       recipientId: step.recipientId,
       accountId: step.accountId,
-      condition: step.condition,
       trueChain: step.trueChain,
-      falseChain: step.falseChain,
+      code: step.config?.code,
+      toolName: step.config?.toolName,
+      toolArgs: step.config?.toolArgs,
+      text: step.config?.text,
+      voiceId: step.config?.voiceId,
+      provider: step.config?.provider,
+      nodeId: step.config?.nodeId,
+      command: step.config?.command,
+      params: step.config?.params,
     },
     variables: context.variables,
     deps,
@@ -65,6 +87,7 @@ async function executeNode(
     label: step.label,
   });
 
+  // Execute the handler
   const result = await handler.execute(input, context);
 
   logger.info("workflow: node execution complete", {
@@ -72,15 +95,43 @@ async function executeNode(
     actionType: step.actionType,
     label: step.label,
     status: result.status,
-    branchTaken: result.branchTaken,
     outputLength: result.output?.length,
   });
+
+  // ✅ RECURSIVE: Execute trueChain if exists
+  if (step.trueChain && step.trueChain.length > 0) {
+    if (result.status === "error") {
+      logger.warn("workflow: skipping trueChain due to error", {
+        nodeId: step.nodeId,
+        error: result.error,
+      });
+      return result;
+    }
+
+    logger.info("workflow: executing trueChain recursively", {
+      nodeId: step.nodeId,
+      trueChainLength: step.trueChain.length,
+    });
+
+    // Execute trueChain with current output as input
+    const chainResult = await executeWorkflowChain(
+      step.trueChain,
+      result.output || context.currentInput,
+      deps,
+    );
+
+    // Return chain result (not single node result)
+    return chainResult;
+  }
 
   return result;
 }
 
 /**
- * Execute a chain of workflow nodes with branching support
+ * Execute a chain of workflow nodes
+ *
+ * This is the main entry point for workflow execution.
+ * It processes nodes sequentially and handles trueChain recursion.
  */
 export async function executeWorkflowChain(
   chain: WorkflowChainStep[],
@@ -107,64 +158,26 @@ export async function executeWorkflowChain(
       label: step.label,
     });
 
-    // Execute the node
+    // Execute the node (with trueChain recursion handled internally)
     const result = await executeNode(step, context, deps);
 
-    // Store output for reference
+    // Store output for reference by next steps
     if (result.output) {
+      context.currentInput = result.output;
       context.previousOutputs.set(step.nodeId, result.output);
     }
 
-    // Handle errors
+    // Stop on error
     if (result.status === "error") {
       logger.error("workflow: chain execution failed", {
         step: i + 1,
         nodeId: step.nodeId,
         error: result.error,
       });
-
       return result;
     }
 
-    // Handle branching (If/Else)
-    if (result.status === "branched" && result.branchTaken) {
-      logger.info("workflow: branch taken, executing branch chain", {
-        step: i + 1,
-        nodeId: step.nodeId,
-        branchTaken: result.branchTaken,
-      });
-
-      // Get the appropriate branch chain
-      const branchChain = result.branchTaken === "true" ? step.trueChain : step.falseChain;
-
-      if (branchChain && branchChain.length > 0) {
-        // Execute the branch chain recursively
-        const branchResult = await executeWorkflowChain(branchChain, context.currentInput, deps);
-
-        // Update context with branch result
-        context.currentInput = branchResult.output || context.currentInput;
-        lastResult = branchResult;
-
-        // If branch failed, stop execution
-        if (branchResult.status === "error") {
-          return branchResult;
-        }
-      } else {
-        // Empty branch - just continue
-        logger.info("workflow: empty branch, continuing", {
-          step: i + 1,
-          nodeId: step.nodeId,
-          branchTaken: result.branchTaken,
-        });
-        lastResult = result;
-      }
-    } else {
-      // Normal execution - update context
-      if (result.output) {
-        context.currentInput = result.output;
-      }
-      lastResult = result;
-    }
+    lastResult = result;
   }
 
   logger.info("workflow: chain execution complete", {

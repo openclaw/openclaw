@@ -3,8 +3,7 @@
  *
  * Sends a message to a channel without waiting for AI response
  *
- * TODO: Implement proper channel delivery integration
- * For now, enqueues a system event
+ * Simple and clean - no chain handling (done by executor)
  */
 
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -15,23 +14,17 @@ export const sendMessageHandler: WorkflowNodeHandler = {
   actionType: "send-message",
 
   async execute(input: NodeInput, context: ExecutionContext): Promise<NodeOutput> {
-    const { nodeId, label, config, previousOutput } = input;
+    const { nodeId, label, config } = input;
 
     try {
       // Render template with {{input}} replacement
-      const rawBody = config.body || previousOutput || "Hello from workflow!";
+      const rawBody = config.body || input.previousOutput || "Hello from workflow!";
       const body = renderTemplate(rawBody, context.currentInput, context.variables);
-
-      // Extract delivery configuration (for future use)
-      const channel = config.channel;
-      const recipientId = config.recipientId;
-      const accountId = config.accountId;
 
       // Create session key for this message
       const sessionKey = `workflow:${nodeId}`;
 
       // Enqueue system event
-      // TODO: Implement actual channel delivery
       enqueueSystemEvent(body, {
         sessionKey,
         contextKey: `workflow:${nodeId}`,
@@ -43,9 +36,9 @@ export const sendMessageHandler: WorkflowNodeHandler = {
         metadata: {
           nodeId,
           label,
-          channel,
-          recipientId,
-          accountId,
+          channel: config.channel,
+          recipientId: config.recipientId,
+          accountId: config.accountId,
           enqueued: true,
         },
       };

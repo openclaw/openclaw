@@ -1,13 +1,12 @@
 /**
  * Workflow Nodes
  *
- * Modular workflow node execution system
+ * Modular workflow node execution with recursive trueChain support
  */
 
 // Types
 export type {
   NodeExecutionStatus,
-  BranchDirection,
   NodeOutput,
   NodeInput,
   NodeConfig,
@@ -20,7 +19,6 @@ export type {
 // Handlers
 export { agentPromptHandler } from "./agent-prompt.js";
 export { sendMessageHandler } from "./send-message.js";
-export { ifElseHandler } from "./if-else.js";
 export { executeToolHandler } from "./execute-tool.js";
 export { remoteInvokeHandler } from "./remote-invoke.js";
 export { ttsHandler } from "./tts.js";

@@ -1805,20 +1805,7 @@ export default function ChatPage() {
                   >
                     {isSidebarVisible ? "◧ Hide" : "◨ Show Sidebar"}
                   </button>
-                  <h2
-                    style={{
-                      fontSize: 15,
-                      fontWeight: 600,
-                      margin: 0,
-                      color: "var(--text-strong)",
-                    }}
-                  >
-                    {selectedSessionKey
-                      ? sessions.find((s) => s.key === selectedSessionKey)?.label ||
-                        sessions.find((s) => s.key === selectedSessionKey)?.displayName ||
-                        selectedSessionKey
-                      : "Select a Session"}
-                  </h2>
+                  {/* Session label hidden */}
                 </div>
                 {selectedSessionKey && (
                   <div
