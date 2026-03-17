@@ -10,12 +10,12 @@ import {
   setSetupChannelEnabled,
   type OpenClawConfig,
   type WizardPrompter,
-} from "../../../src/plugin-sdk-internal/setup.js";
+} from "openclaw/plugin-sdk/setup";
 import type {
   ChannelSetupAdapter,
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
-} from "../../../src/plugin-sdk-internal/setup.js";
+} from "openclaw/plugin-sdk/setup";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,

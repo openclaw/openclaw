@@ -1,15 +1,15 @@
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   collectOpenProviderGroupPolicyWarnings,
-} from "../../../src/plugin-sdk-internal/channel-config.js";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildAgentSessionKey,
   resolveThreadSessionKeys,
   type RoutePeer,
-} from "../../../src/plugin-sdk-internal/core.js";
+} from "openclaw/plugin-sdk/core";
 import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -27,7 +27,7 @@ import {
   SlackConfigSchema,
   type ChannelPlugin,
   type OpenClawConfig,
-} from "../../../src/plugin-sdk-internal/slack.js";
+} from "openclaw/plugin-sdk/slack";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listEnabledSlackAccounts,

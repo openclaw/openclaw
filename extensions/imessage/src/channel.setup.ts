@@ -1,7 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-} from "../../../src/plugin-sdk-internal/channel-config.js";
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -13,7 +13,7 @@ import {
   resolveIMessageConfigDefaultTo,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-} from "../../../src/plugin-sdk-internal/imessage.js";
+} from "openclaw/plugin-sdk/imessage";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,

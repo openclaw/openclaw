@@ -31,6 +31,7 @@ import type {
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
+  MediaUnderstandingProviderPlugin,
   ProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -103,21 +104,20 @@ export type PluginProviderRegistration = {
   rootDir?: string;
 };
 
-export type PluginWebSearchProviderRegistration = {
+type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
-  provider: WebSearchProviderPlugin;
+  provider: T;
   source: string;
   rootDir?: string;
 };
 
-export type PluginSpeechProviderRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  provider: SpeechProviderPlugin;
-  source: string;
-  rootDir?: string;
-};
+export type PluginSpeechProviderRegistration =
+  PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+export type PluginMediaUnderstandingProviderRegistration =
+  PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
+export type PluginWebSearchProviderRegistration =
+  PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 
 export type PluginHookRegistration = {
   pluginId: string;
@@ -164,6 +164,7 @@ export type PluginRecord = {
   channelIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
+  mediaUnderstandingProviderIds: string[];
   webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
@@ -185,6 +186,7 @@ export type PluginRegistry = {
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
+  mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -231,6 +233,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channelSetups: [],
     providers: [],
     speechProviders: [],
+    mediaUnderstandingProviders: [],
     webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
@@ -562,65 +565,79 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
-    const id = provider.id.trim();
+  const registerUniqueProviderLike = <
+    T extends { id: string },
+    R extends PluginOwnedProviderRegistration<T>,
+  >(params: {
+    record: PluginRecord;
+    provider: T;
+    kindLabel: string;
+    registrations: R[];
+    ownedIds: string[];
+  }) => {
+    const id = params.provider.id.trim();
+    const { record, kindLabel } = params;
+    const missingLabel = `${kindLabel} registration missing id`;
+    const duplicateLabel = `${kindLabel} already registered: ${id}`;
     if (!id) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "speech provider registration missing id",
+        message: missingLabel,
       });
       return;
     }
-    const existing = registry.speechProviders.find((entry) => entry.provider.id === id);
+    const existing = params.registrations.find((entry) => entry.provider.id === id);
     if (existing) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `speech provider already registered: ${id} (${existing.pluginId})`,
+        message: `${duplicateLabel} (${existing.pluginId})`,
       });
       return;
     }
-    record.speechProviderIds.push(id);
-    registry.speechProviders.push({
+    params.ownedIds.push(id);
+    params.registrations.push({
       pluginId: record.id,
       pluginName: record.name,
-      provider,
+      provider: params.provider,
       source: record.source,
       rootDir: record.rootDir,
+    } as R);
+  };
+
+  const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "speech provider",
+      registrations: registry.speechProviders,
+      ownedIds: record.speechProviderIds,
+    });
+  };
+
+  const registerMediaUnderstandingProvider = (
+    record: PluginRecord,
+    provider: MediaUnderstandingProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "media provider",
+      registrations: registry.mediaUnderstandingProviders,
+      ownedIds: record.mediaUnderstandingProviderIds,
     });
   };
 
   const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
-    const id = provider.id.trim();
-    if (!id) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "web search provider registration missing id",
-      });
-      return;
-    }
-    const existing = registry.webSearchProviders.find((entry) => entry.provider.id === id);
-    if (existing) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `web search provider already registered: ${id} (${existing.pluginId})`,
-      });
-      return;
-    }
-    record.webSearchProviderIds.push(id);
-    registry.webSearchProviders.push({
-      pluginId: record.id,
-      pluginName: record.name,
+    registerUniqueProviderLike({
+      record,
       provider,
-      source: record.source,
-      rootDir: record.rootDir,
+      kindLabel: "web search provider",
+      registrations: registry.webSearchProviders,
+      ownedIds: record.webSearchProviderIds,
     });
   };
 
@@ -836,6 +853,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         registrationMode === "full"
           ? (provider) => registerSpeechProvider(record, provider)
           : () => {},
+      registerMediaUnderstandingProvider:
+        registrationMode === "full"
+          ? (provider) => registerMediaUnderstandingProvider(record, provider)
+          : () => {},
       registerWebSearchProvider:
         registrationMode === "full"
           ? (provider) => registerWebSearchProvider(record, provider)
@@ -910,6 +931,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerChannel,
     registerProvider,
     registerSpeechProvider,
+    registerMediaUnderstandingProvider,
     registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,

@@ -3,7 +3,7 @@ import {
   getChatChannelMeta,
   SlackConfigSchema,
   type ChannelPlugin,
-} from "../../../src/plugin-sdk-internal/slack.js";
+} from "openclaw/plugin-sdk/slack";
 import { type ResolvedSlackAccount } from "./accounts.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import {

@@ -1,8 +1,8 @@
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/core";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 

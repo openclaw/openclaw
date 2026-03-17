@@ -1,20 +1,15 @@
 import {
-  DEFAULT_ACCOUNT_ID,
   detectBinary,
   formatCliCommand,
   formatDocsLink,
   installSignalCli,
   type OpenClawConfig,
-  parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   type WizardPrompter,
-} from "../../../src/plugin-sdk-internal/setup.js";
-import type {
-  ChannelSetupDmPolicy,
-  ChannelSetupWizard,
-} from "../../../src/plugin-sdk-internal/setup.js";
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,

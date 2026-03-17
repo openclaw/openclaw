@@ -1,12 +1,9 @@
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
-  formatAllowFromLowercase,
-} from "../../../src/plugin-sdk-internal/channel-config.js";
-import {
-  normalizeAccountId,
-  type OpenClawConfig,
-} from "../../../src/plugin-sdk-internal/telegram.js";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { normalizeAccountId, type OpenClawConfig } from "openclaw/plugin-sdk/telegram";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,

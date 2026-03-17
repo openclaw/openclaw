@@ -16,11 +16,11 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
-import { resolveSignalReactionLevel } from "../../../plugin-sdk-internal/signal.js";
+import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import {
   resolveTelegramInlineButtonsScope,
   resolveTelegramReactionLevel,
-} from "../../../plugin-sdk-internal/telegram.js";
+} from "../../../plugin-sdk/telegram.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -1009,7 +1009,7 @@ function wrapStreamRepairMalformedToolCallArguments(
                   if (!loggedRepairIndices.has(event.contentIndex)) {
                     loggedRepairIndices.add(event.contentIndex);
                     log.warn(
-                      `repairing kimi-coding tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
+                      `repairing Kimi tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
                     );
                   }
                 } else {
@@ -1064,7 +1064,7 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
 }
 
 function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
-  return normalizeProviderId(provider ?? "") === "kimi-coding";
+  return normalizeProviderId(provider ?? "") === "kimi";
 }
 
 // ---------------------------------------------------------------------------

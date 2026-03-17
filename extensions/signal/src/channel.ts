@@ -1,12 +1,12 @@
-import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-} from "../../../src/plugin-sdk-internal/channel-config.js";
-import { buildAgentSessionKey, type RoutePeer } from "../../../src/plugin-sdk-internal/core.js";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
@@ -25,7 +25,7 @@ import {
   SignalConfigSchema,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
-} from "../../../src/plugin-sdk-internal/signal.js";
+} from "openclaw/plugin-sdk/signal";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
