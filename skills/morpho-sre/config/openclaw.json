@@ -453,6 +453,7 @@
       "mode": "token",
       "token": "${OPENCLAW_GATEWAY_TOKEN}"
     },
+    "trustedProxies": ["10.0.0.0/8"],
     "controlUi": {
       "dangerouslyAllowHostHeaderOriginFallback": true,
       "allowInsecureAuth": true,
