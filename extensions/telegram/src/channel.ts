@@ -12,7 +12,6 @@ import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/infra-
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram";
 import {
-  buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
@@ -298,7 +297,6 @@ function readTelegramAllowlistConfig(account: ResolvedTelegramAccount) {
 
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   ...createTelegramPluginBase({
-    configSchema: buildChannelConfigSchema(TelegramConfigSchema),
     setupWizard: telegramSetupWizard,
     setup: telegramSetupAdapter,
   }),
