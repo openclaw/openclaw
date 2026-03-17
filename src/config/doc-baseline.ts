@@ -7,6 +7,7 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
+import { findWildcardHintMatch, schemaHasChildren } from "./schema.shared.js";
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -132,24 +133,6 @@ function asSchemaObject(value: unknown): JsonSchemaObject | null {
   return value as JsonSchemaObject;
 }
 
-function schemaHasChildren(schema: JsonSchemaObject): boolean {
-  if (schema.properties && Object.keys(schema.properties).length > 0) {
-    return true;
-  }
-  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    return true;
-  }
-  if (Array.isArray(schema.items)) {
-    return schema.items.some((entry) => typeof entry === "object" && entry !== null);
-  }
-  for (const branch of [schema.oneOf, schema.anyOf, schema.allOf]) {
-    if (branch?.some((entry) => entry && typeof entry === "object" && schemaHasChildren(entry))) {
-      return true;
-    }
-  }
-  return Boolean(schema.items && typeof schema.items === "object");
-}
-
 function splitHintLookupPath(path: string): string[] {
   const normalized = normalizeBaselinePath(path);
   return normalized ? normalized.split(".").filter(Boolean) : [];
@@ -159,45 +142,11 @@ function resolveUiHintMatch(
   uiHints: ConfigSchemaResponse["uiHints"],
   path: string,
 ): ConfigSchemaResponse["uiHints"][string] | undefined {
-  const targetParts = splitHintLookupPath(path);
-  let bestMatch:
-    | {
-        hint: ConfigSchemaResponse["uiHints"][string];
-        wildcardCount: number;
-      }
-    | undefined;
-
-  for (const [hintPath, hint] of Object.entries(uiHints)) {
-    const hintParts = splitHintLookupPath(hintPath);
-    if (hintParts.length !== targetParts.length) {
-      continue;
-    }
-
-    let wildcardCount = 0;
-    let matches = true;
-    for (let index = 0; index < hintParts.length; index += 1) {
-      const hintPart = hintParts[index];
-      const targetPart = targetParts[index];
-      if (hintPart === targetPart) {
-        continue;
-      }
-      if (hintPart === "*") {
-        wildcardCount += 1;
-        continue;
-      }
-      matches = false;
-      break;
-    }
-
-    if (!matches) {
-      continue;
-    }
-    if (!bestMatch || wildcardCount < bestMatch.wildcardCount) {
-      bestMatch = { hint, wildcardCount };
-    }
-  }
-
-  return bestMatch?.hint;
+  return findWildcardHintMatch({
+    uiHints,
+    path,
+    splitPath: splitHintLookupPath,
+  })?.hint;
 }
 
 function normalizeTypeValue(value: string | string[] | undefined): string | string[] | undefined {
