@@ -1489,6 +1489,36 @@ export async function runEmbeddedPiAgent(
         await contextEngine.dispose?.();
         stopCopilotRefreshTimer();
         process.chdir(prevCwd);
+        // --- Start of fix for #48573: Clean up spawned subagents --- //
+        const requesterSessionKey = params.sessionKey?.trim() || params.sessionId;
+        if (requesterSessionKey) {
+          const childRuns = listSubagentRunsForRequester(requesterSessionKey);
+          for (const childRun of childRuns) {
+            // Only clean up subagents that are meant to be ephemeral ("run" mode) or explicitly marked for delete
+            if (childRun.cleanup === "delete" || childRun.spawnMode === "run") {
+              log.info(
+                `[subagent-cleanup] Parent ${requesterSessionKey} terminating; cleaning up child subagent ${childRun.childSessionKey} (runId: ${childRun.runId}, cleanup: ${childRun.cleanup}, spawnMode: ${childRun.spawnMode})`,
+              );
+              try {
+                await callGateway({
+                  method: "sessions.delete",
+                  params: {
+                    key: childRun.childSessionKey,
+                    deleteTranscript: true,
+                    emitLifecycleHooks: false,
+                  },
+                  timeoutMs: 10_000,
+                });
+                releaseSubagentRun(childRun.runId);
+              } catch (err) {
+                log.warn(
+                  `[subagent-cleanup] Failed to delete child session ${childRun.childSessionKey}: ${describeUnknownError(err)}`,
+                );
+              }
+            }
+          }
+        }
+        // --- End of fix for #48573 --- //
       }
     }),
   );
