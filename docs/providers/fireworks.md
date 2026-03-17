@@ -57,7 +57,7 @@ This will:
 **Option C: Non-interactive**
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk \
   --auth-choice fireworks-api-key \
   --fireworks-api-key "fw_xxxxxxxxxxxx"
 ```
@@ -102,7 +102,7 @@ openclaw models list | grep fireworks
 | **Fast + cheap**      | `qwen3-8b`                       | Lightweight, low latency               |
 | **Long context**      | `kimi-k2-instruct-0905`          | 262k context window                    |
 
-## Available Models (26 Total)
+## Available Models (25 Total)
 
 ### Text Models
 
