@@ -69,16 +69,35 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".xml", "application/xml"],
 ]);
 
-function sanitizeMimeType(value?: string): string | undefined {
+const XML_ESCAPE_MAP: Record<string, string> = {
+  "<": "&lt;",
+  ">": "&gt;",
+  "&": "&amp;",
+  '"': "&quot;",
+  "'": "&apos;",
+};
+
+/**
+ * Escapes special XML characters in attribute values to prevent injection.
+ */
+function xmlEscapeAttr(value: string): string {
+  return value.replace(/[<>&"']/g, (char) => XML_ESCAPE_MAP[char] ?? char);
+}
+
+function escapeFileBlockContent(value: string): string {
+  return value.replace(/<\s*\/\s*file\s*>/gi, "&lt;/file&gt;").replace(/<\s*file\b/gi, "&lt;file");
+}
+
+export function sanitizeMimeType(value?: string): string | undefined {
   if (!value) {
     return undefined;
   }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
   }
-  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)/);
-  return match?.[1];
+  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)(?:\s*;.*)?$/i);
+  return match?.[1]?.toLowerCase();
 }
 
 function resolveFileLimits(cfg: OpenClawConfig) {
