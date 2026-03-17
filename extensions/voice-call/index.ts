@@ -3,7 +3,7 @@ import {
   definePluginEntry,
   type GatewayRequestHandlerOptions,
   type OpenClawPluginApi,
-} from "openclaw/plugin-sdk/voice-call";
+} from "./api.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
   VoiceCallConfigSchema,
