@@ -113,8 +113,20 @@ Common signatures:
   challenge-based device auth flow (`connect.challenge` + `device.nonce`).
 - `device signature invalid` / `device signature expired` → client signed the wrong
   payload (or stale timestamp) for the current handshake.
-- `unauthorized` / reconnect loop → token/password mismatch.
+- `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.
+- repeated `unauthorized` after that retry → shared token/device token drift; refresh token config and re-approve/rotate device token if needed.
 - `gateway connect failed:` → wrong host/port/url target.
+
+### Auth detail codes quick map
+
+Use `error.details.code` from the failed `connect` response to pick the next action:
+
+| Detail code                  | Meaning                                                  | Recommended action                                                                                                                                                   |
+| ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_TOKEN_MISSING`         | Client did not send a required shared token.             | Paste/set token in the client and retry. For dashboard paths: `openclaw config get gateway.auth.token` then paste into Control UI settings.                          |
+| `AUTH_TOKEN_MISMATCH`        | Shared token did not match gateway auth token.           | If `canRetryWithDeviceToken=true`, allow one trusted retry. If still failing, run the [token drift recovery checklist](/cli/devices#token-drift-recovery-checklist). |
+| `AUTH_DEVICE_TOKEN_MISMATCH` | Cached per-device token is stale or revoked.             | Rotate/re-approve device token using [devices CLI](/cli/devices), then reconnect.                                                                                    |
+| `PAIRING_REQUIRED`           | Device identity is known but not approved for this role. | Approve pending request: `openclaw devices list` then `openclaw devices approve <requestId>`.                                                                        |
 
 Device auth v2 migration check:
 
@@ -134,6 +146,54 @@ Related:
 
 - [/web/control-ui](/web/control-ui)
 - [/gateway/authentication](/gateway/authentication)
+- [/gateway/remote](/gateway/remote)
+- [/cli/devices](/cli/devices)
+
+## Paperclip `openclaw_gateway` first run says pairing required
+
+Use this when a Paperclip agent configured with the `openclaw_gateway` adapter fails its
+first run with `errorCode: openclaw_gateway_pairing_required` or a plain `pairing required`
+gateway error.
+
+```bash
+openclaw devices list
+openclaw devices approve --latest
+```
+
+If you are approving against a remote gateway from another machine, include the gateway URL
+and auth explicitly:
+
+```bash
+openclaw devices approve --latest --url <gateway-ws-url> --token <gateway-token>
+```
+
+Look for:
+
+- A pending device request created by the Paperclip adapter on first connect.
+- The first run succeeding after one approval.
+- Repeated approval prompts after every restart, which usually means the adapter is using an
+  ephemeral device identity.
+
+Common signatures:
+
+- `errorCode: openclaw_gateway_pairing_required` → approve the latest pending device, then retry.
+- First run fails silently until logs are checked → the gateway rejected the adapter before the
+  device was approved.
+- Approval is needed again after every restart → persist `adapterConfig.devicePrivateKeyPem` in
+  the Paperclip adapter config so the same device identity is reused.
+
+Notes:
+
+- Auto-pairing only helps when the adapter can authenticate as an operator during first connect.
+  If the adapter does not have a gateway token/password configured yet, plan on one manual
+  `devices approve --latest` step.
+- Keep the Paperclip device key stable once approved; otherwise every restart looks like a new
+  device to the gateway.
+
+Related:
+
+- [/gateway/pairing](/gateway/pairing)
+- [/cli/devices](/cli/devices)
 - [/gateway/remote](/gateway/remote)
 
 ## Gateway service not running
@@ -276,19 +336,18 @@ Look for:
 
 - Valid browser executable path.
 - CDP profile reachability.
-- Extension relay tab attachment for `profile="chrome"`.
+- Local Chrome availability for `existing-session` / `user` profiles.
 
 Common signatures:
 
 - `Failed to start Chrome CDP on port` → browser process failed to launch.
 - `browser.executablePath not found` → configured path is invalid.
-- `Chrome extension relay is running, but no tab is connected` → extension relay not attached.
+- `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
 - `Browser attachOnly is enabled ... not reachable` → attach-only profile has no reachable target.
 
 Related:
 
 - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
-- [/tools/chrome-extension](/tools/chrome-extension)
 - [/tools/browser](/tools/browser)
 
 ## If you upgraded and something suddenly broke
