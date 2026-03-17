@@ -47,7 +47,7 @@ Welcome to the lobster tank! 🦞
 - **Christoph Nakazawa** - JS Infra
   - GitHub: [@cpojer](https://github.com/cpojer) · X: [@cnakazawa](https://x.com/cnakazawa)
 
-- **Gustavo Madeira Santana** - Multi-agents, CLI, web UI
+- **Gustavo Madeira Santana** - Multi-agents, CLI, Performance, Plugins, Matrix
   - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
 
 - **Onur Solmaz** - Agents, dev workflows, ACP integrations, MS Teams
