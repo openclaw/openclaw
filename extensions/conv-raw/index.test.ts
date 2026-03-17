@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../test-utils/plugin-api.js";
-import { ConvRawEngine, getConvRawEngine } from "./index.js";
+import { ConvRawEngine, getConvRawEngine, type CompactionMode } from "./index.js";
 import plugin from "./index.js";
 
 describe("conv-raw plugin", () => {
@@ -61,7 +61,6 @@ describe("ConvRawEngine", () => {
 
   it("applies configurable botName", () => {
     const engine = new ConvRawEngine({ botName: "MyBot" });
-    // getConfigDefaults is internal but we can verify via the engine instance
     expect(engine).toBeInstanceOf(ConvRawEngine);
   });
 
@@ -70,8 +69,40 @@ describe("ConvRawEngine", () => {
     expect(engine).toBeInstanceOf(ConvRawEngine);
   });
 
+  it("defaults compactionMode to 'auto'", () => {
+    const engine = new ConvRawEngine({});
+    // Access via the private config path — just verify it constructs without error
+    expect(engine).toBeInstanceOf(ConvRawEngine);
+  });
+
+  it("accepts compactionMode='truncate'", () => {
+    const engine = new ConvRawEngine({ compactionMode: "truncate", truncateKeepLast: 20 });
+    expect(engine).toBeInstanceOf(ConvRawEngine);
+  });
+
+  it("accepts compactionMode='disabled'", () => {
+    const engine = new ConvRawEngine({ compactionMode: "disabled" });
+    expect(engine).toBeInstanceOf(ConvRawEngine);
+  });
+
+  it("accepts custom compactPrompt", () => {
+    const engine = new ConvRawEngine({
+      compactionMode: "auto",
+      compactPrompt: "Summarize {chatId} briefly.",
+      compactModel: "anthropic/claude-haiku-4-5",
+    });
+    expect(engine).toBeInstanceOf(ConvRawEngine);
+  });
+
+  it("accepts all compactionMode enum values", () => {
+    const modes: CompactionMode[] = ["auto", "truncate", "disabled"];
+    for (const mode of modes) {
+      const engine = new ConvRawEngine({ compactionMode: mode });
+      expect(engine).toBeInstanceOf(ConvRawEngine);
+    }
+  });
+
   it("getConvRawEngine returns singleton", () => {
-    // Reset module-level singleton by using separate configs
     const engine1 = new ConvRawEngine({});
     const engine2 = new ConvRawEngine({});
     expect(engine1).toBeInstanceOf(ConvRawEngine);

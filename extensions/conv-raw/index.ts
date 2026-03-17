@@ -27,13 +27,39 @@ import type {
 // Plugin Configuration Types
 // ============================================================================
 
+/**
+ * Compaction strategy when message count reaches the threshold:
+ * - "auto"     (default) — spawn an isolated LLM agent to summarize and trim history
+ * - "truncate" — drop the oldest N entries without calling any model
+ * - "disabled" — never compact; raw.md grows unbounded (use for low-volume chats)
+ */
+export type CompactionMode = "auto" | "truncate" | "disabled";
+
 export type ConvRawPluginConfig = {
   trackedChats?: string[];
   thresholds?: Record<string, number>;
   defaultThreshold?: number;
   botName?: string;
   timezoneOffset?: number;
+
+  /** Compaction strategy. Default: "auto" */
+  compactionMode?: CompactionMode;
+
+  /** Model to use for LLM compaction (compactionMode="auto"). Default: "qwen3.5-plus" */
   compactModel?: string;
+
+  /**
+   * Override the compaction prompt template.
+   * Use {chatId} as a placeholder for the chat ID.
+   * If omitted, falls back to templates/conv-compact/TASK.md, then a built-in default.
+   */
+  compactPrompt?: string;
+
+  /**
+   * Number of most-recent entries to keep when compactionMode="truncate".
+   * Oldest entries beyond this count are deleted. Default: 40.
+   */
+  truncateKeepLast?: number;
 };
 
 // ============================================================================
@@ -45,6 +71,8 @@ const DEFAULT_THRESHOLD = 60;
 const DEFAULT_BOT_NAME = "Assistant";
 const DEFAULT_TIMEZONE_OFFSET = 0; // UTC
 const DEFAULT_COMPACT_MODEL = "qwen3.5-plus";
+const DEFAULT_COMPACTION_MODE: CompactionMode = "auto";
+const DEFAULT_TRUNCATE_KEEP_LAST = 40;
 
 function getConfigDefaults(config?: ConvRawPluginConfig): {
   trackedGroups: Set<string>;
@@ -52,15 +80,31 @@ function getConfigDefaults(config?: ConvRawPluginConfig): {
   defaultThreshold: number;
   botName: string;
   timezoneOffset: number;
+  compactionMode: CompactionMode;
   compactModel: string;
+  compactPrompt: string | undefined;
+  truncateKeepLast: number;
 } {
   const trackedGroups = new Set(config?.trackedChats ?? DEFAULT_TRACKED_GROUPS);
   const thresholds = config?.thresholds ?? {};
   const defaultThreshold = config?.defaultThreshold ?? DEFAULT_THRESHOLD;
   const botName = config?.botName ?? DEFAULT_BOT_NAME;
   const timezoneOffset = config?.timezoneOffset ?? DEFAULT_TIMEZONE_OFFSET;
+  const compactionMode = config?.compactionMode ?? DEFAULT_COMPACTION_MODE;
   const compactModel = config?.compactModel ?? DEFAULT_COMPACT_MODEL;
-  return { trackedGroups, thresholds, defaultThreshold, botName, timezoneOffset, compactModel };
+  const compactPrompt = config?.compactPrompt;
+  const truncateKeepLast = config?.truncateKeepLast ?? DEFAULT_TRUNCATE_KEEP_LAST;
+  return {
+    trackedGroups,
+    thresholds,
+    defaultThreshold,
+    botName,
+    timezoneOffset,
+    compactionMode,
+    compactModel,
+    compactPrompt,
+    truncateKeepLast,
+  };
 }
 
 // ============================================================================
@@ -369,13 +413,20 @@ export class ConvRawEngine implements ContextEngine {
 
     try {
       const workspace = process.env.OPENCLAW_WORKSPACE || os.homedir() + "/.openclaw/workspace";
-      let taskPrompt = `压缩 Conv-Raw 对话历史。chatId: ${cleanId}`;
-      const promptPath = workspace + "/templates/conv-compact/TASK.md";
-      if (fs.existsSync(promptPath)) {
-        taskPrompt = fs.readFileSync(promptPath, "utf-8").replace(/{chatId}/g, cleanId);
-      }
+      const { compactModel, compactPrompt } = getConfigDefaults(this.config);
 
-      const { compactModel } = getConfigDefaults(this.config);
+      // Resolve prompt: config override > template file > built-in default
+      let taskPrompt =
+        compactPrompt ??
+        (() => {
+          const promptPath = workspace + "/templates/conv-compact/TASK.md";
+          if (fs.existsSync(promptPath)) {
+            return fs.readFileSync(promptPath, "utf-8");
+          }
+          return `Summarize the conversation history for chat {chatId}. Keep key facts, decisions, and context. Output a concise summary in the same language as the conversation.`;
+        })();
+      taskPrompt = taskPrompt.replace(/{chatId}/g, cleanId);
+
       // Sanitize cleanId: only allow alphanumerics, hyphens, underscores
       const safeId = cleanId.slice(0, 8).replace(/[^a-zA-Z0-9_-]/g, "_");
       const jobName = `conv-raw-compact-${safeId}`;
@@ -447,21 +498,42 @@ export class ConvRawEngine implements ContextEngine {
       }
 
       const threshold = this.getThreshold(chatId);
-      if (meta.count >= threshold && !meta.compressPending) {
+      const { compactionMode, compactModel, compactPrompt, truncateKeepLast } =
+        getConfigDefaults(this.config);
+
+      if (meta.count >= threshold && !meta.compressPending && compactionMode !== "disabled") {
+        if (compactionMode === "truncate") {
+          // Truncate: keep only the most recent N entries in-place, no LLM needed
+          this.truncateRawFile(rawPath, truncateKeepLast);
+          meta.count = Math.min(meta.count, truncateKeepLast);
+          meta.last_compact = new Date().toISOString();
+          fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), "utf-8");
+          console.log(
+            `[Conv-Raw] ✂️ Threshold reached (${threshold}), truncated to last ${truncateKeepLast} entries for ${chatId}`,
+          );
+          return;
+        }
+
+        // compactionMode === "auto": spawn LLM compaction agent
         meta.compressPending = true;
         meta.last_compact = new Date().toISOString();
         fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), "utf-8");
 
-        // Trigger compaction
         const cleanId = normalizeChatId(chatId);
         const workspace = process.env.OPENCLAW_WORKSPACE || os.homedir() + "/.openclaw/workspace";
-        let taskPrompt = `压缩 Conv-Raw 对话历史。chatId: ${cleanId}`;
-        const promptPath = workspace + "/templates/conv-compact/TASK.md";
-        if (fs.existsSync(promptPath)) {
-          taskPrompt = fs.readFileSync(promptPath, "utf-8").replace(/{chatId}/g, cleanId);
-        }
 
-        const { compactModel } = getConfigDefaults(this.config);
+        // Resolve compaction prompt: config override > template file > built-in default
+        let taskPrompt =
+          compactPrompt ??
+          (() => {
+            const promptPath = workspace + "/templates/conv-compact/TASK.md";
+            if (fs.existsSync(promptPath)) {
+              return fs.readFileSync(promptPath, "utf-8");
+            }
+            return `Summarize the conversation history for chat {chatId}. Keep key facts, decisions, and context. Output a concise summary in the same language as the conversation.`;
+          })();
+        taskPrompt = taskPrompt.replace(/{chatId}/g, cleanId);
+
         // Sanitize cleanId before interpolating into shell command
         const safeId = cleanId.slice(0, 8).replace(/[^a-zA-Z0-9_-]/g, "_");
         const jobName = `conv-raw-compact-${safeId}`;
@@ -484,6 +556,28 @@ export class ConvRawEngine implements ContextEngine {
       fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), "utf-8");
     } catch (e) {
       console.error(`[Conv-Raw-Meta] Update Error:`, e);
+    }
+  }
+
+  /**
+   * Truncate raw.md in-place, keeping only the most recent `keepLast` entries.
+   * Entries are separated by the `---` divider written after each bot reply.
+   */
+  private truncateRawFile(rawPath: string, keepLast: number): void {
+    try {
+      if (!fs.existsSync(rawPath)) return;
+      const content = fs.readFileSync(rawPath, "utf-8");
+      const SEPARATOR = "\n---\n";
+      const parts = content.split(SEPARATOR);
+      if (parts.length <= keepLast) return; // nothing to trim
+
+      const kept = parts.slice(parts.length - keepLast).join(SEPARATOR);
+      const tempPath = rawPath + ".tmp";
+      fs.writeFileSync(tempPath, kept, "utf-8");
+      fs.renameSync(tempPath, rawPath);
+      console.log(`[Conv-Raw] ✂️ Truncated raw.md from ${parts.length} → ${keepLast} entries`);
+    } catch (err) {
+      console.error(`[Conv-Raw] truncateRawFile error:`, err);
     }
   }
 
@@ -570,16 +664,50 @@ const convRawPlugin = {
       trackedChats: {
         type: "array",
         items: { type: "string" },
-        description: "Chat IDs to track. Empty = track all.",
+        description: "Chat IDs to track. Empty array = track all chats.",
       },
       thresholds: {
         type: "object",
         additionalProperties: { type: "number" },
-        description: "Per-chat compaction thresholds (message count)",
+        description: "Per-chat compaction thresholds (message count). Overrides defaultThreshold.",
       },
       defaultThreshold: {
         type: "number",
         default: 60,
+        description: "Message count before compaction is triggered.",
+      },
+      botName: {
+        type: "string",
+        default: "Assistant",
+        description: "Display name used for bot replies in the history log.",
+      },
+      timezoneOffset: {
+        type: "number",
+        default: 0,
+        description: "UTC offset in hours for timestamps (e.g. 8 for Asia/Shanghai).",
+      },
+      compactionMode: {
+        type: "string",
+        enum: ["auto", "truncate", "disabled"],
+        default: "auto",
+        description:
+          '"auto" — LLM summarization (default); "truncate" — drop oldest entries without a model; "disabled" — never compact.',
+      },
+      compactModel: {
+        type: "string",
+        default: "qwen3.5-plus",
+        description: 'Model ID for LLM compaction. Only used when compactionMode is "auto".',
+      },
+      compactPrompt: {
+        type: "string",
+        description:
+          'Custom compaction prompt. Use {chatId} as a placeholder. Overrides the template file (templates/conv-compact/TASK.md). Only used when compactionMode is "auto".',
+      },
+      truncateKeepLast: {
+        type: "number",
+        default: 40,
+        description:
+          'Number of most-recent entries to keep when compactionMode is "truncate". Oldest entries are deleted.',
       },
     },
   },
