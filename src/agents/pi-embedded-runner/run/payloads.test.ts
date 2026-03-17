@@ -64,20 +64,22 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("suppresses sessions_send errors to avoid leaking transient relay failures", () => {
-    expectNoPayloads({
+  it.each([
+    {
+      name: "default relay failure",
       lastToolError: { toolName: "sessions_send", error: "delivery timeout" },
-      verboseLevel: "on",
-    });
-  });
-
-  it("suppresses sessions_send errors even when marked mutating", () => {
-    expectNoPayloads({
+    },
+    {
+      name: "mutating relay failure",
       lastToolError: {
         toolName: "sessions_send",
         error: "delivery timeout",
         mutatingAction: true,
       },
+    },
+  ])("suppresses sessions_send errors for $name", ({ lastToolError }) => {
+    expectNoPayloads({
+      lastToolError,
       verboseLevel: "on",
     });
   });
