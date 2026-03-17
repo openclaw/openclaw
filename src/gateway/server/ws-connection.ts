@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket, WebSocketServer } from "ws";
+import { loadConfig } from "../../config/config.js";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
 import { upsertPresence } from "../../infra/system-presence.js";
@@ -171,12 +172,19 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     };
 
+    const configSnapshot = loadConfig();
+    const skipDeviceChallenge =
+      configSnapshot.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
     const connectNonce = randomUUID();
-    send({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: connectNonce, ts: Date.now() },
-    });
+    // Skip challenge when device auth is disabled (e.g., HTTP LAN connections
+    // where WebCrypto is unavailable in non-secure context)
+    if (!skipDeviceChallenge) {
+      send({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: connectNonce, ts: Date.now() },
+      });
+    }
 
     const close = (code = 1000, reason?: string) => {
       if (closed) {
