@@ -393,20 +393,33 @@ describe("update-cli", () => {
     expect(logs.join("\n")).toContain("No changes were applied.");
   });
 
-  it("updateStatusCommand prints table output", async () => {
-    await updateStatusCommand({ json: false });
+  it("updateStatusCommand renders table and json output", async () => {
+    const cases = [
+      {
+        name: "table output",
+        options: { json: false },
+        assert: () => {
+          const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => call[0]);
+          expect(logs.join("\n")).toContain("OpenClaw update status");
+        },
+      },
+      {
+        name: "json output",
+        options: { json: true },
+        assert: () => {
+          const last = vi.mocked(defaultRuntime.log).mock.calls.at(-1)?.[0];
+          expect(typeof last).toBe("string");
+          const parsed = JSON.parse(String(last));
+          expect(parsed.channel.value).toBe("stable");
+        },
+      },
+    ] as const;
 
-    const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => call[0]);
-    expect(logs.join("\n")).toContain("OpenClaw update status");
-  });
-
-  it("updateStatusCommand emits JSON", async () => {
-    await updateStatusCommand({ json: true });
-
-    const last = vi.mocked(defaultRuntime.log).mock.calls.at(-1)?.[0];
-    expect(typeof last).toBe("string");
-    const parsed = JSON.parse(String(last));
-    expect(parsed.channel.value).toBe("stable");
+    for (const testCase of cases) {
+      vi.mocked(defaultRuntime.log).mockClear();
+      await updateStatusCommand(testCase.options);
+      testCase.assert();
+    }
   });
 
   it.each([
