@@ -299,6 +299,10 @@ function getPluginName(db: Database.Database, pluginId: string): string | undefi
 
 /** Clean up data older than retention period */
 export function cleanupOldData(db: Database.Database, retentionDays: number): void {
+  // Guard against zero/negative values that would wipe all data
+  if (!Number.isFinite(retentionDays) || retentionDays < 1) {
+    retentionDays = 90;
+  }
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - retentionDays);
   const cutoffStr = cutoff.toISOString().slice(0, 19).replace("T", " ");
