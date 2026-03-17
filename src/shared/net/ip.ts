@@ -296,6 +296,26 @@ export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 |
   return undefined;
 }
 
+/**
+ * Returns true if the string is a valid individual IP address or CIDR block,
+ * suitable for use as a trustedProxies entry.
+ */
+export function isValidIpOrCidrEntry(entry: string): boolean {
+  const candidate = entry.trim();
+  if (!candidate) {
+    return false;
+  }
+  if (!candidate.includes("/")) {
+    return parseCanonicalIpAddress(candidate) !== undefined;
+  }
+  try {
+    ipaddr.parseCIDR(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isIpInCidr(ip: string, cidr: string): boolean {
   const normalizedIp = parseCanonicalIpAddress(ip);
   if (!normalizedIp) {
