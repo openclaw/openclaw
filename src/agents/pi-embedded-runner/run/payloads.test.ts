@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hasEmbeddedSilentCompletion } from "./payloads.js";
 import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
@@ -89,5 +90,23 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       assistantTexts: ["Approval is needed. Please run /approve abc allow-once"],
       didSendDeterministicApprovalPrompt: true,
     });
+  });
+
+  it("marks exact NO_REPLY turns as silent completion candidates", () => {
+    expect(
+      hasEmbeddedSilentCompletion({
+        assistantTexts: ["  NO_REPLY  "],
+        lastAssistant: undefined,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not mark substantive replies as silent completion candidates", () => {
+    expect(
+      hasEmbeddedSilentCompletion({
+        assistantTexts: ["NO_REPLY -- explanation"],
+        lastAssistant: undefined,
+      }),
+    ).toBe(false);
   });
 });

@@ -84,6 +84,15 @@ function formatPayloadForLog(payload: {
   return lines.join("\n").trimEnd();
 }
 
+function isSilentCompletionMeta(meta: unknown): boolean {
+  return Boolean(
+    meta &&
+    typeof meta === "object" &&
+    "silentCompletion" in meta &&
+    (meta as { silentCompletion?: unknown }).silentCompletion === true,
+  );
+}
+
 export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   const body = (opts.message ?? "").trim();
   if (!body) {
@@ -163,7 +172,9 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
+    if (!isSilentCompletionMeta(result?.meta)) {
+      runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
+    }
     return response;
   }
 

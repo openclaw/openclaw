@@ -345,3 +345,15 @@ export function buildEmbeddedRunPayloads(params: {
       return true;
     });
 }
+
+export function hasEmbeddedSilentCompletion(params: {
+  assistantTexts: string[];
+  lastAssistant: AssistantMessage | undefined;
+}): boolean {
+  const visibleTexts = params.assistantTexts.length
+    ? params.assistantTexts
+    : params.lastAssistant
+      ? [extractAssistantText(params.lastAssistant)]
+      : [];
+  return visibleTexts.some((text) => isSilentReplyText(text, SILENT_REPLY_TOKEN));
+}

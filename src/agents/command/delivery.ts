@@ -62,6 +62,15 @@ function logNestedOutput(
   }
 }
 
+function isSilentCompletionMeta(meta: unknown): boolean {
+  return Boolean(
+    meta &&
+    typeof meta === "object" &&
+    "silentCompletion" in meta &&
+    (meta as { silentCompletion?: unknown }).silentCompletion === true,
+  );
+}
+
 export async function deliverAgentCommandResult(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -191,7 +200,9 @@ export async function deliverAgentCommandResult(params: {
   }
 
   if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
+    if (!isSilentCompletionMeta(result.meta)) {
+      runtime.log("No reply from agent.");
+    }
     return { payloads: [], meta: result.meta };
   }
 

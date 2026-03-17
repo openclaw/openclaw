@@ -71,7 +71,7 @@ import { resolveModelAsync } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
-import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { buildEmbeddedRunPayloads, hasEmbeddedSilentCompletion } from "./run/payloads.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
@@ -1612,6 +1612,12 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
           });
+          const silentCompletion =
+            payloads.length === 0 &&
+            hasEmbeddedSilentCompletion({
+              assistantTexts: attempt.assistantTexts,
+              lastAssistant: attempt.lastAssistant,
+            });
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
@@ -1663,6 +1669,7 @@ export async function runEmbeddedPiAgent(
               durationMs: Date.now() - started,
               agentMeta,
               aborted,
+              silentCompletion: silentCompletion || undefined,
               systemPromptReport: attempt.systemPromptReport,
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,

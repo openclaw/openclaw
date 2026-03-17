@@ -138,4 +138,25 @@ describe("agentCliCommand", () => {
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
+
+  it("keeps silent gateway completions out of CLI logs when no payload is returned", async () => {
+    await withTempStore(async () => {
+      vi.mocked(callGateway).mockResolvedValue({
+        runId: "idem-1",
+        status: "ok",
+        summary: "completed",
+        result: {
+          payloads: [],
+          meta: {
+            silentCompletion: true,
+          },
+        },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(runtime.log).not.toHaveBeenCalled();
+    });
+  });
 });
