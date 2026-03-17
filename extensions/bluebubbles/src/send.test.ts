@@ -247,6 +247,80 @@ describe("send", () => {
       expect(result).toBeNull();
     });
 
+    it("prefers iMessage chat over SMS when both exist for same handle", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "SMS;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+                {
+                  guid: "iMessage;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "auto",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
+    it("respects explicit sms: target preference when both chats exist", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+                {
+                  guid: "SMS;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "sms",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("SMS;-;+15551234567");
+    });
+
     it("returns null when chat not found", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

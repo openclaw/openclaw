@@ -159,6 +159,17 @@ function extractChatIdentifierFromChatGuid(chatGuid: string): string | null {
   return identifier ? identifier : null;
 }
 
+function extractServiceFromChatGuid(chatGuid: string): "imessage" | "sms" | "other" {
+  const service = chatGuid.split(";")[0]?.trim().toLowerCase();
+  if (service === "imessage") {
+    return "imessage";
+  }
+  if (service === "sms") {
+    return "sms";
+  }
+  return "other";
+}
+
 function extractParticipantAddresses(chat: BlueBubblesChatRecord): string[] {
   const raw =
     (Array.isArray(chat.participants) ? chat.participants : null) ??
@@ -238,7 +249,14 @@ export async function resolveChatGuidForTarget(params: {
     params.target.kind === "chat_identifier" ? params.target.chatIdentifier : null;
 
   const limit = 500;
-  let participantMatch: string | null = null;
+  const preferredService = params.target.kind === "handle" ? params.target.service : "auto";
+  let imessageDirectMatch: string | null = null;
+  let smsDirectMatch: string | null = null;
+  let otherDirectMatch: string | null = null;
+  let imessageParticipantMatch: string | null = null;
+  let smsParticipantMatch: string | null = null;
+  let otherParticipantMatch: string | null = null;
+
   for (let offset = 0; offset < 5000; offset += limit) {
     const chats = await queryChats({
       baseUrl: params.baseUrl,
@@ -287,11 +305,24 @@ export async function resolveChatGuidForTarget(params: {
       }
       if (normalizedHandle) {
         const guid = extractChatGuid(chat);
+        const service = guid ? extractServiceFromChatGuid(guid) : "other";
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
-        if (directHandle && directHandle === normalizedHandle) {
-          return guid;
+        if (directHandle && directHandle === normalizedHandle && guid) {
+          if (service === "imessage") {
+            imessageDirectMatch ??= guid;
+            if (preferredService === "imessage") {
+              return guid;
+            }
+          } else if (service === "sms") {
+            smsDirectMatch ??= guid;
+            if (preferredService === "sms") {
+              return guid;
+            }
+          } else {
+            otherDirectMatch ??= guid;
+          }
         }
-        if (!participantMatch && guid) {
+        if (guid) {
           // Only consider DM chats (`;-;` separator) as participant matches.
           // Group chats (`;+;` separator) should never match when searching by handle/phone.
           // This prevents routing "send to +1234567890" to a group chat that contains that number.
@@ -301,14 +332,56 @@ export async function resolveChatGuidForTarget(params: {
               normalizeBlueBubblesHandle(entry),
             );
             if (participants.includes(normalizedHandle)) {
-              participantMatch = guid;
+              if (service === "imessage") {
+                imessageParticipantMatch ??= guid;
+                if (preferredService === "imessage") {
+                  return guid;
+                }
+              } else if (service === "sms") {
+                smsParticipantMatch ??= guid;
+                if (preferredService === "sms") {
+                  return guid;
+                }
+              } else {
+                otherParticipantMatch ??= guid;
+              }
             }
           }
         }
       }
     }
   }
-  return participantMatch;
+
+  if (preferredService === "imessage") {
+    return (
+      imessageDirectMatch ??
+      imessageParticipantMatch ??
+      otherDirectMatch ??
+      otherParticipantMatch ??
+      smsDirectMatch ??
+      smsParticipantMatch
+    );
+  }
+  if (preferredService === "sms") {
+    return (
+      smsDirectMatch ??
+      smsParticipantMatch ??
+      otherDirectMatch ??
+      otherParticipantMatch ??
+      imessageDirectMatch ??
+      imessageParticipantMatch
+    );
+  }
+
+  // Default behavior for "auto": prefer iMessage over SMS when both exist.
+  return (
+    imessageDirectMatch ??
+    imessageParticipantMatch ??
+    otherDirectMatch ??
+    otherParticipantMatch ??
+    smsDirectMatch ??
+    smsParticipantMatch
+  );
 }
 
 /**
