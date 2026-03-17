@@ -141,11 +141,11 @@ export function closeHttpServer(server: http.Server): Promise<void> {
       resolve();
     }, SERVER_CLOSE_TIMEOUT_MS);
 
-    (server.closeAllConnections as (() => void) | undefined)?.();
     server.close(() => {
       clearTimeout(timer);
       resolve();
     });
+    (server.closeAllConnections as (() => void) | undefined)?.();
   });
 }
 
