@@ -1,6 +1,22 @@
 import type { ModelProviderConfig } from "../config/types.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "./types.js";
 
+export function findCatalogTemplate(params: {
+  entries: ReadonlyArray<{ provider: string; id: string }>;
+  providerId: string;
+  templateIds: readonly string[];
+}) {
+  return params.templateIds
+    .map((templateId) =>
+      params.entries.find(
+        (entry) =>
+          entry.provider.toLowerCase() === params.providerId.toLowerCase() &&
+          entry.id.toLowerCase() === templateId.toLowerCase(),
+      ),
+    )
+    .find((entry) => entry !== undefined);
+}
+
 export async function buildSingleProviderApiKeyCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;
