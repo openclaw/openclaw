@@ -152,6 +152,35 @@ export const providerContractRegistry: ProviderContractEntry[] = buildCapability
   select: (captured) => captured.providers,
 });
 
+export const uniqueProviderContractProviders: ProviderPlugin[] = [
+  ...new Map(providerContractRegistry.map((entry) => [entry.provider.id, entry.provider])).values(),
+];
+
+export const providerContractPluginIds = [
+  ...new Set(providerContractRegistry.map((entry) => entry.pluginId)),
+].toSorted((left, right) => left.localeCompare(right));
+
+export function requireProviderContractProvider(providerId: string): ProviderPlugin {
+  const provider = uniqueProviderContractProviders.find((entry) => entry.id === providerId);
+  if (!provider) {
+    throw new Error(`provider contract entry missing for ${providerId}`);
+  }
+  return provider;
+}
+
+export function resolveProviderContractProvidersForPluginIds(
+  pluginIds: readonly string[],
+): ProviderPlugin[] {
+  const allowed = new Set(pluginIds);
+  return [
+    ...new Map(
+      providerContractRegistry
+        .filter((entry) => allowed.has(entry.pluginId))
+        .map((entry) => [entry.provider.id, entry.provider]),
+    ).values(),
+  ];
+}
+
 export const webSearchProviderContractRegistry: WebSearchProviderContractEntry[] =
   bundledWebSearchPlugins.flatMap((plugin) => {
     const captured = captureRegistrations(plugin);
