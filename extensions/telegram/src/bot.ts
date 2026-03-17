@@ -38,7 +38,7 @@ import {
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
-import { resolveTelegramTransport } from "./fetch.js";
+import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -65,6 +65,8 @@ export type TelegramBotOptions = {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
   };
+  /** Pre-resolved Telegram transport to reuse across bot instances. If not provided, creates a new one. */
+  telegramTransport?: TelegramTransport;
 };
 
 export { getTelegramSequentialKey };
@@ -132,9 +134,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     : null;
   const telegramCfg = account.config;
 
-  const telegramTransport = resolveTelegramTransport(opts.proxyFetch, {
-    network: telegramCfg.network,
-  });
+  const telegramTransport =
+    opts.telegramTransport ??
+    resolveTelegramTransport(opts.proxyFetch, {
+      network: telegramCfg.network,
+    });
   const shouldProvideFetch = Boolean(telegramTransport.fetch);
   // grammY's ApiClientOptions types still track `node-fetch` types; Node 22+ global fetch
   // (undici) is structurally compatible at runtime but not assignable in TS.

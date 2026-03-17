@@ -82,6 +82,12 @@ const { readTelegramUpdateOffsetSpy } = vi.hoisted(() => ({
 const { startTelegramWebhookSpy } = vi.hoisted(() => ({
   startTelegramWebhookSpy: vi.fn(async () => ({ server: { close: vi.fn() }, stop: vi.fn() })),
 }));
+const { resolveTelegramTransportSpy } = vi.hoisted(() => ({
+  resolveTelegramTransportSpy: vi.fn(() => ({
+    fetch: globalThis.fetch,
+    sourceFetch: globalThis.fetch,
+  })),
+}));
 
 type RunnerStub = {
   task: () => Promise<void>;
@@ -267,6 +273,10 @@ vi.mock("./webhook.js", () => ({
   startTelegramWebhook: startTelegramWebhookSpy,
 }));
 
+vi.mock("./fetch.js", () => ({
+  resolveTelegramTransport: resolveTelegramTransportSpy,
+}));
+
 vi.mock("./update-offset-store.js", () => ({
   readTelegramUpdateOffset: readTelegramUpdateOffsetSpy,
   writeTelegramUpdateOffset: vi.fn(async () => undefined),
@@ -298,6 +308,10 @@ describe("monitorTelegramProvider (grammY)", () => {
     computeBackoff.mockClear();
     sleepWithAbort.mockClear();
     startTelegramWebhookSpy.mockClear();
+    resolveTelegramTransportSpy.mockReset().mockImplementation(() => ({
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+    }));
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
@@ -497,6 +511,34 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(computeBackoff).toHaveBeenCalled();
     expect(sleepWithAbort).toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the resolved transport across polling restarts", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const telegramTransport = {
+        fetch: globalThis.fetch,
+        sourceFetch: globalThis.fetch,
+      };
+      resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
+
+      const abort = new AbortController();
+      mockRunOnceWithStalledPollingRunner();
+      mockRunOnceAndAbort(abort);
+
+      const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+      await vi.waitFor(() => expect(createTelegramBotCalls.length).toBeGreaterThanOrEqual(1));
+
+      vi.advanceTimersByTime(120_000);
+      await monitor;
+
+      expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(1);
+      expect(createTelegramBotCalls).toHaveLength(2);
+      expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport);
+      expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aborts the active Telegram fetch when unhandled network rejection forces restart", async () => {
