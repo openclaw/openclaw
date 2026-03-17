@@ -743,6 +743,21 @@ describe("update-cli", () => {
           expect(runDaemonRestart).not.toHaveBeenCalled();
         },
       },
+      {
+        name: "skips success message when restart does not run",
+        run: async () => {
+          vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+          vi.mocked(runDaemonRestart).mockResolvedValue(false);
+          vi.mocked(defaultRuntime.log).mockClear();
+          await updateCommand({ restart: true });
+        },
+        assert: () => {
+          const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+          expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(
+            false,
+          );
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -877,17 +892,6 @@ describe("update-cli", () => {
     } finally {
       randomSpy.mockRestore();
     }
-  });
-
-  it("updateCommand skips success message when restart does not run", async () => {
-    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-    vi.mocked(runDaemonRestart).mockResolvedValue(false);
-    vi.mocked(defaultRuntime.log).mockClear();
-
-    await updateCommand({ restart: true });
-
-    const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
-    expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(false);
   });
 
   it("validates update command invocation errors", async () => {
