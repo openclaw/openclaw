@@ -757,6 +757,70 @@ describe("resolveModel", () => {
     });
   });
 
+  it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5-mini",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5-mini",
+        name: "GPT-5 mini",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4-mini", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-mini",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("builds an openai fallback for gpt-5.4 nano from the gpt-5-nano template", () => {
+    mockDiscoveredModel({
+      provider: "openai",
+      modelId: "gpt-5-nano",
+      templateModel: buildForwardCompatTemplate({
+        id: "gpt-5-nano",
+        name: "GPT-5 nano",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      }),
+    });
+
+    const result = resolveModel("openai", "gpt-5.4-nano", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4-nano",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("normalizes stale native openai gpt-5.4 completions transport to responses", () => {
     mockDiscoveredModel({
       provider: "openai",
