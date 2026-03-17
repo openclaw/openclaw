@@ -1,8 +1,5 @@
-import type {
-  ProviderResolveDynamicModelContext,
-  ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
+import { findCatalogTemplate } from "../../src/plugins/provider-catalog.js";
+import { cloneFirstTemplateModel } from "../../src/plugins/provider-model-helpers.js";
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
@@ -22,44 +19,5 @@ export function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
   return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
 }
 
-export function cloneFirstTemplateModel(params: {
-  providerId: string;
-  modelId: string;
-  templateIds: readonly string[];
-  ctx: ProviderResolveDynamicModelContext;
-  patch?: Partial<ProviderRuntimeModel>;
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.modelId.trim();
-  for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
-    const template = params.ctx.modelRegistry.find(
-      params.providerId,
-      templateId,
-    ) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      ...params.patch,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
-}
-
-export function findCatalogTemplate(params: {
-  entries: ReadonlyArray<{ provider: string; id: string }>;
-  providerId: string;
-  templateIds: readonly string[];
-}) {
-  return params.templateIds
-    .map((templateId) =>
-      params.entries.find(
-        (entry) =>
-          entry.provider.toLowerCase() === params.providerId.toLowerCase() &&
-          entry.id.toLowerCase() === templateId.toLowerCase(),
-      ),
-    )
-    .find((entry) => entry !== undefined);
-}
+export { cloneFirstTemplateModel };
+export { findCatalogTemplate };
