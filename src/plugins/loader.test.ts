@@ -932,130 +932,150 @@ describe("loadOpenClawPlugins", () => {
     expect(memory?.name).toBe("Memory (Core)");
     expect(memory?.version).toBe("1.2.3");
   });
-  it("loads plugins from config paths", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-    const plugin = writePlugin({
-      id: "allowed",
-      filename: "allowed.cjs",
-      body: `module.exports = {
-  id: "allowed",
+  it("handles config-path and scoped plugin loads", () => {
+    const scenarios = [
+      {
+        label: "loads plugins from config paths",
+        run: () => {
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+          const plugin = writePlugin({
+            id: "allowed-config-path",
+            filename: "allowed-config-path.cjs",
+            body: `module.exports = {
+  id: "allowed-config-path",
   register(api) {
-    api.registerGatewayMethod("allowed.ping", ({ respond }) => respond(true, { ok: true }));
+    api.registerGatewayMethod("allowed-config-path.ping", ({ respond }) => respond(true, { ok: true }));
   },
 };`,
-    });
+          });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["allowed"],
+          const registry = loadOpenClawPlugins({
+            cache: false,
+            workspaceDir: plugin.dir,
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+                allow: ["allowed-config-path"],
+              },
+            },
+          });
+
+          const loaded = registry.plugins.find((entry) => entry.id === "allowed-config-path");
+          expect(loaded?.status).toBe("loaded");
+          expect(Object.keys(registry.gatewayHandlers)).toContain("allowed-config-path.ping");
         },
       },
-    });
+      {
+        label: "limits imports to the requested plugin ids",
+        run: () => {
+          useNoBundledPlugins();
+          const allowed = writePlugin({
+            id: "allowed-scoped-only",
+            filename: "allowed-scoped-only.cjs",
+            body: `module.exports = { id: "allowed-scoped-only", register() {} };`,
+          });
+          const skippedMarker = path.join(makeTempDir(), "skipped-loaded.txt");
+          const skipped = writePlugin({
+            id: "skipped-scoped-only",
+            filename: "skipped-scoped-only.cjs",
+            body: `require("node:fs").writeFileSync(${JSON.stringify(skippedMarker)}, "loaded", "utf-8");
+module.exports = { id: "skipped-scoped-only", register() { throw new Error("skipped plugin should not load"); } };`,
+          });
 
-    const loaded = registry.plugins.find((entry) => entry.id === "allowed");
-    expect(loaded?.status).toBe("loaded");
-    expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
-  });
+          const registry = loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                load: { paths: [allowed.file, skipped.file] },
+                allow: ["allowed-scoped-only", "skipped-scoped-only"],
+              },
+            },
+            onlyPluginIds: ["allowed-scoped-only"],
+          });
 
-  it("limits imports to the requested plugin ids", () => {
-    useNoBundledPlugins();
-    const allowed = writePlugin({
-      id: "allowed",
-      filename: "allowed.cjs",
-      body: `module.exports = { id: "allowed", register() {} };`,
-    });
-    const skippedMarker = path.join(makeTempDir(), "skipped-loaded.txt");
-    const skipped = writePlugin({
-      id: "skipped",
-      filename: "skipped.cjs",
-      body: `require("node:fs").writeFileSync(${JSON.stringify(skippedMarker)}, "loaded", "utf-8");
-module.exports = { id: "skipped", register() { throw new Error("skipped plugin should not load"); } };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [allowed.file, skipped.file] },
-          allow: ["allowed", "skipped"],
+          expect(registry.plugins.map((entry) => entry.id)).toEqual(["allowed-scoped-only"]);
+          expect(fs.existsSync(skippedMarker)).toBe(false);
         },
       },
-      onlyPluginIds: ["allowed"],
-    });
+      {
+        label: "keeps scoped plugin loads in a separate cache entry",
+        run: () => {
+          useNoBundledPlugins();
+          const allowed = writePlugin({
+            id: "allowed-cache-scope",
+            filename: "allowed-cache-scope.cjs",
+            body: `module.exports = { id: "allowed-cache-scope", register() {} };`,
+          });
+          const extra = writePlugin({
+            id: "extra-cache-scope",
+            filename: "extra-cache-scope.cjs",
+            body: `module.exports = { id: "extra-cache-scope", register() {} };`,
+          });
+          const options = {
+            config: {
+              plugins: {
+                load: { paths: [allowed.file, extra.file] },
+                allow: ["allowed-cache-scope", "extra-cache-scope"],
+              },
+            },
+          };
 
-    expect(registry.plugins.map((entry) => entry.id)).toEqual(["allowed"]);
-    expect(fs.existsSync(skippedMarker)).toBe(false);
-  });
+          const full = loadOpenClawPlugins(options);
+          const scoped = loadOpenClawPlugins({
+            ...options,
+            onlyPluginIds: ["allowed-cache-scope"],
+          });
+          const scopedAgain = loadOpenClawPlugins({
+            ...options,
+            onlyPluginIds: ["allowed-cache-scope"],
+          });
 
-  it("keeps scoped plugin loads in a separate cache entry", () => {
-    useNoBundledPlugins();
-    const allowed = writePlugin({
-      id: "allowed",
-      filename: "allowed.cjs",
-      body: `module.exports = { id: "allowed", register() {} };`,
-    });
-    const extra = writePlugin({
-      id: "extra",
-      filename: "extra.cjs",
-      body: `module.exports = { id: "extra", register() {} };`,
-    });
-    const options = {
-      config: {
-        plugins: {
-          load: { paths: [allowed.file, extra.file] },
-          allow: ["allowed", "extra"],
+          expect(full.plugins.map((entry) => entry.id).toSorted()).toEqual([
+            "allowed-cache-scope",
+            "extra-cache-scope",
+          ]);
+          expect(scoped).not.toBe(full);
+          expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed-cache-scope"]);
+          expect(scopedAgain).toBe(scoped);
         },
       },
-    };
+      {
+        label: "can load a scoped registry without replacing the active global registry",
+        run: () => {
+          useNoBundledPlugins();
+          const plugin = writePlugin({
+            id: "allowed-nonactivating-scope",
+            filename: "allowed-nonactivating-scope.cjs",
+            body: `module.exports = { id: "allowed-nonactivating-scope", register() {} };`,
+          });
+          const previousRegistry = createEmptyPluginRegistry();
+          setActivePluginRegistry(previousRegistry, "existing-registry");
+          resetGlobalHookRunner();
 
-    const full = loadOpenClawPlugins(options);
-    const scoped = loadOpenClawPlugins({
-      ...options,
-      onlyPluginIds: ["allowed"],
-    });
-    const scopedAgain = loadOpenClawPlugins({
-      ...options,
-      onlyPluginIds: ["allowed"],
-    });
+          const scoped = loadOpenClawPlugins({
+            cache: false,
+            activate: false,
+            workspaceDir: plugin.dir,
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+                allow: ["allowed-nonactivating-scope"],
+              },
+            },
+            onlyPluginIds: ["allowed-nonactivating-scope"],
+          });
 
-    expect(full.plugins.map((entry) => entry.id).toSorted()).toEqual(["allowed", "extra"]);
-    expect(scoped).not.toBe(full);
-    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed"]);
-    expect(scopedAgain).toBe(scoped);
-  });
-
-  it("can load a scoped registry without replacing the active global registry", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "allowed",
-      filename: "allowed.cjs",
-      body: `module.exports = { id: "allowed", register() {} };`,
-    });
-    const previousRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(previousRegistry, "existing-registry");
-    resetGlobalHookRunner();
-
-    const scoped = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["allowed"],
+          expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed-nonactivating-scope"]);
+          expect(getActivePluginRegistry()).toBe(previousRegistry);
+          expect(getActivePluginRegistryKey()).toBe("existing-registry");
+          expect(getGlobalHookRunner()).toBeNull();
         },
       },
-      onlyPluginIds: ["allowed"],
-    });
+    ] as const;
 
-    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed"]);
-    expect(getActivePluginRegistry()).toBe(previousRegistry);
-    expect(getActivePluginRegistryKey()).toBe("existing-registry");
-    expect(getGlobalHookRunner()).toBeNull();
+    for (const scenario of scenarios) {
+      scenario.run();
+    }
   });
 
   it("only publishes plugin commands to the global registry during activating loads", async () => {
