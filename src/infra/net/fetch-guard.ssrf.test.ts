@@ -291,4 +291,22 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectEnvProxy: true,
     });
   });
+
+  it("skips local DNS pinning when trusted env proxy mode is active", async () => {
+    const lookupFn = vi.fn(async () => {
+      throw new Error("lookup should not run");
+    });
+    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      fetchImpl,
+      lookupFn,
+    });
+
+    expect(lookupFn).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    await result.release();
+  });
 });

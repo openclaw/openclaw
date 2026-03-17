@@ -29,6 +29,8 @@ export async function withRemoteHttpResponse<T>(params: {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
+    proxy: "env",
+    dangerouslyAllowEnvProxyWithoutPinnedDns: true,
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
   });
