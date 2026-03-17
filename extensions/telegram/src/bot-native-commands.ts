@@ -119,7 +119,7 @@ export type RegisterTelegramHandlerParams = {
   logger: ReturnType<typeof getChildLogger>;
 };
 
-type RegisterTelegramNativeCommandsParams = {
+export type RegisterTelegramNativeCommandsParams = {
   bot: Bot;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
