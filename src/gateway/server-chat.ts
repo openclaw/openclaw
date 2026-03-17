@@ -1,5 +1,5 @@
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
-import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import { normalizeVerboseLevel, type VerboseLevel } from "../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
@@ -202,6 +202,7 @@ export type ChatRunState = {
   deltaSentAt: Map<string, number>;
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
+  verboseLevels: Map<string, VerboseLevel | null>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
@@ -211,6 +212,7 @@ export function createChatRunState(): ChatRunState {
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
+  const verboseLevels = new Map<string, VerboseLevel | null>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
@@ -218,6 +220,7 @@ export function createChatRunState(): ChatRunState {
     buffers.clear();
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
+    verboseLevels.clear();
     abortedRuns.clear();
   };
 
@@ -226,6 +229,7 @@ export function createChatRunState(): ChatRunState {
     buffers,
     deltaSentAt,
     deltaLastBroadcastLen,
+    verboseLevels,
     abortedRuns,
     clear,
   };
@@ -471,6 +475,7 @@ export function createAgentEventHandler({
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.verboseLevels.delete(sourceRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -503,22 +508,32 @@ export function createAgentEventHandler({
   };
 
   const resolveVerboseLevel = (runId: string, sessionKey?: string) => {
+    const cachedVerbose = chatRunState.verboseLevels.get(runId);
+    if (cachedVerbose !== undefined) {
+      return cachedVerbose ?? undefined;
+    }
     const runContext = getAgentRunContext(runId);
     const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel);
     if (runVerbose) {
+      chatRunState.verboseLevels.set(runId, runVerbose);
       return runVerbose;
     }
     if (!sessionKey) {
+      chatRunState.verboseLevels.set(runId, null);
       return undefined;
     }
     try {
       const { cfg, entry } = loadSessionEntry(sessionKey);
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
       if (sessionVerbose) {
+        chatRunState.verboseLevels.set(runId, sessionVerbose);
         return sessionVerbose;
       }
-      return normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
+      const defaultVerbose = normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
+      chatRunState.verboseLevels.set(runId, defaultVerbose ?? null);
+      return defaultVerbose;
     } catch {
+      chatRunState.verboseLevels.set(runId, null);
       return undefined;
     }
   };
@@ -641,6 +656,7 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
+        chatRunState.verboseLevels.delete(evt.runId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }

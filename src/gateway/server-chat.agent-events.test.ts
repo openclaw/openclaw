@@ -227,6 +227,7 @@ describe("agent event handler", () => {
     expect(payload.state).toBe("delta");
     expect(payload.message?.content?.[0]?.text).toBe("Need commit push.");
     expect(sessionChatCalls(harness.nodeSendToSession)).toHaveLength(0);
+    harness.nowSpy?.mockRestore();
   });
 
   it("continues streaming assistant deltas to the session when verbose is on", () => {
@@ -250,6 +251,7 @@ describe("agent event handler", () => {
 
     expect(chatBroadcastCalls(harness.broadcast)).toHaveLength(1);
     expect(sessionChatCalls(harness.nodeSendToSession)).toHaveLength(1);
+    harness.nowSpy?.mockRestore();
   });
 
   it("does not include NO_REPLY text in chat final message", () => {
