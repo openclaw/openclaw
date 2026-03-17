@@ -1,6 +1,5 @@
 import {
   DEFAULT_ACCOUNT_ID,
-  formatDocsLink,
   hasConfiguredSecretInput,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -15,6 +14,7 @@ import {
   setSetupChannelEnabled,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import type {
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
