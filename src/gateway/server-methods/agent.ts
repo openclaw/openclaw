@@ -814,10 +814,11 @@ export const agentHandlers: GatewayRequestHandlers = {
           }),
         );
         if (snapshot.stopReason === undefined) {
-          const immediateDedupeMetadata = (await Promise.race([
-            dedupePromise,
-            Promise.resolve<AgentWaitTerminalSnapshot | null>(null),
-          ])) ?? null;
+          const immediateDedupeMetadata =
+            (await Promise.race([
+              dedupePromise,
+              Promise.resolve<AgentWaitTerminalSnapshot | null>(null),
+            ])) ?? null;
           snapshot = mergeAgentWaitStructuredMetadata(snapshot, immediateDedupeMetadata);
         }
         if (isMissingAgentWaitStructuredMetadata(snapshot)) {
