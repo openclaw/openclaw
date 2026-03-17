@@ -13,6 +13,7 @@ ARG VAULT_VERSION=v1.21.2
 ARG BOUNDARY_VERSION=v0.20.1
 ARG ARGOCD_VERSION=v3.3.2
 ARG SENTRY_CLI_VERSION=3.3.2
+ARG DUNE_CLI_VERSION=0.1.5
 ARG TARGETARCH
 
 RUN apt-get update \
@@ -84,6 +85,10 @@ RUN set -eux; \
   chmod +x /usr/local/bin/sentry-cli; \
   curl -fsSL -o /usr/local/bin/argocd "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-${argocd_arch}"; \
   chmod +x /usr/local/bin/argocd; \
+  curl -fsSL -o /tmp/dune-cli.tar.gz "https://github.com/duneanalytics/cli/releases/download/v${DUNE_CLI_VERSION}/dune-cli_${DUNE_CLI_VERSION}_linux_${arch}.tar.gz"; \
+  tar -C /tmp -xzf /tmp/dune-cli.tar.gz dune; \
+  mv /tmp/dune /usr/local/bin/dune; \
+  chmod +x /usr/local/bin/dune; \
   aws --version >/dev/null 2>&1; \
   jq --version >/dev/null; \
   rg --version >/dev/null; \
@@ -96,12 +101,14 @@ RUN set -eux; \
   boundary version >/dev/null; \
   sentry-cli --version >/dev/null; \
   argocd version --client >/dev/null; \
+  dune --version >/dev/null; \
   rm -rf \
     /tmp/helm.tar.gz \
     "/tmp/linux-${helm_arch}" \
     /tmp/terraform.zip \
     /tmp/vault.zip \
-    /tmp/boundary.zip
+    /tmp/boundary.zip \
+    /tmp/dune-cli.tar.gz
 
 RUN mkdir -p /srv/openclaw/repos \
   && chown -R node:node /srv/openclaw

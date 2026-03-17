@@ -102,7 +102,6 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - eRPC API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/erpc-api.sh`
 - Sentry API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentry-api.sh`
 - Sentry CLI wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentry-cli.sh`
-- Wiz MCP launcher: `/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh`
 - Wiz API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh`
 - DB target helper: `/home/node/.openclaw/skills/morpho-sre/scripts/lib-db-target.sh`
 - DB evidence wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/db-evidence.sh`
@@ -110,6 +109,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Linear ticket API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh`
 - Sentinel snapshot helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-snapshot.sh`
 - Sentinel triage helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh`
+- Dune CLI wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh`
 
 ## Knowledge Surfaces
 
@@ -135,33 +135,14 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Helper scripts that support RCA and eRPC investigation:
   - `erpc-context.sh`
   - `single-vault-graphql-evidence.sh`
-  - `wiz-mcp.sh`
   - `wiz-api.sh`
   - `rca-provider-codex.sh`
   - `rca-provider-claude.sh`
   - `rca-provider-openclaw-agent.sh`
-
-## Wiz MCP
-
-- ACP is enabled with `dispatch.enabled=false`, so `/acp` commands are available
-  without switching normal thread execution over to ACP.
-- ACPX is seeded with a `wiz` MCP server definition that runs
-  `/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh`.
-- `wiz-mcp.sh` prefers Vault path `secret/wiz/api-token` over
-  `WIZ_CLIENT_ID` / `WIZ_CLIENT_SECRET`, because the runtime env secret may lag
-  behind the canonical Wiz Vault entry.
-- The launcher keeps Wiz secrets out of process args by passing header
-  placeholders to `mcp-remote` and resolving the real values through
-  environment variables in the child process.
-- Manual checks:
-
-```bash
-# Show the redacted launch plan
-/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh --print-plan | jq
-
-# Probe current Vault-backed Wiz MCP credentials
-/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh --probe-auth | jq
-```
+- Use `references/dune/dunesql-cheatsheet.md` for DuneSQL types, functions, and
+  common patterns before writing onchain analytics queries.
+- Use `references/dune/dataset-discovery.md` when searching for decoded contract
+  tables or spellbook datasets.
 
 - Prefer existing repo docs over inventing parallel guidance:
   - `morpho-infra/docs/operations/incident-response.md`
@@ -208,6 +189,44 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 # Full posture summary (counts by severity)
 /home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh summary | jq
 ```
+
+## Dune CLI
+
+- Wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh`
+- Credential chain: `DUNE_API_KEY` env → Vault token (fast) → Vault K8s JWT (slow)
+- Vault path: `secret/data/openclaw-sre/all-secrets` (key: `DUNE_API_KEY`)
+- Read-only by default; mutation commands (`query create`, `query update`,
+  `query archive`) require `DUNE_ALLOW_MUTATIONS=1`.
+- Always outputs JSON by default (`--output json`).
+- The `--api-key` flag is blocked to prevent credential leakage via process args.
+- `docs search` subcommand works without authentication.
+- Manual checks:
+
+```bash
+# Probe credential resolution
+/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh --probe-auth
+
+# Run ad-hoc DuneSQL query
+/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh query run-sql \
+  --sql "SELECT number, time FROM ethereum.blocks ORDER BY number DESC LIMIT 5"
+
+# Search decoded tables for a contract
+/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh dataset search-by-contract \
+  --contract-address 0x1234... --include-schema
+
+# Search datasets by keyword
+/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh dataset search \
+  --query "morpho blue" --categories decoded --include-schema
+```
+
+- Note: `ethereum.blocks` uses columns `number` and `time` (not `block_number`/`block_time`).
+  Some upstream Dune reference docs use the wrong names — always verify with `dataset search --include-schema`.
+- DuneSQL references (loaded on demand):
+  - `references/dune/dunesql-cheatsheet.md` — types, functions, common patterns
+  - `references/dune/dataset-discovery.md` — dataset search and contract lookup
+  - `references/dune/query-execution.md` — run, run-sql, execution results
+  - `references/dune/query-management.md` — create, get, update, archive
+  - `references/dune/docs-and-usage.md` — docs search and credit usage
 
 ## Incident Workflow
 

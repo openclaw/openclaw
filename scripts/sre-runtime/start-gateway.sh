@@ -71,7 +71,8 @@ for var in \
   WIZ_MCP_CLIENT_ID \
   WIZ_MCP_CLIENT_SECRET \
   WIZ_MCP_CLIENT_ENDPOINT \
-  WIZ_MCP_DATA_CENTER; do
+  WIZ_MCP_DATA_CENTER \
+  DUNE_API_KEY; do
   trim_env_var "$var"
 done
 
