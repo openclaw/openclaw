@@ -560,12 +560,13 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("mirrors in-flight replay failures so concurrent duplicates also fail", async () => {
-    let rejectFirst: ((err: Error) => void) | undefined;
-    const firstDone = new Promise<void>((_, reject) => {
-      rejectFirst = reject;
+    let releaseFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
     });
     const processMessage = vi.fn(async () => {
       await firstDone;
+      throw new Error("transient inflight failure");
     });
     const event = createReplayMessageEvent({
       messageId: "m-inflight-fail",
@@ -575,10 +576,12 @@ describe("handleLineWebhookEvents", () => {
       isRedelivery: true,
     });
     const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
-    rejectFirst?.(new Error("transient inflight failure"));
+    const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
+    const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
 
-    await expect(firstRun).rejects.toThrow("transient inflight failure");
-    await expect(secondRun).rejects.toThrow("transient inflight failure");
+    releaseFirst?.();
+
+    await Promise.all([firstFailure, secondFailure]);
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
