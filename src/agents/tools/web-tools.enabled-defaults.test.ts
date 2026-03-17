@@ -325,9 +325,16 @@ describe("web_search provider proxy dispatch", () => {
 
 describe("web_search perplexity Search API", () => {
   const priorFetch = global.fetch;
+  const savedEnv = { ...process.env };
+
+  beforeEach(() => {
+    delete process.env.PERPLEXITY_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+  });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    process.env = { ...savedEnv };
     global.fetch = priorFetch;
     webSearchTesting.SEARCH_CACHE.clear();
   });
@@ -462,9 +469,16 @@ describe("web_search perplexity Search API", () => {
 
 describe("web_search perplexity OpenRouter compatibility", () => {
   const priorFetch = global.fetch;
+  const savedEnv = { ...process.env };
+
+  beforeEach(() => {
+    delete process.env.PERPLEXITY_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+  });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    process.env = { ...savedEnv };
     global.fetch = priorFetch;
     webSearchTesting.SEARCH_CACHE.clear();
   });
@@ -652,7 +666,7 @@ describe("web_search Perplexity lazy resolution", () => {
           web: {
             search: {
               provider: "gemini",
-              gemini: { apiKey: "gemini-config-test" },
+              gemini: { apiKey: "gemini-config-test" }, // pragma: allowlist secret
               perplexity: perplexityConfig as { apiKey?: string; baseUrl?: string; model?: string },
             },
           },

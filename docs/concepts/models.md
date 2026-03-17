@@ -26,6 +26,7 @@ Related:
 
 - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
+- `agents.defaults.imageGenerationModel` is used by the shared image-generation capability.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
 ## Quick model policy
@@ -34,9 +35,9 @@ Related:
 - Use fallbacks for cost/latency-sensitive tasks and lower-stakes chat.
 - For tool-enabled agents or untrusted inputs, avoid older/weaker model tiers.
 
-## Setup wizard (recommended)
+## Onboarding (recommended)
 
-If you don’t want to hand-edit config, run the onboarding wizard:
+If you don’t want to hand-edit config, run onboarding:
 
 ```bash
 openclaw onboard
@@ -49,14 +50,15 @@ subscription** (OAuth) and **Anthropic** (API key or `claude setup-token`).
 
 - `agents.defaults.model.primary` and `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
+- `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
 - `agents.defaults.models` (allowlist + aliases + provider params)
 - `models.providers` (custom providers written into `models.json`)
 
 Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
 to `zai/*`.
 
-Provider configuration examples (including OpenCode Zen) live in
-[/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy).
+Provider configuration examples (including OpenCode) live in
+[/gateway/configuration](/gateway/configuration#opencode).
 
 ## “Model is not allowed” (and why replies stop)
 
@@ -207,7 +209,7 @@ mode, pass `--yes` to accept defaults.
 ## Models registry (`models.json`)
 
 Custom providers in `models.providers` are written into `models.json` under the
-agent directory (default `~/.openclaw/agents/<agentId>/models.json`). This file
+agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). This file
 is merged by default unless `models.mode` is set to `replace`.
 
 Merge mode precedence for matching provider IDs:
@@ -215,7 +217,9 @@ Merge mode precedence for matching provider IDs:
 - Non-empty `baseUrl` already present in the agent `models.json` wins.
 - Non-empty `apiKey` in the agent `models.json` wins only when that provider is not SecretRef-managed in current config/auth-profile context.
 - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
+- SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
 - Empty or missing agent `apiKey`/`baseUrl` fall back to config `models.providers`.
 - Other provider fields are refreshed from config and normalized catalog data.
 
-This marker-based persistence applies whenever OpenClaw regenerates `models.json`, including command-driven paths like `openclaw agent`.
+Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
+This applies whenever OpenClaw regenerates `models.json`, including command-driven paths like `openclaw agent`.

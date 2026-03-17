@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../test-utils/start-account-context.js";
+import {
+  expectStopPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+} from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedIrcAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -41,27 +44,20 @@ describe("ircPlugin gateway.startAccount", () => {
       config: {} as ResolvedIrcAccount["config"],
     };
 
-    const abort = new AbortController();
-    const task = ircPlugin.gateway!.startAccount!(
-      createStartAccountContext({
-        account,
-        abortSignal: abort.signal,
-      }),
-    );
-    let settled = false;
-    void task.then(() => {
-      settled = true;
+    const { abort, task, isSettled } = startAccountAndTrackLifecycle({
+      startAccount: ircPlugin.gateway!.startAccount!,
+      account,
     });
 
-    await vi.waitFor(() => {
-      expect(hoisted.monitorIrcProvider).toHaveBeenCalledOnce();
+    await expectStopPendingUntilAbort({
+      waitForStarted: () =>
+        vi.waitFor(() => {
+          expect(hoisted.monitorIrcProvider).toHaveBeenCalledOnce();
+        }),
+      isSettled,
+      abort,
+      task,
+      stop,
     });
-    expect(settled).toBe(false);
-    expect(stop).not.toHaveBeenCalled();
-
-    abort.abort();
-    await task;
-
-    expect(stop).toHaveBeenCalledOnce();
   });
 });

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
-import { AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
 
 const hoisted = vi.hoisted(() => {
@@ -32,7 +31,8 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
   };
 });
 
-const { AcpSessionManager } = await import("./manager.js");
+let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
+let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
 
 const baseCfg = {
   acp: {
@@ -146,7 +146,10 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 }
 
 describe("AcpSessionManager", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ AcpSessionManager } = await import("./manager.js"));
+    ({ AcpRuntimeError } = await import("../runtime/errors.js"));
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue(null);
@@ -168,6 +171,57 @@ describe("AcpSessionManager", () => {
     }
     expect(resolved.error.code).toBe("ACP_SESSION_INIT_FAILED");
     expect(resolved.error.message).toContain("ACP metadata is missing");
+  });
+
+  it("canonicalizes the main alias before ACP rehydrate after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+      if (sessionKey !== "agent:main:main") {
+        return null;
+      }
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          agent: "main",
+          runtimeSessionName: sessionKey,
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    const cfg = {
+      ...baseCfg,
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+    } as OpenClawConfig;
+
+    await manager.runTurn({
+      cfg,
+      sessionKey: "main",
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-main",
+    });
+
+    expect(hoisted.readAcpSessionEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        sessionKey: "agent:main:main",
+      }),
+    );
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
   });
 
   it("serializes concurrent turns for the same ACP session", async () => {
