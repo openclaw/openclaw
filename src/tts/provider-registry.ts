@@ -7,11 +7,11 @@ import { buildElevenLabsSpeechProvider } from "./providers/elevenlabs.js";
 import { buildMicrosoftSpeechProvider } from "./providers/microsoft.js";
 import { buildOpenAISpeechProvider } from "./providers/openai.js";
 
-const BUILTIN_SPEECH_PROVIDERS: readonly SpeechProviderPlugin[] = [
-  buildOpenAISpeechProvider(),
-  buildElevenLabsSpeechProvider(),
-  buildMicrosoftSpeechProvider(),
-];
+const BUILTIN_SPEECH_PROVIDER_BUILDERS = [
+  buildOpenAISpeechProvider,
+  buildElevenLabsSpeechProvider,
+  buildMicrosoftSpeechProvider,
+] as const satisfies readonly (() => SpeechProviderPlugin)[];
 
 function trimToUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim().toLowerCase();
@@ -58,8 +58,8 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
     }
   };
 
-  for (const provider of BUILTIN_SPEECH_PROVIDERS) {
-    register(provider);
+  for (const buildProvider of BUILTIN_SPEECH_PROVIDER_BUILDERS) {
+    register(buildProvider());
   }
   for (const provider of resolveSpeechProviderPluginEntries(cfg)) {
     register(provider);
