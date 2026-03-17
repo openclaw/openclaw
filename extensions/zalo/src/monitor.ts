@@ -105,8 +105,16 @@ type ZaloImageMessageParams = ZaloProcessingContext & {
   mediaMaxMb: number;
 };
 
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
 export function resolveInboundZaloPhotoUrl(message: ZaloMessage): string | undefined {
-  return message.photo_url?.trim() || message.photo?.trim() || undefined;
+  return trimNonEmptyString(message.photo_url) ?? trimNonEmptyString(message.photo);
 }
 
 function formatZaloError(error: unknown): string {

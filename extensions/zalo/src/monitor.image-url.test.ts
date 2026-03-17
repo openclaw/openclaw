@@ -33,4 +33,19 @@ describe("resolveInboundZaloPhotoUrl", () => {
       ),
     ).toBe("https://example.com/legacy.jpg");
   });
+
+  it("returns undefined when neither photo_url nor photo is present", () => {
+    expect(resolveInboundZaloPhotoUrl(createMessage())).toBeUndefined();
+  });
+
+  it("ignores malformed non-string payload values", () => {
+    expect(
+      resolveInboundZaloPhotoUrl(
+        createMessage({
+          photo_url: 123 as unknown as string,
+          photo: { bad: true } as unknown as string,
+        }),
+      ),
+    ).toBeUndefined();
+  });
 });
