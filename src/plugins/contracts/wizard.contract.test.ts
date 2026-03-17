@@ -8,12 +8,10 @@ vi.mock("../providers.js", () => ({
   resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
 }));
 
-const {
-  buildProviderPluginMethodChoice,
-  resolveProviderModelPickerEntries,
-  resolveProviderPluginChoice,
-  resolveProviderWizardOptions,
-} = await import("../provider-wizard.js");
+let buildProviderPluginMethodChoice: typeof import("../provider-wizard.js").buildProviderPluginMethodChoice;
+let resolveProviderModelPickerEntries: typeof import("../provider-wizard.js").resolveProviderModelPickerEntries;
+let resolveProviderPluginChoice: typeof import("../provider-wizard.js").resolveProviderPluginChoice;
+let resolveProviderWizardOptions: typeof import("../provider-wizard.js").resolveProviderWizardOptions;
 
 function resolveExpectedWizardChoiceValues(providers: ProviderPlugin[]) {
   const values: string[] = [];
@@ -72,7 +70,14 @@ function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
 }
 
 describe("provider wizard contract", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      buildProviderPluginMethodChoice,
+      resolveProviderModelPickerEntries,
+      resolveProviderPluginChoice,
+      resolveProviderWizardOptions,
+    } = await import("../provider-wizard.js"));
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
   });
