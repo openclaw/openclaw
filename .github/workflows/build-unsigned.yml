@@ -1,0 +1,42 @@
+name: Build Unsigned iOS App
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare iOS project
+        run: |
+          pnpm install
+          ./scripts/ios-configure-signing.sh
+          cd apps/ios
+          xcodegen generate
+
+      - name: Build iOS app (unsigned)
+        run: |
+          cd apps/ios
+          xcodebuild archive \
+            -project OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Release \
+            -archivePath $PWD/build/OpenClaw.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO
+
+          mkdir -p $PWD/build/ipa
+          mkdir -p Payload
+          cp -r $PWD/build/OpenClaw.xcarchive/Products/Applications/OpenClaw.app Payload/
+          zip -r build/ipa/OpenClaw.ipa Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClaw-unsigned.ipa
+          path: apps/ios/build/ipa/OpenClaw.ipa
