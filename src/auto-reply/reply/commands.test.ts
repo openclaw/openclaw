@@ -732,44 +732,77 @@ describe("extractMessageText", () => {
   });
 });
 
-describe("handleCommands /config owner gating", () => {
-  it("enforces /config show owner gating", async () => {
-    const cfg = {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
+describe("handleCommands owner gating for privileged show commands", () => {
+  it("enforces owner gating for /config show and /debug show", async () => {
     const cases = [
       {
-        name: "blocks authorized non-owner senders",
-        text: "/config show",
-        senderIsOwner: false,
+        name: "/config show blocks authorized non-owner senders",
+        build: () => {
+          const params = buildParams("/config show", {
+            commands: { config: true, text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig);
+          params.command.senderIsOwner = false;
+          return params;
+        },
         assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
           expect(result.shouldContinue).toBe(false);
           expect(result.reply).toBeUndefined();
         },
       },
       {
-        name: "keeps /config show working for owners",
-        text: "/config show messages.ackReaction",
-        senderIsOwner: true,
-        beforeRun: () => {
+        name: "/config show stays available for owners",
+        build: () => {
           readConfigFileSnapshotMock.mockResolvedValueOnce({
             valid: true,
             parsed: { messages: { ackReaction: ":)" } },
           });
+          const params = buildParams("/config show messages.ackReaction", {
+            commands: { config: true, text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig);
+          params.command.senderIsOwner = true;
+          return params;
         },
         assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
           expect(result.shouldContinue).toBe(false);
           expect(result.reply?.text).toContain("Config messages.ackReaction");
         },
       },
+      {
+        name: "/debug show blocks authorized non-owner senders",
+        build: () => {
+          const params = buildParams("/debug show", {
+            commands: { debug: true, text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig);
+          params.command.senderIsOwner = false;
+          return params;
+        },
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply).toBeUndefined();
+        },
+      },
+      {
+        name: "/debug show stays available for owners",
+        build: () => {
+          const params = buildParams("/debug show", {
+            commands: { debug: true, text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig);
+          params.command.senderIsOwner = true;
+          return params;
+        },
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply?.text).toContain("Debug overrides");
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
-      testCase.beforeRun?.();
-      const params = buildParams(testCase.text, cfg);
-      params.command.senderIsOwner = testCase.senderIsOwner;
-      const result = await handleCommands(params);
+      const result = await handleCommands(testCase.build());
       testCase.assert(result);
     }
   });
@@ -966,38 +999,6 @@ describe("handleCommands /config configWrites gating", () => {
 
     for (const testCase of cases) {
       await testCase.run();
-    }
-  });
-});
-
-describe("handleCommands /debug owner gating", () => {
-  it("enforces /debug show owner gating", async () => {
-    const cfg = {
-      commands: { debug: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const cases = [
-      {
-        senderIsOwner: false,
-        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
-          expect(result.shouldContinue).toBe(false);
-          expect(result.reply).toBeUndefined();
-        },
-      },
-      {
-        senderIsOwner: true,
-        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
-          expect(result.shouldContinue).toBe(false);
-          expect(result.reply?.text).toContain("Debug overrides");
-        },
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const params = buildParams("/debug show", cfg);
-      params.command.senderIsOwner = testCase.senderIsOwner;
-      const result = await handleCommands(params);
-      testCase.assert(result);
     }
   });
 });
