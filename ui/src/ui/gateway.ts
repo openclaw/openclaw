@@ -13,6 +13,7 @@ import {
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
+import { debugLog, isDebugEnabled } from "./debug-connection.ts";
 
 export type GatewayEventFrame = {
   type: "event";
@@ -184,8 +185,16 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
+    if (isDebugEnabled()) {
+      debugLog.info("websocket", `Connecting to ${this.opts.url}...`);
+    }
     this.ws = new WebSocket(this.opts.url);
-    this.ws.addEventListener("open", () => this.queueConnect());
+    this.ws.addEventListener("open", () => {
+      if (isDebugEnabled()) {
+        debugLog.info("websocket", "WebSocket connection opened");
+      }
+      this.queueConnect();
+    });
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
       const reason = String(ev.reason ?? "");
@@ -193,6 +202,13 @@ export class GatewayBrowserClient {
       this.pendingConnectError = undefined;
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
+      if (isDebugEnabled()) {
+        debugLog.info(
+          "websocket",
+          `WebSocket closed: code=${ev.code}, reason="${reason}"`,
+          connectError ? { error: connectError } : undefined,
+        );
+      }
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
       if (
@@ -206,7 +222,10 @@ export class GatewayBrowserClient {
         this.scheduleReconnect();
       }
     });
-    this.ws.addEventListener("error", () => {
+    this.ws.addEventListener("error", (ev) => {
+      if (isDebugEnabled()) {
+        debugLog.error("websocket", "WebSocket error", ev);
+      }
       // ignored; close handler will fire
     });
   }
@@ -329,6 +348,15 @@ export class GatewayBrowserClient {
       .then((hello) => {
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
+        if (isDebugEnabled()) {
+          debugLog.info(
+            "gateway",
+            "Connection established",
+            hello.server
+              ? { version: hello.server.version, connId: hello.server.connId }
+              : undefined,
+          );
+        }
         if (hello?.auth?.deviceToken && deviceIdentity) {
           storeDeviceAuthToken({
             deviceId: deviceIdentity.deviceId,
@@ -341,6 +369,17 @@ export class GatewayBrowserClient {
         this.opts.onHello?.(hello);
       })
       .catch((err: unknown) => {
+        if (isDebugEnabled()) {
+          if (err instanceof GatewayRequestError) {
+            debugLog.error("gateway", "Connection failed", {
+              code: err.gatewayCode,
+              message: err.message,
+              details: err.details,
+            });
+          } else {
+            debugLog.error("gateway", "Connection failed", err);
+          }
+        }
         const connectErrorCode =
           err instanceof GatewayRequestError ? resolveGatewayErrorDetailCode(err) : null;
         const recoveryAdvice =
@@ -388,17 +427,26 @@ export class GatewayBrowserClient {
     try {
       parsed = JSON.parse(raw);
     } catch {
+      if (isDebugEnabled()) {
+        debugLog.warn("websocket", "Failed to parse message as JSON", { raw: raw.slice(0, 200) });
+      }
       return;
     }
 
     const frame = parsed as { type?: unknown };
     if (frame.type === "event") {
       const evt = parsed as GatewayEventFrame;
+      if (isDebugEnabled()) {
+        debugLog.debug("websocket", `Event: ${evt.event}`, evt.payload);
+      }
       if (evt.event === "connect.challenge") {
         const payload = evt.payload as { nonce?: unknown } | undefined;
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
         if (nonce) {
           this.connectNonce = nonce;
+          if (isDebugEnabled()) {
+            debugLog.info("websocket", "Received connect.challenge, sending connect handshake");
+          }
           void this.sendConnect();
         }
         return;
@@ -422,12 +470,21 @@ export class GatewayBrowserClient {
       const res = parsed as GatewayResponseFrame;
       const pending = this.pending.get(res.id);
       if (!pending) {
+        if (isDebugEnabled()) {
+          debugLog.warn("websocket", `Received response for unknown request ID: ${res.id}`);
+        }
         return;
       }
       this.pending.delete(res.id);
       if (res.ok) {
+        if (isDebugEnabled()) {
+          debugLog.debug("websocket", `Response OK for request ${res.id}`, res.payload);
+        }
         pending.resolve(res.payload);
       } else {
+        if (isDebugEnabled()) {
+          debugLog.warn("websocket", `Response error for request ${res.id}`, res.error);
+        }
         pending.reject(
           new GatewayRequestError({
             code: res.error?.code ?? "UNAVAILABLE",

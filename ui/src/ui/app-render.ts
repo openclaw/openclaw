@@ -1917,6 +1917,11 @@ export function renderApp(state: AppViewState) {
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
+      <debug-drawer 
+        ?open=${state.debugDrawerOpen} 
+        .gatewayClient=${state.client}
+        @close=${() => (state.debugDrawerOpen = false)}
+      ></debug-drawer>
       ${nothing}
     </div>
   `;
