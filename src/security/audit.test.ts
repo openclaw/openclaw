@@ -1104,12 +1104,8 @@ description: test skill
     );
   });
 
-  it("checks sandbox docker mode-off findings with/without agent override", async () => {
-    const cases: Array<{
-      name: string;
-      cfg: OpenClawConfig;
-      expectedPresent: boolean;
-    }> = [
+  it("evaluates sandbox docker config findings", async () => {
+    const cases = [
       {
         name: "mode off with docker config only",
         cfg: {
@@ -1121,8 +1117,8 @@ description: test skill
               },
             },
           },
-        },
-        expectedPresent: true,
+        } as OpenClawConfig,
+        expectedFindings: [{ checkId: "sandbox.docker_config_mode_off" }],
       },
       {
         name: "agent enables sandbox mode",
@@ -1136,22 +1132,10 @@ description: test skill
             },
             list: [{ id: "ops", sandbox: { mode: "all" } }],
           },
-        },
-        expectedPresent: false,
+        } as OpenClawConfig,
+        expectedFindings: [],
+        expectedAbsent: ["sandbox.docker_config_mode_off"],
       },
-    ];
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        expect(hasFinding(res, "sandbox.docker_config_mode_off"), testCase.name).toBe(
-          testCase.expectedPresent,
-        );
-      }),
-    );
-  });
-
-  it("flags dangerous sandbox docker config", async () => {
-    const cases = [
       {
         name: "dangerous binds, host network, seccomp, and apparmor",
         cfg: {
@@ -1203,11 +1187,16 @@ description: test skill
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
-        expect(res.findings, testCase.name).toEqual(
-          expect.arrayContaining(
-            testCase.expectedFindings.map((finding) => expect.objectContaining(finding)),
-          ),
-        );
+        if (testCase.expectedFindings.length > 0) {
+          expect(res.findings, testCase.name).toEqual(
+            expect.arrayContaining(
+              testCase.expectedFindings.map((finding) => expect.objectContaining(finding)),
+            ),
+          );
+        }
+        for (const checkId of testCase.expectedAbsent ?? []) {
+          expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
+        }
       }),
     );
   });
