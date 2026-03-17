@@ -47,6 +47,12 @@ describe("splitTrailingAuthProfile", () => {
     });
   });
 
+  it("keeps model ids with pure numeric @version suffixes", () => {
+    expect(splitTrailingAuthProfile("custom-litellm/vertex-ai_claude-haiku-4-5@20251001")).toEqual({
+      model: "custom-litellm/vertex-ai_claude-haiku-4-5@20251001",
+    });
+  });
+
   it("uses first @ after last slash for email-based auth profiles", () => {
     expect(splitTrailingAuthProfile("flash@google-gemini-cli:test@gmail.com")).toEqual({
       model: "flash",

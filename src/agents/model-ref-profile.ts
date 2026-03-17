@@ -19,5 +19,11 @@ export function splitTrailingAuthProfile(raw: string): {
     return { model: trimmed };
   }
 
+  // Preserve provider model ids that use a pure numeric @version suffix
+  // (for example LiteLLM / Vertex AI style model refs like @20251001).
+  if (/^\d{8}$/.test(profile)) {
+    return { model: trimmed };
+  }
+
   return { model, profile };
 }
