@@ -278,6 +278,7 @@ export const CronListParamsSchema = Type.Object(
     enabled: Type.Optional(CronJobsEnabledFilterSchema),
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
+    callerSessionKey: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -315,12 +316,16 @@ export const CronJobPatchSchema = Type.Object(
 
 export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   patch: CronJobPatchSchema,
+  callerSessionKey: Type.Optional(NonEmptyString),
 });
 
-export const CronRemoveParamsSchema = cronIdOrJobIdParams({});
+export const CronRemoveParamsSchema = cronIdOrJobIdParams({
+  callerSessionKey: Type.Optional(NonEmptyString),
+});
 
 export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
+  callerSessionKey: Type.Optional(NonEmptyString),
 });
 
 export const CronRunsParamsSchema = Type.Object(

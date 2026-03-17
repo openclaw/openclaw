@@ -79,6 +79,59 @@ describe("cron protocol validators", () => {
     expect(validateCronListParams({ offset: -1 })).toBe(false);
   });
 
+  it("accepts callerSessionKey on list params", () => {
+    expect(validateCronListParams({ callerSessionKey: "telegram:direct:111" })).toBe(true);
+    expect(validateCronListParams({ callerSessionKey: "" })).toBe(false);
+  });
+
+  it("accepts callerSessionKey on update params", () => {
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { enabled: false },
+        callerSessionKey: "telegram:direct:111",
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        jobId: "job-2",
+        patch: { enabled: true },
+        callerSessionKey: "telegram:direct:222",
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({ id: "job-1", patch: { enabled: false }, callerSessionKey: "" }),
+    ).toBe(false);
+  });
+
+  it("accepts callerSessionKey on remove params", () => {
+    expect(validateCronRemoveParams({ id: "job-1", callerSessionKey: "telegram:direct:111" })).toBe(
+      true,
+    );
+    expect(
+      validateCronRemoveParams({ jobId: "job-2", callerSessionKey: "telegram:direct:222" }),
+    ).toBe(true);
+    expect(validateCronRemoveParams({ id: "job-1", callerSessionKey: "" })).toBe(false);
+  });
+
+  it("accepts callerSessionKey on run params", () => {
+    expect(
+      validateCronRunParams({
+        id: "job-1",
+        mode: "force",
+        callerSessionKey: "telegram:direct:111",
+      }),
+    ).toBe(true);
+    expect(
+      validateCronRunParams({
+        jobId: "job-2",
+        mode: "due",
+        callerSessionKey: "telegram:direct:222",
+      }),
+    ).toBe(true);
+    expect(validateCronRunParams({ id: "job-1", callerSessionKey: "" })).toBe(false);
+  });
+
   it("enforces runs limit minimum for id and jobId selectors", () => {
     expect(validateCronRunsParams({ id: "job-1", limit: 1 })).toBe(true);
     expect(validateCronRunsParams({ jobId: "job-2", limit: 1 })).toBe(true);
