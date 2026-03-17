@@ -66,6 +66,25 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+const AGENT_WAIT_DEDUPE_METADATA_GRACE_MS = 250;
+
+function mergeAgentWaitStructuredMetadata<T extends AgentWaitTerminalSnapshot>(
+  snapshot: T,
+  dedupeSnapshot: AgentWaitTerminalSnapshot | null | undefined,
+): T {
+  if (!dedupeSnapshot) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    stopReason: snapshot.stopReason ?? dedupeSnapshot.stopReason,
+    pendingToolCalls: snapshot.pendingToolCalls ?? dedupeSnapshot.pendingToolCalls,
+  };
+}
+
+function isMissingAgentWaitStructuredMetadata(snapshot: AgentWaitTerminalSnapshot): boolean {
+  return snapshot.stopReason === undefined || snapshot.pendingToolCalls === undefined;
+}
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -785,6 +804,31 @@ export const agentHandlers: GatewayRequestHandlers = {
       first.snapshot;
     if (snapshot) {
       if (first.source === "lifecycle") {
+        snapshot = mergeAgentWaitStructuredMetadata(
+          snapshot,
+          readTerminalSnapshotFromGatewayDedupe({
+            dedupe: context.dedupe,
+            runId,
+            ignoreAgentTerminalSnapshot: hasActiveChatRun,
+          }),
+        );
+        if (isMissingAgentWaitStructuredMetadata(snapshot)) {
+          const dedupeMetadata =
+            (await Promise.race([
+              dedupePromise,
+              new Promise<null>((resolve) => {
+                const timer = setTimeout(
+                  () => resolve(null),
+                  Math.max(
+                    1,
+                    Math.min(timeoutMs, AGENT_WAIT_DEDUPE_METADATA_GRACE_MS, 2_147_483_647),
+                  ),
+                );
+                timer.unref?.();
+              }),
+            ])) ?? null;
+          snapshot = mergeAgentWaitStructuredMetadata(snapshot, dedupeMetadata);
+        }
         dedupeAbortController.abort();
       } else {
         lifecycleAbortController.abort();
