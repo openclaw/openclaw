@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, SkipForward } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, SkipForward, WifiOff } from "lucide-react";
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ type Props = { initialStep: number };
 export function OnboardingWizard({ initialStep }: Props) {
   const navigate = useNavigate();
   const { updateStep, complete, skip } = useOnboarding();
+  const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
   const [currentStep, setCurrentStep] = useState(initialStep);
   const [stepsCompleted, setStepsCompleted] = useState<number[]>([]);
   const [stepsSkipped, setStepsSkipped] = useState<number[]>([]);
@@ -107,7 +108,21 @@ export function OnboardingWizard({ initialStep }: Props) {
   const canSkipCurrent = currentStep >= 2 && currentStep <= 4;
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6 relative">
+      {/* Gateway disconnect overlay */}
+      {!isConnected && currentStep > 1 && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm rounded-lg">
+          <div className="text-center space-y-3">
+            <WifiOff className="h-8 w-8 mx-auto text-muted-foreground" />
+            <div className="text-sm font-medium">Connection Lost</div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Reconnecting...
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

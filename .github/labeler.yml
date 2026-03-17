@@ -256,3 +256,13 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/talk-voice/**"
+"feature: onboarding":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "ui-next/src/components/onboarding/**"
+          - "ui-next/src/pages/onboarding.tsx"
+          - "ui-next/src/hooks/use-onboarding.ts"
+          - "ui-next/src/lib/onboarding-utils.ts"
+          - "src/gateway/server-methods/onboarding.ts"
+          - "src/gateway/protocol/schema/onboarding.ts"
+          - "src/infra/state-db/onboarding-sqlite.ts"
