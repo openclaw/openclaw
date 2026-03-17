@@ -21,6 +21,7 @@ type BundleMcpSession = {
   serverName: string;
   client: Client;
   transport: StdioClientTransport;
+  activeTransport?: { close: () => Promise<void> };
   detachStderr?: () => void;
 };
 
@@ -117,6 +118,7 @@ function attachStderrLogging(serverName: string, transport: StdioClientTransport
 async function disposeSession(session: BundleMcpSession) {
   session.detachStderr?.();
   await session.client.close().catch(() => {});
+  await session.activeTransport?.close().catch(() => {});
   await session.transport.close().catch(() => {});
 }
 
@@ -176,6 +178,7 @@ export async function createBundleMcpToolRuntime(params: {
         serverName,
         client,
         transport,
+        activeTransport: mcpsOpts ? activeTransport as { close: () => Promise<void> } : undefined,
         detachStderr: attachStderrLogging(serverName, transport),
       };
 
