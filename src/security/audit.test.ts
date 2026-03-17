@@ -1320,12 +1320,8 @@ description: test skill
     );
   });
 
-  it("scores dangerous gateway.nodes.allowCommands by exposure", async () => {
-    const cases: Array<{
-      name: string;
-      cfg: OpenClawConfig;
-      expectedSeverity: "warn" | "critical";
-    }> = [
+  it("evaluates dangerous gateway.nodes.allowCommands findings", async () => {
+    const cases = [
       {
         name: "loopback gateway",
         cfg: {
@@ -1333,8 +1329,8 @@ description: test skill
             bind: "loopback",
             nodes: { allowCommands: ["camera.snap", "screen.record"] },
           },
-        },
-        expectedSeverity: "warn",
+        } as OpenClawConfig,
+        expectedSeverity: "warn" as const,
       },
       {
         name: "lan-exposed gateway",
@@ -1343,14 +1339,31 @@ description: test skill
             bind: "lan",
             nodes: { allowCommands: ["camera.snap", "screen.record"] },
           },
-        },
-        expectedSeverity: "critical",
+        } as OpenClawConfig,
+        expectedSeverity: "critical" as const,
       },
-    ];
+      {
+        name: "denied again suppresses dangerous allowCommands finding",
+        cfg: {
+          gateway: {
+            nodes: {
+              allowCommands: ["camera.snap", "screen.record"],
+              denyCommands: ["camera.snap", "screen.record"],
+            },
+          },
+        } as OpenClawConfig,
+        expectedAbsent: true,
+      },
+    ] as const;
 
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
+        if (testCase.expectedAbsent) {
+          expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
+          return;
+        }
+
         const finding = res.findings.find(
           (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
         );
@@ -1359,20 +1372,6 @@ description: test skill
         expect(finding?.detail, testCase.name).toContain("screen.record");
       }),
     );
-  });
-
-  it("does not flag dangerous allowCommands entries when denied again", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        nodes: {
-          allowCommands: ["camera.snap", "screen.record"],
-          denyCommands: ["camera.snap", "screen.record"],
-        },
-      },
-    };
-
-    const res = await audit(cfg);
-    expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
   });
 
   it("flags agent profile overrides when global tools.profile is minimal", async () => {
