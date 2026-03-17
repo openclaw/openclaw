@@ -214,18 +214,23 @@ plugins:
   OpenClaw skill loader
 - supported now: Claude bundle `settings.json` defaults for embedded Pi agent
   settings (with shell override keys sanitized)
+- supported now: bundle MCP config, merged into embedded Pi agent settings as
+  `mcpServers`, with supported stdio bundle MCP tools exposed during embedded
+  Pi agent turns
 - supported now: Cursor `.cursor/commands/*.md` roots, mapped into the normal
   OpenClaw skill loader
 - supported now: Codex bundle hook directories that use the OpenClaw hook-pack
   layout (`HOOK.md` + `handler.ts`/`handler.js`)
 - detected but not wired yet: other declared bundle capabilities such as
-  agents, Claude hook automation, Cursor rules/hooks/MCP metadata, MCP/app/LSP
+  agents, Claude hook automation, Cursor rules/hooks metadata, app/LSP
   metadata, output styles
 
 That means bundle install/discovery/list/info/enablement all work, and bundle
 skills, Claude command-skills, Claude bundle settings defaults, and compatible
-Codex hook directories load when the bundle is enabled, but bundle runtime code
-is not executed in-process.
+Codex hook directories load when the bundle is enabled. Supported bundle MCP
+servers may also run as subprocesses for embedded Pi tool calls when they use
+supported stdio transport, but bundle runtime modules are not loaded
+in-process.
 
 Bundle hook support is limited to the normal OpenClaw hook directory format
 (`HOOK.md` plus `handler.ts`/`handler.js` under the declared hook roots).

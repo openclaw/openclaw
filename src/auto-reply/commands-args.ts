@@ -51,6 +51,16 @@ const formatConfigArgs: CommandArgsFormatter = (values) =>
     },
   });
 
+const formatMcpArgs: CommandArgsFormatter = (values) =>
+  formatActionArgs(values, {
+    formatKnownAction: (action, path) => {
+      if (action === "show" || action === "get") {
+        return path ? `${action} ${path}` : action;
+      }
+      return undefined;
+    },
+  });
+
 const formatDebugArgs: CommandArgsFormatter = (values) =>
   formatActionArgs(values, {
     formatKnownAction: (action) => {
@@ -124,6 +134,7 @@ const formatExecArgs: CommandArgsFormatter = (values) => {
 
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   config: formatConfigArgs,
+  mcp: formatMcpArgs,
   debug: formatDebugArgs,
   queue: formatQueueArgs,
   exec: formatExecArgs,
