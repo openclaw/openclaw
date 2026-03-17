@@ -22,7 +22,7 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
     models: [
       {
         id: KIMI_CODING_DEFAULT_MODEL_ID,
-        name: "Kimi for Coding",
+        name: "Kimi",
         reasoning: true,
         input: ["text", "image"],
         cost: KIMI_CODING_DEFAULT_COST,
