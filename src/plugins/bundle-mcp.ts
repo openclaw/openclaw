@@ -8,6 +8,8 @@ import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
   CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+  mergeBundlePathLists,
+  normalizeBundlePathList,
 } from "./bundle-manifest.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -40,32 +42,6 @@ const MANIFEST_PATH_BY_FORMAT: Record<PluginBundleFormat, string> = {
   cursor: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
 };
 const CLAUDE_PLUGIN_ROOT_PLACEHOLDER = "${CLAUDE_PLUGIN_ROOT}";
-
-function normalizePathList(value: unknown): string[] {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? [trimmed] : [];
-  }
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
-}
-
-function mergeUniquePathLists(...groups: string[][]): string[] {
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const group of groups) {
-    for (const entry of group) {
-      if (seen.has(entry)) {
-        continue;
-      }
-      seen.add(entry);
-      merged.push(entry);
-    }
-  }
-  return merged;
-}
 
 function readPluginJsonObject(params: {
   rootDir: string;
@@ -103,12 +79,12 @@ function resolveBundleMcpConfigPaths(params: {
   rootDir: string;
   bundleFormat: PluginBundleFormat;
 }): string[] {
-  const declared = normalizePathList(params.raw.mcpServers);
+  const declared = normalizeBundlePathList(params.raw.mcpServers);
   const defaults = fs.existsSync(path.join(params.rootDir, ".mcp.json")) ? [".mcp.json"] : [];
   if (params.bundleFormat === "claude") {
-    return mergeUniquePathLists(defaults, declared);
+    return mergeBundlePathLists(defaults, declared);
   }
-  return mergeUniquePathLists(defaults, declared);
+  return mergeBundlePathLists(defaults, declared);
 }
 
 export function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
