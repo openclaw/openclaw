@@ -8,7 +8,16 @@ import {
 } from "../../plugin-sdk/slack.js";
 import type { ChannelMessageActionAdapter } from "./types.js";
 
-export function createSlackActions(providerId: string): ChannelMessageActionAdapter {
+type SlackActionInvoke = (
+  action: Record<string, unknown>,
+  cfg: unknown,
+  toolContext: unknown,
+) => Promise<unknown>;
+
+export function createSlackActions(
+  providerId: string,
+  options?: { invoke?: SlackActionInvoke },
+): ChannelMessageActionAdapter {
   return {
     listActions: ({ cfg }) => listSlackMessageActions(cfg),
     getCapabilities: ({ cfg }) => {
@@ -29,10 +38,12 @@ export function createSlackActions(providerId: string): ChannelMessageActionAdap
         normalizeChannelId: resolveSlackChannelId,
         includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) =>
-          await handleSlackAction(action, cfg, {
-            ...(toolContext as SlackActionContext | undefined),
-            mediaLocalRoots: ctx.mediaLocalRoots,
-          }),
+          await (options?.invoke
+            ? options.invoke(action, cfg, toolContext)
+            : handleSlackAction(action, cfg, {
+                ...(toolContext as SlackActionContext | undefined),
+                mediaLocalRoots: ctx.mediaLocalRoots,
+              })),
       });
     },
   };
