@@ -503,6 +503,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.bash": "Allow Bash Chat Command",
   "commands.bashForegroundMs": "Bash Foreground Window (ms)",
   "commands.config": "Allow /config",
+  "commands.mcp": "Allow /mcp",
   "commands.debug": "Allow /debug",
   "commands.restart": "Allow Restart",
   "commands.useAccessGroups": "Use Access Groups",
@@ -510,6 +511,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "commands.ownerDisplay": "Owner ID Display",
   "commands.ownerDisplaySecret": "Owner ID Hash Secret", // pragma: allowlist secret
   "commands.allowFrom": "Command Elevated Access Rules",
+  mcp: "MCP",
+  "mcp.servers": "MCP Servers",
   ui: "UI",
   "ui.seamColor": "Accent Color",
   "ui.assistant": "Assistant Appearance",
