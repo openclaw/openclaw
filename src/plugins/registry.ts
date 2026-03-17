@@ -792,6 +792,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerConversationBindingResolvedHandler = (
+    record: PluginRecord,
+    handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
+  ) => {
+    registry.conversationBindingResolvedHandlers.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      pluginRoot: record.rootDir,
+      handler,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerTypedHook = <K extends PluginHookName>(
     record: PluginRecord,
     hookName: K,
