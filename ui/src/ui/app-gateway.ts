@@ -400,6 +400,9 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       agentPayload.sessionKey === host.sessionKey &&
       (!host.chatRunId || host.chatRunId === agentPayload.runId)
     ) {
+      // Agent run ended — cancel any pending inbound timers to avoid a
+      // redundant loadChatHistory after the definitive reload below.
+      clearChatInboundTimers();
       // Clear streaming state only after history loads successfully to avoid
       // a blank UI if the reload races ahead of durable writes or fails.
       // On failure, chatStream is preserved as a graceful degradation.

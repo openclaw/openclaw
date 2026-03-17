@@ -242,6 +242,7 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  (host as unknown as { _chatStreamType?: string })._chatStreamType = undefined;
 }
 
 export type CompactionStatus = {
@@ -422,15 +423,19 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     const text = typeof payload.data?.text === "string" ? payload.data.text : null;
     // Filter NO_REPLY sentinel — matches isSilentReplyStream in controllers/chat.ts
     if (text && !/^\s*NO_REPLY\s*$/.test(text)) {
-      // Detect new paragraph: if accumulated text is shorter than current
-      // chatStream, the agent started a new thinking/reply segment. Commit
-      // the previous segment so it renders above the new streaming text.
-      if (host.chatStream && text.length < host.chatStream.length) {
+      // Detect stream type change (thinking→assistant or vice versa).
+      // When the stream type switches, commit the previous segment so it
+      // renders above the new streaming text. This replaces the old
+      // length-based heuristic which missed short thinking → long assistant
+      // transitions.
+      const prevStreamType = (host as unknown as { _chatStreamType?: string })._chatStreamType;
+      if (host.chatStream && prevStreamType && prevStreamType !== payload.stream) {
         host.chatStreamSegments = [
           ...host.chatStreamSegments,
           { text: host.chatStream, ts: Date.now() },
         ];
       }
+      (host as unknown as { _chatStreamType?: string })._chatStreamType = payload.stream;
       host.chatStream = text;
       if (!host.chatStreamStartedAt) {
         host.chatStreamStartedAt = Date.now();
