@@ -16,6 +16,7 @@ import {
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
+  ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-runtime";
 import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveTelegramPollVisibility } from "openclaw/plugin-sdk/telegram";
@@ -33,6 +34,35 @@ const providerId = "telegram";
 export const telegramMessageActionRuntime = {
   handleTelegramAction,
 };
+
+function resolveTelegramActionDiscovery(cfg: Parameters<typeof listEnabledTelegramAccounts>[0]) {
+  const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
+  if (accounts.length === 0) {
+    return null;
+  }
+  const unionGate = createUnionActionGate(accounts, (account) =>
+    createTelegramActionGate({
+      cfg,
+      accountId: account.accountId,
+    }),
+  );
+  const pollEnabled = accounts.some((account) => {
+    const accountGate = createTelegramActionGate({
+      cfg,
+      accountId: account.accountId,
+    });
+    return resolveTelegramPollActionGateState(accountGate).enabled;
+  });
+  const buttonsEnabled = accounts.some((account) =>
+    isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
+  );
+  return {
+    isEnabled: (key: keyof TelegramActionConfig, defaultValue = true) =>
+      unionGate(key, defaultValue),
+    pollEnabled,
+    buttonsEnabled,
+  };
+}
 
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
@@ -89,85 +119,56 @@ function readTelegramMessageIdParam(params: Record<string, unknown>): number {
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
-    if (accounts.length === 0) {
+    const discovery = resolveTelegramActionDiscovery(cfg);
+    if (!discovery) {
       return [];
     }
-    // Union of all accounts' action gates (any account enabling an action makes it available)
-    const gate = createUnionActionGate(accounts, (account) =>
-      createTelegramActionGate({
-        cfg,
-        accountId: account.accountId,
-      }),
-    );
-    const isEnabled = (key: keyof TelegramActionConfig, defaultValue = true) =>
-      gate(key, defaultValue);
     const actions = new Set<ChannelMessageActionName>(["send"]);
-    const pollEnabledForAnyAccount = accounts.some((account) => {
-      const accountGate = createTelegramActionGate({
-        cfg,
-        accountId: account.accountId,
-      });
-      return resolveTelegramPollActionGateState(accountGate).enabled;
-    });
-    if (pollEnabledForAnyAccount) {
+    if (discovery.pollEnabled) {
       actions.add("poll");
     }
-    if (isEnabled("reactions")) {
+    if (discovery.isEnabled("reactions")) {
       actions.add("react");
     }
-    if (isEnabled("deleteMessage")) {
+    if (discovery.isEnabled("deleteMessage")) {
       actions.add("delete");
     }
-    if (isEnabled("editMessage")) {
+    if (discovery.isEnabled("editMessage")) {
       actions.add("edit");
     }
-    if (isEnabled("sticker", false)) {
+    if (discovery.isEnabled("sticker", false)) {
       actions.add("sticker");
       actions.add("sticker-search");
     }
-    if (isEnabled("createForumTopic")) {
+    if (discovery.isEnabled("createForumTopic")) {
       actions.add("topic-create");
     }
-    if (isEnabled("editForumTopic")) {
+    if (discovery.isEnabled("editForumTopic")) {
       actions.add("topic-edit");
     }
     return Array.from(actions);
   },
   getCapabilities: ({ cfg }) => {
-    const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
-    if (accounts.length === 0) {
+    const discovery = resolveTelegramActionDiscovery(cfg);
+    if (!discovery) {
       return [];
     }
-    const buttonsEnabled = accounts.some((account) =>
-      isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
-    );
-    return buttonsEnabled ? (["interactive", "buttons"] as const) : [];
+    return discovery.buttonsEnabled ? (["interactive", "buttons"] as const) : [];
   },
   getToolSchema: ({ cfg }) => {
-    const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
-    if (accounts.length === 0) {
+    const discovery = resolveTelegramActionDiscovery(cfg);
+    if (!discovery) {
       return null;
     }
-    const buttonsEnabled = accounts.some((account) =>
-      isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
-    );
-    const pollEnabledForAnyAccount = accounts.some((account) => {
-      const accountGate = createTelegramActionGate({
-        cfg,
-        accountId: account.accountId,
-      });
-      return resolveTelegramPollActionGateState(accountGate).enabled;
-    });
-    const entries = [];
-    if (buttonsEnabled) {
+    const entries: ChannelMessageToolSchemaContribution[] = [];
+    if (discovery.buttonsEnabled) {
       entries.push({
         properties: {
           buttons: createMessageToolButtonsSchema(),
         },
       });
     }
-    if (pollEnabledForAnyAccount) {
+    if (discovery.pollEnabled) {
       entries.push({
         properties: createTelegramPollExtraToolSchemas(),
         visibility: "all-configured" as const,
