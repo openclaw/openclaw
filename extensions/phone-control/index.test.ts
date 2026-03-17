@@ -7,7 +7,7 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk/phone-control";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../test-utils/plugin-api.js";
+import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import registerPhoneControl from "./index.js";
 
 function createApi(params: {

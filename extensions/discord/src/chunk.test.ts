@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { countLines, hasBalancedFences } from "../../test-utils/chunk-test-helpers.js";
+import {
+  countLines,
+  hasBalancedFences,
+} from "../../../test/helpers/extensions/chunk-test-helpers.js";
 import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
 
 describe("chunkDiscordText", () => {

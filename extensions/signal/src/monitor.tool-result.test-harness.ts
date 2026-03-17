@@ -1,6 +1,6 @@
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/infra-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
-import type { MockFn } from "openclaw/plugin-sdk/test-utils";
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
 import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
 

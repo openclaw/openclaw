@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Skills/prompt budget: preserve all registered skills via a compact catalog fallback before dropping entries when the full prompt format exceeds `maxSkillsPromptChars`. (#47553) Thanks @snese.
 - Plugins/bundles: make enabled bundle MCP servers expose runnable tools in embedded Pi, and default relative bundle MCP launches to the bundle root so marketplace bundles like Context7 work through Pi instead of stopping at config import.
 - Scope message SecretRef resolution and harden doctor/status paths. (#48728) Thanks @joshavant.
+- Plugins/testing: add a public `openclaw/plugin-sdk/testing` seam for plugin-author test helpers, and move bundled-extension-only test bridges out of `extensions/` into private repo test helpers.
 
 ### Breaking
 
