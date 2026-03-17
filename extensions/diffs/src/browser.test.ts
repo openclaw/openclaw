@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/diffs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../api.js";
 import { createTempDiffRoot } from "./test-helpers.js";
 
 const { launchMock } = vi.hoisted(() => ({
