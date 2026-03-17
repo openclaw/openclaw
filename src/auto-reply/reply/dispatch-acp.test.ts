@@ -195,9 +195,18 @@ function createDispatcher(): {
 } {
   const counts = { tool: 0, block: 0, final: 0 };
   const dispatcher: ReplyDispatcher = {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
+    sendToolResult: vi.fn(() => {
+      counts.tool += 1;
+      return true;
+    }),
+    sendBlockReply: vi.fn(() => {
+      counts.block += 1;
+      return true;
+    }),
+    sendFinalReply: vi.fn(() => {
+      counts.final += 1;
+      return true;
+    }),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
     markComplete: vi.fn(),
@@ -641,6 +650,110 @@ describe("tryDispatchAcpReply", () => {
         channel: "discord",
         to: "discord:session-thread",
         payload: expect.objectContaining({ text: "session route block" }),
+      }),
+    );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not double live block state or final TTS input after a transient live retry", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({
+        backend: "acp-node",
+      }),
+    });
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    routeMocks.routeReply
+      .mockResolvedValueOnce({ ok: false, error: "transient" } as unknown as {
+        ok: boolean;
+        messageId: string;
+      })
+      .mockResolvedValueOnce({ ok: true, messageId: "block-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "final-tts" });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { kind: string; payload: { text?: string } };
+      if (params.kind === "final" && params.payload.text === "durable streamed block") {
+        return {
+          mediaUrl: "https://example.com/final-tts.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+    projectionServiceMocks.ensureProjection.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as { target: unknown };
+      const serviceParams = args[1] as
+        | {
+            coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+          }
+        | undefined;
+      const firstCoordinator = serviceParams?.coordinatorFactory({
+        target: params.target,
+        restartMode: false,
+      }) as {
+        deliver: (kind: "block", payload: { text: string }) => Promise<boolean>;
+      };
+      const secondCoordinator = serviceParams?.coordinatorFactory({
+        target: params.target,
+        restartMode: false,
+      }) as {
+        deliver: (kind: "block", payload: { text: string }) => Promise<boolean>;
+      };
+      expect(await firstCoordinator.deliver("block", { text: "durable streamed block" })).toBe(
+        false,
+      );
+      expect(await secondCoordinator.deliver("block", { text: "durable streamed block" })).toBe(
+        true,
+      );
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply after retry",
+      dispatcher,
+      shouldRouteToOriginating: false,
+      ctxOverrides: {
+        To: "discord:session-thread",
+      },
+    });
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: {
+        tool: 0,
+        block: 1,
+        final: 1,
+      },
+    });
+    const finalTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls
+      .map(([params]) => params as { kind: string; payload: { text?: string } })
+      .filter((params) => params.kind === "final" && typeof params.payload.text === "string");
+    expect(finalTtsCalls).toEqual([
+      expect.objectContaining({
+        kind: "final",
+        payload: expect.objectContaining({
+          text: "durable streamed block",
+        }),
+      }),
+    ]);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "durable streamed block" }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "durable streamed block" }),
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/final-tts.mp3",
+        audioAsVoice: true,
       }),
     );
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();

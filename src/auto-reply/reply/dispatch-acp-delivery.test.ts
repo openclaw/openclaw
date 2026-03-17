@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import {
+  createAcpDispatchDeliveryCoordinator,
+  createAcpDispatchDeliveryState,
+} from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -78,6 +81,29 @@ function createRestartCoordinator() {
   });
 }
 
+function createSharedSessionRouteCoordinator(params?: {
+  state?: ReturnType<typeof createAcpDispatchDeliveryState>;
+}) {
+  return createAcpDispatchDeliveryCoordinator({
+    cfg: createAcpTestConfig(),
+    target: {
+      targetKey: "run-1:primary",
+      targetId: "primary",
+      sessionKey: "agent:codex-acp:session-1",
+      runId: "run-1",
+      channel: "discord",
+      to: "discord:session-thread",
+      routeMode: "session",
+      toolReplayPolicy: "append_only_after_restart",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    inboundAudio: false,
+    shouldRouteToOriginating: false,
+    ...(params?.state ? { state: params.state } : {}),
+  });
+}
+
 describe("createAcpDispatchDeliveryCoordinator", () => {
   it("starts reply lifecycle only once when called directly and through deliver", async () => {
     const onReplyStart = vi.fn(async () => {});
@@ -150,5 +176,25 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         }),
       ]),
     );
+  });
+
+  it("does not double confirmed block state when a live routed block send fails and later retries with shared state", async () => {
+    const state = createAcpDispatchDeliveryState();
+    const firstCoordinator = createSharedSessionRouteCoordinator({ state });
+    const secondCoordinator = createSharedSessionRouteCoordinator({ state });
+    routeMocks.routeReply
+      .mockResolvedValueOnce({ ok: false, error: "transient" } as unknown as {
+        ok: boolean;
+        messageId: string;
+      })
+      .mockResolvedValueOnce({ ok: true, messageId: "block-1" });
+
+    expect(await firstCoordinator.deliver("block", { text: "hello" })).toBe(false);
+    expect(firstCoordinator.getBlockCount()).toBe(0);
+    expect(firstCoordinator.getAccumulatedBlockText()).toBe("");
+
+    expect(await secondCoordinator.deliver("block", { text: "hello" })).toBe(true);
+    expect(secondCoordinator.getBlockCount()).toBe(1);
+    expect(secondCoordinator.getAccumulatedBlockText()).toBe("hello");
   });
 });

@@ -128,6 +128,18 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     await params.onReplyStart?.();
   };
 
+  const recordConfirmedBlockDelivery = (payload: ReplyPayload) => {
+    const text = payload.text?.trim();
+    if (!text) {
+      return;
+    }
+    if (state.accumulatedBlockText.length > 0) {
+      state.accumulatedBlockText += "\n";
+    }
+    state.accumulatedBlockText += payload.text!;
+    state.blockCount += 1;
+  };
+
   const tryEditToolMessage = async (
     payload: ReplyPayload,
     toolCallId: string,
@@ -185,14 +197,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
-    if (kind === "block" && payload.text?.trim()) {
-      if (state.accumulatedBlockText.length > 0) {
-        state.accumulatedBlockText += "\n";
-      }
-      state.accumulatedBlockText += payload.text;
-      state.blockCount += 1;
-    }
-
     if ((payload.text?.trim() ?? "").length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
       await startReplyLifecycleOnce();
     }
@@ -245,6 +249,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         );
         return false;
       }
+      if (kind === "block") {
+        recordConfirmedBlockDelivery(payload);
+      }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
           channel: routeChannel,
@@ -264,13 +271,16 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       );
       return false;
     }
-    if (kind === "tool") {
-      return params.dispatcher.sendToolResult(ttsPayload);
+    const queued =
+      kind === "tool"
+        ? params.dispatcher.sendToolResult(ttsPayload)
+        : kind === "block"
+          ? params.dispatcher.sendBlockReply(ttsPayload)
+          : params.dispatcher.sendFinalReply(ttsPayload);
+    if (queued && kind === "block") {
+      recordConfirmedBlockDelivery(payload);
     }
-    if (kind === "block") {
-      return params.dispatcher.sendBlockReply(ttsPayload);
-    }
-    return params.dispatcher.sendFinalReply(ttsPayload);
+    return queued;
   };
 
   return {
