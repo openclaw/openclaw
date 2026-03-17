@@ -187,7 +187,7 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("carries forward httpRoutes when new registry has none", () => {
+  it("does not carry forward httpRoutes when new registry has none", () => {
     const oldRegistry = createEmptyPluginRegistry();
     const fakeRoute = makeRoute("/test");
     oldRegistry.httpRoutes.push(fakeRoute);
@@ -197,8 +197,7 @@ describe("setActivePluginRegistry", () => {
     const newRegistry = createEmptyPluginRegistry();
     expect(newRegistry.httpRoutes).toHaveLength(0);
     setActivePluginRegistry(newRegistry);
-    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(1);
-    expect(getActivePluginRegistry()?.httpRoutes[0]).toEqual(fakeRoute);
+    expect(getActivePluginRegistry()?.httpRoutes).toHaveLength(0);
   });
 
   it("does not carry forward when new registry already has routes", () => {
