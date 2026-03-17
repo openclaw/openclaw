@@ -37,6 +37,21 @@ export type CronListPageOptions = {
   enabled?: CronJobsEnabledFilter;
   sortBy?: CronJobsSortBy;
   sortDir?: CronSortDir;
+  /** When set, restricts results to jobs owned by this agentId. Ignored when ownerOverride is true. */
+  callerAgentId?: string;
+  /** When set, restricts results to jobs owned by this sessionKey. Ignored when ownerOverride is true. */
+  callerSessionKey?: string;
+  /** When true, bypasses ownership filtering (admin/owner sessions only). */
+  ownerOverride?: boolean;
+};
+
+export type CronMutationCallerOptions = {
+  /** agentId of the caller requesting the mutation. */
+  callerAgentId?: string;
+  /** sessionKey of the caller requesting the mutation. */
+  callerSessionKey?: string;
+  /** When true, bypasses ownership checks (admin/owner sessions only). */
+  ownerOverride?: boolean;
 };
 
 export type CronListPageResult = {
@@ -47,6 +62,38 @@ export type CronListPageResult = {
   hasMore: boolean;
   nextOffset: number | null;
 };
+
+/**
+ * Returns true when the caller is allowed to see or mutate the given job.
+ *
+ * Ownership rules:
+ * - ownerOverride bypasses all checks (admin sessions).
+ * - No caller identity → preserve backward compat (local CLI, tests).
+ * - Job has no owner metadata → accessible to any caller (legacy jobs).
+ * - Otherwise the caller must match by sessionKey or agentId.
+ */
+function callerOwnsJob(job: CronJob, caller: CronMutationCallerOptions): boolean {
+  if (caller.ownerOverride) {
+    return true;
+  }
+  // No caller identity available — preserve backward compat (local CLI, tests).
+  if (!caller.callerAgentId && !caller.callerSessionKey) {
+    return true;
+  }
+  if (caller.callerAgentId && job.agentId && caller.callerAgentId === job.agentId) {
+    return true;
+  }
+  if (caller.callerSessionKey && job.sessionKey && caller.callerSessionKey === job.sessionKey) {
+    return true;
+  }
+  // Job has no owner metadata — allow access so pre-existing jobs without
+  // ownership info remain accessible to all callers.
+  if (!job.agentId && !job.sessionKey) {
+    return true;
+  }
+  return false;
+}
+
 function mergeManualRunSnapshotAfterReload(params: {
   state: CronServiceState;
   jobId: string;
@@ -201,8 +248,16 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const enabledFilter = resolveEnabledFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
+    const callerOpts: CronMutationCallerOptions = {
+      callerAgentId: opts?.callerAgentId,
+      callerSessionKey: opts?.callerSessionKey,
+      ownerOverride: opts?.ownerOverride,
+    };
     const source = state.store?.jobs ?? [];
     const filtered = source.filter((job) => {
+      if (!callerOwnsJob(job, callerOpts)) {
+        return false;
+      }
       if (enabledFilter === "enabled" && !job.enabled) {
         return false;
       }

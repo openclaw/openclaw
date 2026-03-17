@@ -6,6 +6,7 @@ import {
 } from "../../cron/run-log.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -19,7 +20,27 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+
+/**
+ * Resolves the caller identity and admin-bypass flag from the connected client.
+ *
+ * ownerOverride is true when the client holds the operator.admin scope, meaning
+ * it can read and mutate any cron job regardless of ownership metadata.
+ */
+function resolveCronCallerOptions(
+  client: GatewayClient | null,
+  callerSessionKey?: string,
+): { callerSessionKey?: string; ownerOverride: boolean } {
+  const scopes: readonly string[] = Array.isArray(client?.connect?.scopes)
+    ? (client.connect.scopes as string[])
+    : [];
+  const ownerOverride = scopes.includes(ADMIN_SCOPE);
+  return {
+    callerSessionKey: callerSessionKey ?? undefined,
+    ownerOverride,
+  };
+}
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -222,7 +243,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
     respond(true, result, undefined);
   },
-  "cron.runs": async ({ params, respond, context }) => {
+  "cron.runs": async ({ params, respond, context, client }) => {
     if (!validateCronRunsParams(params)) {
       respond(
         false,
@@ -238,6 +259,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       scope?: "job" | "all";
       id?: string;
       jobId?: string;
+      sessionKey?: string;
       limit?: number;
       offset?: number;
       statuses?: Array<"ok" | "error" | "skipped">;
@@ -259,9 +281,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     if (scope === "all") {
-      const jobs = await context.cron.list({ includeDisabled: true });
+      const callerOpts = resolveCronCallerOptions(client, p.sessionKey);
+      const jobsPage = await context.cron.listPage({
+        includeDisabled: true,
+        callerSessionKey: callerOpts.callerSessionKey,
+        ownerOverride: callerOpts.ownerOverride,
+      });
       const jobNameById = Object.fromEntries(
-        jobs
+        jobsPage.jobs
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")
           .map((job) => [job.id, job.name]),
       );
