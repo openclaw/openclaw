@@ -21,6 +21,7 @@ import { createBdiTools } from "./src/tools/bdi-tools.js";
 import { createBpmnMigrateTools } from "./src/tools/bpmn-migrate.js";
 import { createBusinessTools } from "./src/tools/business-tools.js";
 import { createCapabilitiesSyncTools } from "./src/tools/capabilities-sync.js";
+import { createCatalogSyncTools } from "./src/tools/catalog-sync-tools.js";
 import { createCbrTools } from "./src/tools/cbr-tools.js";
 import {
   createCognitiveRouterTools,
@@ -28,6 +29,7 @@ import {
 } from "./src/tools/cognitive-router.js";
 import { resolveWorkspaceDir, getPluginConfig } from "./src/tools/common.js";
 import { createCommunicationTools } from "./src/tools/communication-tools.js";
+import { createCompetitorMonitorTools } from "./src/tools/competitor-monitor-tools.js";
 import { createCrmTools } from "./src/tools/crm-tools.js";
 import { createDesireTools } from "./src/tools/desire-tools.js";
 import { createEmailTools } from "./src/tools/email-tools.js";
@@ -36,6 +38,8 @@ import { createFinancialTools } from "./src/tools/financial-tools.js";
 import { createInferenceTools } from "./src/tools/inference-tools.js";
 import { createIntegrationTools } from "./src/tools/integration-tools.js";
 import { createKnowledgeTools } from "./src/tools/knowledge-tools.js";
+import { createLeInventoryTools } from "./src/tools/le-inventory-tools.js";
+import { createLeWaitlistTools } from "./src/tools/le-waitlist-tools.js";
 import { createLeadGenerationTools } from "./src/tools/lead-generation-tools.js";
 import { createMarketingTools } from "./src/tools/marketing-tools.js";
 import { createMemoryHierarchyTools } from "./src/tools/memory-hierarchy.js";
@@ -103,6 +107,10 @@ export default function register(api: OpenClawPluginApi) {
     createFinancialTools,
     createOperationsTools,
     createTechOpsTools,
+    createCatalogSyncTools,
+    createLeWaitlistTools,
+    createLeInventoryTools,
+    createCompetitorMonitorTools,
   ];
 
   // Collect all tool names for capabilities_sync context
