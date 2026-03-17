@@ -1,6 +1,6 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { mistralProvider } from "../../src/media-understanding/providers/mistral/index.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "mistral";
@@ -51,7 +51,7 @@ const mistralPlugin = {
         ],
       },
     });
-    api.registerMediaUnderstandingProvider(mistralProvider);
+    api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
   },
 };
 

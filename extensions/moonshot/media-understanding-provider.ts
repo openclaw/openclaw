@@ -1,5 +1,14 @@
-import type { VideoDescriptionRequest, VideoDescriptionResult } from "../../types.js";
-import { assertOkOrThrowHttpError, normalizeBaseUrl, postJsonRequest } from "../shared.js";
+import { describeImageWithModel } from "../../src/media-understanding/providers/image.js";
+import {
+  assertOkOrThrowHttpError,
+  normalizeBaseUrl,
+  postJsonRequest,
+} from "../../src/media-understanding/providers/shared.js";
+import type {
+  MediaUnderstandingProvider,
+  VideoDescriptionRequest,
+  VideoDescriptionResult,
+} from "../../src/media-understanding/types.js";
 
 export const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_MOONSHOT_VIDEO_MODEL = "kimi-k2.5";
@@ -104,3 +113,10 @@ export async function describeMoonshotVideo(
     await release();
   }
 }
+
+export const moonshotMediaUnderstandingProvider: MediaUnderstandingProvider = {
+  id: "moonshot",
+  capabilities: ["image", "video"],
+  describeImage: describeImageWithModel,
+  describeVideo: describeMoonshotVideo,
+};
