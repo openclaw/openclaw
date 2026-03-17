@@ -233,6 +233,34 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
   });
 
+  it("copies plugin skills into the runtime overlay so they stay within the runtime root", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-skills-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "acpx");
+    const distSkillDir = path.join(distPluginDir, "skills", "acp-router");
+    fs.mkdirSync(distSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(distSkillDir, "SKILL.md"), "# ACP Router\n", "utf8");
+    fs.writeFileSync(path.join(distSkillDir, "guide.txt"), "ok\n", "utf8");
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const runtimeSkillDir = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "acpx",
+      "skills",
+      "acp-router",
+    );
+    const runtimeSkillPath = path.join(runtimeSkillDir, "SKILL.md");
+    const runtimeGuidePath = path.join(runtimeSkillDir, "guide.txt");
+
+    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# ACP Router\n");
+    expect(fs.realpathSync(runtimeSkillPath)).toBe(runtimeSkillPath);
+    expect(fs.lstatSync(runtimeGuidePath).isSymbolicLink()).toBe(false);
+    expect(fs.realpathSync(runtimeGuidePath)).toBe(runtimeGuidePath);
+  });
+
   it("preserves package metadata needed for bundled plugin discovery from dist-runtime", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-discovery-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "demo");
