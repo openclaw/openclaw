@@ -1,9 +1,6 @@
-import {
-  readAcpSessionEntry,
-  type AcpSessionStoreEntry,
-} from "../../../../src/acp/runtime/session-meta.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { normalizeAccountId } from "../../../../src/routing/session-key.js";
+import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
@@ -323,7 +320,12 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
     };
   }
 
-  const acpBindings = manager.listBindings().filter((binding) => binding.targetKind === "acp");
+  const acpBindings = manager
+    .listBindings()
+    .filter(
+      (binding) =>
+        binding.targetKind === "acp" && binding.metadata?.pluginBindingOwner !== "plugin",
+    );
   const staleBindings: ThreadBindingRecord[] = [];
   const probeTargets: Array<{
     binding: ThreadBindingRecord;

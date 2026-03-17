@@ -2,6 +2,7 @@
 // Keep this list additive and scoped to symbols used under extensions/nostr.
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -18,3 +19,4 @@ export {
 } from "./status-helpers.js";
 export { createFixedWindowRateLimiter } from "./webhook-memory-guards.js";
 export { mapAllowFromEntries } from "./channel-config-helpers.js";
+export { nostrSetupAdapter, nostrSetupWizard } from "../../extensions/nostr/api.js";

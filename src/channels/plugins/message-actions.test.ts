@@ -1,24 +1,27 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import {
-  supportsChannelMessageButtons,
-  supportsChannelMessageButtonsForChannel,
-  supportsChannelMessageCards,
-  supportsChannelMessageCardsForChannel,
+  __testing,
+  channelSupportsMessageCapability,
+  channelSupportsMessageCapabilityForChannel,
+  listChannelMessageActions,
+  listChannelMessageCapabilities,
+  listChannelMessageCapabilitiesForChannel,
 } from "./message-actions.js";
+import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type { ChannelPlugin } from "./types.js";
 
 const emptyRegistry = createTestRegistry([]);
 
 function createMessageActionsPlugin(params: {
   id: "discord" | "telegram";
-  supportsButtons: boolean;
-  supportsCards: boolean;
+  capabilities: readonly ChannelMessageCapability[];
 }): ChannelPlugin {
   return {
     ...createChannelTestPluginBase({
@@ -31,22 +34,19 @@ function createMessageActionsPlugin(params: {
     }),
     actions: {
       listActions: () => ["send"],
-      supportsButtons: () => params.supportsButtons,
-      supportsCards: () => params.supportsCards,
+      getCapabilities: () => params.capabilities,
     },
   };
 }
 
 const buttonsPlugin = createMessageActionsPlugin({
   id: "discord",
-  supportsButtons: true,
-  supportsCards: false,
+  capabilities: ["interactive", "buttons"],
 });
 
 const cardsPlugin = createMessageActionsPlugin({
   id: "telegram",
-  supportsButtons: false,
-  supportsCards: true,
+  capabilities: ["cards"],
 });
 
 function activateMessageActionTestRegistry() {
@@ -59,29 +59,106 @@ function activateMessageActionTestRegistry() {
 }
 
 describe("message action capability checks", () => {
+  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    __testing.resetLoggedMessageActionErrors();
+    errorSpy.mockClear();
   });
 
-  it("aggregates buttons/card support across plugins", () => {
+  it("aggregates capabilities across plugins", () => {
     activateMessageActionTestRegistry();
 
-    expect(supportsChannelMessageButtons({} as OpenClawConfig)).toBe(true);
-    expect(supportsChannelMessageCards({} as OpenClawConfig)).toBe(true);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig).toSorted()).toEqual([
+      "buttons",
+      "cards",
+      "interactive",
+    ]);
+    expect(channelSupportsMessageCapability({} as OpenClawConfig, "interactive")).toBe(true);
+    expect(channelSupportsMessageCapability({} as OpenClawConfig, "buttons")).toBe(true);
+    expect(channelSupportsMessageCapability({} as OpenClawConfig, "cards")).toBe(true);
   });
 
   it("checks per-channel capabilities", () => {
     activateMessageActionTestRegistry();
 
     expect(
-      supportsChannelMessageButtonsForChannel({ cfg: {} as OpenClawConfig, channel: "discord" }),
+      listChannelMessageCapabilitiesForChannel({
+        cfg: {} as OpenClawConfig,
+        channel: "discord",
+      }),
+    ).toEqual(["interactive", "buttons"]);
+    expect(
+      listChannelMessageCapabilitiesForChannel({
+        cfg: {} as OpenClawConfig,
+        channel: "telegram",
+      }),
+    ).toEqual(["cards"]);
+    expect(
+      channelSupportsMessageCapabilityForChannel(
+        { cfg: {} as OpenClawConfig, channel: "discord" },
+        "interactive",
+      ),
     ).toBe(true);
     expect(
-      supportsChannelMessageButtonsForChannel({ cfg: {} as OpenClawConfig, channel: "telegram" }),
+      channelSupportsMessageCapabilityForChannel(
+        { cfg: {} as OpenClawConfig, channel: "telegram" },
+        "interactive",
+      ),
     ).toBe(false);
     expect(
-      supportsChannelMessageCardsForChannel({ cfg: {} as OpenClawConfig, channel: "telegram" }),
+      channelSupportsMessageCapabilityForChannel(
+        { cfg: {} as OpenClawConfig, channel: "discord" },
+        "buttons",
+      ),
     ).toBe(true);
-    expect(supportsChannelMessageCardsForChannel({ cfg: {} as OpenClawConfig })).toBe(false);
+    expect(
+      channelSupportsMessageCapabilityForChannel(
+        { cfg: {} as OpenClawConfig, channel: "telegram" },
+        "buttons",
+      ),
+    ).toBe(false);
+    expect(
+      channelSupportsMessageCapabilityForChannel(
+        { cfg: {} as OpenClawConfig, channel: "telegram" },
+        "cards",
+      ),
+    ).toBe(true);
+    expect(channelSupportsMessageCapabilityForChannel({ cfg: {} as OpenClawConfig }, "cards")).toBe(
+      false,
+    );
+  });
+
+  it("skips crashing action/capability discovery paths and logs once", () => {
+    const crashingPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        label: "Discord",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        listActions: () => {
+          throw new Error("boom");
+        },
+        getCapabilities: () => {
+          throw new Error("boom");
+        },
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "discord", source: "test", plugin: crashingPlugin }]),
+    );
+
+    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+
+    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,4 +1,4 @@
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/matrix";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import { getMatrixRuntime } from "./runtime.js";

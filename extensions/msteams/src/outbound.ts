@@ -1,4 +1,4 @@
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/compat";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/msteams";
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { getMSTeamsRuntime } from "./runtime.js";

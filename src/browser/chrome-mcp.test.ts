@@ -1,17 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../config/config.js";
 import {
-  buildChromeMcpLaunchPlanForTest,
+  buildChromeMcpArgs,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp.js";
-
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(),
-}));
 
 type ToolCall = {
   name: string;
@@ -85,99 +80,6 @@ function createFakeSession(): ChromeMcpSession {
 describe("chrome MCP page parsing", () => {
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
-    vi.mocked(loadConfig).mockReturnValue({
-      browser: {
-        profiles: {
-          "chrome-live": {
-            driver: "existing-session",
-            attachOnly: true,
-            color: "#00AA00",
-          },
-        },
-      },
-    });
-  });
-
-  it("uses autoConnect for desktop existing-session profiles", () => {
-    const plan = buildChromeMcpLaunchPlanForTest("chrome-live");
-    expect(plan.mode).toBe("autoConnect");
-    expect(plan.args).toContain("--autoConnect");
-  });
-
-  it("uses headless launch flags for headless existing-session profiles", () => {
-    vi.mocked(loadConfig).mockReturnValue({
-      browser: {
-        headless: true,
-        noSandbox: true,
-        executablePath: "/usr/bin/google-chrome-stable",
-        extraArgs: ["--disable-dev-shm-usage"],
-        profiles: {
-          "chrome-live": {
-            driver: "existing-session",
-            attachOnly: true,
-            color: "#00AA00",
-          },
-        },
-      },
-    });
-
-    const plan = buildChromeMcpLaunchPlanForTest("chrome-live");
-    expect(plan.mode).toBe("headless");
-    expect(plan.args).toEqual(
-      expect.arrayContaining([
-        "--headless",
-        "--userDataDir",
-        expect.stringContaining("/browser/chrome-live/user-data"),
-        "--executablePath",
-        "/usr/bin/google-chrome-stable",
-        "--chromeArg",
-        "--no-sandbox",
-        "--chromeArg",
-        "--disable-setuid-sandbox",
-        "--chromeArg",
-        "--disable-dev-shm-usage",
-      ]),
-    );
-  });
-
-  it("uses browserUrl for MCP profiles configured with an HTTP target", () => {
-    vi.mocked(loadConfig).mockReturnValue({
-      browser: {
-        profiles: {
-          "chrome-live": {
-            driver: "existing-session",
-            attachOnly: true,
-            cdpUrl: "http://127.0.0.1:9222",
-            color: "#00AA00",
-          },
-        },
-      },
-    });
-
-    const plan = buildChromeMcpLaunchPlanForTest("chrome-live");
-    expect(plan.mode).toBe("browserUrl");
-    expect(plan.args).toEqual(expect.arrayContaining(["--browserUrl", "http://127.0.0.1:9222"]));
-  });
-
-  it("uses wsEndpoint for MCP profiles configured with a WebSocket target", () => {
-    vi.mocked(loadConfig).mockReturnValue({
-      browser: {
-        profiles: {
-          "chrome-live": {
-            driver: "existing-session",
-            attachOnly: true,
-            cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
-            color: "#00AA00",
-          },
-        },
-      },
-    });
-
-    const plan = buildChromeMcpLaunchPlanForTest("chrome-live");
-    expect(plan.mode).toBe("wsEndpoint");
-    expect(plan.args).toEqual(
-      expect.arrayContaining(["--wsEndpoint", "ws://127.0.0.1:9222/devtools/browser/abc"]),
-    );
   });
 
   it("parses list_pages text responses when structuredContent is missing", async () => {
@@ -199,6 +101,18 @@ describe("chrome MCP page parsing", () => {
         url: "https://github.com/openclaw/openclaw/pull/45318",
         type: "page",
       },
+    ]);
+  });
+
+  it("adds --userDataDir when an explicit Chromium profile path is configured", () => {
+    expect(buildChromeMcpArgs("/tmp/brave-profile")).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--userDataDir",
+      "/tmp/brave-profile",
     ]);
   });
 
@@ -347,6 +261,33 @@ describe("chrome MCP page parsing", () => {
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
+  });
+
+  it("creates a fresh session when userDataDir changes for the same profile", async () => {
+    const createdSessions: ChromeMcpSession[] = [];
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factoryCalls: Array<{ profileName: string; userDataDir?: string }> = [];
+    const factory: ChromeMcpSessionFactory = async (profileName, userDataDir) => {
+      factoryCalls.push({ profileName, userDataDir });
+      const session = createFakeSession();
+      const closeMock = vi.fn().mockResolvedValue(undefined);
+      session.client.close = closeMock as typeof session.client.close;
+      createdSessions.push(session);
+      closeMocks.push(closeMock);
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await listChromeMcpTabs("chrome-live", "/tmp/brave-a");
+    await listChromeMcpTabs("chrome-live", "/tmp/brave-b");
+
+    expect(factoryCalls).toEqual([
+      { profileName: "chrome-live", userDataDir: "/tmp/brave-a" },
+      { profileName: "chrome-live", userDataDir: "/tmp/brave-b" },
+    ]);
+    expect(createdSessions).toHaveLength(2);
+    expect(closeMocks[0]).toHaveBeenCalledTimes(1);
+    expect(closeMocks[1]).not.toHaveBeenCalled();
   });
 
   it("clears failed pending sessions so the next call can retry", async () => {

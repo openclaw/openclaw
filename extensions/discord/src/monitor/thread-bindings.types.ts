@@ -17,6 +17,7 @@ export type ThreadBindingRecord = {
   idleTimeoutMs?: number;
   /** Hard max-age window in milliseconds from bind time (0 disables hard cap). */
   maxAgeMs?: number;
+  metadata?: Record<string, unknown>;
 };
 
 export type PersistedThreadBindingRecord = ThreadBindingRecord & {
@@ -56,6 +57,7 @@ export type ThreadBindingManager = {
     introText?: string;
     webhookId?: string;
     webhookToken?: string;
+    metadata?: Record<string, unknown>;
   }) => Promise<ThreadBindingRecord | null>;
   unbindThread: (params: {
     threadId: string;
