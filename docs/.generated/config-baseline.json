@@ -11734,6 +11734,116 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.lang",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.outputFormat",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.pitch",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.proxy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.rate",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.saveSubtitles",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.timeoutMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.voice",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.accounts.*.voice.tts.microsoft.volume",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.accounts.*.voice.tts.mode",
       "kind": "channel",
       "type": "string",
@@ -11961,11 +12071,6 @@
       "kind": "channel",
       "type": "string",
       "required": false,
-      "enumValues": [
-        "elevenlabs",
-        "openai",
-        "edge"
-      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -14699,6 +14804,116 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.voice.tts.microsoft",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.lang",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.outputFormat",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.pitch",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.proxy",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.rate",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.saveSubtitles",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.timeoutMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.voice",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.voice.tts.microsoft.volume",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.voice.tts.mode",
       "kind": "channel",
       "type": "string",
@@ -14926,11 +15141,6 @@
       "kind": "channel",
       "type": "string",
       "required": false,
-      "enumValues": [
-        "elevenlabs",
-        "openai",
-        "edge"
-      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -43561,6 +43771,116 @@
       "hasChildren": false
     },
     {
+      "path": "messages.tts.microsoft",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "messages.tts.microsoft.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.lang",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.outputFormat",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.pitch",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.proxy",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.rate",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.saveSubtitles",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.timeoutMs",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.voice",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "messages.tts.microsoft.volume",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "messages.tts.mode",
       "kind": "core",
       "type": "string",
@@ -43786,11 +44106,6 @@
       "kind": "core",
       "type": "string",
       "required": false,
-      "enumValues": [
-        "elevenlabs",
-        "openai",
-        "edge"
-      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -46145,6 +46460,75 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.elevenlabs",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/elevenlabs-speech",
+      "help": "OpenClaw ElevenLabs speech plugin (plugin: elevenlabs)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.elevenlabs.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/elevenlabs-speech Config",
+      "help": "Plugin-defined config payload for elevenlabs.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.elevenlabs.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/elevenlabs-speech",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.elevenlabs.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.elevenlabs.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.feishu",
       "kind": "plugin",
       "type": "object",
@@ -46766,7 +47150,7 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.kimi-coding",
+      "path": "plugins.entries.kimi",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46775,12 +47159,12 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/kimi-coding-provider",
-      "help": "OpenClaw Kimi Coding provider plugin (plugin: kimi-coding)",
+      "label": "@openclaw/kimi-provider",
+      "help": "OpenClaw Kimi provider plugin (plugin: kimi)",
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.kimi-coding.config",
+      "path": "plugins.entries.kimi.config",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46789,12 +47173,12 @@
       "tags": [
         "advanced"
       ],
-      "label": "@openclaw/kimi-coding-provider Config",
-      "help": "Plugin-defined config payload for kimi-coding.",
+      "label": "@openclaw/kimi-provider Config",
+      "help": "Plugin-defined config payload for kimi.",
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.kimi-coding.enabled",
+      "path": "plugins.entries.kimi.enabled",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -46803,11 +47187,11 @@
       "tags": [
         "advanced"
       ],
-      "label": "Enable @openclaw/kimi-coding-provider",
+      "label": "Enable @openclaw/kimi-provider",
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.kimi-coding.hooks",
+      "path": "plugins.entries.kimi.hooks",
       "kind": "plugin",
       "type": "object",
       "required": false,
@@ -46821,7 +47205,7 @@
       "hasChildren": true
     },
     {
-      "path": "plugins.entries.kimi-coding.hooks.allowPromptInjection",
+      "path": "plugins.entries.kimi.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -47504,6 +47888,75 @@
     },
     {
       "path": "plugins.entries.memory-lancedb.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-speech",
+      "help": "OpenClaw Microsoft speech plugin (plugin: microsoft)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-speech Config",
+      "help": "Plugin-defined config payload for microsoft.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/microsoft-speech",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft.hooks.allowPromptInjection",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
@@ -51184,11 +51637,6 @@
       "kind": "plugin",
       "type": "string",
       "required": false,
-      "enumValues": [
-        "openai",
-        "elevenlabs",
-        "edge"
-      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [
@@ -51196,7 +51644,7 @@
         "media"
       ],
       "label": "TTS Provider Override",
-      "help": "Deep-merges with messages.tts (Edge is ignored for calls).",
+      "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       "hasChildren": false
     },
     {
