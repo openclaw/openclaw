@@ -8,35 +8,15 @@ describe("media-understanding provider registry", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("registers the Mistral provider", () => {
+  it("keeps core-owned fallback providers registered by default", () => {
     const registry = buildMediaUnderstandingRegistry();
-    const provider = getMediaUnderstandingProvider("mistral", registry);
+    const groqProvider = getMediaUnderstandingProvider("groq", registry);
+    const deepgramProvider = getMediaUnderstandingProvider("deepgram", registry);
 
-    expect(provider?.id).toBe("mistral");
-    expect(provider?.capabilities).toEqual(["audio"]);
-  });
-
-  it("keeps provider id normalization behavior", () => {
-    const registry = buildMediaUnderstandingRegistry();
-    const provider = getMediaUnderstandingProvider("gemini", registry);
-
-    expect(provider?.id).toBe("google");
-  });
-
-  it("registers the Moonshot provider", () => {
-    const registry = buildMediaUnderstandingRegistry();
-    const provider = getMediaUnderstandingProvider("moonshot", registry);
-
-    expect(provider?.id).toBe("moonshot");
-    expect(provider?.capabilities).toEqual(["image", "video"]);
-  });
-
-  it("registers the minimax portal provider", () => {
-    const registry = buildMediaUnderstandingRegistry();
-    const provider = getMediaUnderstandingProvider("minimax-portal", registry);
-
-    expect(provider?.id).toBe("minimax-portal");
-    expect(provider?.capabilities).toEqual(["image"]);
+    expect(groqProvider?.id).toBe("groq");
+    expect(groqProvider?.capabilities).toEqual(["audio"]);
+    expect(deepgramProvider?.id).toBe("deepgram");
+    expect(deepgramProvider?.capabilities).toEqual(["audio"]);
   });
 
   it("merges plugin-registered media providers into the active registry", async () => {
@@ -60,5 +40,24 @@ describe("media-understanding provider registry", () => {
 
     expect(provider?.id).toBe("google");
     expect(await provider?.describeVideo?.({} as never)).toEqual({ text: "plugin video" });
+  });
+
+  it("keeps provider id normalization behavior for plugin-owned providers", () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "Google Plugin",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image", "audio", "video"],
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = getMediaUnderstandingProvider("gemini", registry);
+
+    expect(provider?.id).toBe("google");
   });
 });

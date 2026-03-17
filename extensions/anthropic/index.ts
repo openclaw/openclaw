@@ -23,10 +23,10 @@ import {
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../src/commands/auth-token.js";
 import { applyAuthProfileConfig } from "../../src/commands/onboard-auth.js";
 import { fetchClaudeUsage } from "../../src/infra/provider-usage.fetch.js";
-import { anthropicProvider } from "../../src/media-understanding/providers/anthropic/index.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { ProviderAuthResult } from "../../src/plugins/types.js";
 import { normalizeSecretInput } from "../../src/utils/normalize-secret-input.js";
+import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const PROVIDER_ID = "anthropic";
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
@@ -395,7 +395,7 @@ const anthropicPlugin = {
           profileId: ctx.profileId,
         }),
     });
-    api.registerMediaUnderstandingProvider(anthropicProvider);
+    api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
   },
 };
 

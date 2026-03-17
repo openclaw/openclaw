@@ -1,29 +1,31 @@
 import path from "node:path";
-import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../../types.js";
+import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../types.js";
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
   postTranscriptionRequest,
   requireTranscriptionText,
-} from "../shared.js";
+} from "./shared.js";
 
-export const DEFAULT_OPENAI_AUDIO_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_AUDIO_MODEL = "gpt-4o-mini-transcribe";
+type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
+  defaultBaseUrl: string;
+  defaultModel: string;
+};
 
-function resolveModel(model?: string): string {
+function resolveModel(model: string | undefined, fallback: string): string {
   const trimmed = model?.trim();
-  return trimmed || DEFAULT_OPENAI_AUDIO_MODEL;
+  return trimmed || fallback;
 }
 
 export async function transcribeOpenAiCompatibleAudio(
-  params: AudioTranscriptionRequest,
+  params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_OPENAI_AUDIO_BASE_URL);
+  const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
   const allowPrivate = Boolean(params.baseUrl?.trim());
   const url = `${baseUrl}/audio/transcriptions`;
 
-  const model = resolveModel(params.model);
+  const model = resolveModel(params.model, params.defaultModel);
   const form = new FormData();
   const fileName = params.fileName?.trim() || path.basename(params.fileName) || "audio";
   const bytes = new Uint8Array(params.buffer);
