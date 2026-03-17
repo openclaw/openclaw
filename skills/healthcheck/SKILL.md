@@ -95,6 +95,14 @@ As part of the default read-only checks, run `openclaw update status`.
 
 Report the current channel and whether an update is available.
 
+When recommending an update command, detect the installation method first:
+
+1. Run `which openclaw` and check the path:
+   - If the path contains `/homebrew/` or `/Cellar/` → installed via Homebrew → recommend `brew upgrade openclaw`
+   - If the path contains a global `node_modules` directory → installed via npm/pnpm → recommend the matching package manager (check which of `npm`, `pnpm`, `yarn` is available)
+   - Otherwise → show generic guidance with both options
+2. Never blindly recommend `pnpm update` or `npm update` without checking the installation method first.
+
 ### 4) Determine risk tolerance (after system context)
 
 Ask the user to pick or confirm a risk posture and any required open services/ports (numbered choices below).
