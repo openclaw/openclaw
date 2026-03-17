@@ -125,7 +125,7 @@ describe("tools invoke HTTP denylist", () => {
     expect(cronRes.status).toBe(200);
   });
 
-  it("keeps cron available under coding profile without exposing gateway", async () => {
+  it("keeps cron available via gateway.tools.allow without exposing gateway", async () => {
     cfg = {
       tools: {
         profile: "coding",
