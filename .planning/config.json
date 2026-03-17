@@ -1,0 +1,14 @@
+{
+  "mode": "yolo",
+  "granularity": "coarse",
+  "parallelization": true,
+  "commit_docs": true,
+  "model_profile": "quality",
+  "workflow": {
+    "research": true,
+    "plan_check": true,
+    "verifier": true,
+    "nyquist_validation": false,
+    "auto_advance": true
+  }
+}
