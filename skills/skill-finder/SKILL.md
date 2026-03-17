@@ -1,6 +1,9 @@
 ---
 name: skill-finder
-description: Discover and install new OpenClaw skills by searching ClawHub and the web. Use when the user asks to find, search, or install a skill for a tool or task that is not already available.
+description: >
+  Use when the user asks to find, search, or discover a skill that is not already
+  installed. Does not handle updating or publishing skills — use the clawhub skill
+  for those.
 homepage: https://clawhub.com
 metadata:
   openclaw:
@@ -38,14 +41,15 @@ Use this skill when the user asks something like:
 
 - If a skill is already installed and working — use it directly
 - For skills that don't exist anywhere — offer to create one instead
+- For updating or publishing skills — use the `clawhub` skill instead
 
 ---
 
 ## Step 1 — Search ClawHub (official registry)
 
 Always start here. ClawHub is the official OpenClaw skill registry.
+
 ```bash
-# Search by keyword
 clawhub search "postgres"
 clawhub search "linear"
 clawhub search "jira"
@@ -57,21 +61,29 @@ Output includes: skill name, description, version, author.
 
 ---
 
-## Step 2 — Search the web for community skills
+## Step 2 — Search GitHub for community skills
 
-If ClawHub has no results, search GitHub and the web.
+If ClawHub has no results, fall back to GitHub.
 
-Set `GITHUB_TOKEN` for reliable results — unauthenticated requests are limited to 60/hour per IP.
+Note: set `GITHUB_TOKEN` in your environment for reliable results.
+Unauthenticated requests are capped at 60/hour per IP and will silently
+return empty results on 403 errors.
+
 ```bash
-# Search GitHub for openclaw skills
-curl -s ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
-  "https://api.github.com/search/repositories?q=openclaw+skill+KEYWORD&sort=stars&per_page=5" \
-  | python3 -c "import sys,json; data=json.load(sys.stdin); [print(r['full_name'],'-',r.get('description',''),'\n ',r['html_url']) for r in data.get('items',[])] if not data.get('message') else print('API error:',data['message'])"
+GITHUB_AUTH=""
+if [ -n "$GITHUB_TOKEN" ]; then
+  GITHUB_AUTH="-H Authorization:Bearer $GITHUB_TOKEN"
+fi
 
-# Search GitHub for SKILL.md files matching a topic
-curl -s ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
+# Search for openclaw skill repos
+curl -s $GITHUB_AUTH \
+  "https://api.github.com/search/repositories?q=openclaw+skill+KEYWORD&sort=stars&per_page=5" \
+  | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('message','')) if data.get('message') else [print(r['full_name'],'|',r.get('description',''),'|',r['html_url']) for r in data.get('items',[])]"
+
+# Search for SKILL.md files matching a topic
+curl -s $GITHUB_AUTH \
   "https://api.github.com/search/code?q=openclaw+KEYWORD+filename:SKILL.md&per_page=5" \
-  | python3 -c "import sys,json; data=json.load(sys.stdin); [print(item['repository']['full_name'],'\n  File:',item['path'],'\n  URL:',item['html_url']) for item in data.get('items',[])] if not data.get('message') else print('API error:',data['message'])"
+  | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('message','')) if data.get('message') else [print(i['repository']['full_name'],'|',i['path'],'|',i['html_url']) for i in data.get('items',[])]"
 ```
 
 Replace `KEYWORD` with the tool or topic the user asked about.
@@ -81,14 +93,10 @@ Replace `KEYWORD` with the tool or topic the user asked about.
 ## Step 3 — Install from ClawHub
 
 Once you find a skill on ClawHub:
+
 ```bash
-# Install latest version
 clawhub install SKILL-NAME
-
-# Install specific version
 clawhub install SKILL-NAME --version 1.2.3
-
-# Confirm it installed
 clawhub list
 ```
 
@@ -97,8 +105,8 @@ clawhub list
 ## Step 4 — Install from GitHub (community)
 
 If a skill is on GitHub but not on ClawHub:
+
 ```bash
-# Clone just the skill folder
 REPO="owner/repo"
 SKILL_PATH="skills/skill-name"
 DEST="$(pwd)/skills/skill-name"
@@ -115,37 +123,25 @@ echo "Installed to $DEST"
 
 ---
 
-## Step 5 — Update existing skills
-```bash
-# Update one skill
-clawhub update SKILL-NAME
-
-# Update all installed skills
-clawhub update --all
-
-# Force update even if hash matches
-clawhub update --all --force
-```
-
----
-
 ## Full Discovery Workflow
 
-When the user asks for a skill you don't have:
 ```bash
-# 1. Search ClawHub
+# 1. Search ClawHub first
 clawhub search "KEYWORD"
 
-# 2. If nothing found, search GitHub
-curl -s ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
-  "https://api.github.com/search/repositories?q=openclaw+skill+KEYWORD&per_page=5" \
-  | python3 -c "import sys,json; [print(r['full_name'],'-',r.get('description','')) for r in json.load(sys.stdin).get('items',[])]"
-
-# 3. Install the best match
+# 2. If found on ClawHub, install directly
 clawhub install SKILL-NAME
 
-# 4. Confirm and report back
-clawhub list | grep SKILL-NAME
+# 3. If NOT on ClawHub, search GitHub
+GITHUB_AUTH=""
+if [ -n "$GITHUB_TOKEN" ]; then
+  GITHUB_AUTH="-H Authorization:Bearer $GITHUB_TOKEN"
+fi
+curl -s $GITHUB_AUTH \
+  "https://api.github.com/search/repositories?q=openclaw+skill+KEYWORD&per_page=5" \
+  | python3 -c "import sys,json; [print(r['full_name'],'|',r.get('description','')) for r in json.load(sys.stdin).get('items',[])]"
+
+# 4. If found on GitHub, use the Step 4 clone flow above
 ```
 
 ---
@@ -154,20 +150,8 @@ clawhub list | grep SKILL-NAME
 
 If nothing exists anywhere, tell the user:
 
-> "I couldn't find a skill for [X] on ClawHub or GitHub. I can write one for you — it's just a `SKILL.md` file with usage docs. Want me to create it and publish it to ClawHub?"
-
-To publish a new skill after creating it:
-```bash
-# Login first (one-time)
-clawhub login
-
-# Publish
-clawhub publish ./skills/my-skill \
-  --slug my-skill \
-  --name "My Skill" \
-  --version 1.0.0 \
-  --changelog "Initial release"
-```
+> "I couldn't find a skill for [X] on ClawHub or GitHub. I can write one for you —
+> it's just a SKILL.md file with usage docs. Want me to create it?"
 
 ---
 
