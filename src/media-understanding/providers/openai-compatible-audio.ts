@@ -33,8 +33,14 @@ export async function transcribeOpenAiCompatibleAudio(
   // If the filename has no extension but we know the MIME type, append the
   // correct extension so the API can identify the audio format (e.g. Signal
   // AAC voice notes arrive without an extension).
+  // OpenAI only accepts: flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm.
+  // AAC audio is the same codec wrapped in an M4A container, so remap .aac
+  // to .m4a for API compatibility.
   if (!path.extname(fileName) && params.mime) {
-    const ext = extensionForMime(params.mime);
+    let ext = extensionForMime(params.mime);
+    if (ext === ".aac") {
+      ext = ".m4a";
+    }
     if (ext) {
       fileName += ext;
     }

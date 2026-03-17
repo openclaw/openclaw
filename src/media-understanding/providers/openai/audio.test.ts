@@ -85,7 +85,9 @@ describe("transcribeOpenAiAudio", () => {
     const file = form.get("file");
     expect(file).not.toBeNull();
     expect(file).toHaveProperty("name");
-    expect((file as File).name).toBe("voice-note.aac");
+    // AAC is remapped to .m4a for OpenAI API compatibility (AAC in M4A
+    // container is the same codec; .aac is not in the supported format list).
+    expect((file as File).name).toBe("voice-note.m4a");
   });
 
   it("throws when the provider response omits text", async () => {
