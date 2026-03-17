@@ -145,6 +145,7 @@ export type AppViewState = {
   channelsSnapshot: ChannelsStatusSnapshot | null;
   channelsError: string | null;
   channelsLastSuccess: number | null;
+  configSaveError: string | null;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;
