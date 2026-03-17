@@ -20,4 +20,17 @@ describe("gateway request scope", () => {
       expect(second.getPluginRuntimeGatewayRequestScope()).toEqual(TEST_SCOPE);
     });
   });
+
+  it("attaches plugin id to the active scope", async () => {
+    const runtimeScope = await import("./gateway-request-scope.js");
+
+    await runtimeScope.withPluginRuntimeGatewayRequestScope(TEST_SCOPE, async () => {
+      await runtimeScope.withPluginRuntimePluginIdScope("voice-call", async () => {
+        expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual({
+          ...TEST_SCOPE,
+          pluginId: "voice-call",
+        });
+      });
+    });
+  });
 });

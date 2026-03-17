@@ -71,6 +71,12 @@ function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["cl
   return scopes.includes(ADMIN_SCOPE);
 }
 
+function resolveAllowModelOverrideFromClient(
+  client: GatewayRequestHandlerOptions["client"],
+): boolean {
+  return resolveSenderIsOwnerFromClient(client) || client?.internal?.allowModelOverride === true;
+}
+
 async function runSessionResetFromAgent(params: {
   key: string;
   reason: "new" | "reset";
@@ -162,6 +168,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     const request = p as {
       message: string;
       agentId?: string;
+      provider?: string;
+      model?: string;
       to?: string;
       replyTo?: string;
       sessionId?: string;
@@ -192,6 +200,21 @@ export const agentHandlers: GatewayRequestHandlers = {
       inputProvenance?: InputProvenance;
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
+    const allowModelOverride = resolveAllowModelOverrideFromClient(client);
+    const requestedModelOverride = Boolean(request.provider || request.model);
+    if (requestedModelOverride && !allowModelOverride) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "provider/model overrides are not authorized for this caller.",
+        ),
+      );
+      return;
+    }
+    const providerOverride = allowModelOverride ? request.provider : undefined;
+    const modelOverride = allowModelOverride ? request.model : undefined;
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
     const normalizedSpawned = normalizeSpawnedRunMetadata({
@@ -584,6 +607,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       ingressOpts: {
         message,
         images,
+        provider: providerOverride,
+        model: modelOverride,
         to: resolvedTo,
         sessionId: resolvedSessionId,
         sessionKey: resolvedSessionKey,
@@ -619,6 +644,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           workspaceDir: sessionEntry?.spawnedWorkspaceDir,
         }),
         senderIsOwner,
+        allowModelOverride,
       },
       runId,
       idempotencyKey: idem,

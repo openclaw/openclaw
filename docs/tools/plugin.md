@@ -862,6 +862,26 @@ Notes:
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
 - `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
+Plugins can also launch background subagent runs through `api.runtime.subagent`:
+
+```ts
+const result = await api.runtime.subagent.run({
+  sessionKey: "agent:main:subagent:search-helper",
+  message: "Expand this query into focused follow-up searches.",
+  provider: "openai",
+  model: "gpt-4.1-mini",
+  deliver: false,
+});
+```
+
+Notes:
+
+- `provider` and `model` are optional per-run overrides, not persistent session changes.
+- OpenClaw only honors those override fields for trusted callers.
+- For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
+- Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
+- Untrusted plugin subagent runs still work, but override requests are rejected instead of silently falling back.
+
 For web search, plugins can consume the shared runtime helper instead of
 reaching into the agent tool wiring:
 

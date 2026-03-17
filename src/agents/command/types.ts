@@ -39,6 +39,10 @@ export type AgentCommandOpts = {
   clientTools?: ClientToolDefinition[];
   /** Agent id override (must exist in config). */
   agentId?: string;
+  /** Per-run provider override. */
+  provider?: string;
+  /** Per-run model override. */
+  model?: string;
   to?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -65,6 +69,8 @@ export type AgentCommandOpts = {
   runContext?: AgentRunContext;
   /** Whether this caller is authorized for owner-only tools (defaults true for local CLI calls). */
   senderIsOwner?: boolean;
+  /** Whether this caller is authorized to use provider/model per-run overrides. */
+  allowModelOverride?: boolean;
   /** Group/spawn metadata for subagent policy inheritance and routing context. */
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];
@@ -84,7 +90,12 @@ export type AgentCommandOpts = {
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
 };
 
-export type AgentCommandIngressOpts = Omit<AgentCommandOpts, "senderIsOwner"> & {
-  /** Ingress callsites must always pass explicit owner authorization state. */
+export type AgentCommandIngressOpts = Omit<
+  AgentCommandOpts,
+  "senderIsOwner" | "allowModelOverride"
+> & {
+  /** Ingress callsites must always pass explicit owner-tool authorization state. */
   senderIsOwner: boolean;
+  /** Ingress callsites must always pass explicit model-override authorization state. */
+  allowModelOverride: boolean;
 };
