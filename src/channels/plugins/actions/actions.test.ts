@@ -1281,10 +1281,11 @@ describe("slack actions adapter", () => {
     }
   });
 
-  it("rejects invalid send block combinations before dispatch", async () => {
+  it("rejects invalid Slack payloads before dispatch", async () => {
     const cases = [
       {
         name: "invalid JSON",
+        action: "send" as const,
         params: {
           to: "channel:C1",
           message: "",
@@ -1294,6 +1295,7 @@ describe("slack actions adapter", () => {
       },
       {
         name: "empty blocks",
+        action: "send" as const,
         params: {
           to: "channel:C1",
           message: "",
@@ -1303,6 +1305,7 @@ describe("slack actions adapter", () => {
       },
       {
         name: "blocks with media",
+        action: "send" as const,
         params: {
           to: "channel:C1",
           message: "",
@@ -1311,29 +1314,34 @@ describe("slack actions adapter", () => {
         },
         error: /does not support blocks with media/i,
       },
-    ] as const;
-
-    for (const testCase of cases) {
-      handleSlackAction.mockClear();
-      await expectSlackSendRejected(testCase.params, testCase.error);
-    }
-  });
-
-  it("rejects edit when both message and blocks are missing", async () => {
-    const { cfg, actions } = slackHarness();
-
-    await expect(
-      actions.handleAction?.({
-        channel: "slack",
-        action: "edit",
-        cfg,
+      {
+        name: "edit missing message and blocks",
+        action: "edit" as const,
         params: {
           channelId: "C1",
           messageId: "171234.567",
           message: "",
         },
-      }),
-    ).rejects.toThrow(/edit requires message or blocks/i);
-    expect(handleSlackAction).not.toHaveBeenCalled();
+        error: /edit requires message or blocks/i,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      handleSlackAction.mockClear();
+      if (testCase.action === "send") {
+        await expectSlackSendRejected(testCase.params, testCase.error);
+      } else {
+        const { cfg, actions } = slackHarness();
+        await expect(
+          actions.handleAction?.({
+            channel: "slack",
+            action: "edit",
+            cfg,
+            params: testCase.params,
+          }),
+        ).rejects.toThrow(testCase.error);
+      }
+      expect(handleSlackAction, testCase.name).not.toHaveBeenCalled();
+    }
   });
 });
