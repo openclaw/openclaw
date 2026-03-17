@@ -61,6 +61,14 @@ vi.mock("grammy", () => ({
       botCtorSpy(token, options);
     }
   },
+  HttpError: class HttpError extends Error {
+    constructor(
+      message = "HttpError",
+      public error?: unknown,
+    ) {
+      super(message);
+    }
+  },
   InputFile: class {},
 }));
 
@@ -94,5 +102,6 @@ export function installTelegramSendTestHooks() {
 }
 
 export async function importTelegramSendModule() {
+  vi.resetModules();
   return await import("./send.js");
 }
