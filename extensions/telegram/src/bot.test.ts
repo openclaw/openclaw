@@ -1,11 +1,11 @@
 import { rm } from "node:fs/promises";
+import type { PluginInteractiveTelegramHandlerContext } from "openclaw/plugin-sdk/core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../src/channels/plugins/contracts/suites.js";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "../../../src/plugins/interactive.js";
-import type { PluginInteractiveTelegramHandlerContext } from "../../../src/plugins/types.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import {
   answerCallbackQuerySpy,

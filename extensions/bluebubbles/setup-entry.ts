@@ -1,5 +1,4 @@
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
 import { bluebubblesPlugin } from "./src/channel.js";
 
-export default {
-  plugin: bluebubblesPlugin,
-};
+export default defineSetupPluginEntry(bluebubblesPlugin);

@@ -4,7 +4,7 @@ import * as mediaFetch from "../../../../src/media/fetch.js";
 import type { SavedMedia } from "../../../../src/media/store.js";
 import * as mediaStore from "../../../../src/media/store.js";
 import { mockPinnedHostnameResolution } from "../../../../src/test-helpers/ssrf.js";
-import { type FetchMock, withFetchPreconnect } from "../../../../src/test-utils/fetch-mock.js";
+import { type FetchMock, withFetchPreconnect } from "../../../test-utils/fetch-mock.js";
 import {
   fetchWithSlackAuth,
   resolveSlackAttachmentContent,

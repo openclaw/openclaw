@@ -1,3 +1,13 @@
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
+  OpenClawPluginConfigSchema,
+  PluginInteractiveTelegramHandlerContext,
+} from "../plugins/types.js";
+
 export type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
@@ -31,6 +41,8 @@ export type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthMethod,
   ProviderAuthResult,
+  OpenClawPluginCommandDefinition,
+  PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
@@ -70,3 +82,44 @@ export {
 export { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 export { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 export { resolveThreadSessionKeys } from "../routing/session-key.js";
+
+type DefineChannelPluginEntryOptions<TPlugin extends ChannelPlugin = ChannelPlugin> = {
+  id: string;
+  name: string;
+  description: string;
+  plugin: TPlugin;
+  configSchema?: () => OpenClawPluginConfigSchema;
+  setRuntime?: (runtime: PluginRuntime) => void;
+  registerFull?: (api: OpenClawPluginApi) => void;
+};
+
+// Shared channel-plugin entry boilerplate for bundled and third-party channels.
+export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
+  id,
+  name,
+  description,
+  plugin,
+  configSchema = emptyPluginConfigSchema,
+  setRuntime,
+  registerFull,
+}: DefineChannelPluginEntryOptions<TPlugin>) {
+  return {
+    id,
+    name,
+    description,
+    configSchema: configSchema(),
+    register(api: OpenClawPluginApi) {
+      setRuntime?.(api.runtime);
+      api.registerChannel({ plugin });
+      if (api.registrationMode !== "full") {
+        return;
+      }
+      registerFull?.(api);
+    },
+  };
+}
+
+// Shared setup-entry shape so bundled channels do not duplicate `{ plugin }`.
+export function defineSetupPluginEntry<TPlugin>(plugin: TPlugin) {
+  return { plugin };
+}

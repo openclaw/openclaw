@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/diffs";
 import { describe, expect, it, vi } from "vitest";
-import { createMockServerResponse } from "../../src/test-utils/mock-http-response.js";
+import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { createTestPluginApi } from "../test-utils/plugin-api.js";
 import plugin from "./index.js";
 
