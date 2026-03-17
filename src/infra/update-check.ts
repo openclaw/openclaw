@@ -48,6 +48,8 @@ export type UpdateCheckResult = {
   registry?: RegistryStatus;
 };
 
+export type PackageInstallSource = "brew" | "package" | "unknown";
+
 export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
   if (update.installKind !== "git") {
     return null;
@@ -61,6 +63,65 @@ export function formatGitInstallLabel(update: UpdateCheckResult): string | null 
     shortSha ? `@ ${shortSha}` : null,
   ].filter(Boolean);
   return parts.join(" · ");
+}
+
+function normalizeRootForInstallSource(root: string | null): string | null {
+  if (!root) {
+    return null;
+  }
+  return path.resolve(root).replace(/\\/g, "/");
+}
+
+export function detectPackageInstallSource(root: string | null): PackageInstallSource {
+  const normalized = normalizeRootForInstallSource(root);
+  if (!normalized) {
+    return "unknown";
+  }
+
+  const brewMarkers = [
+    "/opt/homebrew/Cellar/openclaw/",
+    "/opt/homebrew/opt/openclaw/",
+    "/usr/local/Cellar/openclaw/",
+    "/usr/local/opt/openclaw/",
+    "/home/linuxbrew/.linuxbrew/Cellar/openclaw/",
+    "/home/linuxbrew/.linuxbrew/opt/openclaw/",
+    "/.linuxbrew/Cellar/openclaw/",
+    "/.linuxbrew/opt/openclaw/",
+  ];
+  if (brewMarkers.some((marker) => normalized.includes(marker))) {
+    return "brew";
+  }
+
+  return "package";
+}
+
+export function formatPackageInstallLabel(params: {
+  root: string | null;
+  packageManager: PackageManager;
+}): string {
+  if (detectPackageInstallSource(params.root) === "brew") {
+    return "brew";
+  }
+  return params.packageManager !== "unknown" ? params.packageManager : "pkg";
+}
+
+export function formatPackageUpdateCommand(params: {
+  root: string | null;
+  packageManager: PackageManager;
+}): string {
+  if (detectPackageInstallSource(params.root) === "brew") {
+    return "brew upgrade openclaw";
+  }
+  if (params.packageManager === "pnpm") {
+    return "pnpm add -g openclaw@latest";
+  }
+  if (params.packageManager === "npm") {
+    return "npm install -g openclaw@latest";
+  }
+  if (params.packageManager === "bun") {
+    return "bun add -g openclaw@latest";
+  }
+  return "openclaw update";
 }
 
 async function exists(p: string): Promise<boolean> {

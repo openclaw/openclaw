@@ -109,6 +109,18 @@ describe("formatUpdateOneLiner", () => {
 
     expect(formatUpdateOneLiner(update)).toBe("Update: npm · npm latest unknown · deps missing");
   });
+
+  it("renders Homebrew installs as brew in package mode", () => {
+    const latestVersion = nextMajorVersion(VERSION);
+    const update = buildUpdate({
+      root: "/opt/homebrew/Cellar/openclaw/2026.3.13/libexec/lib/node_modules/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe(`Update: brew · brew update ${latestVersion}`);
+  });
 });
 
 describe("formatUpdateAvailableHint", () => {
@@ -142,6 +154,34 @@ describe("formatUpdateAvailableHint", () => {
 
     expect(formatUpdateAvailableHint(update)).toBe(
       `Update available (git behind 2 · npm ${latestVersion}). Run: openclaw update`,
+    );
+  });
+
+  it("renders Homebrew-specific update guidance for package installs", () => {
+    const latestVersion = nextMajorVersion(VERSION);
+    const update = buildUpdate({
+      root: "/opt/homebrew/Cellar/openclaw/2026.3.13/libexec/lib/node_modules/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion },
+    });
+
+    expect(formatUpdateAvailableHint(update)).toBe(
+      `Update available (brew ${latestVersion}). Run: brew upgrade openclaw`,
+    );
+  });
+
+  it("renders pnpm-specific update guidance for package installs", () => {
+    const latestVersion = nextMajorVersion(VERSION);
+    const update = buildUpdate({
+      root: "/Users/test/.local/share/pnpm/global/5/node_modules/openclaw",
+      installKind: "package",
+      packageManager: "pnpm",
+      registry: { latestVersion },
+    });
+
+    expect(formatUpdateAvailableHint(update)).toBe(
+      `Update available (pnpm ${latestVersion}). Run: pnpm add -g openclaw@latest`,
     );
   });
 });

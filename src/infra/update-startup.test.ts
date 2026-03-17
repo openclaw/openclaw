@@ -9,7 +9,8 @@ vi.mock("./openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(),
 }));
 
-vi.mock("./update-check.js", async () => {
+vi.mock("./update-check.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./update-check.js")>();
   const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
   const compareSemverStrings = (a: string, b: string) => {
     const left = parse(a);
@@ -25,6 +26,7 @@ vi.mock("./update-check.js", async () => {
   };
 
   return {
+    ...actual,
     checkUpdateStatus: vi.fn(),
     compareSemverStrings,
     resolveNpmChannelTag: vi.fn(),
@@ -215,6 +217,28 @@ describe("update-startup", () => {
     expect(parsed.lastNotifiedVersion).toBe("2.0.0");
     expect(parsed.lastAvailableVersion).toBe("2.0.0");
     expect(parsed.lastNotifiedTag).toBe("latest");
+  });
+
+  it("logs Homebrew update guidance for brew package installs", async () => {
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(
+      "/opt/homebrew/Cellar/openclaw/2.0.0/libexec/lib/node_modules/openclaw",
+    );
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/opt/homebrew/Cellar/openclaw/2.0.0/libexec/lib/node_modules/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    mockNpmChannelTag("latest", "2.0.0");
+
+    const log = { info: vi.fn() };
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("Run: brew upgrade openclaw"));
   });
 
   it("hydrates cached update from persisted state during throttle window", async () => {

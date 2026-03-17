@@ -3,6 +3,8 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
+  formatPackageInstallLabel,
+  formatPackageUpdateCommand,
   type UpdateCheckResult,
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
@@ -63,29 +65,43 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
     details.push(`git behind ${availability.gitBehind}`);
   }
   if (availability.hasRegistryUpdate && availability.latestVersion) {
-    details.push(`npm ${availability.latestVersion}`);
+    const registryLabel =
+      update.installKind === "package"
+        ? formatPackageInstallLabel({
+            root: update.root,
+            packageManager: update.packageManager,
+          })
+        : "npm";
+    details.push(`${registryLabel} ${availability.latestVersion}`);
   }
   const suffix = details.length > 0 ? ` (${details.join(" · ")})` : "";
-  return `Update available${suffix}. Run: ${formatCliCommand("openclaw update")}`;
+  const updateCommand =
+    update.installKind === "package"
+      ? formatPackageUpdateCommand({
+          root: update.root,
+          packageManager: update.packageManager,
+        })
+      : "openclaw update";
+  return `Update available${suffix}. Run: ${formatCliCommand(updateCommand)}`;
 }
 
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   const parts: string[] = [];
 
-  const appendRegistryUpdateSummary = () => {
+  const appendRegistryUpdateSummary = (registryLabel: string) => {
     if (update.registry?.latestVersion) {
       const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
       if (cmp === 0) {
-        parts.push(`npm latest ${update.registry.latestVersion}`);
+        parts.push(`${registryLabel} latest ${update.registry.latestVersion}`);
       } else if (cmp != null && cmp < 0) {
-        parts.push(`npm update ${update.registry.latestVersion}`);
+        parts.push(`${registryLabel} update ${update.registry.latestVersion}`);
       } else {
-        parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
+        parts.push(`${registryLabel} latest ${update.registry.latestVersion} (local newer)`);
       }
       return;
     }
     if (update.registry?.error) {
-      parts.push("npm latest unknown");
+      parts.push(`${registryLabel} latest unknown`);
     }
   };
 
@@ -112,10 +128,14 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.fetchOk === false) {
       parts.push("fetch failed");
     }
-    appendRegistryUpdateSummary();
+    appendRegistryUpdateSummary("npm");
   } else {
-    parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
-    appendRegistryUpdateSummary();
+    const packageLabel = formatPackageInstallLabel({
+      root: update.root,
+      packageManager: update.packageManager,
+    });
+    parts.push(packageLabel);
+    appendRegistryUpdateSummary(packageLabel);
   }
 
   if (update.deps) {
