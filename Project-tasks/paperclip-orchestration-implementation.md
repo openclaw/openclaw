@@ -52,15 +52,15 @@ Adapt Paperclip's company-level AI orchestration model into Operator1's single-o
 
 ## 4. Design Decisions
 
-| Decision                            | Options Considered                                   | Chosen                                       | Reason                                                                                                                                               |
-| ----------------------------------- | ---------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Workspace isolation model           | Separate DB per workspace, single DB with FK scoping | Single DB with `workspace_id` FK             | Matches existing pattern (one `operator1.db`). Simpler queries. No multi-DB management.                                                              |
-| Task system vs extending team tasks | Extend `op1_team_tasks`, new `op1_tasks` table       | New `op1_tasks` table                        | Team tasks are ephemeral and scoped to a team run. New tasks are long-lived, workspace-scoped, with identifiers, priority, comments, and goal links. |
-| Cost event storage                  | Write to session JSONL, write to SQLite              | SQLite `op1_cost_events` table               | Enables cross-session, cross-agent aggregation. Session JSONL remains for detailed replay; cost events table is the rollup.                          |
-| Budget enforcement point            | Gateway middleware, agent runtime hook               | Agent runtime hook + periodic cron sweep     | Pre-call check prevents overspend in real-time. Cron sweep catches missed events and reconciles monthly totals.                                      |
-| Goal hierarchy depth                | Flat goals, tree hierarchy                           | Tree with `parent_id` self-reference         | Mirrors Paperclip's vision-to-subtask levels. Enables OKR-style cascading.                                                                           |
-| Approval system                     | Extend exec approvals, new table                     | New `op1_approvals` table                    | Exec approvals are security-focused (command allowlists). New approvals cover organizational governance. Different lifecycle.                        |
-| Default workspace                   | No default, auto-create on first boot                | Auto-create "default" workspace on migration | Backward compatibility. Existing projects and sessions bind to default workspace without manual migration.                                           |
+| Decision                            | Options Considered                                   | Chosen                                       | Reason                                                                                                                                                                                                                                                                          |
+| ----------------------------------- | ---------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace isolation model           | Separate DB per workspace, single DB with FK scoping | Single DB with `workspace_id` FK             | Matches existing pattern (one `operator1.db`). Simpler queries. No multi-DB management.                                                                                                                                                                                         |
+| Task system vs extending team tasks | Extend `op1_team_tasks`, new `op1_tasks` table       | New `op1_tasks` table                        | Team tasks are ephemeral and scoped to a team run. New tasks are long-lived, workspace-scoped, with identifiers, priority, comments, and goal links.                                                                                                                            |
+| Cost event storage                  | Write to session JSONL, write to SQLite              | SQLite `op1_cost_events` table               | Enables cross-session, cross-agent aggregation. Session JSONL remains for detailed replay; cost events table is the rollup.                                                                                                                                                     |
+| Budget enforcement point            | Gateway middleware, agent runtime hook               | Post-call recording + periodic cron sweep    | Pre-call cost estimation is not possible (costs are only known after LLM response). Post-call hook records actuals; cron sweep reconciles totals and triggers incidents at monthly boundary. Hard-stop enforcement requires a prompt-token rate table for estimation; see §5.4. |
+| Goal hierarchy depth                | Flat goals, tree hierarchy                           | Tree with `parent_id` self-reference         | Mirrors Paperclip's vision-to-subtask levels. Enables OKR-style cascading.                                                                                                                                                                                                      |
+| Approval system                     | Extend exec approvals, new table                     | New `op1_approvals` table                    | Exec approvals are security-focused (command allowlists). New approvals cover organizational governance. Different lifecycle.                                                                                                                                                   |
+| Default workspace                   | No default, auto-create on first boot                | Auto-create "default" workspace on migration | Backward compatibility. Existing projects and sessions bind to default workspace without manual migration.                                                                                                                                                                      |
 
 ---
 
@@ -79,8 +79,8 @@ CREATE TABLE op1_workspaces (
                 CHECK (status IN ('active', 'archived', 'suspended')),
   task_prefix   TEXT NOT NULL DEFAULT 'OP1',
   task_counter  INTEGER NOT NULL DEFAULT 0,
-  budget_monthly_cents INTEGER,
-  spent_monthly_cents  INTEGER NOT NULL DEFAULT 0,
+  budget_monthly_microcents INTEGER,
+  spent_monthly_microcents  INTEGER NOT NULL DEFAULT 0,
   brand_color   TEXT,
   created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at    INTEGER NOT NULL DEFAULT (unixepoch())
@@ -110,6 +110,9 @@ UPDATE op1_projects SET workspace_id = 'default' WHERE workspace_id IS NULL;
 CREATE TABLE op1_tasks (
   id              TEXT PRIMARY KEY,
   workspace_id    TEXT NOT NULL REFERENCES op1_workspaces(id) ON DELETE CASCADE,
+  -- project_id and goal_id are intentionally bare TEXT (no FK); SQLite cannot add FK
+  -- constraints retroactively, and goals table (v20) is created after tasks (v19).
+  -- Referential integrity is enforced at the application layer in the store functions.
   project_id      TEXT,
   goal_id         TEXT,
   parent_id       TEXT REFERENCES op1_tasks(id) ON DELETE SET NULL,
@@ -153,8 +156,10 @@ CREATE TABLE op1_goals (
   parent_id     TEXT REFERENCES op1_goals(id) ON DELETE SET NULL,
   title         TEXT NOT NULL,
   description   TEXT,
+  -- 'task' and 'subtask' levels are intentionally excluded; op1_tasks handles
+  -- that layer. Goals top out at key_result; tasks reference goals via goal_id.
   level         TEXT NOT NULL DEFAULT 'objective'
-                CHECK (level IN ('vision','objective','key_result','task','subtask')),
+                CHECK (level IN ('vision','objective','key_result')),
   status        TEXT NOT NULL DEFAULT 'planned'
                 CHECK (status IN ('planned','in_progress','achieved','abandoned')),
   owner_agent_id TEXT,
@@ -181,19 +186,23 @@ CREATE TABLE op1_cost_events (
   model         TEXT,
   input_tokens  INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_cents    REAL NOT NULL DEFAULT 0,
+  -- cost stored as INTEGER micro-cents (cost * 1_000_000) to avoid float accumulation
+  -- error across thousands of events. spent_monthly_cents on workspaces uses the same unit.
+  -- Display layer divides by 1_000_000 to render dollars.
+  cost_microcents INTEGER NOT NULL DEFAULT 0,
   occurred_at   INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX idx_cost_events_workspace ON op1_cost_events(workspace_id, occurred_at);
 CREATE INDEX idx_cost_events_agent ON op1_cost_events(agent_id, occurred_at);
 CREATE INDEX idx_cost_events_project ON op1_cost_events(project_id);
+CREATE INDEX idx_cost_events_task ON op1_cost_events(task_id);
 
 CREATE TABLE op1_budget_policies (
   id            TEXT PRIMARY KEY,
   workspace_id  TEXT NOT NULL REFERENCES op1_workspaces(id) ON DELETE CASCADE,
   scope_type    TEXT NOT NULL CHECK (scope_type IN ('workspace','agent','project')),
   scope_id      TEXT NOT NULL,
-  amount_cents  INTEGER NOT NULL,
+  amount_microcents INTEGER NOT NULL,
   window_kind   TEXT NOT NULL DEFAULT 'calendar_month_utc'
                 CHECK (window_kind IN ('calendar_month_utc','lifetime')),
   warn_percent  INTEGER NOT NULL DEFAULT 80,
@@ -209,8 +218,8 @@ CREATE TABLE op1_budget_incidents (
   policy_id     TEXT NOT NULL REFERENCES op1_budget_policies(id) ON DELETE CASCADE,
   type          TEXT NOT NULL CHECK (type IN ('warning','hard_stop','resolved')),
   agent_id      TEXT,
-  spent_cents   INTEGER NOT NULL,
-  limit_cents   INTEGER NOT NULL,
+  spent_microcents INTEGER NOT NULL,
+  limit_microcents INTEGER NOT NULL,
   message       TEXT,
   resolved_at   INTEGER,
   created_at    INTEGER NOT NULL DEFAULT (unixepoch())
@@ -311,16 +320,16 @@ CREATE INDEX idx_agent_config_revisions ON op1_agent_config_revisions(agent_id, 
 
 #### Budget RPCs
 
-| Method                      | Scope | Params                                                                                   | Returns                           |
-| --------------------------- | ----- | ---------------------------------------------------------------------------------------- | --------------------------------- |
-| `budgets.policies.list`     | READ  | `{ workspaceId }`                                                                        | `{ policies: BudgetPolicy[] }`    |
-| `budgets.policies.create`   | ADMIN | `{ workspaceId, scopeType, scopeId, amountCents, windowKind?, warnPercent?, hardStop? }` | `BudgetPolicy`                    |
-| `budgets.policies.update`   | ADMIN | `{ id, amountCents?, warnPercent?, hardStop? }`                                          | `BudgetPolicy`                    |
-| `budgets.policies.delete`   | ADMIN | `{ id }`                                                                                 | `{ ok: true }`                    |
-| `budgets.spend`             | READ  | `{ workspaceId, from?, to?, groupBy? }`                                                  | Spend summary                     |
-| `budgets.incidents.list`    | READ  | `{ workspaceId }`                                                                        | `{ incidents: BudgetIncident[] }` |
-| `budgets.incidents.resolve` | ADMIN | `{ id, resolution }`                                                                     | `BudgetIncident`                  |
-| `cost.record`               | WRITE | `{ workspaceId, agentId, provider, model, inputTokens, outputTokens, costCents }`        | `CostEvent`                       |
+| Method                      | Scope | Params                                                                                                      | Returns                           |
+| --------------------------- | ----- | ----------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `budgets.policies.list`     | READ  | `{ workspaceId }`                                                                                           | `{ policies: BudgetPolicy[] }`    |
+| `budgets.policies.create`   | ADMIN | `{ workspaceId, scopeType, scopeId, amountMicrocents, windowKind?, warnPercent?, hardStop? }`               | `BudgetPolicy`                    |
+| `budgets.policies.update`   | ADMIN | `{ id, amountMicrocents?, warnPercent?, hardStop? }`                                                        | `BudgetPolicy`                    |
+| `budgets.policies.delete`   | ADMIN | `{ id }`                                                                                                    | `{ ok: true }`                    |
+| `budgets.spend`             | READ  | `{ workspaceId, from?, to?, groupBy? }`                                                                     | Spend summary                     |
+| `budgets.incidents.list`    | READ  | `{ workspaceId }`                                                                                           | `{ incidents: BudgetIncident[] }` |
+| `budgets.incidents.resolve` | ADMIN | `{ id, resolution }`                                                                                        | `BudgetIncident`                  |
+| `cost.record`               | WRITE | `{ workspaceId, agentId, sessionId?, taskId?, provider, model, inputTokens, outputTokens, costMicrocents }` | `CostEvent`                       |
 
 #### Approval RPCs
 
@@ -342,15 +351,24 @@ CREATE INDEX idx_agent_config_revisions ON op1_agent_config_revisions(agent_id, 
 
 Each workspace has a `task_prefix` (e.g., "OP1") and a monotonically increasing `task_counter`. When a task is created:
 
-1. Atomically increment counter: `UPDATE op1_workspaces SET task_counter = task_counter + 1, updated_at = unixepoch() WHERE id = ? RETURNING task_counter`
-2. Format identifier: `${task_prefix}-${String(counter).padStart(3, '0')}` (e.g., "OP1-001")
-3. Store in `op1_tasks.identifier`
+1. Run inside an explicit write transaction to prevent races across concurrent gateway connections.
+2. Atomically increment counter: `UPDATE op1_workspaces SET task_counter = task_counter + 1, updated_at = unixepoch() WHERE id = ? RETURNING task_counter`
+3. Format identifier: `${task_prefix}-${String(counter).padStart(3, '0')}` (e.g., "OP1-001")
+4. Store in `op1_tasks.identifier`
+
+`DatabaseSync` (node:sqlite) is synchronous but the transaction wrapper is still required to keep the counter increment and task insert atomic within a single gateway request.
 
 ### 5.4 Budget Enforcement Architecture
 
-1. **Pre-call check (real-time):** Before each LLM call, query budget store for applicable policy (agent-level first, then project, then workspace). If spend + estimated cost exceeds hard stop, block the call and record a budget incident. If it exceeds warn threshold, log warning and emit gateway event.
+**Known limitation: pre-call cost is not knowable.** Costs are only available in LLM responses (token counts × rate). There is no mechanism to estimate cost before a call completes. The enforcement model is therefore:
 
-2. **Periodic reconciliation (cron):** Hourly job reconciles `op1_cost_events` totals against `op1_budget_policies`. Updates `spent_monthly_cents` on workspace. At month boundary, resets monthly spend counters.
+1. **Post-call recording (real-time):** The actual hook point is the Pi agent runtime where LLM responses arrive with usage data — specifically `src/agents/usage.ts` (`normalizeUsage`) which is called after each turn. After normalization, look up the session's `project_id`, resolve its `workspace_id` via `op1_projects`, then call `cost.record`. This workspace attribution chain (`session → project_id → workspace_id`) must be resolved at call time since `session_entries` has no direct `workspace_id` column. This is a deliberate tradeoff: workspace is project-scoped, not session-scoped.
+
+2. **Hard-stop estimation (optional, phase 2):** To support pre-call hard stops, a model rate table (`src/orchestration/model-rate-table.ts`) can estimate cost from prompt token count × rate. This requires: (a) a maintained rate table per provider/model, (b) a pre-call token count estimate. If this complexity is not warranted, hard stops should be removed from the schema and replaced with post-call incident + agent pause.
+
+3. **Periodic reconciliation (cron):** Hourly job reconciles `op1_cost_events` totals against `op1_budget_policies`. Updates `spent_monthly_microcents` on workspace. At month boundary, resets monthly spend counters and resolves expired incidents.
+
+4. **Audit vs activity log boundary:** `audit_state` (schema v9) covers security-sensitive table mutations via SQLite triggers. `op1_activity_log` covers organizational events (task created, goal updated, approval resolved). Do not double-log: activity log records are written explicitly by RPC handlers, not by triggers, and must not duplicate what `audit_state` already captures.
 
 ### 5.5 Task Status Transitions
 
@@ -477,8 +495,8 @@ Cost event recording, budget policies, enforcement, and incident tracking. Hooks
 - [ ] 4.1 Schema migration v21 — add `op1_cost_events`, `op1_budget_policies`, `op1_budget_incidents`
 - [ ] 4.2 Cost event store — create `src/orchestration/cost-event-store-sqlite.ts` with insert + aggregation queries
 - [ ] 4.3 Budget store — create `src/orchestration/budget-store-sqlite.ts` with policy CRUD + incident tracking
-- [ ] 4.4 Cost recording hook — hook into `src/infra/provider-usage.ts` to insert cost events after LLM calls
-- [ ] 4.5 Budget pre-call check — `checkBudget(agentId, workspaceId, estimatedCost)` returning allow/warn/block
+- [ ] 4.4 Cost recording hook — hook into `src/agents/usage.ts` (`normalizeUsage` call site in Pi agent runtime) post-LLM-response; resolve workspace_id via session → project_id → op1_projects join, then insert cost event
+- [ ] 4.5 Workspace attribution helper — `resolveWorkspaceForSession(sessionId, db)` returning workspaceId via project_id FK; used by cost recording hook and budget enforcement
 - [ ] 4.6 Budget reconciliation cron — hourly cron to reconcile totals, reset monthly counters, create incidents
 - [ ] 4.7 Protocol schemas — create `src/gateway/protocol/schema/budgets.ts`
 - [ ] 4.8 RPC handlers — create `src/gateway/server-methods/budgets.ts` with 8 budget/cost handlers
@@ -509,18 +527,19 @@ Organizational approval workflow + activity audit log + agent config revision tr
 
 ### Task 6: Phase 6 — Agent Lifecycle and Integration
 
-**Status:** To-do | **Priority:** Medium | **Assignee:** rohit sharma | **Due:** | **Est:** 8h
+**Status:** To-do | **Priority:** Medium | **Assignee:** rohit sharma | **Due:** | **Est:** 14h
 
-Workspace-aware agent status, performance metrics, department budget aggregation, and workspace context injection into agent sessions.
+Workspace-aware agent status, performance metrics, department budget aggregation, and workspace context injection into agent sessions. Note: 6.5 (context injection) touches the Pi agent runtime's prompt construction pipeline and is a significant integration — treat it as a separate investigation before implementation.
 
 - [ ] 6.1 Agent status tracking — extend `op1_workspace_agents` with status and capabilities columns
-- [ ] 6.2 Session-workspace binding — auto-bind sessions to active workspace; extend `sessions.list` with workspace ID
+- [ ] 6.2 Session-workspace binding — document and enforce the `session → project_id → workspace_id` attribution chain; extend `sessions.list` to surface resolved workspaceId; note this is an indirect FK (no workspace_id column on session_entries) and must join through op1_projects
 - [ ] 6.3 Agent performance metrics — query cost events + tasks for per-agent metrics (completed, cost, tokens, response time)
-- [ ] 6.4 Department budget aggregation — aggregate cost events by department using Matrix tier map
-- [ ] 6.5 Workspace context injection — include workspace context (goals, tasks, budget) in agent system prompts
-- [ ] 6.6 UI org chart integration — extend org chart page with workspace badges, status indicators, budget utilization
-- [ ] 6.7 UI workspace dashboard — enhance overview with workspace stats (tasks, goals, spend, activity)
-- [ ] 6.8 Tests — session binding, metrics computation, department aggregation tests
+- [ ] 6.4 Department budget aggregation — aggregate cost events by department using Matrix tier map (`ui-next/src/lib/matrix-tier-map.ts`)
+- [ ] 6.5 Workspace context injection (investigation) — identify exact prompt construction call site in Pi agent runtime; determine injection point, payload shape (goals summary, active tasks, budget status), and size budget; produce a design note before implementation
+- [ ] 6.6 Workspace context injection (implementation) — implement context injection per design note from 6.5; validate prompt size stays within model context limits
+- [ ] 6.7 UI org chart integration — extend org chart page with workspace badges, status indicators, budget utilization
+- [ ] 6.8 UI workspace dashboard — enhance overview with workspace stats (tasks, goals, spend, activity)
+- [ ] 6.9 Tests — session binding, workspace attribution, metrics computation, department aggregation tests
 
 ---
 
@@ -540,8 +559,11 @@ Workspace-aware agent status, performance metrics, department budget aggregation
   - `src/gateway/server-methods-list.ts` — method name list
   - `src/gateway/method-scopes.ts` — scope classification
   - `src/gateway/protocol/index.ts` — protocol export barrel
-  - `src/gateway/server-methods/usage.ts` — existing usage tracking
-  - `src/infra/provider-usage.ts` — cost recording hook point
+  - `src/gateway/server-methods/usage.ts` — existing usage tracking (JSONL scan-based, read-only)
+  - `src/infra/provider-usage.ts` — barrel re-export only; not a hook point
+  - `src/agents/usage.ts` — actual per-call usage normalization; cost recording hook goes here
+  - `src/infra/session-cost-usage.ts` — post-hoc JSONL session cost scanning (reference for data shape)
+  - `src/infra/state-db/schema.ts` v9 — existing `audit_state` table (triggers on security tables; do not duplicate in activity log)
   - `ui-next/src/lib/matrix-tier-map.ts` — Matrix tier hierarchy
   - `ui-next/src/app.tsx` — route registration
   - `ui-next/src/pages/projects.tsx` — reference UI page pattern
