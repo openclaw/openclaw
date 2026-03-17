@@ -171,6 +171,18 @@ function expectNoFinding(res: SecurityAuditReport, checkId: string): void {
   expect(hasFinding(res, checkId)).toBe(false);
 }
 
+async function runChannelSecurityAudit(
+  cfg: OpenClawConfig,
+  plugins: ChannelPlugin[],
+): Promise<SecurityAuditReport> {
+  return runSecurityAudit({
+    config: cfg,
+    includeFilesystem: false,
+    includeChannelSecurity: true,
+    plugins,
+  });
+}
+
 describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
@@ -2240,13 +2252,16 @@ description: test skill
     });
   });
 
-  it("warns when Discord allowlists contain name-based entries", async () => {
-    await withChannelSecurityStateDir(async (tmp) => {
-      await fs.writeFile(
-        path.join(tmp, "credentials", "discord-allowFrom.json"),
-        JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
-      );
-      const cfg: OpenClawConfig = {
+  it.each([
+    {
+      name: "warns when Discord allowlists contain name-based entries",
+      setup: async (tmp: string) => {
+        await fs.writeFile(
+          path.join(tmp, "credentials", "discord-allowFrom.json"),
+          JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
+        );
+      },
+      cfg: {
         channels: {
           discord: {
             enabled: true,
@@ -2264,35 +2279,20 @@ description: test skill
             },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
-      );
-      expect(finding).toBeDefined();
-      expect(finding?.severity).toBe("warn");
-      expect(finding?.detail).toContain("channels.discord.allowFrom:Alice#1234");
-      expect(finding?.detail).toContain("channels.discord.guilds.123.users:trusted.operator");
-      expect(finding?.detail).toContain(
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNameBasedSeverity: "warn",
+      detailIncludes: [
+        "channels.discord.allowFrom:Alice#1234",
+        "channels.discord.guilds.123.users:trusted.operator",
         "channels.discord.guilds.123.channels.general.users:security-team",
-      );
-      expect(finding?.detail).toContain(
         "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
-      );
-      expect(finding?.detail).not.toContain("<@123456789012345678>");
-    });
-  });
-
-  it("marks Discord name-based allowlists as break-glass when dangerous matching is enabled", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+      ],
+      detailExcludes: ["<@123456789012345678>"],
+    },
+    {
+      name: "marks Discord name-based allowlists as break-glass when dangerous matching is enabled",
+      cfg: {
         channels: {
           discord: {
             enabled: true,
@@ -2301,35 +2301,18 @@ description: test skill
             allowFrom: ["Alice#1234"],
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
-      );
-      expect(finding).toBeDefined();
-      expect(finding?.severity).toBe("info");
-      expect(finding?.detail).toContain("out-of-scope");
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
-            severity: "info",
-          }),
-        ]),
-      );
-    });
-  });
-
-  it("audits non-default Discord accounts for dangerous name matching", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNameBasedSeverity: "info",
+      detailIncludes: ["out-of-scope"],
+      expectFindingMatch: {
+        checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+        severity: "info",
+      },
+    },
+    {
+      name: "audits non-default Discord accounts for dangerous name matching",
+      cfg: {
         channels: {
           discord: {
             enabled: true,
@@ -2343,24 +2326,101 @@ description: test skill
             },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
-            title: expect.stringContaining("(account: beta)"),
-            severity: "info",
-          }),
-        ]),
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNoNameBasedFinding: true,
+      expectFindingMatch: {
+        checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+        title: expect.stringContaining("(account: beta)"),
+        severity: "info",
+      },
+    },
+    {
+      name: "audits name-based allowlists on non-default Discord accounts",
+      cfg: {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            accounts: {
+              alpha: {
+                token: "a",
+                allowFrom: ["123456789012345678"],
+              },
+              beta: {
+                token: "b",
+                allowFrom: ["Alice#1234"],
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNameBasedSeverity: "warn",
+      detailIncludes: ["channels.discord.accounts.beta.allowFrom:Alice#1234"],
+    },
+    {
+      name: "does not warn when Discord allowlists use ID-style entries only",
+      cfg: {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            allowFrom: [
+              "123456789012345678",
+              "<@223456789012345678>",
+              "user:323456789012345678",
+              "discord:423456789012345678",
+              "pk:member-123",
+            ],
+            guilds: {
+              "123": {
+                users: ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
+                channels: {
+                  general: {
+                    users: ["723456789012345678", "user:823456789012345678"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectNoNameBasedFinding: true,
+    },
+  ])("$name", async (testCase) => {
+    await withChannelSecurityStateDir(async (tmp) => {
+      await testCase.setup?.(tmp);
+      const res = await runChannelSecurityAudit(testCase.cfg, testCase.plugins);
+      const nameBasedFinding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
       );
+
+      if (testCase.expectNoNameBasedFinding) {
+        expect(nameBasedFinding).toBeUndefined();
+      } else if (
+        testCase.expectNameBasedSeverity ||
+        testCase.detailIncludes?.length ||
+        testCase.detailExcludes?.length
+      ) {
+        expect(nameBasedFinding).toBeDefined();
+        if (testCase.expectNameBasedSeverity) {
+          expect(nameBasedFinding?.severity).toBe(testCase.expectNameBasedSeverity);
+        }
+        for (const snippet of testCase.detailIncludes ?? []) {
+          expect(nameBasedFinding?.detail).toContain(snippet);
+        }
+        for (const snippet of testCase.detailExcludes ?? []) {
+          expect(nameBasedFinding?.detail).not.toContain(snippet);
+        }
+      }
+
+      if (testCase.expectFindingMatch) {
+        expect(res.findings).toEqual(
+          expect.arrayContaining([expect.objectContaining(testCase.expectFindingMatch)]),
+        );
+      }
     });
   });
 
@@ -2406,42 +2466,6 @@ description: test skill
       expect(nameBasedFinding).toBeDefined();
       expect(nameBasedFinding?.detail).toContain("channels.discord.allowFrom:Alice#1234");
       expect(nameBasedFinding?.detail).not.toContain("channels.discord.accounts.toString");
-    });
-  });
-
-  it("audits name-based allowlists on non-default Discord accounts", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            accounts: {
-              alpha: {
-                token: "a",
-                allowFrom: ["123456789012345678"],
-              },
-              beta: {
-                token: "b",
-                allowFrom: ["Alice#1234"],
-              },
-            },
-          },
-        },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
-      );
-      expect(finding).toBeDefined();
-      expect(finding?.detail).toContain("channels.discord.accounts.beta.allowFrom:Alice#1234");
     });
   });
 
@@ -2509,49 +2533,6 @@ description: test skill
             checkId: "channels.zalouser.allowFrom.dangerous_name_matching_enabled",
             severity: "info",
           }),
-        ]),
-      );
-    });
-  });
-
-  it("does not warn when Discord allowlists use ID-style entries only", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            allowFrom: [
-              "123456789012345678",
-              "<@223456789012345678>",
-              "user:323456789012345678",
-              "discord:423456789012345678",
-              "pk:member-123",
-            ],
-            guilds: {
-              "123": {
-                users: ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
-                channels: {
-                  general: {
-                    users: ["723456789012345678", "user:823456789012345678"],
-                  },
-                },
-              },
-            },
-          },
-        },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      expect(res.findings).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ checkId: "channels.discord.allowFrom.name_based_entries" }),
         ]),
       );
     });
