@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { useFrozenTime, useRealTime } from "../../test-utils/frozen-time.js";
+import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
+import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
 import {
   answerCallbackQuerySpy,
   botCtorSpy,

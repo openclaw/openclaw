@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot, ChannelGatewayContext } from "openclaw/plugin-sdk/test-utils";
+import type { ChannelAccountSnapshot, ChannelGatewayContext } from "openclaw/plugin-sdk/testing";
 import { expect, vi } from "vitest";
 import { createStartAccountContext } from "./start-account-context.js";
 

@@ -4,7 +4,7 @@ import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/googlech
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { createMockServerResponse } from "../../test-utils/mock-http-response.js";
+import { createMockServerResponse } from "../../../test/helpers/extensions/mock-http-response.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
 import { handleGoogleChatWebhookRequest, registerGoogleChatWebhookTarget } from "./monitor.js";

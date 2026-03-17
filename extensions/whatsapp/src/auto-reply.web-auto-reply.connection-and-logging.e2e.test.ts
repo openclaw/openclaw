@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { setLoggerOverride } from "../../../src/logging.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
 import {
   createMockWebListener,
   createWebListenerFactoryCapture,

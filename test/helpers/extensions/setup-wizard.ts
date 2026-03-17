@@ -1,7 +1,7 @@
 import { vi } from "vitest";
-import type { WizardPrompter } from "../../src/wizard/prompts.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 
-export type { WizardPrompter } from "../../src/wizard/prompts.js";
+export type { WizardPrompter } from "../../../src/wizard/prompts.js";
 
 export async function selectFirstWizardOption<T>(params: {
   options: Array<{ value: T }>;

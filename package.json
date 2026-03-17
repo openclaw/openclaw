@@ -278,6 +278,10 @@
       "types": "./dist/plugin-sdk/talk-voice.d.ts",
       "default": "./dist/plugin-sdk/talk-voice.js"
     },
+    "./plugin-sdk/testing": {
+      "types": "./dist/plugin-sdk/testing.d.ts",
+      "default": "./dist/plugin-sdk/testing.js"
+    },
     "./plugin-sdk/test-utils": {
       "types": "./dist/plugin-sdk/test-utils.d.ts",
       "default": "./dist/plugin-sdk/test-utils.js"
