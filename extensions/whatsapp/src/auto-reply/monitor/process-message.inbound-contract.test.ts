@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectInboundContextContract } from "../../../../../test/helpers/inbound-contract.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/suites.js";
 
 let capturedCtx: unknown;
 let capturedDispatchParams: unknown;
@@ -306,6 +306,21 @@ describe("web processMessage inbound contract", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const replyOptions = (capturedDispatchParams as any)?.replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("passes sendComposing through as the reply typing callback", async () => {
+    const sendComposing = vi.fn(async () => undefined);
+    const args = createWhatsAppDirectStreamingArgs();
+    args.msg = {
+      ...args.msg,
+      sendComposing,
+    };
+
+    await processMessage(args);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const dispatcherOptions = (capturedDispatchParams as any)?.dispatcherOptions;
+    expect(dispatcherOptions?.onReplyStart).toBe(sendComposing);
   });
 
   it("updates main last route for DM when session key matches main session key", async () => {

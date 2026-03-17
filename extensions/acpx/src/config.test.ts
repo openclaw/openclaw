@@ -1,11 +1,14 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   ACPX_BUNDLED_BIN,
   ACPX_PINNED_VERSION,
   createAcpxPluginConfigSchema,
   resolveAcpxPluginConfig,
+  resolveAcpxPluginRoot,
 } from "./config.js";
 
 describe("acpx plugin config parsing", () => {
@@ -16,6 +19,33 @@ describe("acpx plugin config parsing", () => {
     };
 
     expect(packageJson.dependencies?.acpx).toBe(ACPX_PINNED_VERSION);
+  });
+
+  it("resolves source-layout plugin root from a file under src", () => {
+    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-root-source-"));
+    try {
+      fs.mkdirSync(path.join(pluginRoot, "src"), { recursive: true });
+      fs.writeFileSync(path.join(pluginRoot, "package.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
+
+      const moduleUrl = pathToFileURL(path.join(pluginRoot, "src", "config.ts")).href;
+      expect(resolveAcpxPluginRoot(moduleUrl)).toBe(pluginRoot);
+    } finally {
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves bundled-layout plugin root from the dist entry file", () => {
+    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-root-dist-"));
+    try {
+      fs.writeFileSync(path.join(pluginRoot, "package.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
+
+      const moduleUrl = pathToFileURL(path.join(pluginRoot, "index.js")).href;
+      expect(resolveAcpxPluginRoot(moduleUrl)).toBe(pluginRoot);
+    } finally {
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+    }
   });
 
   it("resolves bundled acpx with pinned version by default", () => {

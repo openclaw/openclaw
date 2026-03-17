@@ -1,6 +1,6 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
-import { getDefaultLocalRoots } from "../../../extensions/whatsapp/src/media.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getDefaultLocalRoots } from "../../plugin-sdk/web-media.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
 

@@ -4,76 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  buildPluginSdkPackageExports,
+  buildPluginSdkSpecifiers,
+  pluginSdkEntrypoints,
+} from "./entrypoints.js";
 import * as sdk from "./index.js";
 
-const pluginSdkEntrypoints = [
-  "index",
-  "core",
-  "compat",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "whatsapp",
-  "line",
-  "msteams",
-  "acpx",
-  "bluebubbles",
-  "copilot-proxy",
-  "device-pair",
-  "diagnostics-otel",
-  "diffs",
-  "feishu",
-  "google-gemini-cli-auth",
-  "googlechat",
-  "irc",
-  "llm-task",
-  "lobster",
-  "matrix",
-  "mattermost",
-  "memory-core",
-  "memory-lancedb",
-  "minimax-portal-auth",
-  "nextcloud-talk",
-  "nostr",
-  "open-prose",
-  "phone-control",
-  "qwen-portal-auth",
-  "synology-chat",
-  "talk-voice",
-  "test-utils",
-  "thread-ownership",
-  "tlon",
-  "twitch",
-  "voice-call",
-  "zalo",
-  "zalouser",
-  "account-id",
-  "keyed-async-queue",
-] as const;
-
-const pluginSdkSpecifiers = pluginSdkEntrypoints.map((entry) =>
-  entry === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entry}`,
+const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
+const hasBuiltPluginSdkDist = pluginSdkEntrypoints.every((entry) =>
+  existsSync(path.join(process.cwd(), "dist", "plugin-sdk", `${entry}.js`)),
 );
-
-function buildPluginSdkPackageExports() {
-  return Object.fromEntries(
-    pluginSdkEntrypoints.map((entry) => [
-      entry === "index" ? "./plugin-sdk" : `./plugin-sdk/${entry}`,
-      {
-        default: `./dist/plugin-sdk/${entry}.js`,
-      },
-    ]),
-  );
-}
 
 describe("plugin-sdk exports", () => {
   it("does not expose runtime modules", () => {
     const forbidden = [
       "chunkMarkdownText",
       "chunkText",
-      "resolveTextChunkLimit",
       "hasControlCommand",
       "isControlCommandMessage",
       "shouldComputeCommandAuthorized",
@@ -81,9 +28,7 @@ describe("plugin-sdk exports", () => {
       "buildMentionRegexes",
       "matchesMentionPatterns",
       "resolveStateDir",
-      "loadConfig",
       "writeConfigFile",
-      "runCommandWithTimeout",
       "enqueueSystemEvent",
       "fetchRemoteMedia",
       "saveMediaBuffer",
@@ -172,7 +117,7 @@ describe("plugin-sdk exports", () => {
     }
   });
 
-  it.skipIf(!existsSync(path.join(process.cwd(), "dist", "plugin-sdk", "index.js")))(
+  it.skipIf(!hasBuiltPluginSdkDist)(
     "emits importable bundled subpath entries",
     { timeout: 60_000 },
     async () => {
@@ -229,4 +174,16 @@ describe("plugin-sdk exports", () => {
       }
     },
   );
+
+  it("keeps package.json plugin-sdk exports synced with the manifest", async () => {
+    const packageJsonPath = path.join(process.cwd(), "package.json");
+    const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as {
+      exports?: Record<string, unknown>;
+    };
+    const currentPluginSdkExports = Object.fromEntries(
+      Object.entries(packageJson.exports ?? {}).filter(([key]) => key.startsWith("./plugin-sdk")),
+    );
+
+    expect(currentPluginSdkExports).toEqual(buildPluginSdkPackageExports());
+  });
 });

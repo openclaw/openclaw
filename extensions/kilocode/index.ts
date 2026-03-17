@@ -1,0 +1,79 @@
+import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import {
+  createKilocodeWrapper,
+  isProxyReasoningUnsupported,
+} from "../../src/agents/pi-embedded-runner/proxy-stream-wrappers.js";
+import {
+  applyKilocodeConfig,
+  KILOCODE_DEFAULT_MODEL_REF,
+} from "../../src/commands/onboard-auth.js";
+import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { buildKilocodeProviderWithDiscovery } from "./provider-catalog.js";
+
+const PROVIDER_ID = "kilocode";
+
+const kilocodePlugin = {
+  id: PROVIDER_ID,
+  name: "Kilo Gateway Provider",
+  description: "Bundled Kilo Gateway provider plugin",
+  configSchema: emptyPluginConfigSchema(),
+  register(api: OpenClawPluginApi) {
+    api.registerProvider({
+      id: PROVIDER_ID,
+      label: "Kilo Gateway",
+      docsPath: "/providers/kilocode",
+      envVars: ["KILOCODE_API_KEY"],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "Kilo Gateway API key",
+          hint: "API key (OpenRouter-compatible)",
+          optionKey: "kilocodeApiKey",
+          flagName: "--kilocode-api-key",
+          envVar: "KILOCODE_API_KEY",
+          promptMessage: "Enter Kilo Gateway API key",
+          defaultModel: KILOCODE_DEFAULT_MODEL_REF,
+          expectedProviders: ["kilocode"],
+          applyConfig: (cfg) => applyKilocodeConfig(cfg),
+          wizard: {
+            choiceId: "kilocode-api-key",
+            choiceLabel: "Kilo Gateway API key",
+            groupId: "kilocode",
+            groupLabel: "Kilo Gateway",
+            groupHint: "API key (OpenRouter-compatible)",
+          },
+        }),
+      ],
+      catalog: {
+        order: "simple",
+        run: async (ctx) => {
+          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+          return {
+            provider: {
+              ...(await buildKilocodeProviderWithDiscovery()),
+              apiKey,
+            },
+          };
+        },
+      },
+      capabilities: {
+        geminiThoughtSignatureSanitization: true,
+        geminiThoughtSignatureModelHints: ["gemini"],
+      },
+      wrapStreamFn: (ctx) => {
+        const thinkingLevel =
+          ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)
+            ? undefined
+            : ctx.thinkingLevel;
+        return createKilocodeWrapper(ctx.streamFn, thinkingLevel);
+      },
+      isCacheTtlEligible: (ctx) => ctx.modelId.startsWith("anthropic/"),
+    });
+  },
+};
+
+export default kilocodePlugin;
