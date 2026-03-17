@@ -1,5 +1,5 @@
-import { findCatalogTemplate } from "../../src/plugins/provider-catalog.js";
-import { cloneFirstTemplateModel } from "../../src/plugins/provider-model-helpers.js";
+import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog";
+import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-models";
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 

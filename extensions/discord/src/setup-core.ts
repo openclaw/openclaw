@@ -1,7 +1,9 @@
 import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-runtime";
 import {
   applyAccountNameToChannelSection,
+  createPatchedAccountSetupAdapter,
   DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   noteChannelLookupFailure,
@@ -13,13 +15,11 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import {
+  createAllowlistSetupWizardProxy,
   type ChannelSetupAdapter,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
-import { createAllowlistSetupWizardProxy } from "../../../src/channels/plugins/setup-wizard-proxy.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
 
@@ -140,9 +140,15 @@ export const discordSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
-export function createDiscordSetupWizardProxy(
-  loadWizard: () => Promise<{ discordSetupWizard: ChannelSetupWizard }>,
-) {
+export function createDiscordSetupWizardBase(handlers: {
+  promptAllowFrom: NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>;
+  resolveAllowFromEntries: NonNullable<
+    NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]
+  >;
+  resolveGroupAllowlist: NonNullable<
+    NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
+  >;
+}) {
   const discordDmPolicy: ChannelSetupDmPolicy = {
     label: "Discord",
     channel,
@@ -156,13 +162,7 @@ export function createDiscordSetupWizardProxy(
         channel,
         dmPolicy: policy,
       }),
-    promptAllowFrom: async ({ cfg, prompter, accountId }) => {
-      const wizard = (await loadWizard()).discordSetupWizard;
-      if (!wizard.dmPolicy?.promptAllowFrom) {
-        return cfg;
-      }
-      return await wizard.dmPolicy.promptAllowFrom({ cfg, prompter, accountId });
-    },
+    promptAllowFrom: handlers.promptAllowFrom,
   };
 
   return {
@@ -253,12 +253,8 @@ export function createDiscordSetupWizardProxy(
         entries: string[];
         prompter: { note: (message: string, title?: string) => Promise<void> };
       }) => {
-        const wizard = (await loadWizard()).discordSetupWizard;
-        if (!wizard.groupAccess?.resolveAllowlist) {
-          return entries.map((input) => ({ input, resolved: false }));
-        }
         try {
-          return await wizard.groupAccess.resolveAllowlist({
+          return await handlers.resolveGroupAllowlist({
             cfg,
             accountId,
             credentialValues,
@@ -317,18 +313,7 @@ export function createDiscordSetupWizardProxy(
         accountId: string;
         credentialValues: { token?: string };
         entries: string[];
-      }) => {
-        const wizard = (await loadWizard()).discordSetupWizard;
-        if (!wizard.allowFrom) {
-          return entries.map((input) => ({ input, resolved: false, id: null }));
-        }
-        return await wizard.allowFrom.resolveEntries({
-          cfg,
-          accountId,
-          credentialValues,
-          entries,
-        });
-      },
+      }) => await handlers.resolveAllowFromEntries({ cfg, accountId, credentialValues, entries }),
       apply: async ({
         cfg,
         accountId,
