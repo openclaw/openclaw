@@ -132,8 +132,13 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           `Invalid thinking level "${thinkingRaw}". Use one of: ${INVALID_THINKING_LEVELS_HINT}.`,
         );
       }
-      if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
+      if (
+        thinkLevel === "xhigh" &&
+        !supportsXHighThinking(provider, model, { config: api.config })
+      ) {
+        throw new Error(
+          `Thinking level "xhigh" is only supported for ${formatXHighModelHint({ config: api.config })}.`,
+        );
       }
 
       const timeoutMs =

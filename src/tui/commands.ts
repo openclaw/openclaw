@@ -51,7 +51,12 @@ export function parseCommand(input: string): ParsedCommand {
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
-  const thinkLevels = listThinkingLevelLabels(options.provider, options.model);
+  const thinkingSupportSource = options.cfg ? { config: options.cfg } : undefined;
+  const thinkLevels = listThinkingLevelLabels(
+    options.provider,
+    options.model,
+    thinkingSupportSource,
+  );
   const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
   const fastCompletions = createLevelCompletion(FAST_LEVELS);
   const reasoningCompletions = createLevelCompletion(REASONING_LEVELS);
@@ -139,7 +144,13 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
 }
 
 export function helpText(options: SlashCommandOptions = {}): string {
-  const thinkLevels = formatThinkingLevels(options.provider, options.model, "|");
+  const thinkingSupportSource = options.cfg ? { config: options.cfg } : undefined;
+  const thinkLevels = formatThinkingLevels(
+    options.provider,
+    options.model,
+    "|",
+    thinkingSupportSource,
+  );
   return [
     "Slash commands:",
     "/help",

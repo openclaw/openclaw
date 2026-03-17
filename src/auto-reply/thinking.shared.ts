@@ -1,3 +1,5 @@
+import type { ModelCompatConfig } from "../config/types.models.js";
+
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
@@ -9,6 +11,7 @@ export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
   reasoning?: boolean;
+  compat?: Pick<ModelCompatConfig, "supportsXHighThinking">;
 };
 
 const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high", "adaptive"];

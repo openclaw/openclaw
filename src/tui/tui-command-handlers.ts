@@ -5,6 +5,7 @@ import {
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -30,6 +31,7 @@ type CommandHandlerContext = {
   chatLog: ChatLog;
   tui: TUI;
   opts: TuiOptions;
+  config?: OpenClawConfig;
   state: TuiStateAccess;
   deliverDefault: boolean;
   openOverlay: (component: Component) => void;
@@ -59,6 +61,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     chatLog,
     tui,
     opts,
+    config,
     state,
     deliverDefault,
     openOverlay,
@@ -250,6 +253,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "help":
         chatLog.addSystem(
           helpText({
+            cfg: config,
             provider: state.sessionInfo.modelProvider,
             model: state.sessionInfo.model,
           }),
@@ -320,6 +324,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             state.sessionInfo.modelProvider,
             state.sessionInfo.model,
             "|",
+            config ? { config } : undefined,
           );
           chatLog.addSystem(`usage: /think <${levels}>`);
           break;

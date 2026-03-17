@@ -37,6 +37,7 @@ export type ModelCompatConfig = SupportedOpenAICompatFields & {
   toolSchemaProfile?: "xai";
   nativeWebSearchTool?: boolean;
   toolCallArgumentsEncoding?: "html-entities";
+  supportsXHighThinking?: boolean;
   requiresMistralToolIds?: boolean;
   requiresOpenAiAnthropicToolPayload?: boolean;
 };

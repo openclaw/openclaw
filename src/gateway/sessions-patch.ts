@@ -246,7 +246,7 @@ export async function applySessionsPatchToStore(params: {
         const hintProvider = existing?.providerOverride?.trim() || resolvedDefault.provider;
         const hintModel = existing?.modelOverride?.trim() || resolvedDefault.model;
         return invalid(
-          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
+          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", { config: cfg })})`,
         );
       }
       next.thinkingLevel = normalized;
@@ -423,9 +423,11 @@ export async function applySessionsPatchToStore(params: {
   if (next.thinkingLevel === "xhigh") {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
-    if (!supportsXHighThinking(effectiveProvider, effectiveModel)) {
+    if (!supportsXHighThinking(effectiveProvider, effectiveModel, { config: cfg })) {
       if ("thinkingLevel" in patch) {
-        return invalid(`thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`);
+        return invalid(
+          `thinkingLevel "xhigh" is only supported for ${formatXHighModelHint({ config: cfg })}`,
+        );
       }
       next.thinkingLevel = "high";
     }
