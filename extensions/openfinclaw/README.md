@@ -1,92 +1,146 @@
 # @openfinclaw/openfinclaw
 
-Financial tools for OpenClaw: strategy builder, publishing, and backtest.
+FinClaw Commons - 量化策略开发平台插件。连接 hub.openfinclaw.ai 策略网络，支持策略创建、验证、发布、Fork。
 
-## Installation
+## 安装
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cryptoSUN2049/openFinclaw/main/scripts/install-finclaw.sh | bash
 ```
 
-Or manually:
+或手动安装：
 
 ```bash
 openclaw plugins install @openfinclaw/openfinclaw
 ```
 
-## Features
+## 功能概览
 
-- **skill-publish** - Publish strategies to server with automatic backtest
-- **fin-strategy-builder** - Turn natural language trading ideas into FEP v1.2 strategy packages
+| 功能      | 工具/Skill             | 说明                         |
+| --------- | ---------------------- | ---------------------------- |
+| 策略创建  | `fin-strategy-builder` | 自然语言生成 FEP v1.2 策略包 |
+| 策略验证  | `skill_validate`       | 本地验证策略包格式           |
+| 策略发布  | `skill_publish`        | 发布到 Hub 并自动回测        |
+| 发布查询  | `skill_publish_verify` | 查询发布和回测状态           |
+| 策略 Fork | `skill_fork`           | 从 Hub 下载策略到本地        |
+| 本地列表  | `skill_list_local`     | 列出本地已下载的策略         |
+| 策略详情  | `skill_get_info`       | 获取 Hub 策略详情            |
 
-### Available Tools
+### AI 工具列表
 
-| Tool                   | Description                                              |
-| ---------------------- | -------------------------------------------------------- |
-| `skill_publish`        | Publish a strategy ZIP to server (auto-trigger backtest) |
-| `skill_publish_verify` | Query publish status and get backtest report             |
-| `skill_validate`       | Validate strategy package directory locally              |
+| 工具                   | 说明                              |
+| ---------------------- | --------------------------------- |
+| `skill_publish`        | 发布策略 ZIP 到 Hub，自动触发回测 |
+| `skill_publish_verify` | 查询发布状态和回测报告            |
+| `skill_validate`       | 本地验证策略包（FEP v1.2）        |
+| `skill_fork`           | 从 Hub 下载策略到本地             |
+| `skill_list_local`     | 列出本地策略                      |
+| `skill_get_info`       | 获取 Hub 策略详情                 |
 
-## Configuration
-
-After installation, configure your API key:
+## CLI 命令
 
 ```bash
-# Get your API key at https://hub.openfinclaw.ai
-openclaw config set plugins.entries.openfinclaw.config.skillApiKey YOUR_API_KEY
+# 从 Hub Fork 策略
+openfinclaw strategy fork <strategy-id>
 
-# Optional: modify server URL (default: https://hub.openfinclaw.ai)
-openclaw config set plugins.entries.openfinclaw.config.skillApiUrl https://hub.openfinclaw.ai
+# 列出本地策略
+openfinclaw strategy list
+
+# 查看策略详情
+openfinclaw strategy show <name-or-id> [--remote]
+
+# 删除本地策略
+openfinclaw strategy remove <name-or-id> --force
 ```
 
-Or use environment variables:
+## 配置
+
+安装后配置 API Key（从 https://hub.openfinclaw.ai 获取）：
+
+```bash
+openclaw config set plugins.entries.openfinclaw.config.skillApiKey YOUR_API_KEY
+```
+
+或使用环境变量：
 
 ```bash
 export SKILL_API_KEY=YOUR_API_KEY
 export SKILL_API_URL=https://hub.openfinclaw.ai
 ```
 
-### Configuration Options
+### 配置选项
 
-| Config Key         | Environment Variable       | Description                      | Default                      |
-| ------------------ | -------------------------- | -------------------------------- | ---------------------------- |
-| `skillApiKey`      | `SKILL_API_KEY`            | API key (fch\_ prefix, 68 chars) | Required                     |
-| `skillApiUrl`      | `SKILL_API_URL`            | Skill server URL                 | `https://hub.openfinclaw.ai` |
-| `requestTimeoutMs` | `SKILL_REQUEST_TIMEOUT_MS` | Request timeout in milliseconds  | `60000`                      |
+| 配置项             | 环境变量                   | 说明         | 默认值                       |
+| ------------------ | -------------------------- | ------------ | ---------------------------- |
+| `skillApiKey`      | `SKILL_API_KEY`            | Hub API Key  | 必填                         |
+| `skillApiUrl`      | `SKILL_API_URL`            | Hub 服务地址 | `https://hub.openfinclaw.ai` |
+| `requestTimeoutMs` | `SKILL_REQUEST_TIMEOUT_MS` | 请求超时     | `60000`                      |
 
 ## Skills
 
+### openfinclaw (入口)
+
+平台入口 skill，帮助用户了解 Hub 平台、安装插件、使用工具链。
+
 ### skill-publish
 
-Publish strategies and get backtest results:
+发布策略到 Hub：
 
 ```
-User: "发布我的策略到服务器"
+用户: "发布我的策略到服务器"
 Agent:
-1. skill_validate(dirPath) → validate locally
-2. [zip the directory]
-3. skill_publish(filePath) → get submissionId, backtestTaskId
-4. skill_publish_verify(submissionId) → poll until completed
-5. Return backtest report
+1. skill_validate(dirPath) → 本地验证
+2. [打包 ZIP]
+3. skill_publish(filePath) → 获取 submissionId
+4. skill_publish_verify(submissionId) → 轮询直到完成
+5. 返回回测报告
 ```
 
 ### fin-strategy-builder
 
-Create trading strategies from natural language:
+自然语言生成策略：
 
 ```
-User: "帮我创建一个 BTC 定投策略，每周买入 100 美元"
+用户: "帮我创建一个 BTC 定投策略，每周买入 100 美元"
+Agent:
+1. 生成 fep.yaml 配置
+2. 生成 scripts/strategy.py 代码
+3. 可选：验证并打包
 ```
 
-The skill will generate:
+### strategy-fork
 
-- `fep.yaml` - Strategy configuration
-- `scripts/strategy.py` - Strategy entry point
+从 Hub 下载策略：
 
-## Links
+```
+用户: "帮我下载那个收益 453% 的 BTC 策略"
+Agent:
+1. skill_get_info(strategyId) → 查看详情
+2. skill_fork(strategyId) → 下载到本地
+3. 返回本地路径供编辑
+```
 
-- **Repository**: https://github.com/cryptoSUN2049/openFinclaw
-- **Get API Key**: https://hub.openfinclaw.ai
+## 本地存储
+
+策略存储在 `~/.openfinclaw/strategies/`：
+
+```
+~/.openfinclaw/strategies/
+└── 2026-03-16/
+    ├── btc-adaptive-dca-34a5792f/   # Fork 来的策略
+    │   ├── fep.yaml
+    │   ├── scripts/strategy.py
+    │   └── .fork-meta.json
+    └── my-new-strategy/             # 自建策略
+        └── ...
+```
+
+## 链接
+
+- **Hub 平台**: https://hub.openfinclaw.ai
+- **排行榜**: https://hub.openfinclaw.ai/leaderboard
+- **获取 API Key**: https://hub.openfinclaw.ai/dashboard
+- **GitHub**: https://github.com/cryptoSUN2049/openFinclaw
 
 ## License
 

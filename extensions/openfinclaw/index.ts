@@ -1,11 +1,14 @@
 /**
- * OpenFinClaw — Skill publishing and strategy validation tools.
- * Tools: skill_publish, skill_publish_verify, skill_validate.
+ * OpenFinClaw — Skill publishing, strategy validation, and fork tools.
+ * Tools: skill_publish, skill_publish_verify, skill_validate, skill_fork, skill_list_local, skill_get_info.
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openfinclaw/plugin-sdk";
+import { registerStrategyCli } from "./src/cli.js";
+import { forkStrategy, fetchStrategyInfo } from "./src/fork.js";
+import { listLocalStrategies, findLocalStrategy } from "./src/strategy-storage.js";
 import { validateStrategyPackage } from "./src/validate.js";
 
 /** JSON tool result helper. */
@@ -109,7 +112,7 @@ const openfinclawPlugin = {
   id: "openfinclaw",
   name: "OpenFinClaw",
   description:
-    "Skill publishing and strategy validation tools. Publish strategy ZIPs to remote server with automatic backtest.",
+    "Strategy publishing, fork, and validation tools. Publish strategy ZIPs to Hub, fork public strategies to local, and validate strategy packages.",
 
   register(api: OpenClawPluginApi) {
     const config = resolveConfig(api);
@@ -507,6 +510,223 @@ const openfinclawPlugin = {
         },
       },
       { names: ["skill_validate"] },
+    );
+
+    // ── skill_fork ──
+    api.registerTool(
+      {
+        name: "skill_fork",
+        label: "Fork strategy from Hub",
+        description:
+          "Download a public strategy from hub.openfinclaw.ai to local directory. The strategy will be extracted and ready for modification. Returns the local path. Use this when user wants to download, clone, or fork a strategy from Hub.",
+        parameters: Type.Object({
+          strategyId: Type.String({
+            description:
+              "Strategy ID from Hub (UUID, short ID, or Hub URL like https://hub.openfinclaw.ai/strategy/{id})",
+          }),
+          targetDir: Type.Optional(
+            Type.String({
+              description:
+                "Custom target directory. Default: ~/.openfinclaw/strategies/{date}/{name}-{shortId}/",
+            }),
+          ),
+          dateDir: Type.Optional(
+            Type.String({
+              description: "Date directory (YYYY-MM-DD). Default: today",
+            }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            const strategyId = String(params.strategyId ?? "").trim();
+            if (!strategyId) {
+              return json({ success: false, error: "strategyId is required" });
+            }
+
+            const result = await forkStrategy(config, strategyId, {
+              targetDir: params.targetDir ? String(params.targetDir) : undefined,
+              dateDir: params.dateDir ? String(params.dateDir) : undefined,
+            });
+
+            if (result.success) {
+              const lines: string[] = [];
+              lines.push("策略 Fork 成功！");
+              lines.push("");
+              lines.push(`- 策略名称: ${result.sourceName}`);
+              lines.push(`- 来源 ID: ${result.sourceId}`);
+              lines.push(`- 本地路径: ${result.localPath}`);
+              lines.push("");
+              lines.push("下一步:");
+              lines.push(`- 编辑策略: code ${result.localPath}/scripts/strategy.py`);
+              lines.push(`- 验证修改: openfinclaw strategy validate ${result.localPath}`);
+              lines.push(`- 发布新版本: openfinclaw strategy publish ${result.localPath}`);
+
+              return {
+                content: [{ type: "text" as const, text: lines.join("\n") }],
+                details: result,
+              };
+            }
+
+            return json({
+              success: false,
+              error: result.error ?? "Failed to fork strategy",
+            });
+          } catch (err) {
+            return json({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        },
+      },
+      { names: ["skill_fork"] },
+    );
+
+    // ── skill_list_local ──
+    api.registerTool(
+      {
+        name: "skill_list_local",
+        label: "List local strategies",
+        description:
+          "List all strategies downloaded or created locally, organized by date. Shows strategy name, type (forked/created), and local path.",
+        parameters: Type.Object({}),
+        async execute() {
+          try {
+            const strategies = await listLocalStrategies();
+
+            if (strategies.length === 0) {
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "本地暂无策略。\n\n使用 skill_fork 从 Hub 下载策略，或使用 skill_validate 验证本地策略目录。",
+                  },
+                ],
+                details: { success: true, strategies: [] },
+              };
+            }
+
+            const lines: string[] = [];
+            lines.push(`本地策略列表 (共 ${strategies.length} 个):`);
+            lines.push("");
+
+            let currentDate = "";
+            for (const s of strategies) {
+              if (s.dateDir !== currentDate) {
+                currentDate = s.dateDir;
+                lines.push(`${s.dateDir}/`);
+              }
+              const typeLabel = s.type === "forked" ? "(forked)" : "(created)";
+              lines.push(
+                `  ${s.name.padEnd(40)} ${s.displayName.slice(0, 20).padEnd(20)} ${typeLabel}`,
+              );
+            }
+
+            return {
+              content: [{ type: "text" as const, text: lines.join("\n") }],
+              details: { success: true, strategies },
+            };
+          } catch (err) {
+            return json({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        },
+      },
+      { names: ["skill_list_local"] },
+    );
+
+    // ── skill_get_info ──
+    api.registerTool(
+      {
+        name: "skill_get_info",
+        label: "Get strategy info from Hub",
+        description:
+          "Fetch detailed information about a strategy from hub.openfinclaw.ai, including performance metrics (return, sharpe, max drawdown, win rate). Use this before forking to preview the strategy.",
+        parameters: Type.Object({
+          strategyId: Type.String({
+            description: "Strategy ID from Hub (UUID, short ID, or Hub URL)",
+          }),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          try {
+            const strategyId = String(params.strategyId ?? "").trim();
+            if (!strategyId) {
+              return json({ success: false, error: "strategyId is required" });
+            }
+
+            const result = await fetchStrategyInfo(config, strategyId);
+
+            if (result.success && result.data) {
+              const info = result.data;
+              const lines: string[] = [];
+              lines.push("策略信息:");
+              lines.push("");
+              lines.push(`- ID: ${info.id}`);
+              lines.push(`- 名称: ${info.name}`);
+              if (info.version) lines.push(`- 版本: ${info.version}`);
+              if (info.author?.name) lines.push(`- 作者: ${info.author.name}`);
+              if (info.market) lines.push(`- 市场: ${info.market}`);
+              if (info.description) lines.push(`- 描述: ${info.description}`);
+              if (info.tags?.length) lines.push(`- 标签: ${info.tags.join(", ")}`);
+
+              if (info.performance) {
+                lines.push("");
+                lines.push("绩效指标:");
+                const perf = info.performance;
+                if (typeof perf.totalReturn === "number") {
+                  lines.push(`- 总收益率: ${(perf.totalReturn * 100).toFixed(2)}%`);
+                }
+                if (typeof perf.sharpe === "number") {
+                  lines.push(`- 夏普比率: ${perf.sharpe.toFixed(3)}`);
+                }
+                if (typeof perf.maxDrawdown === "number") {
+                  lines.push(`- 最大回撤: ${(perf.maxDrawdown * 100).toFixed(2)}%`);
+                }
+                if (typeof perf.winRate === "number") {
+                  lines.push(`- 胜率: ${perf.winRate.toFixed(1)}%`);
+                }
+                if (typeof perf.totalTrades === "number") {
+                  lines.push(`- 交易笔数: ${perf.totalTrades}`);
+                }
+              }
+
+              lines.push("");
+              lines.push(`Hub URL: https://hub.openfinclaw.ai/strategy/${info.id}`);
+              lines.push("");
+              lines.push("使用 skill_fork 下载此策略到本地。");
+
+              return {
+                content: [{ type: "text" as const, text: lines.join("\n") }],
+                details: { success: true, ...info },
+              };
+            }
+
+            return json({
+              success: false,
+              error: result.error ?? "Failed to fetch strategy info",
+            });
+          } catch (err) {
+            return json({
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        },
+      },
+      { names: ["skill_get_info"] },
+    );
+
+    // ── CLI commands ──
+    api.registerCli(
+      ({ program }) =>
+        registerStrategyCli({
+          program,
+          config,
+          logger: api.logger,
+        }),
+      { commands: ["strategy"] },
     );
   },
 };

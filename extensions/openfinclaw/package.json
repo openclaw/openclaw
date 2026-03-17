@@ -31,7 +31,11 @@
     "registry": "https://registry.npmjs.org"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.34.0"
+    "@sinclair/typebox": "^0.34.0",
+    "adm-zip": "^0.5.16"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8"
   },
   "openclaw": {
     "extensions": [
