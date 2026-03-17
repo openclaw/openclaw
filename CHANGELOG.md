@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Matrix/multi-account: thread `accountId` through the tool-action dispatch chain so send, edit, delete, react, pin, read, and info actions use the agent's bound account instead of the fallback account. (#34616, #26457)
+
 ### Changes
 
 - Commands/btw: add `/btw` side questions for quick tool-less answers about the current session without changing future session context, with dismissible in-session TUI answers and explicit BTW replies on external channels. (#45444) Thanks @ngutman.
