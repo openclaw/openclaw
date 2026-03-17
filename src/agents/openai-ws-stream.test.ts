@@ -561,6 +561,25 @@ describe("convertMessagesToInputItems", () => {
     expect(items).toEqual([]);
   });
 
+  it("drops assistant tool calls with empty names (model switch scenario)", () => {
+    // This happens during model switching (e.g., Gemini -> Grok -> Gemini)
+    const msg = assistantMsg([], [{ id: "call123", name: "", args: { path: "/tmp/a" } }]);
+    const items = convertMessagesToInputItems([msg] as Parameters<typeof convertMessagesToInputItems>[0]);
+    expect(items).toEqual([]);
+  });
+
+  it("drops tool results for skipped empty-name tool calls", () => {
+    // Paired tool result should also be skipped when tool call was skipped due to empty name
+    const msg1 = assistantMsg([], [{ id: "call123", name: "", args: { query: "test" } }]);
+    const msg2 = {
+      role: "tool_result" as const,
+      toolCallId: "call123",
+      content: [{ type: "output_text", output: "result" }],
+    };
+    const items = convertMessagesToInputItems([msg1, msg2] as Parameters<typeof convertMessagesToInputItems>[0]);
+    expect(items).toEqual([]);
+  });
+
   it("skips thinking blocks in assistant messages", () => {
     const msg = {
       role: "assistant" as const,
