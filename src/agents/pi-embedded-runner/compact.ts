@@ -27,7 +27,7 @@ import {
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import { isCronSessionKey, isSubagentSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
@@ -682,7 +682,7 @@ export async function compactEmbeddedPiSessionDirect(
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     // Resolve preamble: per-agent config takes priority over defaults.
     const agentPreamble =
-      params.config?.agents?.list?.find((a) => a.id?.toLowerCase() === sessionAgentId?.toLowerCase())?.preamble ??
+      params.config?.agents?.list?.find((a) => normalizeAgentId(a.id) === normalizeAgentId(sessionAgentId))?.preamble ??
       params.config?.agents?.defaults?.preamble;
 
     const appendPrompt = buildEmbeddedSystemPrompt({

@@ -27,7 +27,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isCronSessionKey, isSubagentSessionKey, normalizeAgentId } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -1652,7 +1652,7 @@ export async function runEmbeddedAttempt(
 
     // Resolve preamble: per-agent config takes priority over defaults.
     const agentPreamble =
-      params.config?.agents?.list?.find((a) => a.id?.toLowerCase() === params.agentId?.toLowerCase())?.preamble ??
+      params.config?.agents?.list?.find((a) => normalizeAgentId(a.id) === normalizeAgentId(params.agentId))?.preamble ??
       params.config?.agents?.defaults?.preamble;
 
     const appendPrompt = buildEmbeddedSystemPrompt({
