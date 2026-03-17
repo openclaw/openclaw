@@ -13,8 +13,8 @@
         "mode": "off"
       },
       "model": {
-        "primary": "openai-codex/gpt-5.4",
-        "fallbacks": ["anthropic/claude-opus-4-6"]
+        "primary": "anthropic/claude-opus-4-6",
+        "fallbacks": ["openai-codex/gpt-5.4"]
       },
       "models": {
         "openai-codex/gpt-5.4": {
@@ -120,7 +120,7 @@
           }
         },
         "model": {
-          "primary": "openai-codex/gpt-5.4"
+          "primary": "anthropic/claude-opus-4-6"
         },
         "skills": ["morpho-sre", "foundry-evm-debug"]
       },
