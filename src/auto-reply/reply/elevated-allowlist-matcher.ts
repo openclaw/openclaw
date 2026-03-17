@@ -1,4 +1,4 @@
-import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
+import { CHAT_CHANNEL_ORDER } from "../../channels/ids.js";
 import { normalizeAtHashSlug } from "../../shared/string-normalization.js";
 
 export type ExplicitElevatedAllowField = "id" | "from" | "e164" | "name" | "username" | "tag";

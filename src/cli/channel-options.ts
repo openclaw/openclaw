@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { CHAT_CHANNEL_ORDER } from "../channels/ids.js";
 import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 
