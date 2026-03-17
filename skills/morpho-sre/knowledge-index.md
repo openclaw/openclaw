@@ -36,10 +36,18 @@ Runtime model: the container assumes a shared repo root. Start with
   code-path fanout may be the trigger.
 - `incident-dossier-arbitrum-indexing-throughput-backpressure-2026-03-13.md`
   Repeated Arbitrum freshness lag pattern: healthy pod, stale data, internal lag blind spot, likely throughput/headroom amplifier.
+- `single-vault-graphql-evidence.sh`
+  Exact-query replay helper for one-address GraphQL incidents. Use it to capture
+  the exact query result, same-chain control, public-surface split, and optional
+  direct RPC facts before RCA ranking.
 - `incident-dossier-consumer-app-offchain-approval-failures-2026-03-12.md`
   Consumer wallet / approval / permit failure playbook. Use when a workaround already narrows scope to the offchain path.
 - `incident-dossier-consumer-app-sdk-abi-regression-2026-03-13.md`
   SDK ABI encoding regression playbook. Use when Sentry RPC reverts trace to an interface change in `blue-sdk-viem` or similar SDK packages.
+- `incident-dossier-blue-api-hyperevm-vault-v2-state-gap-2026-03-12.md`
+  Resolved single-vault HyperEVM pattern: metadata and transaction paths work,
+  current-state path misses adapter provenance because the indexer filters on the
+  wrong factory address.
 - `notion-postmortem-index.md`
   First-party postmortem index from Notion workspace sources.
 - `morpho-infra/docs/operations/incident-response.md`
@@ -77,6 +85,9 @@ investigation.
   Vault-aware Wiz MCP launcher. Resolves current Wiz credentials from
   `secret/wiz/api-token`, then starts `mcp-remote` without putting secrets in
   process args.
+- `single-vault-graphql-evidence.sh`
+  GraphQL exact-query replay and same-chain control helper for single-entity API
+  incidents.
 - `rca-provider-codex.sh`
   Codex-backed RCA provider wrapper.
 - `rca-provider-claude.sh`
@@ -113,6 +124,9 @@ investigation.
 - Wrong values / stale values / replica drift:
   Start `references/db-data-incident-playbook.md`, then `morpho-infra/docs/operations/kubernetes-database-ops.md`,
   then relevant incident dossier.
+- One address / one vault / GraphQL ISE / APY nulls:
+  Start `single-vault-graphql-evidence.sh`, then `incident-dossier-blue-api-hyperevm-vault-v2-state-gap-2026-03-12.md`,
+  then `references/db-data-incident-playbook.md`, then DB row/provenance + job-path evidence.
 - Rewards APR / campaign TVL / provider anomalies:
   Start `references/db-data-incident-playbook.md`, then `references/rewards-provider-incident-playbook.md`,
   then the relevant rewards incident dossier.

@@ -7,11 +7,15 @@ CONFIG="$ROOT/config/openclaw.json"
 RCA_CODEX="$ROOT/rca-provider-codex.sh"
 
 jq -e '
-  .agents.defaults.model.primary == "openai-codex/gpt-5.4"
+  .agents.defaults.model.primary == "anthropic/claude-opus-4-6"
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  any(.agents.list[]; .id == "sre" and .model.primary == "openai-codex/gpt-5.4")
+  any(.agents.list[]; .id == "sre" and .model.primary == "anthropic/claude-opus-4-6")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .agents.defaults.model.fallbacks | index("openai-codex/gpt-5.4")
 ' "$CONFIG" >/dev/null
 
 rg -F 'RCA_PROVIDER_MODEL="${RCA_PROVIDER_MODEL:-openai-codex/gpt-5.4}"' "$RCA_CODEX" >/dev/null

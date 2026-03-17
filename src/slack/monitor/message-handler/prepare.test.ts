@@ -384,7 +384,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(second).toBeNull();
   });
 
-  it("allows monitored human thread follow-ups after bot participation", async () => {
+  it("drops monitored human thread follow-ups with only bot participation (no explicit mention)", async () => {
     const ctx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true } },
@@ -412,10 +412,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
       }),
     );
 
-    expect(prepared).toBeTruthy();
+    expect(prepared).toBeNull();
   });
 
-  it("allows monitored human thread follow-ups in bot-rooted threads", async () => {
+  it("drops monitored human thread follow-ups in bot-rooted threads without explicit mention", async () => {
     const ctx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true } },
@@ -443,7 +443,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       }),
     );
 
-    expect(prepared).toBeTruthy();
+    expect(prepared).toBeNull();
   });
 
   it("allows monitored human thread follow-ups with explicit mention", async () => {

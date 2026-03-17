@@ -79,6 +79,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Use Slack mrkdwn only:
   - bold = `*text*`, inline code = `` `text` ``
   - never use Markdown bold `**text**` or Markdown headings
+  - all section labels (`*Incident:*`, `*Customer impact:*`, etc.) must use bold (`*Label:*`), never italic (`_Label:_`)
 - Enrich with BetterStack API context when needed:
   `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh GET '/incidents/<id>'`
 - If confidence is high and fix is scoped/reversible, run `autofix-pr.sh` and post PR URL in-thread.
@@ -86,15 +87,21 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Create or reuse a Linear follow-up ticket for code/config work and mention it in-thread.
 - Any incident PR must use the Linear ticket `branchName` as the branch and attach the PR URL back to the ticket.
 - If auto-fix is blocked, post blocked reason + exact manual next step.
+- Cross-surface RCA consistency: the Slack thread response and any linked Linear ticket must state the same primary root cause and the same corrupt/affected artifact. Never post contradictory RCA across surfaces.
+- RCA correction process: if deeper analysis in the Linear ticket reveals a different cause than the initial Slack summary, update the Slack thread with a corrected hypothesis before posting the Linear update.
 - First four lines must answer: what broke, who feels it, what services are impacted, and what is happening now.
 - If only monitoring/internal tooling is degraded, say exactly: `No confirmed customer impact. Internal observability degraded.`
 - Keep unrelated warnings under `*Also watching:*`.
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
 - Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into any Slack thread.
 - Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
+- Content gate: before posting any message to an incident thread, verify it contains at least one `*Evidence:*` fact or `*Mitigation:*` action. If it doesn't, do not send it — buffer all content into a single reply. Exception: the single non-incident acknowledgment with ETA/next step allowed by the progress-chatter rule above is exempt from this gate.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
+- Keep the same 4-line incident header on every follow-up update, not just the first reply in a thread.
+- If new evidence disproves an earlier theory, retract that theory explicitly in the next update and continue from the new evidence.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement.
+- For one-address GraphQL / `sentryEventId` / `traceId` incidents, replay the exact query, compare one healthy same-chain control, compare `vaultV2ByAddress` / `vaultV2s` / `vaultV2transactions`, and verify direct RPC before naming a chain-wide cause.
 - For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
 - For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile `_fetchMerklSingleRates()` / the merged reward row before stale-row theories or PRs.
 - Until dedicated collectors exist, satisfy those rewards/provider gates only from explicit live probe outputs; if those outputs are absent, keep the gate closed and say so.

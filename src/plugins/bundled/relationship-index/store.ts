@@ -105,7 +105,13 @@ async function readJsonLines<T extends Record<string, unknown>>(
     if (!line.trim()) {
       continue;
     }
-    const parsed = JSON.parse(line) as T;
+    let parsed: T;
+    try {
+      parsed = JSON.parse(line) as T;
+    } catch {
+      logSreMetric("relationship_index_ndjson_corrupt_line", { path: filePath });
+      continue;
+    }
     const key = parsed[keyField];
     if (typeof key === "string" && key) {
       index.set(key, parsed);

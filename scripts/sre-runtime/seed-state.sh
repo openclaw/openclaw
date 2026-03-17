@@ -162,6 +162,54 @@ normalize_slack_incident_channels_json() {
       '
 }
 
+apply_model_env_override() {
+  # Allow deploy-time model selection via environment variables:
+  #   OPENCLAW_SRE_MODEL_PRIMARY   – primary model (e.g. "anthropic/claude-opus-4-6")
+  #   OPENCLAW_SRE_MODEL_FALLBACKS – comma-separated fallback list (e.g. "openai-codex/gpt-5.4")
+  local primary="${OPENCLAW_SRE_MODEL_PRIMARY:-}"
+  local fallbacks_raw="${OPENCLAW_SRE_MODEL_FALLBACKS:-}"
+
+  [ -n "$primary" ] || [ -n "$fallbacks_raw" ] || return 0
+
+  local fallbacks_json tmp_config
+  if [ -n "$fallbacks_raw" ]; then
+    fallbacks_json="$(printf '%s' "$fallbacks_raw" \
+      | tr ',' '\n' \
+      | jq -Rsc '[split("\n")[] | gsub("^\\s+|\\s+$"; "") | select(length > 0)]')"
+  else
+    fallbacks_json="null"
+  fi
+
+  tmp_config="$(mktemp "${CONFIG_PATH}.model.tmp.XXXXXX")"
+  jq \
+    --arg primary "$primary" \
+    --argjson fallbacks "$fallbacks_json" \
+    '
+      # Override global defaults
+      (if $primary != "" then .agents.defaults.model.primary = $primary else . end)
+      | (if $fallbacks != null then .agents.defaults.model.fallbacks = $fallbacks else . end)
+      # Override per-agent model.primary for agents that define one
+      | .agents.list = [
+          .agents.list[] |
+          if .model.primary != null and $primary != "" then
+            .model.primary = $primary
+          else
+            .
+          end
+        ]
+    ' "$CONFIG_PATH" > "$tmp_config"
+
+  # Sanity check: primary must be non-empty after patching
+  if ! jq -e '.agents.defaults.model.primary | length > 0' "$tmp_config" >/dev/null 2>&1; then
+    rm -f "$tmp_config"
+    echo "seed-state:error model env override produced invalid config" >&2
+    exit 1
+  fi
+
+  mv "$tmp_config" "$CONFIG_PATH"
+  echo "seed-state:model-override primary=${primary:-<unchanged>} fallbacks=${fallbacks_raw:-<unchanged>}"
+}
+
 apply_slack_incident_channel_override() {
   [ -n "$SLACK_INCIDENT_CHANNELS_RAW" ] || return 0
 
@@ -180,6 +228,7 @@ apply_slack_incident_channel_override() {
   tmp_config="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
   jq --arg monitoring_prompt_template "$monitoring_prompt" --arg monitoring_prompt_marker "$monitoring_prompt_marker" --argjson incident_channels "$channels_json" '
     .channels.slack.channels as $channels
+    | ($incident_channels | any(. == "#bug-report")) as $include_bug_report
     | ($incident_channels | map(select(. != "#bug-report"))) as $override_channels
     | ($channels["#bug-report"]) as $bug_report
     | ($channels["#platform-monitoring"].systemPrompt
@@ -187,16 +236,19 @@ apply_slack_incident_channel_override() {
     | (if $monitoring_prompt == $monitoring_prompt_marker then $monitoring_prompt_template else $monitoring_prompt end) as $resolved_monitoring_prompt
     | (($channels["#platform-monitoring"]
         // $channels["#public-api-monitoring"]) | .systemPrompt = $resolved_monitoring_prompt) as $monitoring_template
-    | if $bug_report == null or $monitoring_template == null then
-        error("missing seeded Slack incident channel templates")
+    | if $monitoring_template == null then
+        error("missing seeded Slack monitoring channel template")
+      elif $include_bug_report and $bug_report == null then
+        error("missing seeded Slack bug-report channel template")
       else
         .channels.slack.channels = (
-          reduce $override_channels[] as $channel
-            ({ "#bug-report": $bug_report }; . + { ($channel): $monitoring_template })
+          (if $include_bug_report then { "#bug-report": $bug_report } else {} end)
+          | reduce $override_channels[] as $channel
+              (.; . + { ($channel): $monitoring_template })
         )
       end
   ' "$CONFIG_PATH" >"$tmp_config"
-  jq -e '.channels.slack.channels | length > 0 and has("#bug-report")' "$tmp_config" >/dev/null || {
+  jq -e '.channels.slack.channels | length > 0' "$tmp_config" >/dev/null || {
     rm -f "$tmp_config"
     echo "seed-state:error produced invalid Slack incident channel config" >&2
     exit 1
@@ -364,6 +416,7 @@ ensure_workspace_memory_scaffold "$WORKSPACE_DIR"
 ensure_workspace_memory_scaffold "$SRE_WORKSPACE_DIR"
 
 copy_file "${SKILL_SOURCE_DIR}/config/openclaw.json" "$CONFIG_PATH"
+apply_model_env_override
 apply_slack_incident_channel_override
 chmod 600 "$CONFIG_PATH" || true
 seed_managed_cron_jobs

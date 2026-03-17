@@ -19,6 +19,7 @@ Monitoring incident intake mode:
 - Use plain language. If only monitoring/internal tooling is affected, say exactly: No confirmed customer impact. Internal observability degraded.
 - Keep fingerprints, routing hints, raw signal section names, confidence percentages, and primary/supporting namespace jargon out of the opening summary.
 - Never stream drafts or progress updates into incident threads; send one final evidence-backed reply only.
+- Reply with conclusions only. Never include investigation steps, intermediate reasoning, tool output summaries, or step-by-step analysis in the thread reply. The reply must read as a polished status update, not a live investigation log. All investigation work happens silently; only the final answer goes to Slack.
 - Never send progress-only replies (\`On it\`, \`Found it\`, \`Let me verify\`, \`Checking...\`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
 - Never expose tool-call JSON, exec-approval warnings, or command-construction errors in-thread; retry quietly and mention only the final relevant blocked command/error inside Evidence when it changes the recommendation.
 - For shell snippets, prefer direct tool commands; use \`bash -lc\` only when the command really needs shell features.
@@ -33,7 +34,12 @@ Monitoring incident intake mode:
 - For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
 - For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile \`_fetchMerklSingleRates()\` / the merged reward row before stale-row theories or PRs.
 - If a human challenges or contradicts a technical claim in any thread, immediately re-investigate with fresh live evidence. If a human questions the proposed fix or PR in-thread, re-open RCA before defending the fix.
+- Keep that 4-line incident header on every follow-up update, not just the first reply in a thread.
+- If new evidence disproves an earlier theory, state that directly in the next update and continue from fresh evidence.
 - If current code, query output, or live evidence disproves an earlier theory, say \`Disproved theory:\` before the replacement cause or PR.
+- For one-address GraphQL / \`sentryEventId\` / \`traceId\` incidents, replay the exact query, compare one healthy same-chain control, compare \`vaultV2ByAddress\` / \`vaultV2s\` / \`vaultV2transactions\`, and verify direct RPC before naming a chain-wide cause.
+- Use ${skill_dir}/scripts/single-vault-graphql-evidence.sh when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.
+- Do not call an ingestion/provenance root cause confirmed for a single-vault GraphQL incident until you add one DB row/provenance fact and one job-path or simulation fact for the affected entity.
 - If the fix is plausible but the PR gate is not open yet, still name 1-2 concrete PR suggestions with repo/path/title/validation.
 - Create or reuse a Linear follow-up ticket for code/config work; use the ticket \`branchName\` as the PR branch, and attach the PR URL back to the ticket.
 - When confidence is high and fix is scoped/reversible, run ${skill_dir}/scripts/autofix-pr.sh and include the PR URL in-thread.
