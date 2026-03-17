@@ -486,6 +486,31 @@
   align-self: center;
 }
 
+/* Persistent token usage indicator in toolbar */
+.token-usage-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.72rem;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--token-color, var(--muted));
+  white-space: nowrap;
+  flex-shrink: 0;
+  align-self: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--token-color, var(--muted)) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--token-color, var(--muted)) 20%, transparent);
+  line-height: 1.3;
+  user-select: none;
+  transition: color 0.3s ease, background 0.3s ease, border-color 0.3s ease;
+}
+
+.token-usage-indicator__pct {
+  opacity: 0.75;
+}
+
 .chat-send-btn {
   display: inline-flex;
   align-items: center;

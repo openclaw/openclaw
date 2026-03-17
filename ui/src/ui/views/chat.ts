@@ -294,6 +294,50 @@ function formatTokensCompact(n: number): string {
   return String(n);
 }
 
+/**
+ * Persistent token usage indicator displayed in the chat toolbar.
+ * Shows total tokens used and percentage of context window consumed.
+ * Color-codes: green (<70%), yellow (70-90%), red (>90%).
+ */
+function renderTokenUsageIndicator(
+  session: GatewaySessionRow | undefined,
+  defaultContextTokens: number | null,
+) {
+  const total = session?.totalTokens ?? 0;
+  if (!total) {
+    return nothing;
+  }
+  const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
+  const pct = limit ? Math.min(Math.round((total / limit) * 100), 100) : null;
+
+  // Color: green < 70%, yellow 70-90%, red > 90%
+  let tokenColor = "var(--token-usage-green, #22c55e)";
+  if (pct !== null) {
+    if (pct >= 90) {
+      tokenColor = "var(--token-usage-red, #ef4444)";
+    } else if (pct >= 70) {
+      tokenColor = "var(--token-usage-yellow, #eab308)";
+    }
+  }
+
+  const usageText = limit
+    ? `${formatTokensCompact(total)} / ${formatTokensCompact(limit)}`
+    : `${formatTokensCompact(total)} tokens`;
+
+  const titleText = `Context usage: ${total.toLocaleString()} tokens${
+    limit ? ` of ${limit.toLocaleString()} max` : ""
+  }`;
+
+  return html`
+    <span
+      class="token-usage-indicator"
+      role="status"
+      title=${titleText}
+      style="--token-color:${tokenColor}"
+    >🪙 ${usageText}${pct !== null ? html` <span class="token-usage-indicator__pct">(${pct}%)</span>` : nothing}</span>
+  `;
+}
+
 function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -1279,7 +1323,7 @@ export function renderChat(props: ChatProps) {
           </div>
 
           <div class="agent-chat__toolbar-right">
-            ${nothing /* search hidden for now */}
+            ${renderTokenUsageIndicator(activeSession, props.sessions?.defaults?.contextTokens ?? null)}
             ${
               canAbort
                 ? nothing
