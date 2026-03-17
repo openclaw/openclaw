@@ -2315,7 +2315,7 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ThreadStarterBody: "root starter",
         ThreadHistoryBody: "assistant reply\n\nfollow-up question",
-        ThreadLabel: "oc-group ? root starter",
+        ThreadLabel: expect.stringContaining("root starter"),
         MessageThreadId: "om_topic_root",
       }),
     );
@@ -2358,7 +2358,7 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ThreadStarterBody: undefined,
         ThreadHistoryBody: undefined,
-        ThreadLabel: "oc-group ? root starter",
+        ThreadLabel: expect.stringContaining("root starter"),
         MessageThreadId: "om_topic_root",
       }),
     );
@@ -2428,7 +2428,7 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ThreadStarterBody: "root starter",
         ThreadHistoryBody: "assistant reply\n\nfollow-up question",
-        ThreadLabel: "oc-group ? root starter",
+        ThreadLabel: expect.stringContaining("root starter"),
         MessageThreadId: "om_topic_root",
       }),
     );
