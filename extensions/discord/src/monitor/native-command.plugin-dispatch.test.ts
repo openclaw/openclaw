@@ -212,6 +212,58 @@ describe("Discord native plugin command dispatch", () => {
     );
   });
 
+  it("round-trips Discord native aliases through the real plugin registry", async () => {
+    const cfg = createConfig();
+    const commandSpec: NativeCommandSpec = {
+      name: "pairdiscord",
+      description: "Pair",
+      acceptsArgs: true,
+    };
+    const command = createDiscordNativeCommand({
+      command: commandSpec,
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+    const interaction = createInteraction();
+
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "pair",
+        nativeNames: {
+          telegram: "pair_device",
+          discord: "pairdiscord",
+        },
+        description: "Pair device",
+        acceptsArgs: true,
+        requireAuth: false,
+        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
+      }),
+    ).toEqual({ ok: true });
+
+    const dispatchSpy = vi
+      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+      .mockResolvedValue({} as never);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(
+      Object.assign(interaction, {
+        options: {
+          getString: () => "now",
+          getBoolean: () => null,
+          getFocused: () => "",
+        },
+      }) as unknown,
+    );
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "paired:now" }),
+    );
+  });
+
   it("blocks unauthorized Discord senders before requireAuth:false plugin commands execute", async () => {
     const cfg = {
       commands: {

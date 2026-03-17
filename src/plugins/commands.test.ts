@@ -7,6 +7,7 @@ import {
   executePluginCommand,
   getPluginCommandSpecs,
   listPluginCommands,
+  matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
 import { setActivePluginRegistry } from "./runtime.js";
@@ -105,6 +106,29 @@ describe("registerPluginCommand", () => {
       },
     ]);
     expect(getPluginCommandSpecs("slack")).toEqual([]);
+  });
+
+  it("matches provider-specific native aliases back to the canonical command", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "voice",
+      nativeNames: {
+        default: "talkvoice",
+        discord: "discordvoice",
+      },
+      description: "Demo command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/talkvoice now")).toMatchObject({
+      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
+      args: "now",
+    });
+    expect(matchPluginCommand("/discordvoice now")).toMatchObject({
+      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
+      args: "now",
+    });
   });
 
   it("resolves Discord DM command bindings with the user target prefix intact", () => {

@@ -147,6 +147,54 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
   });
 
+  it("round-trips Telegram native aliases through the real plugin registry", async () => {
+    const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
+
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "pair",
+        nativeNames: {
+          telegram: "pair_device",
+          discord: "pairdiscord",
+        },
+        description: "Pair device",
+        acceptsArgs: true,
+        requireAuth: false,
+        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
+      }),
+    ).toEqual({ ok: true });
+
+    registerTelegramNativeCommands({
+      ...buildParams({}),
+      bot,
+    });
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(registeredCommands).toEqual(
+      expect.arrayContaining([{ command: "pair_device", description: "Pair device" }]),
+    );
+
+    const handler = commandHandlers.get("pair_device");
+    expect(handler).toBeTruthy();
+
+    await handler?.({
+      match: "now",
+      message: {
+        message_id: 2,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "alice" },
+      },
+    });
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "paired:now" })],
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+  });
+
   it("keeps real plugin command handlers available when native menu registration is disabled", () => {
     const { bot, commandHandlers, setMyCommands } = createCommandBot();
 
