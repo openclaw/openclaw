@@ -16,6 +16,7 @@ import type {
   RuntimeWebFetchFirecrawlMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
+  RuntimeWebXSearchMetadata,
 } from "./runtime-web-tools.types.js";
 
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
@@ -32,6 +33,7 @@ export type {
   RuntimeWebFetchFirecrawlMetadata,
   RuntimeWebSearchMetadata,
   RuntimeWebToolsMetadata,
+  RuntimeWebXSearchMetadata,
 };
 
 type FetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -291,6 +293,13 @@ function setResolvedFirecrawlApiKey(params: {
   firecrawl.apiKey = params.value;
 }
 
+function setResolvedXSearchApiKey(params: { resolvedConfig: OpenClawConfig; value: string }): void {
+  const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
+  const web = ensureObject(tools, "web");
+  const xSearch = ensureObject(web, "x_search");
+  xSearch.apiKey = params.value;
+}
+
 function keyPathForProvider(provider: WebSearchProvider): string {
   return provider === "brave" ? "tools.web.search.apiKey" : `tools.web.search.${provider}.apiKey`;
 }
@@ -535,6 +544,82 @@ export async function resolveRuntimeWebTools(params: {
     }
   }
 
+  const xSearch = isRecord(web?.x_search) ? web.x_search : undefined;
+  const xSearchEnabled = xSearch?.enabled !== false;
+  const xSearchPath = "tools.web.x_search.apiKey";
+  let xSearchResolution: SecretResolutionResult = {
+    source: "missing",
+    secretRefConfigured: false,
+    fallbackUsedAfterRefFailure: false,
+  };
+  const xSearchDiagnostics: RuntimeWebDiagnostic[] = [];
+
+  if (xSearchEnabled) {
+    xSearchResolution = await resolveSecretInputWithEnvFallback({
+      sourceConfig: params.sourceConfig,
+      context: params.context,
+      defaults,
+      value: xSearch?.apiKey,
+      path: xSearchPath,
+      envVars: ["XAI_API_KEY"],
+    });
+
+    if (xSearchResolution.value) {
+      setResolvedXSearchApiKey({
+        resolvedConfig: params.resolvedConfig,
+        value: xSearchResolution.value,
+      });
+    }
+
+    if (xSearchResolution.secretRefConfigured) {
+      if (xSearchResolution.fallbackUsedAfterRefFailure) {
+        const diagnostic: RuntimeWebDiagnostic = {
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+          message:
+            `${xSearchPath} SecretRef could not be resolved; using ${xSearchResolution.fallbackEnvVar ?? "env fallback"}. ` +
+            (xSearchResolution.unresolvedRefReason ?? "").trim(),
+          path: xSearchPath,
+        };
+        diagnostics.push(diagnostic);
+        xSearchDiagnostics.push(diagnostic);
+        pushWarning(params.context, {
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+          path: xSearchPath,
+          message: diagnostic.message,
+        });
+      }
+
+      if (!xSearchResolution.value && xSearchResolution.unresolvedRefReason) {
+        const diagnostic: RuntimeWebDiagnostic = {
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+          message: xSearchResolution.unresolvedRefReason,
+          path: xSearchPath,
+        };
+        diagnostics.push(diagnostic);
+        xSearchDiagnostics.push(diagnostic);
+        pushWarning(params.context, {
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+          path: xSearchPath,
+          message: xSearchResolution.unresolvedRefReason,
+        });
+        throw new Error(
+          `[WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK] ${xSearchResolution.unresolvedRefReason}`,
+        );
+      }
+    }
+  } else if (hasConfiguredSecretRef(xSearch?.apiKey, defaults)) {
+    pushInactiveSurfaceWarning({
+      context: params.context,
+      path: xSearchPath,
+      details: "tools.web.x_search is disabled.",
+    });
+    xSearchResolution = {
+      source: "secretRef",
+      secretRefConfigured: true,
+      fallbackUsedAfterRefFailure: false,
+    };
+  }
+
   const fetch = isRecord(web?.fetch) ? (web.fetch as FetchConfig) : undefined;
   const firecrawl = isRecord(fetch?.firecrawl) ? fetch.firecrawl : undefined;
   const fetchEnabled = fetch?.enabled !== false;
@@ -642,6 +727,11 @@ export async function resolveRuntimeWebTools(params: {
 
   return {
     search: searchMetadata,
+    xSearch: {
+      active: xSearchEnabled,
+      apiKeySource: xSearchResolution.source,
+      diagnostics: xSearchDiagnostics,
+    },
     fetch: {
       firecrawl: {
         active: firecrawlActive,

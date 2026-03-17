@@ -132,4 +132,40 @@ describe("openclaw tools runtime web metadata wiring", () => {
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://example.com/runtime-off");
     expect(String(mockFetch.mock.calls[0]?.[0])).not.toContain("api.firecrawl.dev");
   });
+
+  it("resolves x_search SecretRef from the active runtime snapshot", async () => {
+    const snapshot = await prepareAndActivate({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_RUNTIME_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_RUNTIME_REF: "x-search-runtime-key",
+      },
+    });
+
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            output: [{ type: "message", content: [{ type: "output_text", text: "runtime x ok" }] }],
+            citations: [],
+          }),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const xSearch = findTool("x_search", snapshot.config);
+    const result = await xSearch.execute("call-runtime-x-search", { query: "runtime x" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.x.ai");
+    expect((result.details as { query?: string }).query).toBe("runtime x");
+  });
 });

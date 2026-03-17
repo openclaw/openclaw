@@ -100,6 +100,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "tools.web.search.perplexity.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "perplexity");
   }
+  if (entry.id === "tools.web.x_search.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "x_search", "enabled"], true);
+  }
   return config;
 }
 

@@ -102,7 +102,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "x_search",
     description: "Search X (formerly Twitter)",
     sectionId: "web",
-    profiles: [],
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {

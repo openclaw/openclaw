@@ -232,7 +232,7 @@ export async function setupXSearch(
   await prompter.note(
     [
       "x_search lets your agent search X (formerly Twitter) posts via xAI Grok.",
-      "Requires an xAI API key (XAI_API_KEY).",
+      "If you already enabled Grok for web_search, the same XAI_API_KEY can power x_search too.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "X search",
@@ -357,6 +357,7 @@ export async function setupSearch(
     [
       "Web search lets your agent look things up online.",
       "Choose a provider and paste your API key.",
+      "If you use Grok (xAI), the same XAI_API_KEY can also power x_search for real-time posts on X.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",

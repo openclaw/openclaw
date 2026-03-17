@@ -28,6 +28,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
   - **Grok**: returns AI-synthesized answers with citations via xAI's Grok model.
   - **Kimi**: returns AI-synthesized answers with citations via Moonshot web search.
 - `x_search` queries X (formerly Twitter) posts via xAI Grok and returns AI-synthesized answers with citations.
+- If you choose xAI, the same `XAI_API_KEY` can power both `web_search` and `x_search`.
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
@@ -43,7 +44,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 | **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time                       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
 | **Firecrawl Search**      | Structured results with snippets   | Use `firecrawl_search` for Firecrawl-specific search options | Best for pairing search with Firecrawl scraping/extraction                     | `FIRECRAWL_API_KEY`                         |
 | **Gemini**                | AI-synthesized answers + citations | —                                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
-| **Grok**                  | AI-synthesized answers + citations | —                                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
+| **Grok**                  | AI-synthesized answers + citations | —                                                            | Uses xAI web-grounded responses; the same key can also power `x_search`        | `XAI_API_KEY`                               |
 | **Kimi**                  | AI-synthesized answers + citations | —                                                            | Uses Moonshot web search                                                       | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
 | **Perplexity Search API** | Structured results with snippets   | `country`, `language`, time, `domain_filter`                 | Supports content extraction controls; OpenRouter uses Sonar compatibility path | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
 

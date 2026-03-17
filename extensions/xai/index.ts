@@ -55,7 +55,7 @@ export default definePluginEntry({
       createPluginBackedWebSearchProvider({
         id: "grok",
         label: "Grok (xAI)",
-        hint: "xAI web-grounded responses",
+        hint: "xAI web-grounded responses · same key also enables x_search",
         envVars: ["XAI_API_KEY"],
         placeholder: "xai-...",
         signupUrl: "https://console.x.ai/",

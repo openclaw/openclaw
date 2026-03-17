@@ -165,6 +165,30 @@ describe("runtime web tools resolution", () => {
     },
   );
 
+  it("resolves x_search SecretRef and writes the resolved key into runtime config", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_REF: "x-search-runtime-key",
+      },
+    });
+
+    expect(metadata.xSearch.active).toBe(true);
+    expect(metadata.xSearch.apiKeySource).toBe("secretRef");
+    expect(resolvedConfig.tools?.web?.x_search?.apiKey).toBe("x-search-runtime-key");
+    expect(context.warnings.map((warning) => warning.code)).not.toContain(
+      "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
   it("auto-detects provider precedence across all configured providers", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
