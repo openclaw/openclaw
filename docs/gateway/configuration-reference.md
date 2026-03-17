@@ -1350,6 +1350,10 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
 </Accordion>
 
 Browser sandboxing and `sandbox.docker.binds` are currently Docker-only.
+The `apple-container` backend is opt-in, requires macOS 26+ on Apple silicon, and currently supports exec plus file tools only.
+When using `backend: "apple-container"`, set `plugins.entries.apple-container.config.command` if the Apple `container` CLI is not on `PATH`.
+`sandbox.docker.network = "none"` maps to Apple's native no-network mode; use `default` or a named Apple container network only when the sandbox needs network access.
+Non-default Docker-only hardening settings such as custom `capDrop` values, `seccompProfile`, `apparmorProfile`, `pidsLimit`, `memorySwap`, and `extraHosts` are rejected on that backend.
 
 Build images:
 

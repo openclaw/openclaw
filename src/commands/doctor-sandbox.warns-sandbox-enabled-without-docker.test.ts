@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -25,6 +25,8 @@ vi.mock("../terminal/note.js", () => ({
 const { maybeRepairSandboxImages } = await import("./doctor-sandbox.js");
 
 describe("maybeRepairSandboxImages", () => {
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+  const originalArchDescriptor = Object.getOwnPropertyDescriptor(process, "arch");
   const mockRuntime: RuntimeEnv = {
     log: vi.fn(),
     error: vi.fn(),
@@ -37,14 +39,29 @@ describe("maybeRepairSandboxImages", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    Object.defineProperty(process, "arch", { value: "arm64", configurable: true });
   });
 
-  function createSandboxConfig(mode: "off" | "all" | "non-main"): OpenClawConfig {
+  afterAll(() => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+    if (originalArchDescriptor) {
+      Object.defineProperty(process, "arch", originalArchDescriptor);
+    }
+  });
+
+  function createSandboxConfig(
+    mode: "off" | "all" | "non-main",
+    backend: "docker" | "apple-container" = "docker",
+  ): OpenClawConfig {
     return {
       agents: {
         defaults: {
           sandbox: {
             mode,
+            backend,
           },
         },
       },
@@ -104,5 +121,47 @@ describe("maybeRepairSandboxImages", () => {
         typeof call[0] === "string" && call[0].toLowerCase().includes("docker not available"),
     );
     expect(dockerUnavailableWarning).toBeUndefined();
+  });
+
+  it("warns when apple-container is installed but not running", async () => {
+    runExec.mockRejectedValue(
+      Object.assign(new Error("apiserver is not running"), {
+        stdout: JSON.stringify({ status: "not running" }),
+        stderr: "",
+        code: 1,
+      }),
+    );
+
+    await maybeRepairSandboxImages(
+      createSandboxConfig("all", "apple-container"),
+      mockRuntime,
+      mockPrompter,
+    );
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Sandbox backend "apple-container" selected, but `container system` is not running.',
+      ),
+      "Sandbox",
+    );
+  });
+
+  it("warns when apple-container CLI is unavailable", async () => {
+    runExec.mockRejectedValue(
+      Object.assign(new Error("container not found"), {
+        code: "ENOENT",
+      }),
+    );
+
+    await maybeRepairSandboxImages(
+      createSandboxConfig("all", "apple-container"),
+      mockRuntime,
+      mockPrompter,
+    );
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining('Sandbox backend "apple-container" selected.'),
+      "Sandbox",
+    );
   });
 });

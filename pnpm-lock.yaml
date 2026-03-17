@@ -278,6 +278,8 @@ importers:
 
   extensions/anthropic: {}
 
+  extensions/apple-container: {}
+
   extensions/bluebubbles:
     dependencies:
       zod:

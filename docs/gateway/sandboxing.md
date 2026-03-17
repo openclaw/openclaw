@@ -59,11 +59,59 @@ Not sandboxed:
 `agents.defaults.sandbox.backend` controls **which runtime** provides the sandbox:
 
 - `"docker"` (default): local Docker-backed sandbox runtime.
+- `"apple-container"`: Apple container-backed runtime for macOS Apple silicon hosts.
 - `"ssh"`: generic SSH-backed remote sandbox runtime.
 - `"openshell"`: OpenShell-backed sandbox runtime.
 
 SSH-specific config lives under `agents.defaults.sandbox.ssh`.
 OpenShell-specific config lives under `plugins.entries.openshell.config`.
+Apple container-specific config lives under `plugins.entries.apple-container.config`.
+
+### Apple container backend
+
+Use `backend: "apple-container"` when you want local sandboxed `exec` and file tools on a macOS 26+ Apple silicon host without Docker Desktop.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "apple-container",
+        scope: "session",
+        workspaceAccess: "rw",
+        docker: {
+          image: "alpine:latest",
+          network: "none", // use "default" or a named Apple container network only when needed
+        },
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      "apple-container": {
+        enabled: true,
+        config: {
+          command: "container",
+          timeoutSeconds: 30,
+        },
+      },
+    },
+  },
+}
+```
+
+Current Apple container backend limits:
+
+- opt-in only; Docker remains the default backend
+- macOS 26+ on Apple silicon only
+- browser sandbox is not supported
+- `sandbox.docker.network = "none"` maps to Apple's native no-network mode; use `default` or a named Apple container network only when the sandbox needs egress
+- Docker-only hardening settings such as custom `capDrop` values, `seccompProfile`, `apparmorProfile`, `pidsLimit`, `memorySwap`, and `extraHosts` are rejected; the default Docker `capDrop: ["ALL"]` is accepted as a compatibility no-op
+- Docker-style browser/runtime parity is not claimed here; this backend is for exec and file tools only
+
+The backend reuses the normal sandbox registry, recreate, prune, and filesystem bridge behavior.
+It uses Apple's `container` CLI for create/start/stop/delete/inspect/exec and keeps the same workspace-mount model as the Docker backend.
 
 ### SSH backend
 

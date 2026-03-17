@@ -94,6 +94,26 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
 
+### Apple container backend smoke
+
+- Suggested manual smoke:
+
+```bash
+container system status --format json
+openclaw sandbox recreate --all
+openclaw sandbox list
+```
+
+- Scope:
+  - Confirms the host is macOS Apple silicon
+  - Confirms `container system status --format json` reports `running`
+  - Creates a sandbox runtime with `backend: "apple-container"`
+  - Verifies simple exec plus file-tool read/write behavior
+- Expectations:
+  - Opt-in only
+  - Requires Apple's `container` CLI and a working local image/network setup
+  - Browser coverage is intentionally out of scope for this backend right now
+
 ### Live (real providers + real models)
 
 - Command: `pnpm test:live`

@@ -194,6 +194,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/copilot-proxy/**"
+"extensions: apple-container":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/apple-container/**"
 "extensions: diagnostics-otel":
   - changed-files:
       - any-glob-to-any-file:

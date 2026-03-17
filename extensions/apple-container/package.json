@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/apple-container-sandbox",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw Apple container sandbox backend",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "apple-container",
+  "name": "Apple Container Sandbox",
+  "description": "Sandbox backend powered by Apple's container CLI for macOS Apple silicon hosts.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string"
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 1
+      }
+    }
+  },
+  "uiHints": {
+    "command": {
+      "label": "Container Command",
+      "help": "Path or command name for the Apple container CLI."
+    },
+    "timeoutSeconds": {
+      "label": "Command Timeout Seconds",
+      "help": "Timeout for Apple container CLI operations such as inspect, create, and exec.",
+      "advanced": true
+    }
+  }
+}

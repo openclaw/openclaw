@@ -16,6 +16,7 @@ OpenClaw can run agents in isolated sandbox runtimes for security. The `sandbox`
 Today that usually means:
 
 - Docker sandbox containers
+- Apple container sandbox runtimes when `agents.defaults.sandbox.backend = "apple-container"`
 - SSH sandbox runtimes when `agents.defaults.sandbox.backend = "ssh"`
 - OpenShell sandbox runtimes when `agents.defaults.sandbox.backend = "openshell"`
 
@@ -135,6 +136,21 @@ openclaw sandbox recreate --all
 For OpenShell `remote` mode, recreate deletes the canonical remote workspace
 for that scope. The next run seeds it again from the local workspace.
 
+### After changing Apple container backend config
+
+```bash
+# Edit config:
+# - agents.defaults.sandbox.backend
+# - agents.defaults.sandbox.docker.network
+# - plugins.entries.apple-container.config.command
+# - plugins.entries.apple-container.config.timeoutSeconds
+
+openclaw sandbox recreate --all
+```
+
+For the Apple container backend, recreate removes the per-scope local Apple container runtime.
+The next run recreates it with the current image, mounts, labels, and network settings.
+
 ### After changing setupCommand
 
 ```bash
@@ -173,7 +189,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
     "defaults": {
       "sandbox": {
         "mode": "all", // off, non-main, all
-        "backend": "docker", // docker, ssh, openshell
+        "backend": "docker", // docker, apple-container, ssh, openshell
         "scope": "agent", // session, agent, shared
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",

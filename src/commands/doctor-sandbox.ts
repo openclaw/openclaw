@@ -73,6 +73,42 @@ async function isDockerAvailable(): Promise<boolean> {
   }
 }
 
+function parseAppleContainerSystemStatus(stdout: string): "running" | "stopped" | null {
+  const raw = stdout.trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { status?: string };
+    return parsed.status === "running" ? "running" : parsed.status ? "stopped" : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getAppleContainerSystemStatus(): Promise<"running" | "unavailable" | "stopped"> {
+  if (process.platform !== "darwin" || process.arch !== "arm64") {
+    return "unavailable";
+  }
+  try {
+    const result = await runExec("container", ["system", "status", "--format", "json"], {
+      timeoutMs: 5_000,
+    });
+    return parseAppleContainerSystemStatus(result.stdout) ?? "unavailable";
+  } catch (error) {
+    const errno = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (errno === "ENOENT") {
+      return "unavailable";
+    }
+    const stdout = (error as { stdout?: string } | undefined)?.stdout ?? "";
+    const parsed = parseAppleContainerSystemStatus(stdout);
+    if (parsed) {
+      return parsed;
+    }
+    return "unavailable";
+  }
+}
+
 async function dockerImageExists(image: string): Promise<boolean> {
   try {
     await runExec("docker", ["image", "inspect", image], { timeoutMs: 5_000 });
@@ -192,6 +228,28 @@ export async function maybeRepairSandboxImages(
   }
   const backend = resolveSandboxBackend(cfg);
   if (backend !== "docker") {
+    if (backend === "apple-container") {
+      const status = await getAppleContainerSystemStatus();
+      if (status === "unavailable") {
+        note(
+          [
+            'Sandbox backend "apple-container" selected.',
+            "It requires a macOS Apple silicon host with Apple's `container` CLI installed.",
+            "If that is not available here, switch back to Docker: openclaw config set agents.defaults.sandbox.backend docker",
+          ].join("\n"),
+          "Sandbox",
+        );
+      } else if (status === "stopped") {
+        note(
+          [
+            'Sandbox backend "apple-container" selected, but `container system` is not running.',
+            "Start Apple Containers, then re-run doctor or retry the sandboxed command.",
+            "Check status with: container system status --format json",
+          ].join("\n"),
+          "Sandbox",
+        );
+      }
+    }
     if (sandbox.browser?.enabled) {
       note(
         `Sandbox backend "${backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
