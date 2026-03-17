@@ -21,9 +21,14 @@ function expectNoImageReferences(prompt: string) {
   expect(refs).toHaveLength(0);
 }
 
-function expectSingleImageReference(prompt: string) {
+function expectImageReferenceCount(prompt: string, count: number) {
   const refs = detectImageReferences(prompt);
-  expect(refs).toHaveLength(1);
+  expect(refs).toHaveLength(count);
+  return refs;
+}
+
+function expectSingleImageReference(prompt: string) {
+  const refs = expectImageReferenceCount(prompt, 1);
   return refs[0];
 }
 
@@ -64,14 +69,15 @@ describe("detectImageReferences", () => {
   });
 
   it("detects multiple image references in a prompt", () => {
-    const prompt = `
+    const refs = expectImageReferenceCount(
+      `
       Compare these two images:
       1. /home/user/photo1.png
       2. https://mysite.com/photo2.jpg
-    `;
-    const refs = detectImageReferences(prompt);
+    `,
+      1,
+    );
 
-    expect(refs).toHaveLength(1);
     expect(refs.some((r) => r.type === "path")).toBe(true);
   });
 
@@ -86,21 +92,15 @@ describe("detectImageReferences", () => {
   });
 
   it("deduplicates repeated image references", () => {
-    const prompt = "Look at /path/image.png and also /path/image.png again";
-    const refs = detectImageReferences(prompt);
-
-    expect(refs).toHaveLength(1);
+    expectImageReferenceCount("Look at /path/image.png and also /path/image.png again", 1);
   });
 
   it("dedupe casing follows host filesystem conventions", () => {
-    const prompt = "Look at /tmp/Image.png and /tmp/image.png";
-    const refs = detectImageReferences(prompt);
-
     if (process.platform === "win32") {
-      expect(refs).toHaveLength(1);
+      expectImageReferenceCount("Look at /tmp/Image.png and /tmp/image.png", 1);
       return;
     }
-    expect(refs).toHaveLength(2);
+    expectImageReferenceCount("Look at /tmp/Image.png and /tmp/image.png", 2);
   });
 
   it("returns empty array when no images found", () => {
@@ -141,13 +141,14 @@ describe("detectImageReferences", () => {
 
   it("detects multiple images in [media attached: ...] format", () => {
     // Multi-file format uses separate brackets on separate lines
-    const prompt = `[media attached: 2 files]
+    const refs = expectImageReferenceCount(
+      `[media attached: 2 files]
 [media attached 1/2: /Users/tyleryust/.openclaw/media/IMG_6430.jpeg (image/jpeg)]
 [media attached 2/2: /Users/tyleryust/.openclaw/media/IMG_6431.jpeg (image/jpeg)]
-what about these images?`;
-    const refs = detectImageReferences(prompt);
+what about these images?`,
+      2,
+    );
 
-    expect(refs).toHaveLength(2);
     expect(refs[0]?.resolved).toContain("IMG_6430.jpeg");
     expect(refs[1]?.resolved).toContain("IMG_6431.jpeg");
   });
@@ -162,12 +163,13 @@ what about these images?`;
   });
 
   it("ignores remote URLs entirely (local-only)", () => {
-    const prompt = `To send an image: MEDIA:https://example.com/image.jpg
+    const refs = expectImageReferenceCount(
+      `To send an image: MEDIA:https://example.com/image.jpg
 Here is my actual image: /path/to/real.png
-Also https://cdn.mysite.com/img.jpg`;
-    const refs = detectImageReferences(prompt);
+Also https://cdn.mysite.com/img.jpg`,
+      1,
+    );
 
-    expect(refs).toHaveLength(1);
     expect(refs[0]?.raw).toBe("/path/to/real.png");
   });
 
