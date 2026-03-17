@@ -2,6 +2,8 @@ import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
+vi.resetModules();
+
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
 vi.mock("../globals.js", () => ({
