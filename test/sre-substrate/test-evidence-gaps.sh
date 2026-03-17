@@ -44,8 +44,8 @@ OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
 
 printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["db_data_check"]' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["changes_in_window","replica_lag","pg_statements"]' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 33' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["changes_in_window","file_truncation_signature","replica_lag","pg_statements"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 38' >/dev/null
 
 cat >"$TMP" <<'EOF'
 critical_alerts=1
@@ -67,8 +67,8 @@ OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
 
 printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["db_data_check","pg_internal_check"]' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["pg_activity","pg_statements"]' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 46' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["file_truncation_signature","pg_activity","pg_statements"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 51' >/dev/null
 
 cat >"$TMP" <<'EOF'
 critical_alerts=1
@@ -100,8 +100,8 @@ OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
 
 printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["artifact_check"]' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == []' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 18' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["file_truncation_signature"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 23' >/dev/null
 
 cat >"$TMP" <<'EOF'
 critical_alerts=1
@@ -133,8 +133,8 @@ OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
 
 printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["disproved_theory_recorded"]' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == []' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 18' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["file_truncation_signature"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 23' >/dev/null
 
 cat >"$TMP" <<'EOF'
 critical_alerts=1
@@ -166,8 +166,8 @@ OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
 
 printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["code_path_reconciled"]' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == []' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 18' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["file_truncation_signature"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 23' >/dev/null
 
 cat >"$TMP" <<'EOF'
 critical_alerts=1
@@ -199,8 +199,8 @@ OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
 
 printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["artifact_check","code_path_reconciled","disproved_theory_recorded"]' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == []' >/dev/null
-printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 54' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["file_truncation_signature"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 59' >/dev/null
 
 cat >"$TMP" <<'EOF'
 sentry_event_trace=1
@@ -252,6 +252,38 @@ printf '%s\n' "$OUTPUT" | jq -e '.category == "sdk_regression"' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == []' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == []' >/dev/null
 printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 0' >/dev/null
+
+cat >"$TMP" <<'EOF'
+pod_issues=1
+prom_critical=1
+log_signals=0
+argocd_sync=1
+changes_in_window=0
+image_revision=1
+EOF
+
+OUTPUT="$(evidence_gaps_assess resource_exhaustion "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "resource_exhaustion"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == []' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["log_signals","changes_in_window"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 10' >/dev/null
+
+cat >"$TMP" <<'EOF'
+pod_issues=0
+prom_critical=1
+log_signals=1
+argocd_sync=0
+changes_in_window=0
+image_revision=0
+EOF
+
+OUTPUT="$(evidence_gaps_assess resource_exhaustion "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "resource_exhaustion"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["pod_issues"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["argocd_sync","changes_in_window","image_revision"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 33' >/dev/null
 
 cat >"$TMP" <<'EOF'
 pod_issues=1
