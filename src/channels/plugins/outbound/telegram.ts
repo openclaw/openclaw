@@ -74,11 +74,30 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     };
 
     if (mediaUrls.length === 0) {
-      const result = await send(to, text, {
-        ...baseOpts,
-        buttons: telegramData?.buttons,
-      });
-      return { channel: "telegram", ...result };
+      // Chunk long text messages to stay within Telegram's 4096 char limit.
+      const TEXT_LIMIT = 4000;
+      const chunks = markdownToTelegramHtmlChunks(text, TEXT_LIMIT);
+      if (chunks.length <= 1) {
+        // Single chunk (or empty) — send with buttons as before.
+        const result = await send(to, chunks[0] ?? text, {
+          ...baseOpts,
+          buttons: telegramData?.buttons,
+        });
+        return { channel: "telegram", ...result };
+      }
+      // Multiple chunks — send all but last as plain text, attach buttons to last only.
+      let finalResult: Awaited<ReturnType<typeof send>> | undefined;
+      for (let i = 0; i < chunks.length; i += 1) {
+        const isLast = i === chunks.length - 1;
+        finalResult = await send(to, chunks[i], {
+          ...baseOpts,
+          // Only attach reply context + quote to first chunk, buttons to last.
+          replyToMessageId: i === 0 ? replyToMessageId : undefined,
+          quoteText: i === 0 ? quoteText : undefined,
+          ...(isLast ? { buttons: telegramData?.buttons } : {}),
+        });
+      }
+      return { channel: "telegram", ...(finalResult ?? { messageId: "unknown", chatId: to }) };
     }
 
     // Telegram allows reply_markup on media; attach buttons only to first send.
