@@ -127,17 +127,14 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     conversationId: params.conversationId,
   });
   const requireMention = activation !== "always";
-  const selfJid = params.msg.selfJid?.replace(/:\d+/, "");
-  const selfLid = params.msg.selfLid?.replace(/:\d+/, "");
-  // replyToSenderJid may carry either a standard JID or an @lid identifier.
-  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\d+/, "");
+  const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
+  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
   const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
   const replySenderE164 = params.msg.replyToSenderE164
     ? normalizeE164(params.msg.replyToSenderE164)
     : null;
   const implicitMention = Boolean(
     (selfJid && replySenderJid && selfJid === replySenderJid) ||
-    (selfLid && replySenderJid && selfLid === replySenderJid) ||
     (selfE164 && replySenderE164 && selfE164 === replySenderE164),
   );
   const mentionGate = resolveMentionGating({
