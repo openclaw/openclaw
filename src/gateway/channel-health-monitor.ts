@@ -17,6 +17,13 @@ const DEFAULT_COOLDOWN_CYCLES = 2;
 const DEFAULT_MAX_RESTARTS_PER_HOUR = 10;
 const ONE_HOUR_MS = 60 * 60_000;
 
+/** Minimum cooldown between health-monitor-triggered restarts per channel. */
+const MIN_RESTART_COOLDOWN_MS = 60_000;
+
+/** Maximum time to wait for active agent runs to drain before aborting. */
+const DRAIN_WINDOW_MS = 30_000;
+const DRAIN_POLL_MS = 1_000;
+
 /**
  * How long a connected channel can go without receiving any event before
  * the health monitor treats it as a "stale socket" and triggers a restart.
@@ -42,6 +49,8 @@ export type ChannelHealthMonitorDeps = {
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
   abortSignal?: AbortSignal;
+  /** Called each check cycle to resolve fresh timing values (avoids stale config). */
+  resolveFreshTiming?: () => Partial<ChannelHealthTimingPolicy>;
 };
 
 export type ChannelHealthMonitor = {
@@ -73,6 +82,38 @@ function resolveTimingPolicy(
   };
 }
 
+/**
+ * Wait up to {@link DRAIN_WINDOW_MS} for active agent runs on a channel/account
+ * to finish so in-flight text replies are not silently aborted.
+ */
+async function drainActiveRuns(
+  channelManager: ChannelManager,
+  channelId: ChannelId,
+  accountId: string,
+  stopped: boolean,
+): Promise<void> {
+  const deadline = Date.now() + DRAIN_WINDOW_MS;
+  let warned = false;
+  while (!stopped && Date.now() < deadline) {
+    const snap = channelManager.getRuntimeSnapshot();
+    const accountSnap = snap.channelAccounts[channelId]?.[accountId];
+    const activeRuns =
+      typeof accountSnap?.activeRuns === "number" && Number.isFinite(accountSnap.activeRuns)
+        ? Math.max(0, Math.trunc(accountSnap.activeRuns))
+        : 0;
+    if (activeRuns === 0) {
+      return;
+    }
+    if (!warned) {
+      log.info?.(
+        `[${channelId}:${accountId}] health-monitor: waiting for ${activeRuns} active run(s) to drain`,
+      );
+      warned = true;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
+  }
+}
+
 export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): ChannelHealthMonitor {
   const {
     channelManager,
@@ -83,7 +124,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   } = deps;
   const timing = resolveTimingPolicy(deps);
 
-  const cooldownMs = cooldownCycles * checkIntervalMs;
+  const cooldownMs = Math.max(cooldownCycles * checkIntervalMs, MIN_RESTART_COOLDOWN_MS);
   const restartRecords = new Map<string, RestartRecord>();
   const startedAt = Date.now();
   let stopped = false;
@@ -108,6 +149,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
         return;
       }
 
+      // Re-resolve timing each cycle so runtime config changes are picked up
+      // without waiting for a full health-monitor restart.
+      const freshTiming = deps.resolveFreshTiming?.();
+      const effectiveTiming: ChannelHealthTimingPolicy = freshTiming
+        ? { ...timing, ...freshTiming }
+        : timing;
+
       const snapshot = channelManager.getRuntimeSnapshot();
 
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
@@ -127,8 +175,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           const healthPolicy: ChannelHealthPolicy = {
             channelId,
             now,
-            staleEventThresholdMs: timing.staleEventThresholdMs,
-            channelConnectGraceMs: timing.channelConnectGraceMs,
+            staleEventThresholdMs: effectiveTiming.staleEventThresholdMs,
+            channelConnectGraceMs: effectiveTiming.channelConnectGraceMs,
           };
           const health = evaluateChannelHealth(status, healthPolicy);
           if (health.healthy) {
@@ -159,6 +207,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           try {
             if (status.running) {
+              await drainActiveRuns(channelManager, channelId as ChannelId, accountId, stopped);
               await channelManager.stopChannel(channelId as ChannelId, accountId);
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
