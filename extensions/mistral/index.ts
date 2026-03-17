@@ -1,16 +1,15 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "mistral";
 
-const mistralPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Mistral Provider",
   description: "Bundled Mistral provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Mistral",
@@ -53,6 +52,4 @@ const mistralPlugin = {
     });
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
   },
-};
-
-export default mistralPlugin;
+});

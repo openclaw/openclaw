@@ -68,7 +68,7 @@ describe("phone-control plugin", () => {
       });
 
       let command: OpenClawPluginCommandDefinition | undefined;
-      registerPhoneControl(
+      registerPhoneControl.register(
         createApi({
           stateDir,
           getConfig: () => config,
