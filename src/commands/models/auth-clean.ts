@@ -201,6 +201,20 @@ export async function modelsAuthCleanCommand(
 
   const storeProfileIds = Object.keys(store.profiles);
 
+  // Build the set of providers that have at least one configured profile ID
+  // actually present in the store.  If no configured ID for a provider exists
+  // in the store, that provider is in "store-only fallback mode" and its store
+  // profiles must be preserved — deleting them would leave the provider with
+  // no credentials at all (resolveAuthProfileOrder falls back to store
+  // profiles when configured IDs are missing).
+  const configuredProvidersWithStorePresence = new Set<string>();
+  for (const profileId of configuredProfiles) {
+    const cred = store.profiles[profileId];
+    if (cred) {
+      configuredProvidersWithStorePresence.add(normalizeProviderIdForAuth(cred.provider));
+    }
+  }
+
   const toRemove = storeProfileIds.filter((id) => {
     if (configuredProfiles.has(id)) {
       return false;
@@ -209,6 +223,15 @@ export async function modelsAuthCleanCommand(
     // so it is the sole credential source for that provider.  Preserve it.
     const cred = store.profiles[id];
     if (cred && !configuredProviders.has(normalizeProviderIdForAuth(cred.provider))) {
+      return false;
+    }
+    // Drift guard: the provider appears in config, but none of its configured
+    // profile IDs actually exist in the store.  The store profile is the only
+    // working credential — preserve it so the provider isn't left with nothing.
+    if (
+      cred &&
+      !configuredProvidersWithStorePresence.has(normalizeProviderIdForAuth(cred.provider))
+    ) {
       return false;
     }
     return true;
