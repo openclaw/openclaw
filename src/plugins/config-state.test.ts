@@ -213,4 +213,9 @@ describe("resolveEnableState", () => {
       reason: "workspace plugin (disabled by default)",
     });
   });
+
+  it("keeps bundled provider plugins enabled when they are bundled-default providers", () => {
+    const state = resolveEnableState("google", "bundled", normalizePluginsConfig({}));
+    expect(state).toEqual({ enabled: true });
+  });
 });

@@ -1,32 +1,11 @@
-import type {
-  OpenClawPluginApi,
-  ProviderPlugin,
-  WebSearchProviderPlugin,
-} from "../plugins/types.js";
+import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
+import type { OpenClawPluginApi, ProviderPlugin } from "../plugins/types.js";
 
-export type CapturedPluginRegistration = {
-  api: OpenClawPluginApi;
-  providers: ProviderPlugin[];
-  webSearchProviders: WebSearchProviderPlugin[];
+export { createCapturedPluginRegistration };
+
+type RegistrablePlugin = {
+  register(api: OpenClawPluginApi): void;
 };
-
-export function createCapturedPluginRegistration(): CapturedPluginRegistration {
-  const providers: ProviderPlugin[] = [];
-  const webSearchProviders: WebSearchProviderPlugin[] = [];
-
-  return {
-    providers,
-    webSearchProviders,
-    api: {
-      registerProvider(provider: ProviderPlugin) {
-        providers.push(provider);
-      },
-      registerWebSearchProvider(provider: WebSearchProviderPlugin) {
-        webSearchProviders.push(provider);
-      },
-    } as OpenClawPluginApi,
-  };
-}
 
 export function registerSingleProviderPlugin(params: {
   register(api: OpenClawPluginApi): void;
@@ -36,6 +15,22 @@ export function registerSingleProviderPlugin(params: {
   const provider = captured.providers[0];
   if (!provider) {
     throw new Error("provider registration missing");
+  }
+  return provider;
+}
+
+export function registerProviderPlugins(...plugins: RegistrablePlugin[]): ProviderPlugin[] {
+  const captured = createCapturedPluginRegistration();
+  for (const plugin of plugins) {
+    plugin.register(captured.api);
+  }
+  return captured.providers;
+}
+
+export function requireRegisteredProvider(providers: ProviderPlugin[], providerId: string) {
+  const provider = providers.find((entry) => entry.id === providerId);
+  if (!provider) {
+    throw new Error(`provider ${providerId} missing`);
   }
   return provider;
 }

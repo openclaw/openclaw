@@ -50,6 +50,9 @@ importers:
       '@homebridge/ciao':
         specifier: ^1.3.5
         version: 1.3.5
+      '@lancedb/lancedb':
+        specifier: ^0.26.2
+        version: 0.26.2(apache-arrow@18.1.0)
       '@larksuiteoapi/node-sdk':
         specifier: ^1.59.0
         version: 1.59.0
@@ -122,6 +125,9 @@ importers:
       file-type:
         specifier: 21.3.2
         version: 21.3.2
+      gaxios:
+        specifier: 7.1.3
+        version: 7.1.3
       grammy:
         specifier: ^1.41.1
         version: 1.41.1
@@ -268,6 +274,8 @@ importers:
         specifier: 0.3.0
         version: 0.3.0(zod@4.3.6)
 
+  extensions/amazon-bedrock: {}
+
   extensions/anthropic: {}
 
   extensions/bluebubbles:
@@ -348,6 +356,8 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+
+  extensions/firecrawl: {}
 
   extensions/github-copilot: {}
 
@@ -486,6 +496,8 @@ importers:
   extensions/opencode-go: {}
 
   extensions/openrouter: {}
+
+  extensions/openshell: {}
 
   extensions/perplexity: {}
 

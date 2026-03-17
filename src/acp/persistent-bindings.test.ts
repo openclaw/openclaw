@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { feishuPlugin } from "../../extensions/feishu/src/channel.js";
+import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
   closeSession: vi.fn(),
@@ -22,13 +27,13 @@ vi.mock("./runtime/session-meta.js", () => ({
   readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
-import {
-  buildConfiguredAcpSessionKey,
-  ensureConfiguredAcpBindingSession,
-  resetAcpSessionInPlace,
-  resolveConfiguredAcpBindingRecord,
-  resolveConfiguredAcpBindingSpecBySessionKey,
-} from "./persistent-bindings.js";
+type PersistentBindingsModule = typeof import("./persistent-bindings.js");
+
+let buildConfiguredAcpSessionKey: PersistentBindingsModule["buildConfiguredAcpSessionKey"];
+let ensureConfiguredAcpBindingSession: PersistentBindingsModule["ensureConfiguredAcpBindingSession"];
+let resetAcpSessionInPlace: PersistentBindingsModule["resetAcpSessionInPlace"];
+let resolveConfiguredAcpBindingRecord: PersistentBindingsModule["resolveConfiguredAcpBindingRecord"];
+let resolveConfiguredAcpBindingSpecBySessionKey: PersistentBindingsModule["resolveConfiguredAcpBindingSpecBySessionKey"];
 
 type ConfiguredBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 type BindingRecordInput = Parameters<typeof resolveConfiguredAcpBindingRecord>[0];
@@ -162,6 +167,13 @@ function mockReadySession(params: { spec: BindingSpec; cwd: string }) {
 }
 
 beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      { pluginId: "discord", plugin: discordPlugin, source: "test" },
+      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      { pluginId: "feishu", plugin: feishuPlugin, source: "test" },
+    ]),
+  );
   managerMocks.resolveSession.mockReset();
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
@@ -170,6 +182,17 @@ beforeEach(() => {
   managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
+});
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    buildConfiguredAcpSessionKey,
+    ensureConfiguredAcpBindingSession,
+    resetAcpSessionInPlace,
+    resolveConfiguredAcpBindingRecord,
+    resolveConfiguredAcpBindingSpecBySessionKey,
+  } = await import("./persistent-bindings.js"));
 });
 
 describe("resolveConfiguredAcpBindingRecord", () => {

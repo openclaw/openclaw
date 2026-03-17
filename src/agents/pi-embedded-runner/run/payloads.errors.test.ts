@@ -40,8 +40,13 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
 
+  function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
+    const payloads = buildPayloads(params);
+    expect(payloads).toHaveLength(0);
+  }
+
   function expectNoSyntheticCompletionForSession(sessionKey: string) {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       sessionKey,
       toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
       lastAssistant: makeAssistant({
@@ -50,7 +55,6 @@ describe("buildEmbeddedRunPayloads", () => {
         content: [],
       }),
     });
-    expect(payloads).toHaveLength(0);
   }
 
   it("suppresses raw API error JSON when the assistant errored", () => {
@@ -155,13 +159,11 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not add synthetic completion text when tools run without final assistant text", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       sessionKey: "agent:main:discord:direct:u123",
       toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
       lastAssistant: makeStoppedAssistant(),
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("does not add synthetic completion text for channel sessions", () => {
@@ -173,7 +175,7 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not add synthetic completion text when messaging tool already delivered output", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       sessionKey: "agent:main:discord:direct:u123",
       toolMetas: [{ toolName: "message_send", meta: "sent to #ops" }],
       didSendViaMessagingTool: true,
@@ -183,25 +185,19 @@ describe("buildEmbeddedRunPayloads", () => {
         content: [],
       }),
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("does not add synthetic completion text when the run still has a tool error", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       toolMetas: [{ toolName: "browser", meta: "open https://example.com" }],
       lastToolError: { toolName: "browser", error: "url required" },
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("does not add synthetic completion text when no tools ran", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastAssistant: makeStoppedAssistant(),
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {

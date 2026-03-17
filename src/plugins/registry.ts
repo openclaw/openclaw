@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
 import type {
@@ -23,6 +22,7 @@ import {
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
+  ImageGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliRegistrar,
@@ -32,6 +32,7 @@ import type {
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
+  MediaUnderstandingProviderPlugin,
   ProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -47,6 +48,7 @@ import type {
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
+  SpeechProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
 
@@ -82,7 +84,6 @@ export type PluginChannelRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
-  dock?: ChannelDock;
   source: string;
   rootDir?: string;
 };
@@ -104,13 +105,22 @@ export type PluginProviderRegistration = {
   rootDir?: string;
 };
 
-export type PluginWebSearchProviderRegistration = {
+type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
-  provider: WebSearchProviderPlugin;
+  provider: T;
   source: string;
   rootDir?: string;
 };
+
+export type PluginSpeechProviderRegistration =
+  PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+export type PluginMediaUnderstandingProviderRegistration =
+  PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
+export type PluginImageGenerationProviderRegistration =
+  PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
+export type PluginWebSearchProviderRegistration =
+  PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 
 export type PluginHookRegistration = {
   pluginId: string;
@@ -156,6 +166,9 @@ export type PluginRecord = {
   hookNames: string[];
   channelIds: string[];
   providerIds: string[];
+  speechProviderIds: string[];
+  mediaUnderstandingProviderIds: string[];
+  imageGenerationProviderIds: string[];
   webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
@@ -176,6 +189,9 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  speechProviders: PluginSpeechProviderRegistration[];
+  mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
+  imageGenerationProviders: PluginImageGenerationProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -221,6 +237,9 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channels: [],
     channelSetups: [],
     providers: [],
+    speechProviders: [],
+    mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
     webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
@@ -516,7 +535,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
-      dock: normalized.dock,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -553,34 +571,92 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
-    const id = provider.id.trim();
+  const registerUniqueProviderLike = <
+    T extends { id: string },
+    R extends PluginOwnedProviderRegistration<T>,
+  >(params: {
+    record: PluginRecord;
+    provider: T;
+    kindLabel: string;
+    registrations: R[];
+    ownedIds: string[];
+  }) => {
+    const id = params.provider.id.trim();
+    const { record, kindLabel } = params;
+    const missingLabel = `${kindLabel} registration missing id`;
+    const duplicateLabel = `${kindLabel} already registered: ${id}`;
     if (!id) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "web search provider registration missing id",
+        message: missingLabel,
       });
       return;
     }
-    const existing = registry.webSearchProviders.find((entry) => entry.provider.id === id);
+    const existing = params.registrations.find((entry) => entry.provider.id === id);
     if (existing) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `web search provider already registered: ${id} (${existing.pluginId})`,
+        message: `${duplicateLabel} (${existing.pluginId})`,
       });
       return;
     }
-    record.webSearchProviderIds.push(id);
-    registry.webSearchProviders.push({
+    params.ownedIds.push(id);
+    params.registrations.push({
       pluginId: record.id,
       pluginName: record.name,
-      provider,
+      provider: params.provider,
       source: record.source,
       rootDir: record.rootDir,
+    } as R);
+  };
+
+  const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "speech provider",
+      registrations: registry.speechProviders,
+      ownedIds: record.speechProviderIds,
+    });
+  };
+
+  const registerMediaUnderstandingProvider = (
+    record: PluginRecord,
+    provider: MediaUnderstandingProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "media provider",
+      registrations: registry.mediaUnderstandingProviders,
+      ownedIds: record.mediaUnderstandingProviderIds,
+    });
+  };
+
+  const registerImageGenerationProvider = (
+    record: PluginRecord,
+    provider: ImageGenerationProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "image-generation provider",
+      registrations: registry.imageGenerationProviders,
+      ownedIds: record.imageGenerationProviderIds,
+    });
+  };
+
+  const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "web search provider",
+      registrations: registry.webSearchProviders,
+      ownedIds: record.webSearchProviderIds,
     });
   };
 
@@ -792,6 +868,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerChannel: (registration) => registerChannel(record, registration, registrationMode),
       registerProvider:
         registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
+      registerSpeechProvider:
+        registrationMode === "full"
+          ? (provider) => registerSpeechProvider(record, provider)
+          : () => {},
+      registerMediaUnderstandingProvider:
+        registrationMode === "full"
+          ? (provider) => registerMediaUnderstandingProvider(record, provider)
+          : () => {},
+      registerImageGenerationProvider:
+        registrationMode === "full"
+          ? (provider) => registerImageGenerationProvider(record, provider)
+          : () => {},
       registerWebSearchProvider:
         registrationMode === "full"
           ? (provider) => registerWebSearchProvider(record, provider)
@@ -865,6 +953,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerSpeechProvider,
+    registerMediaUnderstandingProvider,
+    registerImageGenerationProvider,
     registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,

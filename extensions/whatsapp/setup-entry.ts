@@ -1,3 +1,4 @@
-import { whatsappPlugin } from "./src/channel.js";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { whatsappSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: whatsappPlugin };
+export default defineSetupPluginEntry(whatsappSetupPlugin);

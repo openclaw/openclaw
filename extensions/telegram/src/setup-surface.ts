@@ -1,14 +1,13 @@
-import { type ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
+  DEFAULT_ACCOUNT_ID,
+  hasConfiguredSecretInput,
+  type OpenClawConfig,
   patchChannelConfigForAccount,
   setChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+  setSetupChannelEnabled,
+  splitSetupEntries,
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import {
@@ -22,7 +21,7 @@ import {
 
 const channel = "telegram" as const;
 
-const dmPolicy: ChannelOnboardingDmPolicy = {
+const dmPolicy: ChannelSetupDmPolicy = {
   label: "Telegram",
   channel,
   policyKey: "channels.telegram.dmPolicy",
@@ -89,7 +88,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     placeholder: "@username",
     invalidWithoutCredentialNote:
       "Telegram token missing; use numeric sender ids (usernames require a bot token).",
-    parseInputs: splitOnboardingEntries,
+    parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
     resolveEntries: async ({ credentialValues, entries }) =>
       resolveTelegramAllowFromEntries({
@@ -105,7 +104,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
       }),
   },
   dmPolicy,
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
 export { parseTelegramAllowFromId, telegramSetupAdapter };

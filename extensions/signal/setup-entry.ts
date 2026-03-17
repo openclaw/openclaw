@@ -1,3 +1,4 @@
-import { signalPlugin } from "./src/channel.js";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { signalSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: signalPlugin };
+export default defineSetupPluginEntry(signalSetupPlugin);

@@ -1,19 +1,17 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   addWildcardAllowFrom,
-  mergeAllowFromEntries,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
   applySetupAccountConfigPatch,
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  mergeAllowFromEntries,
   migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  splitSetupEntries,
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+  type DmPolicy,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
@@ -48,7 +46,7 @@ function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
 
 async function promptAllowFrom(params: {
   cfg: OpenClawConfig;
-  prompter: Parameters<NonNullable<ChannelOnboardingDmPolicy["promptAllowFrom"]>>[0]["prompter"];
+  prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
 }): Promise<OpenClawConfig> {
   const current = params.cfg.channels?.googlechat?.dm?.allowFrom ?? [];
   const entry = await params.prompter.text({
@@ -57,7 +55,7 @@ async function promptAllowFrom(params: {
     initialValue: current[0] ? String(current[0]) : undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
-  const parts = splitOnboardingEntries(String(entry));
+  const parts = splitSetupEntries(String(entry));
   const unique = mergeAllowFromEntries(undefined, parts);
   return {
     ...params.cfg,
@@ -76,7 +74,7 @@ async function promptAllowFrom(params: {
   };
 }
 
-const googlechatDmPolicy: ChannelOnboardingDmPolicy = {
+const googlechatDmPolicy: ChannelSetupDmPolicy = {
   label: "Google Chat",
   channel,
   policyKey: "channels.googlechat.dm.policy",

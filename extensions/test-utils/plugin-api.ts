@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 
 type TestPluginApiInput = Partial<OpenClawPluginApi> &
   Pick<OpenClawPluginApi, "id" | "name" | "source" | "config" | "runtime">;
@@ -15,6 +15,9 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     registerCli() {},
     registerService() {},
     registerProvider() {},
+    registerSpeechProvider() {},
+    registerMediaUnderstandingProvider() {},
+    registerImageGenerationProvider() {},
     registerWebSearchProvider() {},
     registerInteractiveHandler() {},
     registerCommand() {},

@@ -1,20 +1,15 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  formatResolvedUnresolvedNote,
   mergeAllowFromEntries,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
-  migrateBaseNameToDefaultAccount,
+  normalizeAccountId,
   patchScopedAccountConfig,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { formatResolvedUnresolvedNote } from "../../../src/plugin-sdk/resolution-notes.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  setTopLevelChannelDmPolicyWithAllowFrom,
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -22,6 +17,7 @@ import {
   checkZcaAuthenticated,
 } from "./accounts.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
+import { zalouserSetupAdapter } from "./setup-core.js";
 import {
   logoutZaloProfile,
   resolveZaloAllowFromEntries,
@@ -96,7 +92,7 @@ async function noteZalouserHelp(
 
 async function promptZalouserAllowFrom(params: {
   cfg: OpenClawConfig;
-  prompter: Parameters<NonNullable<ChannelOnboardingDmPolicy["promptAllowFrom"]>>[0]["prompter"];
+  prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
   accountId: string;
 }): Promise<OpenClawConfig> {
   const { cfg, prompter, accountId } = params;
@@ -149,7 +145,7 @@ async function promptZalouserAllowFrom(params: {
   }
 }
 
-const zalouserDmPolicy: ChannelOnboardingDmPolicy = {
+const zalouserDmPolicy: ChannelSetupDmPolicy = {
   label: "Zalo Personal",
   channel,
   policyKey: "channels.zalouser.dmPolicy",
@@ -169,38 +165,7 @@ const zalouserDmPolicy: ChannelOnboardingDmPolicy = {
   },
 };
 
-export const zalouserSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: () => null,
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    return applySetupAccountConfigPatch({
-      cfg: next,
-      channelKey: channel,
-      accountId,
-      patch: {},
-    });
-  },
-};
+export { zalouserSetupAdapter } from "./setup-core.js";
 
 export const zalouserSetupWizard: ChannelSetupWizard = {
   channel,

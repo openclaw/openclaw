@@ -168,7 +168,7 @@ const mocks = vi.hoisted(() => ({
     configSnapshot: null,
   }),
   callGateway: vi.fn().mockResolvedValue({}),
-  listAgentsForGateway: vi.fn().mockReturnValue({
+  listGatewayAgentsBasic: vi.fn().mockReturnValue({
     defaultId: "main",
     mainKey: "agent:main:main",
     scope: "per-sender",
@@ -299,11 +299,18 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/call.js")>();
   return { ...actual, callGateway: mocks.callGateway };
 });
+vi.mock("../gateway/agent-list.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/agent-list.js")>();
+  return {
+    ...actual,
+    listGatewayAgentsBasic: mocks.listGatewayAgentsBasic,
+  };
+});
+
 vi.mock("../gateway/session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
   return {
     ...actual,
-    listAgentsForGateway: mocks.listAgentsForGateway,
   };
 });
 vi.mock("../infra/openclaw-root.js", () => ({
@@ -512,6 +519,11 @@ describe("statusCommand", () => {
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
     expect(payload.gateway.error ?? payload.gateway.authWarning ?? null).not.toBeNull();
+    if (Array.isArray(payload.secretDiagnostics) && payload.secretDiagnostics.length > 0) {
+      expect(
+        payload.secretDiagnostics.some((entry: string) => entry.includes("gateway.auth.token")),
+      ).toBe(true);
+    }
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
@@ -603,11 +615,11 @@ describe("statusCommand", () => {
   });
 
   it("includes sessions across agents in JSON output", async () => {
-    const originalAgents = mocks.listAgentsForGateway.getMockImplementation();
+    const originalAgents = mocks.listGatewayAgentsBasic.getMockImplementation();
     const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
     const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
 
-    mocks.listAgentsForGateway.mockReturnValue({
+    mocks.listGatewayAgentsBasic.mockReturnValue({
       defaultId: "main",
       mainKey: "agent:main:main",
       scope: "per-sender",
@@ -646,7 +658,7 @@ describe("statusCommand", () => {
     ).toBe(true);
 
     if (originalAgents) {
-      mocks.listAgentsForGateway.mockImplementation(originalAgents);
+      mocks.listGatewayAgentsBasic.mockImplementation(originalAgents);
     }
     if (originalResolveStorePath) {
       mocks.resolveStorePath.mockImplementation(originalResolveStorePath);

@@ -87,7 +87,7 @@ export type PluginRuntimeChannel = {
     shouldHandleTextCommands: typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
   };
   discord: {
-    messageActions: typeof import("../../channels/plugins/actions/discord.js").discordMessageActions;
+    messageActions: typeof import("../../../extensions/discord/src/channel-actions.js").discordMessageActions;
     auditChannelPermissions: typeof import("../../../extensions/discord/src/audit.js").auditDiscordChannelPermissions;
     listDirectoryGroupsLive: typeof import("../../../extensions/discord/src/directory-live.js").listDiscordDirectoryGroupsLive;
     listDirectoryPeersLive: typeof import("../../../extensions/discord/src/directory-live.js").listDiscordDirectoryPeersLive;
@@ -98,6 +98,16 @@ export type PluginRuntimeChannel = {
     sendMessageDiscord: typeof import("../../../extensions/discord/src/send.js").sendMessageDiscord;
     sendPollDiscord: typeof import("../../../extensions/discord/src/send.js").sendPollDiscord;
     monitorDiscordProvider: typeof import("../../../extensions/discord/src/monitor.js").monitorDiscordProvider;
+    threadBindings: {
+      getManager: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").getThreadBindingManager;
+      resolveIdleTimeoutMs: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingIdleTimeoutMs;
+      resolveInactivityExpiresAt: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingInactivityExpiresAt;
+      resolveMaxAgeMs: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingMaxAgeMs;
+      resolveMaxAgeExpiresAt: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingMaxAgeExpiresAt;
+      setIdleTimeoutBySessionKey: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").setThreadBindingIdleTimeoutBySessionKey;
+      setMaxAgeBySessionKey: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").setThreadBindingMaxAgeBySessionKey;
+      unbindBySessionKey: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").unbindThreadBindingsBySessionKey;
+    };
     typing: {
       pulse: typeof import("../../../extensions/discord/src/send.js").sendTypingDiscord;
       start: (params: {
@@ -137,7 +147,11 @@ export type PluginRuntimeChannel = {
     sendMessageTelegram: typeof import("../../../extensions/telegram/src/send.js").sendMessageTelegram;
     sendPollTelegram: typeof import("../../../extensions/telegram/src/send.js").sendPollTelegram;
     monitorTelegramProvider: typeof import("../../../extensions/telegram/src/monitor.js").monitorTelegramProvider;
-    messageActions: typeof import("../../channels/plugins/actions/telegram.js").telegramMessageActions;
+    messageActions: typeof import("../../../extensions/telegram/src/channel-actions.js").telegramMessageActions;
+    threadBindings: {
+      setIdleTimeoutBySessionKey: typeof import("../../../extensions/telegram/src/thread-bindings.js").setTelegramThreadBindingIdleTimeoutBySessionKey;
+      setMaxAgeBySessionKey: typeof import("../../../extensions/telegram/src/thread-bindings.js").setTelegramThreadBindingMaxAgeBySessionKey;
+    };
     typing: {
       pulse: typeof import("../../../extensions/telegram/src/send.js").sendTypingTelegram;
       start: (params: {
@@ -197,7 +211,7 @@ export type PluginRuntimeChannel = {
     waitForWebLogin: typeof import("../../../extensions/whatsapp/src/login-qr.js").waitForWebLogin;
     monitorWebChannel: typeof import("../../channels/web/index.js").monitorWebChannel;
     handleWhatsAppAction: typeof import("../../agents/tools/whatsapp-actions.js").handleWhatsAppAction;
-    createLoginTool: typeof import("../../channels/plugins/agent-tools/whatsapp-login.js").createWhatsAppLoginTool;
+    createLoginTool: typeof import("./runtime-whatsapp-login-tool.js").createRuntimeWhatsAppLoginTool;
   };
   line: {
     listLineAccountIds: typeof import("../../line/accounts.js").listLineAccountIds;

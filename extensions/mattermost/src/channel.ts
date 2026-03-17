@@ -1,9 +1,9 @@
+import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
+import { createScopedAccountConfigAccessors } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-  createScopedAccountConfigAccessors,
-  formatNormalizedAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-policy";
 import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -71,11 +71,11 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
   },
-  supportsButtons: ({ cfg }) => {
+  getCapabilities: ({ cfg }) => {
     const accounts = listMattermostAccountIds(cfg)
       .map((id) => resolveMattermostAccount({ cfg, accountId: id }))
       .filter((a) => a.enabled && a.botToken?.trim() && a.baseUrl?.trim());
-    return accounts.length > 0;
+    return accounts.length > 0 ? (["buttons"] as const) : [];
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {

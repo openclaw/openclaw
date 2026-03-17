@@ -1,3 +1,4 @@
-import { imessagePlugin } from "./src/channel.js";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { imessageSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: imessagePlugin };
+export default defineSetupPluginEntry(imessageSetupPlugin);
