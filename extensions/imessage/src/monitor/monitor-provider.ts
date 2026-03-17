@@ -504,12 +504,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
     const emoji = tapbackEmoji(reaction.reaction_type);
-    const targetPreview = reaction.target_text
-      ? truncateUtf16Safe(reaction.target_text, 100)
-      : undefined;
-    const bodyText = targetPreview
-      ? `[${emoji} reaction to: "${targetPreview}"]`
-      : `[${emoji} reaction]`;
+    // Do NOT include target_text in the synthetic body.  The body flows through
+    // resolveIMessageInboundDecision where it is matched against mention patterns
+    // and allow-list policies.  Including untrusted target_text would let a
+    // tapback on a message that happens to contain a mention bypass requireMention
+    // gating, or influence other policy checks.
+    const bodyText = `[${emoji} reaction]`;
 
     // Synthesize an IMessagePayload so the standard message pipeline handles it.
     const syntheticMessage: IMessagePayload = {
