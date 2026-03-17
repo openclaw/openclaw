@@ -99,6 +99,7 @@ describe("memory search async sync", () => {
     });
 
     manager = await createMemoryManagerOrThrow(cfg);
+    (manager as unknown as { dirty: boolean }).dirty = true;
     await manager.search("hello");
 
     let closed = false;
