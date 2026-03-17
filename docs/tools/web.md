@@ -32,7 +32,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 
 | Provider                  | Result shape                       | Provider-specific filters                                    | Notes                                                                          | API key                                     |
 | ------------------------- | ---------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------- |
-| **baidu**                 | Fast, structured results           | -                                                            | Use Baidu web search                                                           | `BAIDU_SEARCH_API_KEY`                      |
+| **Baidu**                 | Fast, structured results           | -                                                            | Use Baidu web search                                                           | `BAIDU_SEARCH_API_KEY`                      |
 | **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time                       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
 | **Firecrawl Search**      | Structured results with snippets   | Use `firecrawl_search` for Firecrawl-specific search options | Best for pairing search with Firecrawl scraping/extraction                     | `FIRECRAWL_API_KEY`                         |
 | **Gemini**                | AI-synthesized answers + citations | —                                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
@@ -44,7 +44,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 
 The table above is alphabetical. If no `provider` is explicitly set, runtime auto-detection checks providers in this order:
 
-1. **Baidu** - `BAIDU_SEARCH__API_KEY` env var or `tools.web.search.baidu.apiKey` config
+1. **Baidu** — `BAIDU_SEARCH_API_KEY` env var or `tools.web.search.baidu.apiKey` config
 2. **Brave** — `BRAVE_API_KEY` env var or `tools.web.search.apiKey` config
 3. **Gemini** — `GEMINI_API_KEY` env var or `tools.web.search.gemini.apiKey` config
 4. **Grok** — `XAI_API_KEY` env var or `tools.web.search.grok.apiKey` config

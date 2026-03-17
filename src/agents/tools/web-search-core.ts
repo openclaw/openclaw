@@ -632,7 +632,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
     return {
       error: "missing_baidu_search_api_key",
       message:
-        "web_search (baidu) needs an Baidu Search API key. Set BAIDU_SEARCH_API_KEY in the Gateway environment, or configure tools.web.search.baidu.apiKey.",
+        "web_search (baidu) needs a Baidu Search API key. Set BAIDU_SEARCH_API_KEY in the Gateway environment, or configure tools.web.search.baidu.apiKey.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
@@ -2109,7 +2109,7 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : provider == "baidu"
+                : provider === "baidu"
                   ? resolveBaiduApiKey(baiduConfig)
                   : resolveSearchApiKey(search);
       if (!apiKey) {
