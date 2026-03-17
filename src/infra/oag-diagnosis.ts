@@ -14,6 +14,7 @@ const log = createSubsystemLogger("oag/diagnosis");
 const DIAGNOSIS_COOLDOWN_MS = 4 * 60 * 60_000; // 4 hours
 const MAX_LIFECYCLE_CONTEXT = 5;
 const MAX_PROMPT_VALUE_LENGTH = 200;
+const MAX_HISTORICAL_RECOMMENDATIONS = 10;
 
 /**
  * Sanitize an arbitrary value for safe inclusion in a diagnosis prompt.
@@ -70,12 +71,45 @@ function shouldRunDiagnosis(memory: OagMemory, trigger: DiagnosisTrigger): boole
   return true;
 }
 
+export function buildHistoricalRecommendations(memory: OagMemory): string {
+  const lines: string[] = [];
+  // Collect recommendations with outcomes from completed diagnoses, newest first
+  const completedDiagnoses = memory.diagnoses
+    .filter((d) => d.completedAt)
+    .slice(-MAX_HISTORICAL_RECOMMENDATIONS);
+
+  for (const diag of completedDiagnoses) {
+    for (const rec of diag.recommendations) {
+      if (rec.configPath && rec.outcome) {
+        const configPath = sanitizeForPrompt(rec.configPath);
+        lines.push(
+          `- ${configPath}: ${sanitizeForPrompt(rec.description ?? "change")} -> ${sanitizeForPrompt(rec.outcome)}`,
+        );
+      }
+    }
+    // Also include trackedRecommendations if present
+    if (diag.trackedRecommendations) {
+      for (const tr of diag.trackedRecommendations) {
+        if (tr.outcome) {
+          lines.push(
+            `- ${sanitizeForPrompt(tr.parameter)}: ${sanitizeForPrompt(tr.oldValue)} -> ${sanitizeForPrompt(tr.newValue)} -> ${sanitizeForPrompt(tr.outcome)}`,
+          );
+        }
+      }
+    }
+  }
+
+  // Limit to MAX_HISTORICAL_RECOMMENDATIONS total lines
+  return lines.slice(-MAX_HISTORICAL_RECOMMENDATIONS).join("\n");
+}
+
 export function composeDiagnosisPrompt(trigger: DiagnosisTrigger, memory: OagMemory): string {
   const recentLifecycles = memory.lifecycles.slice(-MAX_LIFECYCLE_CONTEXT);
   const metrics = getOagMetrics();
   const cfg = loadConfig();
   const oagConfig = cfg.gateway?.oag ?? {};
   const previousEvolutions = memory.evolutions.slice(-5);
+  const historicalRecs = buildHistoricalRecommendations(memory);
 
   return `You are OAG (Operational Assurance Gateway) performing a self-diagnosis.
 Your analysis will be used to automatically tune operational parameters.
@@ -99,6 +133,7 @@ ${sanitizeForPrompt(oagConfig)}
 
 ## Previous Evolutions
 ${sanitizeForPrompt(previousEvolutions)}
+${historicalRecs ? `\n## Previous Recommendation Outcomes\n${historicalRecs}` : ""}
 
 ## Response Schema
 {
@@ -197,10 +232,23 @@ export async function completeDiagnosis(
   if (record) {
     record.rootCause = result.rootCause;
     record.confidence = result.confidence;
-    record.recommendations = result.recommendations.map((r) => ({
+    record.recommendations = result.recommendations.map((r, i) => ({
       ...r,
       applied: false,
+      recommendationId: `${diagnosisId}-rec-${i}`,
+      outcome: "pending" as const,
     }));
+    record.trackedRecommendations = result.recommendations
+      .filter((r) => r.type === "config_change" && r.configPath)
+      .map((r, i) => ({
+        id: `${diagnosisId}-rec-${i}`,
+        parameter: r.configPath ?? "",
+        oldValue: undefined,
+        newValue: r.suggestedValue,
+        risk: r.risk,
+        applied: false,
+        outcome: "pending" as const,
+      }));
     record.completedAt = new Date().toISOString();
     const idx = memory.diagnoses.findIndex((d) => d.id === diagnosisId);
     if (idx >= 0) {

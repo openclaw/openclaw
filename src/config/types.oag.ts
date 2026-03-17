@@ -31,6 +31,8 @@ export type OagConfig = {
     restartRegressionThreshold?: number;
     /** Delivery failure threshold for regression detection (default: 3). */
     failureRegressionThreshold?: number;
+    /** Interval for periodic runtime analysis in milliseconds (default: 6h). */
+    periodicAnalysisIntervalMs?: number;
   };
   scheduler?: {
     /** Maximum wait time before forcing task execution in milliseconds (default: 5min). */

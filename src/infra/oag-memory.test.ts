@@ -38,6 +38,10 @@ vi.mock("./oag-config.js", () => ({
   resolveOagMemoryMaxLifecycleAgeDays: () => 30,
 }));
 
+vi.mock("./restart-sentinel.js", () => ({
+  resolveRestartSentinelPath: () => "/tmp/oag-test/restart-sentinel.json",
+}));
+
 const {
   loadOagMemory,
   saveOagMemory,
@@ -47,6 +51,9 @@ const {
   getRecentCrashes,
   findRecurringIncidentPattern,
   appendAuditEntry,
+  appendMetricSnapshot,
+  updateRecommendationOutcome,
+  readSentinelContext,
 } = await import("./oag-memory.js");
 
 describe("oag-memory", () => {
@@ -277,5 +284,266 @@ describe("oag-memory", () => {
 
     const memory = await loadOagMemory();
     expect(memory.auditLog).toEqual([]);
+  });
+
+  it("ensures metricSeries on legacy memory files missing the field", async () => {
+    const mainPath = "/tmp/oag-test/oag-memory.json";
+    const legacy = {
+      version: 1,
+      lifecycles: [],
+      evolutions: [],
+      diagnoses: [],
+    };
+    mockFiles.set(mainPath, JSON.stringify(legacy));
+
+    const memory = await loadOagMemory();
+    expect(memory.metricSeries).toEqual([]);
+  });
+
+  it("appends metric snapshots", async () => {
+    await appendMetricSnapshot({
+      timestamp: new Date().toISOString(),
+      uptimeMs: 3600000,
+      metrics: { channelRestarts: 5, noteDeliveries: 10 },
+    });
+    await appendMetricSnapshot({
+      timestamp: new Date().toISOString(),
+      uptimeMs: 7200000,
+      metrics: { channelRestarts: 8, noteDeliveries: 15 },
+    });
+    const memory = await loadOagMemory();
+    expect(memory.metricSeries).toHaveLength(2);
+    expect(memory.metricSeries[0].metrics.channelRestarts).toBe(5);
+    expect(memory.metricSeries[1].metrics.channelRestarts).toBe(8);
+  });
+
+  it("caps metricSeries at 168 entries", async () => {
+    // Pre-fill with 167 entries
+    const memory = await loadOagMemory();
+    for (let i = 0; i < 167; i++) {
+      memory.metricSeries.push({
+        timestamp: new Date(Date.now() - (167 - i) * 3600000).toISOString(),
+        uptimeMs: i * 3600000,
+        metrics: { channelRestarts: i },
+      });
+    }
+    await saveOagMemory(memory);
+
+    // Append 2 more — should cap at 168
+    await appendMetricSnapshot({
+      timestamp: new Date().toISOString(),
+      uptimeMs: 167 * 3600000,
+      metrics: { channelRestarts: 167 },
+    });
+    await appendMetricSnapshot({
+      timestamp: new Date().toISOString(),
+      uptimeMs: 168 * 3600000,
+      metrics: { channelRestarts: 168 },
+    });
+
+    const final = await loadOagMemory();
+    expect(final.metricSeries).toHaveLength(168);
+    // Oldest entry (index 0, channelRestarts: 0) should be trimmed
+    expect(final.metricSeries[0].metrics.channelRestarts).toBe(1);
+    expect(final.metricSeries[167].metrics.channelRestarts).toBe(168);
+  });
+
+  describe("updateRecommendationOutcome", () => {
+    it("updates outcome for a recommendation in recommendations array", async () => {
+      await recordDiagnosis({
+        id: "diag-outcome-1",
+        triggeredAt: new Date().toISOString(),
+        trigger: "recurring_pattern",
+        rootCause: "Rate limit",
+        confidence: 0.9,
+        recommendations: [
+          {
+            type: "config_change",
+            description: "Increase budget",
+            configPath: "gateway.oag.delivery.recoveryBudgetMs",
+            suggestedValue: 90000,
+            risk: "low",
+            applied: true,
+            recommendationId: "diag-outcome-1-rec-0",
+            outcome: "pending",
+          },
+        ],
+        completedAt: new Date().toISOString(),
+      });
+
+      const updated = await updateRecommendationOutcome(
+        "diag-outcome-1",
+        "diag-outcome-1-rec-0",
+        "effective",
+      );
+      expect(updated).toBe(true);
+
+      const memory = await loadOagMemory();
+      const diag = memory.diagnoses.find((d) => d.id === "diag-outcome-1");
+      expect(diag).toBeDefined();
+      expect(diag!.recommendations[0].outcome).toBe("effective");
+      expect(diag!.recommendations[0].outcomeTimestamp).toBeDefined();
+    });
+
+    it("updates outcome for a tracked recommendation", async () => {
+      await recordDiagnosis({
+        id: "diag-outcome-2",
+        triggeredAt: new Date().toISOString(),
+        trigger: "recurring_pattern",
+        rootCause: "Timeout",
+        confidence: 0.8,
+        recommendations: [],
+        trackedRecommendations: [
+          {
+            id: "diag-outcome-2-rec-0",
+            parameter: "gateway.oag.delivery.maxRetries",
+            oldValue: 5,
+            newValue: 7,
+            risk: "low",
+            applied: true,
+            outcome: "pending",
+          },
+        ],
+        completedAt: new Date().toISOString(),
+      });
+
+      const updated = await updateRecommendationOutcome(
+        "diag-outcome-2",
+        "diag-outcome-2-rec-0",
+        "reverted",
+      );
+      expect(updated).toBe(true);
+
+      const memory = await loadOagMemory();
+      const diag = memory.diagnoses.find((d) => d.id === "diag-outcome-2");
+      expect(diag!.trackedRecommendations![0].outcome).toBe("reverted");
+      expect(diag!.trackedRecommendations![0].outcomeTimestamp).toBeDefined();
+    });
+
+    it("returns false when diagnosis not found", async () => {
+      const updated = await updateRecommendationOutcome("nonexistent", "rec-0", "effective");
+      expect(updated).toBe(false);
+    });
+
+    it("returns false when recommendation id not found in diagnosis", async () => {
+      await recordDiagnosis({
+        id: "diag-outcome-3",
+        triggeredAt: new Date().toISOString(),
+        trigger: "recurring_pattern",
+        rootCause: "test",
+        confidence: 0.5,
+        recommendations: [
+          {
+            type: "config_change",
+            description: "test",
+            risk: "low",
+            applied: false,
+            recommendationId: "diag-outcome-3-rec-0",
+          },
+        ],
+        completedAt: new Date().toISOString(),
+      });
+
+      const updated = await updateRecommendationOutcome(
+        "diag-outcome-3",
+        "nonexistent-rec",
+        "effective",
+      );
+      expect(updated).toBe(false);
+    });
+  });
+
+  describe("readSentinelContext", () => {
+    it("returns context from a valid sentinel file", async () => {
+      const sentinel = {
+        version: 1,
+        payload: {
+          kind: "restart",
+          status: "ok",
+          ts: 1710700000000,
+          sessionKey: "session-abc",
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        },
+      };
+      mockFiles.set("/tmp/oag-test/restart-sentinel.json", JSON.stringify(sentinel));
+      const ctx = await readSentinelContext();
+      expect(ctx).toBeDefined();
+      expect(ctx!.sessionKey).toBe("session-abc");
+      expect(ctx!.channel).toBe("telegram");
+      expect(ctx!.stopReason).toBe("restart");
+      expect(ctx!.timestamp).toBeDefined();
+    });
+
+    it("returns undefined when sentinel file does not exist", async () => {
+      const ctx = await readSentinelContext();
+      expect(ctx).toBeUndefined();
+    });
+
+    it("returns undefined for corrupted sentinel file", async () => {
+      mockFiles.set("/tmp/oag-test/restart-sentinel.json", "NOT VALID JSON{{{");
+      const ctx = await readSentinelContext();
+      expect(ctx).toBeUndefined();
+    });
+
+    it("returns undefined when sentinel has wrong version", async () => {
+      const sentinel = {
+        version: 99,
+        payload: {
+          kind: "restart",
+          ts: 1710700000000,
+        },
+      };
+      mockFiles.set("/tmp/oag-test/restart-sentinel.json", JSON.stringify(sentinel));
+      const ctx = await readSentinelContext();
+      expect(ctx).toBeUndefined();
+    });
+
+    it("returns undefined when payload has no extractable fields", async () => {
+      const sentinel = {
+        version: 1,
+        payload: {
+          status: "ok",
+          message: "just a message",
+        },
+      };
+      mockFiles.set("/tmp/oag-test/restart-sentinel.json", JSON.stringify(sentinel));
+      const ctx = await readSentinelContext();
+      expect(ctx).toBeUndefined();
+    });
+  });
+
+  it("records lifecycle shutdown with sentinel context", async () => {
+    await recordLifecycleShutdown({
+      startedAt: Date.now() - 60000,
+      stopReason: "crash",
+      metricsSnapshot: { channelRestarts: 1 },
+      incidents: [],
+      sentinelContext: {
+        sessionKey: "sess-123",
+        channel: "telegram",
+        stopReason: "restart",
+        timestamp: "2026-03-17T00:00:00.000Z",
+      },
+    });
+    const memory = await loadOagMemory();
+    expect(memory.lifecycles).toHaveLength(1);
+    expect(memory.lifecycles[0].sentinelContext).toBeDefined();
+    expect(memory.lifecycles[0].sentinelContext!.sessionKey).toBe("sess-123");
+    expect(memory.lifecycles[0].sentinelContext!.channel).toBe("telegram");
+  });
+
+  it("omits sentinelContext when not provided", async () => {
+    await recordLifecycleShutdown({
+      startedAt: Date.now() - 60000,
+      stopReason: "clean",
+      metricsSnapshot: {},
+      incidents: [],
+    });
+    const memory = await loadOagMemory();
+    expect(memory.lifecycles).toHaveLength(1);
+    expect(memory.lifecycles[0].sentinelContext).toBeUndefined();
   });
 });

@@ -4,9 +4,25 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveOagMemoryMaxLifecycleAgeDays } from "./oag-config.js";
 import type { OagMetricCounters } from "./oag-metrics.js";
+import { resolveRestartSentinelPath } from "./restart-sentinel.js";
+
+export type SentinelContext = {
+  sessionKey?: string;
+  channel?: string;
+  stopReason?: string;
+  timestamp?: string;
+};
 
 const OAG_MEMORY_FILENAME = "oag-memory.json";
 const MAX_LIFECYCLES = 100;
+// 7 days of hourly snapshots
+const MAX_METRIC_SERIES = 168;
+
+export type MetricSnapshot = {
+  timestamp: string;
+  uptimeMs: number;
+  metrics: Record<string, number>;
+};
 
 export type OagIncident = {
   type:
@@ -27,10 +43,11 @@ export type OagLifecycle = {
   id: string;
   startedAt: string;
   stoppedAt: string;
-  stopReason: "clean" | "crash" | "restart" | "unknown";
+  stopReason: "clean" | "crash" | "restart" | "checkpoint" | "unknown";
   uptimeMs: number;
   metricsSnapshot: Partial<OagMetricCounters>;
   incidents: OagIncident[];
+  sentinelContext?: SentinelContext;
 };
 
 export type OagEvolutionRecord = {
@@ -46,6 +63,17 @@ export type OagEvolutionRecord = {
   outcomeAt?: string;
 };
 
+export type TrackedRecommendation = {
+  id: string;
+  parameter: string;
+  oldValue: unknown;
+  newValue: unknown;
+  risk: "low" | "medium" | "high";
+  applied: boolean;
+  outcome?: "effective" | "reverted" | "neutral" | "pending";
+  outcomeTimestamp?: string;
+};
+
 export type OagDiagnosisRecord = {
   id: string;
   triggeredAt: string;
@@ -59,7 +87,11 @@ export type OagDiagnosisRecord = {
     suggestedValue?: unknown;
     risk: "low" | "medium" | "high";
     applied: boolean;
+    recommendationId?: string;
+    outcome?: "effective" | "reverted" | "neutral" | "pending";
+    outcomeTimestamp?: string;
   }>;
+  trackedRecommendations?: TrackedRecommendation[];
   completedAt: string;
 };
 
@@ -76,11 +108,14 @@ export type OagMemory = {
   evolutions: OagEvolutionRecord[];
   diagnoses: OagDiagnosisRecord[];
   auditLog: OagAuditEntry[];
+  metricSeries: MetricSnapshot[];
   activeObservation?: {
     evolutionAppliedAt: string;
     baselineMetrics: Record<string, number>;
     rollbackChanges: Array<{ configPath: string; previousValue: unknown }>;
     windowMs: number;
+    diagnosisId?: string;
+    recommendationIds?: string[];
   } | null;
 };
 
@@ -97,6 +132,7 @@ function createEmptyMemory(): OagMemory {
     evolutions: [],
     diagnoses: [],
     auditLog: [],
+    metricSeries: [],
     activeObservation: null,
   };
 }
@@ -104,6 +140,9 @@ function createEmptyMemory(): OagMemory {
 function ensureAuditLog(memory: OagMemory): OagMemory {
   if (!Array.isArray(memory.auditLog)) {
     memory.auditLog = [];
+  }
+  if (!Array.isArray(memory.metricSeries)) {
+    memory.metricSeries = [];
   }
   return memory;
 }
@@ -161,10 +200,11 @@ export async function recordLifecycleShutdown(params: {
   metricsSnapshot: Partial<OagMetricCounters>;
   incidents: OagIncident[];
   cfg?: OpenClawConfig;
+  sentinelContext?: SentinelContext;
 }): Promise<void> {
   const memory = await loadOagMemory();
   const now = Date.now();
-  memory.lifecycles.push({
+  const lifecycle: OagLifecycle = {
     id: `gw-${now}`,
     startedAt: new Date(params.startedAt).toISOString(),
     stoppedAt: new Date(now).toISOString(),
@@ -172,7 +212,11 @@ export async function recordLifecycleShutdown(params: {
     uptimeMs: now - params.startedAt,
     metricsSnapshot: params.metricsSnapshot,
     incidents: params.incidents,
-  });
+  };
+  if (params.sentinelContext) {
+    lifecycle.sentinelContext = params.sentinelContext;
+  }
+  memory.lifecycles.push(lifecycle);
   pruneOldLifecycles(memory, params.cfg);
   await saveOagMemory(memory);
 }
@@ -199,6 +243,55 @@ export async function appendAuditEntry(entry: OagAuditEntry): Promise<void> {
   // Cap at MAX_AUDIT_LOG_ENTRIES, keeping the most recent entries
   memory.auditLog = memory.auditLog.slice(-MAX_AUDIT_LOG_ENTRIES);
   await saveOagMemory(memory);
+}
+
+export async function appendMetricSnapshot(snapshot: MetricSnapshot): Promise<void> {
+  const memory = await loadOagMemory();
+  memory.metricSeries.push(snapshot);
+  // Cap at MAX_METRIC_SERIES (168 = 7 days hourly), keeping most recent
+  memory.metricSeries = memory.metricSeries.slice(-MAX_METRIC_SERIES);
+  await saveOagMemory(memory);
+}
+
+export async function updateRecommendationOutcome(
+  diagnosisId: string,
+  recommendationId: string,
+  outcome: "effective" | "reverted" | "neutral" | "pending",
+): Promise<boolean> {
+  const memory = await loadOagMemory();
+  const diagnosis = memory.diagnoses.find((d) => d.id === diagnosisId);
+  if (!diagnosis) {
+    return false;
+  }
+
+  let updated = false;
+  const now = new Date().toISOString();
+
+  // Update in recommendations array
+  for (const rec of diagnosis.recommendations) {
+    if (rec.recommendationId === recommendationId) {
+      rec.outcome = outcome;
+      rec.outcomeTimestamp = now;
+      updated = true;
+    }
+  }
+
+  // Update in trackedRecommendations array
+  if (diagnosis.trackedRecommendations) {
+    for (const tr of diagnosis.trackedRecommendations) {
+      if (tr.id === recommendationId) {
+        tr.outcome = outcome;
+        tr.outcomeTimestamp = now;
+        updated = true;
+      }
+    }
+  }
+
+  if (updated) {
+    await saveOagMemory(memory);
+  }
+
+  return updated;
 }
 
 export function getRecentCrashes(memory: OagMemory, windowHours = 24): OagLifecycle[] {
@@ -245,4 +338,44 @@ export function findRecurringIncidentPattern(
     }
   }
   return patterns;
+}
+
+/**
+ * Reads the restart sentinel file and extracts context relevant for OAG
+ * lifecycle records. Returns undefined when the file is missing or invalid.
+ */
+export async function readSentinelContext(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<SentinelContext | undefined> {
+  const filePath = resolveRestartSentinelPath(env);
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw) as { version?: number; payload?: Record<string, unknown> };
+    if (!parsed || parsed.version !== 1 || !parsed.payload) {
+      return undefined;
+    }
+    const payload = parsed.payload;
+    const ctx: SentinelContext = {};
+    if (typeof payload.sessionKey === "string") {
+      ctx.sessionKey = payload.sessionKey;
+    }
+    // Channel lives inside deliveryContext
+    const dc = payload.deliveryContext as Record<string, unknown> | undefined;
+    if (dc && typeof dc.channel === "string") {
+      ctx.channel = dc.channel;
+    }
+    if (typeof payload.kind === "string") {
+      ctx.stopReason = payload.kind;
+    }
+    if (typeof payload.ts === "number") {
+      ctx.timestamp = new Date(payload.ts).toISOString();
+    }
+    // Only return if at least one field was populated
+    if (ctx.sessionKey || ctx.channel || ctx.stopReason || ctx.timestamp) {
+      return ctx;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }

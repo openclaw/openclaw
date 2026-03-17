@@ -4,6 +4,8 @@ import {
   getOagMetrics,
   getOagMetricsEntries,
   resetOagMetrics,
+  snapshotMetrics,
+  restoreMetricsFromLastSnapshot,
 } from "./oag-metrics.js";
 
 describe("oag-metrics", () => {
@@ -55,6 +57,71 @@ describe("oag-metrics", () => {
     resetOagMetrics();
     const metrics = getOagMetrics();
     expect(metrics.channelRestarts).toBe(0);
+    expect(metrics.noteDeliveries).toBe(0);
+  });
+
+  it("snapshotMetrics captures current counters with timestamp and uptime", () => {
+    incrementOagMetric("channelRestarts", 3);
+    incrementOagMetric("noteDeliveries", 7);
+    const snap = snapshotMetrics(5000);
+    expect(snap.uptimeMs).toBe(5000);
+    expect(snap.timestamp).toBeDefined();
+    expect(snap.metrics.channelRestarts).toBe(3);
+    expect(snap.metrics.noteDeliveries).toBe(7);
+    expect(snap.metrics.deliveryRecoveries).toBe(0);
+  });
+
+  it("snapshotMetrics returns a copy, not a reference to internal counters", () => {
+    incrementOagMetric("channelRestarts", 1);
+    const snap = snapshotMetrics(1000);
+    incrementOagMetric("channelRestarts", 10);
+    expect(snap.metrics.channelRestarts).toBe(1);
+    expect(getOagMetrics().channelRestarts).toBe(11);
+  });
+
+  it("restoreMetricsFromLastSnapshot restores saved counters", () => {
+    const saved = {
+      metrics: {
+        channelRestarts: 42,
+        noteDeliveries: 100,
+        deliveryRecoveries: 5,
+      },
+    };
+    restoreMetricsFromLastSnapshot(saved);
+    const metrics = getOagMetrics();
+    expect(metrics.channelRestarts).toBe(42);
+    expect(metrics.noteDeliveries).toBe(100);
+    expect(metrics.deliveryRecoveries).toBe(5);
+    // Counters not in snapshot stay at 0
+    expect(metrics.stalePollDetections).toBe(0);
+  });
+
+  it("restoreMetricsFromLastSnapshot ignores unknown keys", () => {
+    const saved = {
+      metrics: {
+        channelRestarts: 10,
+        unknownFutureMetric: 999,
+      },
+    };
+    restoreMetricsFromLastSnapshot(saved);
+    const metrics = getOagMetrics();
+    expect(metrics.channelRestarts).toBe(10);
+    // Unknown key should not appear
+    expect((metrics as Record<string, unknown>).unknownFutureMetric).toBeUndefined();
+  });
+
+  it("restoreMetricsFromLastSnapshot skips zero or negative values", () => {
+    incrementOagMetric("channelRestarts", 5);
+    const saved = {
+      metrics: {
+        channelRestarts: 0,
+        noteDeliveries: -1,
+      },
+    };
+    restoreMetricsFromLastSnapshot(saved);
+    const metrics = getOagMetrics();
+    // channelRestarts should keep its existing value since saved is 0
+    expect(metrics.channelRestarts).toBe(5);
     expect(metrics.noteDeliveries).toBe(0);
   });
 });

@@ -48,3 +48,31 @@ export function resetOagMetrics(): void {
     counters[key] = 0;
   }
 }
+
+/** Capture current counters + timestamp as a persistable snapshot. */
+export function snapshotMetrics(uptimeMs: number): {
+  timestamp: string;
+  uptimeMs: number;
+  metrics: Record<string, number>;
+} {
+  return {
+    timestamp: new Date().toISOString(),
+    uptimeMs,
+    metrics: { ...counters },
+  };
+}
+
+/**
+ * Restore cumulative counters from the last persisted snapshot so metrics
+ * accumulate across restarts instead of resetting to 0.
+ */
+export function restoreMetricsFromLastSnapshot(snapshot: {
+  metrics: Record<string, number>;
+}): void {
+  for (const key of Object.keys(counters) as Array<keyof OagMetricCounters>) {
+    const saved = snapshot.metrics[key];
+    if (typeof saved === "number" && saved > 0) {
+      counters[key] = saved;
+    }
+  }
+}

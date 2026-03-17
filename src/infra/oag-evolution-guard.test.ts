@@ -39,6 +39,10 @@ vi.mock("./oag-config.js", () => ({
   resolveOagEvolutionFailureRegressionThreshold: () => 3,
 }));
 
+const updateRecOutcomeCalls = vi.hoisted(
+  () => [] as Array<{ diagnosisId: string; recommendationId: string; outcome: string }>,
+);
+
 vi.mock("./oag-memory.js", () => ({
   loadOagMemory: vi.fn(async () => ({
     ...mockMemory.current,
@@ -49,6 +53,12 @@ vi.mock("./oag-memory.js", () => ({
     mockMemory.current = m as typeof mockMemory.current;
   }),
   appendAuditEntry: vi.fn(async () => {}),
+  updateRecommendationOutcome: vi.fn(
+    async (diagnosisId: string, recommendationId: string, outcome: string) => {
+      updateRecOutcomeCalls.push({ diagnosisId, recommendationId, outcome });
+      return true;
+    },
+  ),
 }));
 
 const {
@@ -73,6 +83,7 @@ describe("oag-evolution-guard", () => {
       lockStalRecoveries: 0,
     };
     appliedConfigs.length = 0;
+    updateRecOutcomeCalls.length = 0;
     mockMemory.current = { version: 1, lifecycles: [], evolutions: [], diagnoses: [] };
   });
 
@@ -179,5 +190,93 @@ describe("oag-evolution-guard", () => {
     // Observation should now be active
     const result = await checkEvolutionHealth();
     expect(result.checked).toBe(true);
+  });
+
+  describe("recommendation outcome linkage", () => {
+    it("updates linked recommendations to 'reverted' on regression", async () => {
+      mockMemory.current.evolutions = [
+        {
+          appliedAt: new Date().toISOString(),
+          source: "agent-diagnosis",
+          trigger: "diagnosis",
+          changes: [],
+          outcome: "pending",
+        },
+      ];
+      await startEvolutionObservation({
+        appliedAt: new Date().toISOString(),
+        rollbackChanges: [
+          { configPath: "gateway.oag.delivery.recoveryBudgetMs", previousValue: 60000 },
+        ],
+        diagnosisId: "diag-link-1",
+        recommendationIds: ["diag-link-1-rec-0", "diag-link-1-rec-1"],
+      });
+
+      // Simulate regression
+      mockMetrics.current.channelRestarts = 5;
+      await checkEvolutionHealth();
+
+      expect(updateRecOutcomeCalls).toHaveLength(2);
+      expect(updateRecOutcomeCalls[0]).toEqual({
+        diagnosisId: "diag-link-1",
+        recommendationId: "diag-link-1-rec-0",
+        outcome: "reverted",
+      });
+      expect(updateRecOutcomeCalls[1]).toEqual({
+        diagnosisId: "diag-link-1",
+        recommendationId: "diag-link-1-rec-1",
+        outcome: "reverted",
+      });
+    });
+
+    it("updates linked recommendations to 'effective' on confirmation", async () => {
+      mockMemory.current.evolutions = [
+        {
+          appliedAt: new Date().toISOString(),
+          source: "agent-diagnosis",
+          trigger: "diagnosis",
+          changes: [],
+          outcome: "pending",
+        },
+      ];
+      await startEvolutionObservation({
+        appliedAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+        rollbackChanges: [],
+        windowMs: 60 * 60_000,
+        diagnosisId: "diag-link-2",
+        recommendationIds: ["diag-link-2-rec-0"],
+      });
+
+      await checkEvolutionHealth();
+
+      expect(updateRecOutcomeCalls).toHaveLength(1);
+      expect(updateRecOutcomeCalls[0]).toEqual({
+        diagnosisId: "diag-link-2",
+        recommendationId: "diag-link-2-rec-0",
+        outcome: "effective",
+      });
+    });
+
+    it("does not call updateRecommendationOutcome when no diagnosis is linked", async () => {
+      mockMemory.current.evolutions = [
+        {
+          appliedAt: new Date().toISOString(),
+          source: "adaptive",
+          trigger: "heuristic",
+          changes: [],
+          outcome: "pending",
+        },
+      ];
+      await startEvolutionObservation({
+        appliedAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+        rollbackChanges: [],
+        windowMs: 60 * 60_000,
+      });
+
+      await checkEvolutionHealth();
+
+      // No recommendation IDs linked, so no calls
+      expect(updateRecOutcomeCalls).toHaveLength(0);
+    });
   });
 });

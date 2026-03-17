@@ -15,6 +15,7 @@ import {
   resolveOagEvolutionObservationWindowMs,
   resolveOagEvolutionRestartRegressionThreshold,
   resolveOagEvolutionFailureRegressionThreshold,
+  resolveOagEvolutionPeriodicAnalysisIntervalMs,
   resolveOagSchedulerMaxWaitMs,
   resolveOagMemoryMaxLifecycleAgeDays,
 } from "./oag-config.js";
@@ -65,6 +66,7 @@ describe("oag-config evolution resolvers", () => {
     expect(resolveOagEvolutionObservationWindowMs()).toBe(60 * 60_000);
     expect(resolveOagEvolutionRestartRegressionThreshold()).toBe(5);
     expect(resolveOagEvolutionFailureRegressionThreshold()).toBe(3);
+    expect(resolveOagEvolutionPeriodicAnalysisIntervalMs()).toBe(6 * 60 * 60_000);
   });
 
   it("returns overridden evolution values when set", () => {
@@ -99,6 +101,20 @@ describe("oag-config evolution resolvers", () => {
     };
     expect(resolveOagEvolutionMaxStepPercent(cfg)).toBe(50);
     expect(resolveOagEvolutionCooldownMs(cfg)).toBe(4 * 60 * 60_000);
+  });
+
+  it("returns overridden periodicAnalysisIntervalMs when set", () => {
+    const cfg = {
+      gateway: { oag: { evolution: { periodicAnalysisIntervalMs: 3_600_000 } } },
+    };
+    expect(resolveOagEvolutionPeriodicAnalysisIntervalMs(cfg)).toBe(3_600_000);
+  });
+
+  it("ignores invalid periodicAnalysisIntervalMs and returns default", () => {
+    const cfg = {
+      gateway: { oag: { evolution: { periodicAnalysisIntervalMs: -1 } } },
+    };
+    expect(resolveOagEvolutionPeriodicAnalysisIntervalMs(cfg)).toBe(6 * 60 * 60_000);
   });
 });
 

@@ -6,7 +6,12 @@ import {
   resolveOagEvolutionObservationWindowMs,
   resolveOagEvolutionRestartRegressionThreshold,
 } from "./oag-config.js";
-import { appendAuditEntry, loadOagMemory, saveOagMemory } from "./oag-memory.js";
+import {
+  appendAuditEntry,
+  loadOagMemory,
+  saveOagMemory,
+  updateRecommendationOutcome,
+} from "./oag-memory.js";
 import { getOagMetrics, type OagMetricCounters } from "./oag-metrics.js";
 
 const log = createSubsystemLogger("oag/evolution-guard");
@@ -19,6 +24,8 @@ export type EvolutionObservation = {
   >;
   rollbackChanges: Array<{ configPath: string; previousValue: unknown }>;
   windowMs: number;
+  diagnosisId?: string;
+  recommendationIds?: string[];
 };
 
 let activeObservation: EvolutionObservation | null = null;
@@ -28,6 +35,8 @@ export async function startEvolutionObservation(params: {
   rollbackChanges: Array<{ configPath: string; previousValue: unknown }>;
   windowMs?: number;
   cfg?: OpenClawConfig;
+  diagnosisId?: string;
+  recommendationIds?: string[];
 }): Promise<void> {
   const metrics = getOagMetrics();
   activeObservation = {
@@ -39,6 +48,8 @@ export async function startEvolutionObservation(params: {
     },
     rollbackChanges: params.rollbackChanges,
     windowMs: params.windowMs ?? resolveOagEvolutionObservationWindowMs(params.cfg),
+    diagnosisId: params.diagnosisId,
+    recommendationIds: params.recommendationIds,
   };
   log.info(
     `Evolution observation started (window: ${Math.round(activeObservation.windowMs / 60_000)}min)`,
@@ -52,6 +63,8 @@ export async function startEvolutionObservation(params: {
       baselineMetrics: activeObservation.baselineMetrics as Record<string, number>,
       rollbackChanges: activeObservation.rollbackChanges,
       windowMs: activeObservation.windowMs,
+      diagnosisId: activeObservation.diagnosisId,
+      recommendationIds: activeObservation.recommendationIds,
     };
     await saveOagMemory(memory);
   } catch {
@@ -88,6 +101,8 @@ export async function restoreObservationFromMemory(): Promise<boolean> {
       >,
       rollbackChanges: memory.activeObservation.rollbackChanges,
       windowMs: memory.activeObservation.windowMs,
+      diagnosisId: memory.activeObservation.diagnosisId,
+      recommendationIds: memory.activeObservation.recommendationIds,
     };
     log.info("Restored evolution observation from memory");
     return true;
@@ -128,6 +143,22 @@ function detectRegression(
   return { regressed: false };
 }
 
+async function updateLinkedRecommendations(
+  observation: EvolutionObservation,
+  outcome: "effective" | "reverted",
+): Promise<void> {
+  if (!observation.diagnosisId || !observation.recommendationIds?.length) {
+    return;
+  }
+  for (const recId of observation.recommendationIds) {
+    try {
+      await updateRecommendationOutcome(observation.diagnosisId, recId, outcome);
+    } catch {
+      // Best effort — don't block evolution flow for tracking failures
+    }
+  }
+}
+
 export async function checkEvolutionHealth(cfg?: OpenClawConfig): Promise<{
   checked: boolean;
   action: "none" | "reverted" | "confirmed";
@@ -161,6 +192,9 @@ export async function checkEvolutionHealth(cfg?: OpenClawConfig): Promise<{
     } catch {
       // Best effort
     }
+
+    // Link recommendation outcomes to "reverted"
+    await updateLinkedRecommendations(activeObservation, "reverted");
 
     await appendAuditEntry({
       timestamp: new Date().toISOString(),
@@ -198,6 +232,9 @@ export async function checkEvolutionHealth(cfg?: OpenClawConfig): Promise<{
     } catch {
       // Best effort
     }
+
+    // Link recommendation outcomes to "effective"
+    await updateLinkedRecommendations(activeObservation, "effective");
 
     await appendAuditEntry({
       timestamp: new Date().toISOString(),

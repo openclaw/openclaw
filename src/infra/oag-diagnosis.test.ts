@@ -41,8 +41,13 @@ vi.mock("./oag-memory.js", () => ({
   }),
 }));
 
-const { composeDiagnosisPrompt, parseDiagnosisResponse, requestDiagnosis, sanitizeForPrompt } =
-  await import("./oag-diagnosis.js");
+const {
+  composeDiagnosisPrompt,
+  parseDiagnosisResponse,
+  requestDiagnosis,
+  sanitizeForPrompt,
+  buildHistoricalRecommendations,
+} = await import("./oag-diagnosis.js");
 
 describe("oag-diagnosis", () => {
   beforeEach(() => {
@@ -190,5 +195,125 @@ describe("oag-diagnosis", () => {
     expect(prompt).toContain('"recurring_pattern"');
     expect(prompt).toContain('"Telegram crash loop"');
     expect(prompt).toContain('"telegram"');
+  });
+
+  describe("historical recommendation outcomes", () => {
+    it("includes previous recommendation outcomes in diagnosis prompt", () => {
+      const memoryWithOutcomes = {
+        ...mockMemory.current,
+        diagnoses: [
+          {
+            id: "diag-hist-1",
+            triggeredAt: "2026-03-16T00:00:00Z",
+            trigger: "recurring_pattern",
+            rootCause: "Rate limit",
+            confidence: 0.9,
+            recommendations: [
+              {
+                type: "config_change" as const,
+                description: "Increase recovery budget",
+                configPath: "gateway.oag.delivery.recoveryBudgetMs",
+                suggestedValue: 90000,
+                risk: "low" as const,
+                applied: true,
+                recommendationId: "diag-hist-1-rec-0",
+                outcome: "effective" as const,
+              },
+            ],
+            completedAt: "2026-03-16T01:00:00Z",
+          },
+        ],
+      };
+
+      const prompt = composeDiagnosisPrompt(
+        {
+          type: "recurring_pattern",
+          description: "New crash loop",
+        },
+        memoryWithOutcomes as never,
+      );
+
+      expect(prompt).toContain("Previous Recommendation Outcomes");
+      expect(prompt).toContain("recoveryBudgetMs");
+      expect(prompt).toContain("effective");
+    });
+
+    it("does not include outcomes section when no historical data exists", () => {
+      const prompt = composeDiagnosisPrompt(
+        {
+          type: "recurring_pattern",
+          description: "Crash loop",
+        },
+        mockMemory.current as never,
+      );
+
+      expect(prompt).not.toContain("Previous Recommendation Outcomes");
+    });
+
+    it("buildHistoricalRecommendations formats tracked recommendations", () => {
+      const memory = {
+        ...mockMemory.current,
+        diagnoses: [
+          {
+            id: "diag-tr-1",
+            triggeredAt: "2026-03-16T00:00:00Z",
+            trigger: "recurring_pattern",
+            rootCause: "Timeout",
+            confidence: 0.8,
+            recommendations: [],
+            trackedRecommendations: [
+              {
+                id: "diag-tr-1-rec-0",
+                parameter: "gateway.oag.delivery.maxRetries",
+                oldValue: 5,
+                newValue: 7,
+                risk: "low" as const,
+                applied: true,
+                outcome: "reverted" as const,
+                outcomeTimestamp: "2026-03-16T02:00:00Z",
+              },
+            ],
+            completedAt: "2026-03-16T01:00:00Z",
+          },
+        ],
+      };
+
+      const result = buildHistoricalRecommendations(memory as never);
+      expect(result).toContain("maxRetries");
+      expect(result).toContain("reverted");
+      expect(result).toContain("5");
+      expect(result).toContain("7");
+    });
+
+    it("limits historical recommendations to 10 entries", () => {
+      const diagnoses = [];
+      for (let i = 0; i < 15; i++) {
+        diagnoses.push({
+          id: `diag-limit-${i}`,
+          triggeredAt: "2026-03-16T00:00:00Z",
+          trigger: "recurring_pattern",
+          rootCause: `cause-${i}`,
+          confidence: 0.5,
+          recommendations: [
+            {
+              type: "config_change" as const,
+              description: `change-${i}`,
+              configPath: `gateway.oag.param${i}`,
+              suggestedValue: i * 100,
+              risk: "low" as const,
+              applied: true,
+              recommendationId: `diag-limit-${i}-rec-0`,
+              outcome: "effective" as const,
+            },
+          ],
+          completedAt: "2026-03-16T01:00:00Z",
+        });
+      }
+
+      const memory = { ...mockMemory.current, diagnoses };
+      const result = buildHistoricalRecommendations(memory as never);
+      const lines = result.split("\n").filter((l) => l.length > 0);
+      expect(lines.length).toBeLessThanOrEqual(10);
+    });
   });
 });

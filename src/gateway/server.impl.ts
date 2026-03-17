@@ -38,9 +38,19 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { startFileWatcher, stopFileWatcher } from "../infra/oag-event-bus.js";
 import { checkEvolutionHealth } from "../infra/oag-evolution-guard.js";
 import { collectActiveIncidents, recordOagIncident } from "../infra/oag-incident-collector.js";
-import { recordLifecycleShutdown } from "../infra/oag-memory.js";
-import { getOagMetrics, incrementOagMetric } from "../infra/oag-metrics.js";
-import { runPostRecoveryAnalysis } from "../infra/oag-postmortem.js";
+import {
+  appendMetricSnapshot,
+  loadOagMemory,
+  readSentinelContext,
+  recordLifecycleShutdown,
+} from "../infra/oag-memory.js";
+import {
+  getOagMetrics,
+  incrementOagMetric,
+  restoreMetricsFromLastSnapshot,
+  snapshotMetrics,
+} from "../infra/oag-metrics.js";
+import { runPostRecoveryAnalysis, schedulePeriodicAnalysis } from "../infra/oag-postmortem.js";
 import { createGatewayIdleCheck, runWhenIdle } from "../infra/oag-scheduler.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
@@ -959,6 +969,7 @@ export async function startGatewayServer(
 
   // OAG evolution health check — runs every 5 minutes during observation window
   let evolutionCheckInterval: ReturnType<typeof setInterval> | null = null;
+  let periodicAnalysisHandle: { stop: () => void } | null = null;
   if (!minimalTestGateway) {
     evolutionCheckInterval = setInterval(() => {
       void checkEvolutionHealth().catch((err) => {
@@ -967,6 +978,34 @@ export async function startGatewayServer(
     }, 5 * 60_000);
     if (typeof evolutionCheckInterval === "object" && "unref" in evolutionCheckInterval) {
       evolutionCheckInterval.unref();
+    }
+  }
+
+  // Restore cumulative metrics from last persisted snapshot on startup
+  // and schedule hourly metric snapshots for trend analysis
+  let metricSnapshotInterval: ReturnType<typeof setInterval> | null = null;
+  if (!minimalTestGateway) {
+    void loadOagMemory()
+      .then((memory) => {
+        const lastSnapshot = memory.metricSeries[memory.metricSeries.length - 1];
+        if (lastSnapshot) {
+          restoreMetricsFromLastSnapshot(lastSnapshot);
+          log.info("OAG metrics restored from last persisted snapshot");
+        }
+      })
+      .catch((err) => {
+        log.warn(`OAG metrics restore failed: ${String(err)}`);
+      });
+
+    // Record an hourly snapshot for trend analysis (1 hour = 3_600_000 ms)
+    metricSnapshotInterval = setInterval(() => {
+      const snapshot = snapshotMetrics(Date.now() - serverStartedAt);
+      void appendMetricSnapshot(snapshot).catch((err) => {
+        log.warn(`OAG metric snapshot failed: ${String(err)}`);
+      });
+    }, 3_600_000);
+    if (typeof metricSnapshotInterval === "object" && "unref" in metricSnapshotInterval) {
+      metricSnapshotInterval.unref();
     }
   }
 
@@ -1189,11 +1228,14 @@ export async function startGatewayServer(
       getPendingReplies: () => getTotalPendingReplies(),
       getActiveRuns: () => getActiveEmbeddedRunCount(),
     });
+    // Read sentinel context before postmortem so crash details are available
+    const sentinelContextPromise = readSentinelContext().catch(() => undefined);
     void runWhenIdle(async () => {
       if (startupDeliveryRecovery) {
         await startupDeliveryRecovery;
       }
-      const postmortem = await runPostRecoveryAnalysis();
+      const sentinelCtx = await sentinelContextPromise;
+      const postmortem = await runPostRecoveryAnalysis(sentinelCtx);
       if (postmortem.userNotification) {
         log.info(`OAG evolution: ${postmortem.userNotification}`);
       }
@@ -1202,6 +1244,11 @@ export async function startGatewayServer(
       }
     }, gatewayIdleCheck).catch((err) => {
       log.warn(`OAG post-recovery analysis failed: ${String(err)}`);
+    });
+
+    // Schedule periodic runtime analysis (runs every 6h by default)
+    periodicAnalysisHandle = schedulePeriodicAnalysis({
+      idleCheck: gatewayIdleCheck,
     });
   }
 
@@ -1547,6 +1594,14 @@ export async function startGatewayServer(
       if (evolutionCheckInterval) {
         clearInterval(evolutionCheckInterval);
         evolutionCheckInterval = null;
+      }
+      if (metricSnapshotInterval) {
+        clearInterval(metricSnapshotInterval);
+        metricSnapshotInterval = null;
+      }
+      if (periodicAnalysisHandle) {
+        periodicAnalysisHandle.stop();
+        periodicAnalysisHandle = null;
       }
       stopFileWatcher();
       await close(opts);
