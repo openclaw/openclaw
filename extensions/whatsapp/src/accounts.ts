@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "openclaw/plugin-sdk/whatsapp";
 import { resolveOAuthDir } from "../../../src/config/paths.js";
 import {
   type OpenClawConfig,
@@ -10,6 +9,11 @@ import {
   resolveAccountEntry,
   resolveUserPath,
 } from "../../../src/plugin-sdk-internal/accounts.js";
+import type {
+  DmPolicy,
+  GroupPolicy,
+  WhatsAppAccountConfig,
+} from "../../../src/plugin-sdk-internal/whatsapp.js";
 import { hasWebCredsSync } from "./auth-store.js";
 
 export type ResolvedWhatsAppAccount = {

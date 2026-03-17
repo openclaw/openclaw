@@ -1,9 +1,10 @@
+import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import {
   buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-} from "openclaw/plugin-sdk/compat";
-import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
+} from "../../../src/plugin-sdk-internal/channel-config.js";
+import { buildAgentSessionKey, type RoutePeer } from "../../../src/plugin-sdk-internal/core.js";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
@@ -22,8 +23,7 @@ import {
   resolveIMessageGroupToolPolicy,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/imessage";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+} from "../../../src/plugin-sdk-internal/imessage.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listIMessageAccountIds,
@@ -31,19 +31,12 @@ import {
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
+import { imessageSetupWizard } from "./plugin-shared.js";
 import { getIMessageRuntime } from "./runtime.js";
-import { createIMessageSetupWizardProxy, imessageSetupAdapter } from "./setup-core.js";
+import { imessageSetupAdapter } from "./setup-core.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
 const meta = getChatChannelMeta("imessage");
-
-async function loadIMessageChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
-const imessageSetupWizard = createIMessageSetupWizardProxy(async () => ({
-  imessageSetupWizard: (await loadIMessageChannelRuntime()).imessageSetupWizard,
-}));
 
 type IMessageSendFn = ReturnType<
   typeof getIMessageRuntime

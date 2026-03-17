@@ -3,19 +3,16 @@ import {
   getChatChannelMeta,
   SlackConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/slack";
+} from "../../../src/plugin-sdk-internal/slack.js";
 import { type ResolvedSlackAccount } from "./accounts.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import { createSlackSetupWizardProxy, slackSetupAdapter } from "./setup-core.js";
-import { isSlackPluginAccountConfigured, slackConfigAccessors, slackConfigBase } from "./shared.js";
-
-async function loadSlackChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
-const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
-  slackSetupWizard: (await loadSlackChannelRuntime()).slackSetupWizard,
-}));
+import {
+  isSlackPluginAccountConfigured,
+  slackConfigAccessors,
+  slackConfigBase,
+  slackSetupWizard,
+} from "./plugin-shared.js";
+import { slackSetupAdapter } from "./setup-core.js";
 
 export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
