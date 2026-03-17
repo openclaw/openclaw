@@ -353,9 +353,24 @@ export const MarkdownConfigSchema = z
   .strict()
   .optional();
 
-export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge"]);
+export const TtsProviderSchema = z.string().min(1);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
+const TtsMicrosoftConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    voice: z.string().optional(),
+    lang: z.string().optional(),
+    outputFormat: z.string().optional(),
+    pitch: z.string().optional(),
+    rate: z.string().optional(),
+    volume: z.string().optional(),
+    saveSubtitles: z.boolean().optional(),
+    proxy: z.string().optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  })
+  .strict()
+  .optional();
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
@@ -409,21 +424,8 @@ export const TtsConfigSchema = z
       })
       .strict()
       .optional(),
-    edge: z
-      .object({
-        enabled: z.boolean().optional(),
-        voice: z.string().optional(),
-        lang: z.string().optional(),
-        outputFormat: z.string().optional(),
-        pitch: z.string().optional(),
-        rate: z.string().optional(),
-        volume: z.string().optional(),
-        saveSubtitles: z.boolean().optional(),
-        proxy: z.string().optional(),
-        timeoutMs: z.number().int().min(1000).max(120000).optional(),
-      })
-      .strict()
-      .optional(),
+    edge: TtsMicrosoftConfigSchema,
+    microsoft: TtsMicrosoftConfigSchema,
     prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),

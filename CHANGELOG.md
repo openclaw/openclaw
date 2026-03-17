@@ -106,6 +106,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/subagents: preserve gateway-owned plugin subagent access across runtime, tool, and embedded-runner load paths so gateway plugin tools and context engines can still spawn and manage subagents after the loader cache split. (#46648) Thanks @jalehman.
 - Control UI/overview: keep the language dropdown aligned with the persisted locale during dashboard startup so refreshing the page does not fall back to English before locale hydration completes. (#48019) Thanks @git-jxj.
 - Agents/compaction: rerun transcript repair after `session.compact()` so orphaned `tool_result` blocks cannot survive compaction and break later Anthropic requests. (#16095) thanks @claw-sylphx.
+- Agents/compaction: trigger overflow recovery from the tool-result guard once post-compaction context still exceeds the safe threshold, so long tool loops compact before the next model call hard-fails. (#29371) thanks @keshav55.
 
 ## 2026.3.13
 
@@ -184,7 +185,6 @@ Docs: https://docs.openclaw.ai
 - Auth/login lockout recovery: clear stale `auth_permanent` and `billing` disabled state for all profiles matching the target provider when `openclaw models auth login` is invoked, so users locked out by expired or revoked OAuth tokens can recover by re-authenticating instead of waiting for the cooldown timer to expire. (#43057)
 - Auto-reply/context-engine compaction: persist the exact embedded-run metadata compaction count for main and followup runner session accounting, so metadata-only auto-compactions no longer undercount multi-compaction runs. (#42629) thanks @uf-hy.
 - Auth/Codex CLI reuse: sync reused Codex CLI credentials into the supported `openai-codex:default` OAuth profile instead of reviving the deprecated `openai-codex:codex-cli` slot, so doctor cleanup no longer loops. (#45353) thanks @Gugu-sugar.
-- WhatsApp/group replies: recognize implicit reply-to-bot mentions when WhatsApp sends the quoted sender in `@lid` format, including device-suffixed self identities. (#23029) Thanks @sparkyrider.
 
 ## 2026.3.12
 
@@ -277,6 +277,9 @@ Docs: https://docs.openclaw.ai
 - Docs/Brave pricing: escape literal dollar signs in Brave Search cost text so the docs render the free credit and per-request pricing correctly. (#44989) Thanks @keelanfh.
 - Feishu/file uploads: preserve literal UTF-8 filenames in `im.file.create` so Chinese and other non-ASCII filenames no longer appear percent-encoded in chat. (#34262) Thanks @fabiaodemianyang and @KangShuaiFu.
 - Agents/compaction safeguard: trim large kept `toolResult` payloads consistently for budgeting, pruning, and identifier seeding, then restore preserved payloads after prune so oversized safeguard summaries stay stable. (#44133) thanks @SayrWolfridge.
+- Agents/compaction: compare post-compaction token sanity checks against full-session pre-compaction totals and skip the check when token estimation fails, so sessions with large bootstrap context keep real token counts instead of falling back to unknown. (#28347) thanks @efe-arv.
+- Discord/gateway startup: treat plain-text and transient `/gateway/bot` metadata fetch failures as transient startup errors so Discord gateway boot no longer crashes on unhandled rejections. (#44397) Thanks @jalehman.
+- Agents/Ollama overflow: rewrite Ollama `prompt too long` API payloads through the normal context-overflow sanitizer so embedded sessions keep the friendly overflow copy and auto-compaction trigger. (#34019) thanks @lishuaigit.
 
 ## 2026.3.11
 

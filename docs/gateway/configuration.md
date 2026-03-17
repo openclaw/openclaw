@@ -38,7 +38,7 @@ See the [full reference](/gateway/configuration-reference) for every available f
 <Tabs>
   <Tab title="Interactive wizard">
     ```bash
-    openclaw onboard       # full setup wizard
+    openclaw onboard       # full onboarding flow
     openclaw configure     # config wizard
     ```
   </Tab>
