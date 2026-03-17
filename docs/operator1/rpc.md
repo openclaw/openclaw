@@ -1,7 +1,8 @@
 ---
-summary: "Complete gateway RPC reference for Operator1 — all ~160 methods, scopes, and params."
-updated: "2026-03-16"
+summary: "Complete gateway RPC reference for Operator1 — all ~180 methods, scopes, and params."
+updated: "2026-03-17"
 title: "RPC Reference"
+tags: ["RPC", "Reference"]
 ---
 
 # RPC Reference
@@ -23,7 +24,13 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Health and System
+## Base Methods
+
+Core gateway methods always available regardless of installed plugins.
+
+---
+
+### Health and System
 
 | Method                 | Scope | Description                     | Key Params                               |
 | ---------------------- | ----- | ------------------------------- | ---------------------------------------- |
@@ -40,7 +47,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Config
+### Config
 
 | Method                 | Scope | Description                   | Key Params                         |
 | ---------------------- | ----- | ----------------------------- | ---------------------------------- |
@@ -53,7 +60,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Channels
+### Channels
 
 | Method            | Scope | Description                      | Key Params            |
 | ----------------- | ----- | -------------------------------- | --------------------- |
@@ -62,7 +69,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Models
+### Models
 
 | Method        | Scope | Description              | Key Params            |
 | ------------- | ----- | ------------------------ | --------------------- |
@@ -70,7 +77,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Tools
+### Tools
 
 | Method          | Scope | Description               | Key Params |
 | --------------- | ----- | ------------------------- | ---------- |
@@ -78,7 +85,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Sessions
+### Sessions
 
 | Method                      | Scope | Description                                     | Key Params                               |
 | --------------------------- | ----- | ----------------------------------------------- | ---------------------------------------- |
@@ -97,7 +104,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Agents
+### Agents
 
 | Method               | Scope | Description                                  | Key Params                                                 |
 | -------------------- | ----- | -------------------------------------------- | ---------------------------------------------------------- |
@@ -112,7 +119,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Chat (WebChat)
+### Chat (WebChat)
 
 | Method         | Scope | Description                    | Key Params                                 |
 | -------------- | ----- | ------------------------------ | ------------------------------------------ |
@@ -122,7 +129,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Memory
+### Memory
 
 | Method            | Scope | Description                      | Key Params                                            |
 | ----------------- | ----- | -------------------------------- | ----------------------------------------------------- |
@@ -133,7 +140,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Cron
+### Cron
 
 | Method        | Scope | Description                      | Key Params                              |
 | ------------- | ----- | -------------------------------- | --------------------------------------- |
@@ -147,19 +154,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Skills
-
-| Method           | Scope | Description                     | Key Params                          |
-| ---------------- | ----- | ------------------------------- | ----------------------------------- |
-| `skills.status`  | READ  | Skills system status            | `{}`                                |
-| `skills.list`    | READ  | List installed skills           | `{}`                                |
-| `skills.bins`    | NODE  | List skill binaries (node role) | `{}`                                |
-| `skills.install` | ADMIN | Install a skill                 | `{ name: string, source?: string }` |
-| `skills.update`  | ADMIN | Update installed skills         | `{ name?: string }`                 |
-
----
-
-## TTS / STT
+### TTS / STT
 
 | Method            | Scope | Description                  | Key Params                             |
 | ----------------- | ----- | ---------------------------- | -------------------------------------- |
@@ -174,7 +169,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Voice Wake
+### Voice Wake
 
 | Method          | Scope | Description                   | Key Params                |
 | --------------- | ----- | ----------------------------- | ------------------------- |
@@ -183,7 +178,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Talk
+### Talk
 
 | Method        | Scope | Description                        | Key Params         |
 | ------------- | ----- | ---------------------------------- | ------------------ |
@@ -192,7 +187,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Usage
+### Usage
 
 | Method         | Scope | Description              | Key Params           |
 | -------------- | ----- | ------------------------ | -------------------- |
@@ -201,7 +196,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Secrets
+### Secrets
 
 | Method            | Scope | Description                  | Key Params         |
 | ----------------- | ----- | ---------------------------- | ------------------ |
@@ -210,7 +205,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Exec Approvals
+### Exec Approvals
 
 | Method                       | Scope     | Description                   | Key Params                                  |
 | ---------------------------- | --------- | ----------------------------- | ------------------------------------------- |
@@ -224,7 +219,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Browser
+### Browser
 
 | Method            | Scope | Description                          | Key Params                                         |
 | ----------------- | ----- | ------------------------------------ | -------------------------------------------------- |
@@ -232,7 +227,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Nodes
+### Nodes
 
 | Method                           | Scope   | Description                                  | Key Params                                           |
 | -------------------------------- | ------- | -------------------------------------------- | ---------------------------------------------------- |
@@ -253,7 +248,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Devices
+### Devices
 
 | Method                | Scope   | Description              | Key Params             |
 | --------------------- | ------- | ------------------------ | ---------------------- |
@@ -266,20 +261,7 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## ClawHub
-
-| Method              | Scope | Description                       | Key Params                           |
-| ------------------- | ----- | --------------------------------- | ------------------------------------ |
-| `clawhub.catalog`   | READ  | Browse the ClawHub plugin catalog | `{ query?: string }`                 |
-| `clawhub.installed` | READ  | List installed ClawHub plugins    | `{}`                                 |
-| `clawhub.inspect`   | WRITE | Inspect a plugin before install   | `{ name: string, version?: string }` |
-| `clawhub.sync`      | WRITE | Sync catalog from remote          | `{}`                                 |
-| `clawhub.download`  | ADMIN | Download a plugin package         | `{ name: string, version?: string }` |
-| `clawhub.uninstall` | ADMIN | Uninstall a ClawHub plugin        | `{ name: string }`                   |
-
----
-
-## Projects
+### Projects
 
 | Method                   | Scope | Description                       | Key Params                           |
 | ------------------------ | ----- | --------------------------------- | ------------------------------------ |
@@ -294,7 +276,152 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Agent Marketplace
+### Personas
+
+| Method                | Scope | Description                              | Key Params                                                             |
+| --------------------- | ----- | ---------------------------------------- | ---------------------------------------------------------------------- |
+| `personas.list`       | READ  | List persona templates                   | `{ category?: string, tag?: string, limit?: number, source?: string }` |
+| `personas.get`        | READ  | Get a persona by slug                    | `{ slug: string }`                                                     |
+| `personas.categories` | READ  | List persona categories                  | `{}`                                                                   |
+| `personas.search`     | READ  | Search personas by query                 | `{ query: string }`                                                    |
+| `personas.expand`     | READ  | Expand persona template to system prompt | `{ slug: string, vars?: object }`                                      |
+| `personas.apply`      | WRITE | Apply a persona to an agent              | `{ agentId: string, slug: string }`                                    |
+
+---
+
+### Teams
+
+| Method                  | Scope | Description                  | Key Params                                            |
+| ----------------------- | ----- | ---------------------------- | ----------------------------------------------------- |
+| `teamRuns.create`       | WRITE | Create a team run            | `{ name: string, members?: string[] }`                |
+| `teamRuns.list`         | READ  | List team runs               | `{ limit?: number }`                                  |
+| `teamRuns.get`          | READ  | Get a team run               | `{ id: string }`                                      |
+| `teamRuns.complete`     | WRITE | Mark a team run as complete  | `{ id: string, result?: unknown }`                    |
+| `teamRuns.addMember`    | WRITE | Add a member to a team run   | `{ id: string, agentId: string, role?: string }`      |
+| `teamRuns.updateMember` | WRITE | Update a team run member     | `{ id: string, agentId: string, patch: object }`      |
+| `teamRuns.delete`       | ADMIN | Delete a team run            | `{ id: string }`                                      |
+| `teamRuns.sweep`        | ADMIN | Sweep stale team runs        | `{}`                                                  |
+| `teamTasks.create`      | WRITE | Create a task in a team run  | `{ runId: string, title: string, assignee?: string }` |
+| `teamTasks.list`        | READ  | List tasks for a team run    | `{ runId: string }`                                   |
+| `teamTasks.update`      | WRITE | Update a task                | `{ id: string, patch: object }`                       |
+| `teamTasks.delete`      | ADMIN | Delete a task                | `{ id: string }`                                      |
+| `teamMessages.send`     | WRITE | Send a message in a team run | `{ runId: string, content: string }`                  |
+| `teamMessages.list`     | READ  | List messages for a team run | `{ runId: string, limit?: number }`                   |
+| `teamMessages.markRead` | WRITE | Mark messages as read        | `{ runId: string, upToId?: string }`                  |
+
+---
+
+### Slash Commands
+
+| Method             | Scope | Description                      | Key Params                               |
+| ------------------ | ----- | -------------------------------- | ---------------------------------------- |
+| `commands.list`    | READ  | List registered slash commands   | `{ scope?: "user" \| "agent" \| "all" }` |
+| `commands.get`     | READ  | Get a command by name            | `{ name: string }`                       |
+| `commands.getBody` | READ  | Get full command body (markdown) | `{ name: string }`                       |
+| `commands.create`  | ADMIN | Create a new user command        | `{ name: string, body: string, ... }`    |
+| `commands.update`  | ADMIN | Update a user command            | `{ name: string, patch: object }`        |
+| `commands.delete`  | ADMIN | Delete a user command            | `{ name: string }`                       |
+| `commands.invoke`  | WRITE | Execute a slash command          | `{ name: string, args?: string }`        |
+
+---
+
+### State DB
+
+Direct read/write access to the SQLite state database (`operator1.db`). These methods let agents and tools introspect live state without spawning a CLI subprocess.
+
+| Method                | Scope | Description                                          | Key Params                                                                                  |
+| --------------------- | ----- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `state.info`          | READ  | DB path, file size, schema version, integrity status | `{}`                                                                                        |
+| `state.tables`        | READ  | All tables with row counts and sensitivity flags     | `{}`                                                                                        |
+| `state.schema`        | READ  | CREATE TABLE DDL for a specific table                | `{ table: string }`                                                                         |
+| `state.inspect`       | READ  | Paginated row browser for a table                    | `{ table: string, limit?: number, offset?: number, columns?: string[] }`                    |
+| `state.query`         | READ  | Execute a read-only SQL SELECT statement             | `{ sql: string, limit?: number }`                                                           |
+| `state.settings.list` | READ  | List all settings in a store/scope                   | `{ store: "core" \| "op1", scope?: string }`                                                |
+| `state.settings.get`  | READ  | Read a single setting by scope + key                 | `{ store: "core" \| "op1", scope: string, key: string }`                                    |
+| `state.settings.set`  | ADMIN | Write/upsert a setting                               | `{ store: "core" \| "op1", scope: string, key: string, value: unknown }`                    |
+| `state.audit`         | READ  | Query the audit_state trail                          | `{ table?: string, action?: "INSERT"\|"UPDATE"\|"DELETE", since?: number, limit?: number }` |
+| `state.export`        | READ  | Export one or all tables as JSON                     | `{ table?: string }`                                                                        |
+
+#### Notes
+
+- `state.query` only accepts `SELECT` (or `WITH … SELECT`) statements. Multi-statement queries (semicolons), `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, and `ATTACH` are rejected.
+- Row results are capped at 1000 rows; default is 100. Use `limit` to control.
+- `auth_credentials` is flagged as `sensitive: true` in `state.tables` responses. Use `state.inspect` on it only when you have explicit admin intent.
+- Settings stores: `"core"` = `core_settings` table (device, voicewake, TTS, etc.); `"op1"` = `op1_settings` table (heartbeat state, generic KV).
+
+---
+
+### Wizard
+
+| Method          | Scope | Description             | Key Params            |
+| --------------- | ----- | ----------------------- | --------------------- |
+| `wizard.start`  | ADMIN | Start onboarding wizard | `{}`                  |
+| `wizard.next`   | ADMIN | Advance wizard step     | `{ answer?: string }` |
+| `wizard.cancel` | ADMIN | Cancel active wizard    | `{}`                  |
+| `wizard.status` | ADMIN | Get wizard state        | `{}`                  |
+
+---
+
+### Web Login
+
+| Method            | Scope | Description                   | Key Params                                 |
+| ----------------- | ----- | ----------------------------- | ------------------------------------------ |
+| `web.login.start` | ADMIN | Start web provider login flow | `{ provider: string }`                     |
+| `web.login.wait`  | ADMIN | Wait for web login completion | `{ provider: string, timeoutMs?: number }` |
+
+---
+
+## Plugin Ecosystem
+
+Methods for managing plugins, skills, MCP servers, and the agent marketplace. These are core gateway methods — all available without any plugin installed.
+
+---
+
+### Skills
+
+| Method           | Scope | Description                     | Key Params                          |
+| ---------------- | ----- | ------------------------------- | ----------------------------------- |
+| `skills.status`  | READ  | Skills system status            | `{}`                                |
+| `skills.list`    | READ  | List installed skills           | `{}`                                |
+| `skills.bins`    | NODE  | List skill binaries (node role) | `{}`                                |
+| `skills.install` | ADMIN | Install a skill                 | `{ name: string, source?: string }` |
+| `skills.update`  | ADMIN | Update installed skills         | `{ name?: string }`                 |
+
+---
+
+### ClawHub
+
+| Method              | Scope | Description                       | Key Params                           |
+| ------------------- | ----- | --------------------------------- | ------------------------------------ |
+| `clawhub.catalog`   | READ  | Browse the ClawHub plugin catalog | `{ query?: string }`                 |
+| `clawhub.installed` | READ  | List installed ClawHub plugins    | `{}`                                 |
+| `clawhub.inspect`   | WRITE | Inspect a plugin before install   | `{ name: string, version?: string }` |
+| `clawhub.sync`      | WRITE | Sync catalog from remote          | `{}`                                 |
+| `clawhub.download`  | ADMIN | Download a plugin package         | `{ name: string, version?: string }` |
+| `clawhub.uninstall` | ADMIN | Uninstall a ClawHub plugin        | `{ name: string }`                   |
+
+---
+
+### Hub
+
+Unified hub catalog for skills, agents, commands, and collections.
+
+| Method                  | Scope | Description                           | Key Params                          |
+| ----------------------- | ----- | ------------------------------------- | ----------------------------------- |
+| `hub.sync`              | ADMIN | Sync hub catalog from remote          | `{ force?: boolean }`               |
+| `hub.catalog`           | READ  | Browse hub catalog                    | `{ query?: string, type?: string }` |
+| `hub.search`            | READ  | Search hub items                      | `{ query: string }`                 |
+| `hub.inspect`           | READ  | Inspect a hub item before install     | `{ id: string }`                    |
+| `hub.install`           | ADMIN | Install a hub item                    | `{ id: string }`                    |
+| `hub.remove`            | ADMIN | Remove a hub-installed item           | `{ id: string }`                    |
+| `hub.installed`         | READ  | List installed hub items              | `{}`                                |
+| `hub.updates`           | READ  | Check for available hub updates       | `{}`                                |
+| `hub.collections`       | READ  | List hub collections                  | `{}`                                |
+| `hub.installCollection` | ADMIN | Install all items in a hub collection | `{ id: string }`                    |
+
+---
+
+### Agent Marketplace
 
 | Method                               | Scope | Description                       | Key Params                              |
 | ------------------------------------ | ----- | --------------------------------- | --------------------------------------- |
@@ -321,85 +448,27 @@ Every method requires one of the following scopes (or `operator.admin` which sup
 
 ---
 
-## Teams
+### MCP Servers
 
-| Method                  | Scope | Description                  | Key Params                                            |
-| ----------------------- | ----- | ---------------------------- | ----------------------------------------------------- |
-| `teamRuns.create`       | WRITE | Create a team run            | `{ name: string, members?: string[] }`                |
-| `teamRuns.list`         | READ  | List team runs               | `{ limit?: number }`                                  |
-| `teamRuns.get`          | READ  | Get a team run               | `{ id: string }`                                      |
-| `teamRuns.complete`     | WRITE | Mark a team run as complete  | `{ id: string, result?: unknown }`                    |
-| `teamRuns.addMember`    | WRITE | Add a member to a team run   | `{ id: string, agentId: string, role?: string }`      |
-| `teamRuns.updateMember` | WRITE | Update a team run member     | `{ id: string, agentId: string, patch: object }`      |
-| `teamRuns.delete`       | ADMIN | Delete a team run            | `{ id: string }`                                      |
-| `teamRuns.sweep`        | ADMIN | Sweep stale team runs        | `{}`                                                  |
-| `teamTasks.create`      | WRITE | Create a task in a team run  | `{ runId: string, title: string, assignee?: string }` |
-| `teamTasks.list`        | READ  | List tasks for a team run    | `{ runId: string }`                                   |
-| `teamTasks.update`      | WRITE | Update a task                | `{ id: string, patch: object }`                       |
-| `teamTasks.delete`      | ADMIN | Delete a task                | `{ id: string }`                                      |
-| `teamMessages.send`     | WRITE | Send a message in a team run | `{ runId: string, content: string }`                  |
-| `teamMessages.list`     | READ  | List messages for a team run | `{ runId: string, limit?: number }`                   |
-| `teamMessages.markRead` | WRITE | Mark messages as read        | `{ runId: string, upToId?: string }`                  |
+Manage Model Context Protocol (MCP) server connections and registries.
 
----
-
-## Slash Commands
-
-| Method             | Scope | Description                      | Key Params                               |
-| ------------------ | ----- | -------------------------------- | ---------------------------------------- |
-| `commands.list`    | READ  | List registered slash commands   | `{ scope?: "user" \| "agent" \| "all" }` |
-| `commands.get`     | READ  | Get a command by name            | `{ name: string }`                       |
-| `commands.getBody` | READ  | Get full command body (markdown) | `{ name: string }`                       |
-| `commands.create`  | ADMIN | Create a new user command        | `{ name: string, body: string, ... }`    |
-| `commands.update`  | ADMIN | Update a user command            | `{ name: string, patch: object }`        |
-| `commands.delete`  | ADMIN | Delete a user command            | `{ name: string }`                       |
-| `commands.invoke`  | WRITE | Execute a slash command          | `{ name: string, args?: string }`        |
-
----
-
-## State DB
-
-Direct read/write access to the SQLite state database (`operator1.db`). These methods let agents and tools introspect live state without spawning a CLI subprocess.
-
-| Method                | Scope | Description                                          | Key Params                                                                                  |
-| --------------------- | ----- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `state.info`          | READ  | DB path, file size, schema version, integrity status | `{}`                                                                                        |
-| `state.tables`        | READ  | All tables with row counts and sensitivity flags     | `{}`                                                                                        |
-| `state.schema`        | READ  | CREATE TABLE DDL for a specific table                | `{ table: string }`                                                                         |
-| `state.inspect`       | READ  | Paginated row browser for a table                    | `{ table: string, limit?: number, offset?: number, columns?: string[] }`                    |
-| `state.query`         | READ  | Execute a read-only SQL SELECT statement             | `{ sql: string, limit?: number }`                                                           |
-| `state.settings.list` | READ  | List all settings in a store/scope                   | `{ store: "core" \| "op1", scope?: string }`                                                |
-| `state.settings.get`  | READ  | Read a single setting by scope + key                 | `{ store: "core" \| "op1", scope: string, key: string }`                                    |
-| `state.settings.set`  | ADMIN | Write/upsert a setting                               | `{ store: "core" \| "op1", scope: string, key: string, value: unknown }`                    |
-| `state.audit`         | READ  | Query the audit_state trail                          | `{ table?: string, action?: "INSERT"\|"UPDATE"\|"DELETE", since?: number, limit?: number }` |
-| `state.export`        | READ  | Export one or all tables as JSON                     | `{ table?: string }`                                                                        |
-
-### Notes
-
-- `state.query` only accepts `SELECT` (or `WITH … SELECT`) statements. Multi-statement queries (semicolons), `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, and `ATTACH` are rejected.
-- Row results are capped at 1000 rows; default is 100. Use `limit` to control.
-- `auth_credentials` is flagged as `sensitive: true` in `state.tables` responses. Use `state.inspect` on it only when you have explicit admin intent.
-- Settings stores: `"core"` = `core_settings` table (device, voicewake, TTS, etc.); `"op1"` = `op1_settings` table (heartbeat state, generic KV).
-
----
-
-## Wizard
-
-| Method          | Scope | Description             | Key Params            |
-| --------------- | ----- | ----------------------- | --------------------- |
-| `wizard.start`  | ADMIN | Start onboarding wizard | `{}`                  |
-| `wizard.next`   | ADMIN | Advance wizard step     | `{ answer?: string }` |
-| `wizard.cancel` | ADMIN | Cancel active wizard    | `{}`                  |
-| `wizard.status` | ADMIN | Get wizard state        | `{}`                  |
-
----
-
-## Web Login
-
-| Method            | Scope | Description                   | Key Params                                 |
-| ----------------- | ----- | ----------------------------- | ------------------------------------------ |
-| `web.login.start` | ADMIN | Start web provider login flow | `{ provider: string }`                     |
-| `web.login.wait`  | ADMIN | Wait for web login completion | `{ provider: string, timeoutMs?: number }` |
+| Method                  | Scope | Description                              | Key Params                                                              |
+| ----------------------- | ----- | ---------------------------------------- | ----------------------------------------------------------------------- |
+| `mcp.servers.list`      | READ  | List configured MCP servers with status  | `{}`                                                                    |
+| `mcp.servers.tools`     | READ  | List discovered tools for a server       | `{ server: string }`                                                    |
+| `mcp.servers.test`      | WRITE | Test connection to a server (or all)     | `{ server?: string }`                                                   |
+| `mcp.servers.configure` | WRITE | Update server configuration fields       | `{ server: string, url?: string, command?: string, enabled?: boolean }` |
+| `mcp.servers.enable`    | WRITE | Enable a server and reconnect at runtime | `{ server: string }`                                                    |
+| `mcp.servers.disable`   | WRITE | Disable a server and disconnect          | `{ server: string }`                                                    |
+| `mcp.servers.add`       | ADMIN | Add a new MCP server to a scope          | `{ server: string, type: string, url?: string, scope?: string }`        |
+| `mcp.servers.remove`    | ADMIN | Remove an MCP server from its scope      | `{ server: string }`                                                    |
+| `mcp.health.status`     | READ  | Overall MCP health summary               | `{}`                                                                    |
+| `mcp.health.check`      | READ  | Health check for a server (or all)       | `{ server?: string }`                                                   |
+| `mcp.registry.list`     | READ  | List configured MCP registries           | `{}`                                                                    |
+| `mcp.registry.add`      | ADMIN | Add a registry (persisted to SQLite)     | `{ id: string, name: string, url: string }`                             |
+| `mcp.registry.remove`   | ADMIN | Remove a registry                        | `{ id: string }`                                                        |
+| `mcp.registry.sync`     | WRITE | Sync registry manifests (one or all)     | `{ registry?: string }`                                                 |
+| `mcp.browse.list`       | READ  | List available servers from registries   | `{}`                                                                    |
 
 ---
 
@@ -448,3 +517,4 @@ These are server-push events (not RPC calls) the gateway broadcasts to connected
 - [Architecture](/operator1/architecture) — system design overview
 - [Sub-Agent Spawning](/operator1/spawning) — how `agent` and `sessions` are used in practice
 - [Configuration](/operator1/configuration) — config RPC usage and hot reload
+- [MCP](/operator1/mcp) — MCP server setup and scope files
