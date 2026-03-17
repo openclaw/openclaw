@@ -1,10 +1,11 @@
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
   collectOpenProviderGroupPolicyWarnings,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   ChannelAccountSnapshot,
   ChannelPlugin,
@@ -56,12 +57,7 @@ function normalizeZaloMessagingTarget(raw: string): string | undefined {
   return trimmed.replace(/^(zalo|zl):/i, "");
 }
 
-let zaloChannelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
-
-async function loadZaloChannelRuntime() {
-  zaloChannelRuntimePromise ??= import("./channel.runtime.js");
-  return zaloChannelRuntimePromise;
-}
+const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
 export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   id: "zalo",

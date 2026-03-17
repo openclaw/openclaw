@@ -7,13 +7,14 @@ import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
+import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
 import type {
   ProviderAuthOptionBag,
   ProviderNonInteractiveApiKeyCredentialParams,
   ProviderResolveNonInteractiveApiKeyParams,
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { resolvePreferredProviderForAuthChoice } from "../../auth-choice.preferred-provider.js";
+import { createLazyRuntimeSurface } from "../../../shared/lazy-runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
@@ -21,6 +22,11 @@ const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 async function loadPluginProviderRuntime() {
   return import("./auth-choice.plugin-providers.runtime.js");
 }
+
+const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
+  loadPluginProviderRuntime,
+  ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
+);
 
 function buildIsolatedProviderResolutionConfig(
   cfg: OpenClawConfig,
@@ -81,7 +87,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     preferredProviderId,
   );
   const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
-    await loadPluginProviderRuntime();
+    await loadAuthChoicePluginProvidersRuntime();
   const owningPluginIds = preferredProviderId
     ? resolveOwningPluginIdsForProvider({
         provider: preferredProviderId,

@@ -18,7 +18,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
-import { ensureConfiguredAcpRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
+import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   executePluginCommand,
@@ -63,7 +63,10 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import {
+  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import type { TelegramTransport } from "./fetch.js";
 import {
@@ -119,7 +122,7 @@ export type RegisterTelegramHandlerParams = {
   logger: ReturnType<typeof getChildLogger>;
 };
 
-type RegisterTelegramNativeCommandsParams = {
+export type RegisterTelegramNativeCommandsParams = {
   bot: Bot;
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -487,13 +490,13 @@ export const registerTelegramNativeCommands = ({
       topicAgentId,
     });
     if (configuredBinding) {
-      const ensured = await ensureConfiguredAcpRouteReady({
+      const ensured = await ensureConfiguredBindingRouteReady({
         cfg,
-        configuredBinding,
+        bindingResolution: configuredBinding,
       });
       if (!ensured.ok) {
         logVerbose(
-          `telegram native command: configured ACP binding unavailable for topic ${configuredBinding.spec.conversationId}: ${ensured.error}`,
+          `telegram native command: configured ACP binding unavailable for topic ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
         );
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
@@ -650,7 +653,13 @@ export const registerTelegramNativeCommands = ({
             });
             return;
           }
-          const baseSessionKey = route.sessionKey;
+          const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+            cfg,
+            route,
+            chatId,
+            isGroup,
+            senderId,
+          });
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
           const threadKeys =

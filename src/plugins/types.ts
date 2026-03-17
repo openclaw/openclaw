@@ -22,6 +22,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -244,6 +245,18 @@ export type ProviderCatalogContext = {
   resolveProviderApiKey: (providerId?: string) => {
     apiKey: string | undefined;
     discoveryApiKey?: string;
+  };
+  resolveProviderAuth: (
+    providerId?: string,
+    options?: {
+      oauthMarker?: string;
+    },
+  ) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+    mode: "api_key" | "oauth" | "token" | "none";
+    source: "env" | "profile" | "none";
+    profileId?: string;
   };
 };
 
@@ -890,6 +903,7 @@ export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
 };
 
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
+export type ImageGenerationProviderPlugin = ImageGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
   method: string;
@@ -938,6 +952,8 @@ export type PluginConversationBindingRequestParams = {
   detachHint?: string;
 };
 
+export type PluginConversationBindingResolutionDecision = "allow-once" | "allow-always" | "deny";
+
 export type PluginConversationBinding = {
   bindingId: string;
   pluginId: string;
@@ -967,6 +983,24 @@ export type PluginConversationBindingRequestResult =
       status: "error";
       message: string;
     };
+
+export type PluginConversationBindingResolvedEvent = {
+  status: "approved" | "denied";
+  binding?: PluginConversationBinding;
+  decision: PluginConversationBindingResolutionDecision;
+  request: {
+    summary?: string;
+    detachHint?: string;
+    requestedBySenderId?: string;
+    conversation: {
+      channel: string;
+      accountId: string;
+      conversationId: string;
+      parentConversationId?: string;
+      threadId?: string | number;
+    };
+  };
+};
 
 /**
  * Result returned by a plugin command handler.
@@ -1251,8 +1285,12 @@ export type OpenClawPluginApi = {
   registerProvider: (provider: ProviderPlugin) => void;
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
+  registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
   registerWebSearchProvider: (provider: WebSearchProviderPlugin) => void;
   registerInteractiveHandler: (registration: PluginInteractiveHandlerRegistration) => void;
+  onConversationBindingResolved: (
+    handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
+  ) => void;
   /**
    * Register a custom command that bypasses the LLM agent.
    * Plugin commands are processed before built-in commands and before agent invocation.
