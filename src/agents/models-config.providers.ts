@@ -514,6 +514,28 @@ export function normalizeProviders(params: {
       }
     }
 
+    // Reverse-lookup: if apiKey looks like a resolved secret value (not an env
+    // var name), check whether it matches the canonical env var for this provider.
+    // This prevents resolveConfigEnvVars()-resolved secrets from being persisted
+    // to models.json as plaintext. Only run this when sourceProviders is not
+    // available (legacy path without source refs).
+    // (Fixes #38757)
+    if (!params.sourceProviders) {
+      const currentApiKey = normalizedProvider.apiKey;
+      if (
+        typeof currentApiKey === "string" &&
+        currentApiKey.trim() &&
+        !/^[A-Z_][A-Z0-9_]*$/.test(currentApiKey.trim())
+      ) {
+        const envVarName = resolveEnvApiKeyVarName(normalizedKey, env);
+        if (envVarName && env[envVarName] === currentApiKey) {
+          mutated = true;
+          normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
+          params.secretRefManagedProviders?.add(normalizedKey);
+        }
+      }
+    }
+
     // If a provider defines models, pi's ModelRegistry requires apiKey to be set.
     // Fill it from the environment or auth profiles when possible.
     const hasModels =
