@@ -32,6 +32,15 @@ function isFeishuWebhookPayload(value: unknown): value is Record<string, unknown
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function timingSafeEqualString(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left, "utf8");
+  const rightBuffer = Buffer.from(right, "utf8");
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
 function buildFeishuWebhookEnvelope(
   req: http.IncomingMessage,
   payload: Record<string, unknown>,
@@ -63,7 +72,7 @@ function isFeishuWebhookSignatureValid(params: {
     .createHash("sha256")
     .update(timestamp + nonce + encryptKey + JSON.stringify(params.payload))
     .digest("hex");
-  return computedSignature === signature;
+  return timingSafeEqualString(computedSignature, signature);
 }
 
 function respondText(res: http.ServerResponse, statusCode: number, body: string): void {
