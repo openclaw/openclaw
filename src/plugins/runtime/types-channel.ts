@@ -1,3 +1,10 @@
+/**
+ * Runtime helpers for native channel plugins.
+ *
+ * This surface exposes core and channel-specific helpers used by bundled
+ * plugins. Prefer hooks unless you need tight in-process coupling with the
+ * OpenClaw messaging/runtime stack.
+ */
 type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
