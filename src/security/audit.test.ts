@@ -2530,9 +2530,10 @@ description: test skill
     });
   });
 
-  it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+  it.each([
+    {
+      name: "flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists",
+      cfg: {
         commands: { useAccessGroups: false },
         channels: {
           discord: {
@@ -2548,29 +2549,16 @@ description: test skill
             },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.commands.native.unrestricted",
-            severity: "critical",
-          }),
-        ]),
-      );
-    });
-  });
-
-  it("flags Slack slash commands without a channel users allowlist", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+      } satisfies OpenClawConfig,
+      plugins: [discordPlugin],
+      expectedFinding: {
+        checkId: "channels.discord.commands.native.unrestricted",
+        severity: "critical",
+      },
+    },
+    {
+      name: "flags Slack slash commands without a channel users allowlist",
+      cfg: {
         channels: {
           slack: {
             enabled: true,
@@ -2580,29 +2568,16 @@ description: test skill
             slashCommand: { enabled: true },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [slackPlugin],
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.slack.commands.slash.no_allowlists",
-            severity: "warn",
-          }),
-        ]),
-      );
-    });
-  });
-
-  it("flags Slack slash commands when access-group enforcement is disabled", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+      } satisfies OpenClawConfig,
+      plugins: [slackPlugin],
+      expectedFinding: {
+        checkId: "channels.slack.commands.slash.no_allowlists",
+        severity: "warn",
+      },
+    },
+    {
+      name: "flags Slack slash commands when access-group enforcement is disabled",
+      cfg: {
         commands: { useAccessGroups: false },
         channels: {
           slack: {
@@ -2613,29 +2588,16 @@ description: test skill
             slashCommand: { enabled: true },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [slackPlugin],
-      });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.slack.commands.slash.useAccessGroups_off",
-            severity: "critical",
-          }),
-        ]),
-      );
-    });
-  });
-
-  it("flags Telegram group commands without a sender allowlist", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+      } satisfies OpenClawConfig,
+      plugins: [slackPlugin],
+      expectedFinding: {
+        checkId: "channels.slack.commands.slash.useAccessGroups_off",
+        severity: "critical",
+      },
+    },
+    {
+      name: "flags Telegram group commands without a sender allowlist",
+      cfg: {
         channels: {
           telegram: {
             enabled: true,
@@ -2644,22 +2606,19 @@ description: test skill
             groups: { "-100123": {} },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [telegramPlugin],
-      });
+      } satisfies OpenClawConfig,
+      plugins: [telegramPlugin],
+      expectedFinding: {
+        checkId: "channels.telegram.groups.allowFrom.missing",
+        severity: "critical",
+      },
+    },
+  ])("$name", async (testCase) => {
+    await withChannelSecurityStateDir(async () => {
+      const res = await runChannelSecurityAudit(testCase.cfg, testCase.plugins);
 
       expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.telegram.groups.allowFrom.missing",
-            severity: "critical",
-          }),
-        ]),
+        expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
       );
     });
   });
