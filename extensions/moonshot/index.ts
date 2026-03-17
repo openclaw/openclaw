@@ -1,5 +1,6 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -74,22 +75,13 @@ const moonshotPlugin = {
       ],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
-          const explicitBaseUrl =
-            typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
-          return {
-            provider: {
-              ...buildMoonshotProvider(),
-              ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-              apiKey,
-            },
-          };
-        },
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildMoonshotProvider,
+            allowExplicitBaseUrl: true,
+          }),
       },
       wrapStreamFn: (ctx) => {
         const thinkingType = resolveMoonshotThinkingType({
