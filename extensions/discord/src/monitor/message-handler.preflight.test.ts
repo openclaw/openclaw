@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/media-understanding/audio-preflight.js", () => ({
+vi.mock("./preflight-audio.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
 import {
@@ -229,16 +229,16 @@ describe("resolvePreflightMentionRequirement", () => {
     expect(
       resolvePreflightMentionRequirement({
         shouldRequireMention: true,
-        isBoundThreadSession: false,
+        bypassMentionRequirement: false,
       }),
     ).toBe(true);
   });
 
-  it("disables mention requirement for bound thread sessions", () => {
+  it("disables mention requirement when the route explicitly bypasses mentions", () => {
     expect(
       resolvePreflightMentionRequirement({
         shouldRequireMention: true,
-        isBoundThreadSession: true,
+        bypassMentionRequirement: true,
       }),
     ).toBe(false);
   });
@@ -247,7 +247,7 @@ describe("resolvePreflightMentionRequirement", () => {
     expect(
       resolvePreflightMentionRequirement({
         shouldRequireMention: false,
-        isBoundThreadSession: false,
+        bypassMentionRequirement: false,
       }),
     ).toBe(false);
   });
@@ -376,6 +376,69 @@ describe("preflightDiscordMessage", () => {
 
     expect(result).not.toBeNull();
     expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
+  });
+
+  it("drops hydrated bound-thread webhook echoes after fetching an empty payload", async () => {
+    const threadBinding = createThreadBinding({
+      targetKind: "session",
+      targetSessionKey: "agent:main:acp:discord-thread-1",
+    });
+    const threadId = "thread-webhook-hydrated-1";
+    const parentId = "channel-parent-webhook-hydrated-1";
+    const message = createDiscordMessage({
+      id: "m-webhook-hydrated-1",
+      channelId: threadId,
+      content: "",
+      webhookId: undefined,
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+    const restGet = vi.fn(async () => ({
+      id: message.id,
+      content: "webhook relay",
+      webhook_id: "wh-1",
+      attachments: [],
+      embeds: [],
+      mentions: [],
+      mention_roles: [],
+      mention_everyone: false,
+      author: {
+        id: "relay-bot-1",
+        username: "Relay",
+        bot: true,
+      },
+    }));
+    const client = {
+      ...createThreadClient({ threadId, parentId }),
+      rest: {
+        get: restGet,
+      },
+    } as unknown as DiscordClient;
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: true,
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      threadBindings: {
+        getByThreadId: (id: string) => (id === threadId ? threadBinding : undefined),
+      } as import("./thread-bindings.js").ThreadBindingManager,
+    });
+
+    expect(restGet).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
   });
 
   it("bypasses mention gating in bound threads for allowed bot senders", async () => {
@@ -655,8 +718,8 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    const result = await preflightDiscordMessage(
-      createPreflightArgs({
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
         cfg: {
           ...DEFAULT_PREFLIGHT_CFG,
           messages: {
@@ -674,7 +737,17 @@ describe("preflightDiscordMessage", () => {
         }),
         client,
       }),
-    );
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            [channelId]: {
+              allow: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
