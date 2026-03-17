@@ -613,7 +613,8 @@ export function resolveExecApprovalsFromFile(params: {
       // For map-format wildcard: fall back to the wildcard "default" bucket, then to the flat list.
       const wildcardEntries =
         wildcardByHost?.[hostKey] ?? wildcardByHost?.["default"] ?? wildcardFlatList;
-      const agentEntries = agentByHost?.[hostKey] ?? [];
+      // Fall back to agent "default" bucket or flat list when host-specific bucket is absent.
+      const agentEntries = agentByHost?.[hostKey] ?? agentByHost?.["default"] ?? agentFlatList;
       const seen = new Set<string>();
       const merged: ExecAllowlistEntry[] = [];
       for (const e of [...wildcardEntries, ...agentEntries]) {

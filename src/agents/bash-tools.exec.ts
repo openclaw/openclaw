@@ -475,6 +475,7 @@ export function createExecTool(
           security,
           ask,
           host,
+          sandbox: host === "sandbox" ? sandbox : undefined,
           safeBins,
           safeBinProfiles,
           agentId,
