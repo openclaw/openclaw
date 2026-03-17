@@ -69,6 +69,9 @@ function getJiti() {
   const { createJiti } = require("jiti");
   jitiLoader = createJiti(__filename, {
     interopDefault: true,
+    // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
+    // so local plugins do not create a second transpiled OpenClaw core graph.
+    tryNative: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
   return jitiLoader;
@@ -169,9 +172,8 @@ rootExports = new Proxy(target, {
   },
   ownKeys() {
     const keys = new Set(Reflect.ownKeys(target));
-    const monolithic = getMonolithicSdk();
-    if (monolithic) {
-      for (const key of Reflect.ownKeys(monolithic)) {
+    if (monolithicSdk && typeof monolithicSdk === "object") {
+      for (const key of Reflect.ownKeys(monolithicSdk)) {
         if (!keys.has(key)) {
           keys.add(key);
         }

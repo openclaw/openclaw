@@ -60,10 +60,6 @@ export default defineConfig({
   resolve: {
     // Keep this ordered: the base `openclaw/plugin-sdk` alias is a prefix match.
     alias: [
-      {
-        find: "openclaw/extension-api",
-        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
-      },
       ...pluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -133,7 +129,6 @@ export default defineConfig({
         "src/index.ts",
         "src/runtime.ts",
         "src/channel-web.ts",
-        "src/extensionAPI.ts",
         "src/logging.ts",
         "src/cli/**",
         "src/commands/**",

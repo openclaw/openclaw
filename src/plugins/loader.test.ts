@@ -297,22 +297,6 @@ function createPluginSdkAliasFixture(params?: {
   return { root, srcFile, distFile };
 }
 
-function createExtensionApiAliasFixture(params?: { srcBody?: string; distBody?: string }) {
-  const root = makeTempDir();
-  const srcFile = path.join(root, "src", "extensionAPI.ts");
-  const distFile = path.join(root, "dist", "extensionAPI.js");
-  mkdirSafe(path.dirname(srcFile));
-  mkdirSafe(path.dirname(distFile));
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
-    "utf-8",
-  );
-  fs.writeFileSync(srcFile, params?.srcBody ?? "export {};\n", "utf-8");
-  fs.writeFileSync(distFile, params?.distBody ?? "export {};\n", "utf-8");
-  return { root, srcFile, distFile };
-}
-
 function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?: string }) {
   const root = makeTempDir();
   const srcFile = path.join(root, "src", "plugins", "runtime", "index.ts");
@@ -729,6 +713,68 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(getGlobalHookRunner()).toBeNull();
   });
 
+  it("only publishes plugin commands to the global registry during activating loads", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "command-plugin",
+      filename: "command-plugin.cjs",
+      body: `module.exports = {
+        id: "command-plugin",
+        register(api) {
+          api.registerCommand({
+            name: "pair",
+            description: "Pair device",
+            acceptsArgs: true,
+            handler: async ({ args }) => ({ text: \`paired:\${args ?? ""}\` }),
+          });
+        },
+      };`,
+    });
+    const { clearPluginCommands, getPluginCommandSpecs } = await import("./commands.js");
+
+    clearPluginCommands();
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["command-plugin"],
+        },
+      },
+      onlyPluginIds: ["command-plugin"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
+    expect(scoped.commands.map((entry) => entry.command.name)).toEqual(["pair"]);
+    expect(getPluginCommandSpecs("telegram")).toEqual([]);
+
+    const active = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["command-plugin"],
+        },
+      },
+      onlyPluginIds: ["command-plugin"],
+    });
+
+    expect(active.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
+    expect(getPluginCommandSpecs("telegram")).toEqual([
+      {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+      },
+    ]);
+
+    clearPluginCommands();
+  });
+
   it("throws when activate:false is used without cache:false", () => {
     expect(() => loadOpenClawPlugins({ activate: false })).toThrow(
       "activate:false requires cache:false",
@@ -940,6 +986,44 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
 
     expect(second).not.toBe(first);
     expect(third).toBe(second);
+  });
+
+  it("does not reuse cached registries across gateway subagent binding modes", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cache-gateway-bindable",
+      filename: "cache-gateway-bindable.cjs",
+      body: `module.exports = { id: "cache-gateway-bindable", register() {} };`,
+    });
+
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          allow: ["cache-gateway-bindable"],
+          load: {
+            paths: [plugin.file],
+          },
+        },
+      },
+    };
+
+    const defaultRegistry = loadOpenClawPlugins(options);
+    const gatewayBindableRegistry = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    const gatewayBindableAgain = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+
+    expect(gatewayBindableRegistry).not.toBe(defaultRegistry);
+    expect(gatewayBindableAgain).toBe(gatewayBindableRegistry);
   });
 
   it("evicts least recently used registries when the loader cache exceeds its cap", () => {
@@ -2030,6 +2114,225 @@ module.exports = {
     expect(registry.channels).toHaveLength(1);
   });
 
+  it("can prefer setupEntry for configured channel loads during startup", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const setupMarker = path.join(pluginDir, "setup-loaded.txt");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/setup-runtime-preferred-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+            startup: {
+              deferConfiguredChannelFullLoadUntilAfterListen: true,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "setup-runtime-preferred-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["setup-runtime-preferred-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "setup-runtime-preferred-test",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "setup-runtime-preferred-test",
+        meta: {
+          id: "setup-runtime-preferred-test",
+          label: "Setup Runtime Preferred Test",
+          selectionLabel: "Setup Runtime Preferred Test",
+          docsPath: "/channels/setup-runtime-preferred-test",
+          blurb: "full entry should be deferred while startup is still cold",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ accountId: "default", token: "configured" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  plugin: {
+    id: "setup-runtime-preferred-test",
+    meta: {
+      id: "setup-runtime-preferred-test",
+      label: "Setup Runtime Preferred Test",
+      selectionLabel: "Setup Runtime Preferred Test",
+      docsPath: "/channels/setup-runtime-preferred-test",
+      blurb: "setup runtime preferred",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ accountId: "default", token: "configured" }),
+    },
+    outbound: { deliveryMode: "direct" },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "setup-runtime-preferred-test": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["setup-runtime-preferred-test"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(registry.channelSetups).toHaveLength(1);
+    expect(registry.channels).toHaveLength(1);
+  });
+
+  it("does not prefer setupEntry for configured channel loads without startup opt-in", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(makeTempDir(), "full-loaded.txt");
+    const setupMarker = path.join(makeTempDir(), "setup-loaded.txt");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/setup-runtime-not-preferred-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "setup-runtime-not-preferred-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["setup-runtime-not-preferred-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "setup-runtime-not-preferred-test",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "setup-runtime-not-preferred-test",
+        meta: {
+          id: "setup-runtime-not-preferred-test",
+          label: "Setup Runtime Not Preferred Test",
+          selectionLabel: "Setup Runtime Not Preferred Test",
+          docsPath: "/channels/setup-runtime-not-preferred-test",
+          blurb: "full entry should still load without explicit startup opt-in",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ accountId: "default", token: "configured" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  plugin: {
+    id: "setup-runtime-not-preferred-test",
+    meta: {
+      id: "setup-runtime-not-preferred-test",
+      label: "Setup Runtime Not Preferred Test",
+      selectionLabel: "Setup Runtime Not Preferred Test",
+      docsPath: "/channels/setup-runtime-not-preferred-test",
+      blurb: "setup runtime not preferred",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ accountId: "default", token: "configured" }),
+    },
+    outbound: { deliveryMode: "direct" },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "setup-runtime-not-preferred-test": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["setup-runtime-not-preferred-test"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(fullMarker)).toBe(true);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(registry.channelSetups).toHaveLength(1);
+    expect(registry.channels).toHaveLength(1);
+  });
+
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -2800,6 +3103,7 @@ module.exports = {
 
   it("preserves runtime reflection semantics when runtime is lazily initialized", () => {
     useNoBundledPlugins();
+    const stateDir = makeTempDir();
     const plugin = writePlugin({
       id: "runtime-introspection",
       filename: "runtime-introspection.cjs",
@@ -2818,12 +3122,17 @@ module.exports = {
 } };`,
     });
 
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["runtime-introspection"],
-      },
-    });
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["runtime-introspection"],
+        },
+        options: {
+          onlyPluginIds: ["runtime-introspection"],
+        },
+      }),
+    );
 
     const record = registry.plugins.find((entry) => entry.id === "runtime-introspection");
     expect(record?.status).toBe("loaded");
@@ -2964,6 +3273,16 @@ module.exports = {
     expect(resolved).toBe(distFile);
   });
 
+  it("configures the plugin loader jiti boundary to prefer native dist modules", () => {
+    const options = __testing.buildPluginLoaderJitiOptions({});
+
+    expect(options.tryNative).toBe(true);
+    expect(options.interopDefault).toBe(true);
+    expect(options.extensions).toContain(".js");
+    expect(options.extensions).toContain(".ts");
+    expect("alias" in options).toBe(false);
+  });
+
   it("prefers src root-alias shim when loader runs from src in non-production", () => {
     const { root, srcFile } = createPluginSdkAliasFixture({
       srcFile: "root-alias.cjs",
@@ -2976,26 +3295,6 @@ module.exports = {
       __testing.resolvePluginSdkAliasFile({
         srcFile: "root-alias.cjs",
         distFile: "root-alias.cjs",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
-  });
-
-  it("prefers dist extension-api alias when loader runs from dist", () => {
-    const { root, distFile } = createExtensionApiAliasFixture();
-
-    const resolved = __testing.resolveExtensionApiAlias({
-      modulePath: path.join(root, "dist", "plugins", "loader.js"),
-    });
-    expect(resolved).toBe(distFile);
-  });
-
-  it("prefers src extension-api alias when loader runs from src in non-production", () => {
-    const { root, srcFile } = createExtensionApiAliasFixture();
-
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolveExtensionApiAlias({
         modulePath: path.join(root, "src", "plugins", "loader.ts"),
       }),
     );
@@ -3016,16 +3315,13 @@ module.exports = {
     expect(resolved).toBe(srcFile);
   });
 
-  it("resolves extension-api alias from package root when loader runs from transpiler cache path", () => {
-    const { root, srcFile } = createExtensionApiAliasFixture();
+  it("prefers dist plugin runtime module when loader runs from dist", () => {
+    const { root, distFile } = createPluginRuntimeAliasFixture();
 
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolveExtensionApiAlias({
-        modulePath: "/tmp/tsx-cache/openclaw-loader.js",
-        argv1: path.join(root, "openclaw.mjs"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
+    const resolved = __testing.resolvePluginRuntimeModulePath({
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
   });
 
   it("resolves plugin runtime module from package root when loader runs from transpiler cache path", () => {
