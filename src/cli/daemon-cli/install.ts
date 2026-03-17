@@ -8,7 +8,7 @@ import {
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayStateDir } from "../../daemon/paths.js";
-import { isNvmNode } from "../../daemon/service-env.js";
+import { isNvmNode, resolveLinuxSystemCaBundle } from "../../daemon/service-env.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -58,6 +58,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   if (loaded) {
     if (!opts.force) {
+      // Backfill NODE_EXTRA_CA_CERTS even when service is already installed,
+      // so users upgrading to this fix don't need --force to get the .env entry.
+      ensureNvmCaCertsInDotEnv({ env: process.env, json, warnings });
       emit({
         ok: true,
         result: "already-installed",
@@ -148,13 +151,17 @@ function ensureNvmCaCertsInDotEnv(params: {
   }
 
   try {
+    const caBundle = resolveLinuxSystemCaBundle();
+    if (!caBundle) {
+      return;
+    }
     const stateDir = resolveGatewayStateDir(params.env);
     const envFile = path.join(stateDir, ".env");
     const existing = fs.existsSync(envFile) ? fs.readFileSync(envFile, "utf8") : "";
     if (existing.includes("NODE_EXTRA_CA_CERTS")) {
       return;
     }
-    const line = "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt\n";
+    const line = `NODE_EXTRA_CA_CERTS=${caBundle}\n`;
     const content = existing.endsWith("\n") || !existing ? existing + line : `${existing}\n${line}`;
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(envFile, content, "utf8");

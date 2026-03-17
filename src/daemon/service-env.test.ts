@@ -9,6 +9,7 @@ import {
   getMinimalServicePathParts,
   getMinimalServicePathPartsFromEnv,
   isNvmNode,
+  resolveLinuxSystemCaBundle,
 } from "./service-env.js";
 
 describe("getMinimalServicePathParts - Linux user directories", () => {
@@ -486,6 +487,17 @@ describe("isNvmNode", () => {
   });
 });
 
+describe("resolveLinuxSystemCaBundle", () => {
+  it("returns a known CA bundle path when one exists", () => {
+    const result = resolveLinuxSystemCaBundle();
+    if (process.platform === "linux") {
+      // On a real Linux host, at least one standard CA bundle should exist.
+      expect(result).toMatch(/\.(crt|pem)$/);
+    }
+    // On non-Linux CI or minimal containers, result may be undefined.
+  });
+});
+
 describe("shared Node TLS env — Linux nvm detection", () => {
   const builders = [
     {
@@ -500,11 +512,14 @@ describe("shared Node TLS env — Linux nvm detection", () => {
     },
   ] as const;
 
+  // The expected CA path depends on what the host actually has on disk.
+  const expectedCaBundle = resolveLinuxSystemCaBundle();
+
   it.each(builders)(
     "$name defaults NODE_EXTRA_CA_CERTS on Linux when NVM_DIR is set",
     ({ build }) => {
       const env = build({ HOME: "/home/user", NVM_DIR: "/home/user/.nvm" }, "linux");
-      expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+      expect(env.NODE_EXTRA_CA_CERTS).toBe(expectedCaBundle);
     },
   );
 

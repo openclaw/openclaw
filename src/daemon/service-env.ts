@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
@@ -15,8 +16,28 @@ import {
   resolveNodeWindowsTaskName,
 } from "./constants.js";
 
-/** Standard system CA bundle path on Debian/Ubuntu/Alpine Linux. */
-const LINUX_SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
+/** Known system CA bundle paths across common Linux distros. */
+const LINUX_CA_BUNDLE_PATHS = [
+  "/etc/ssl/certs/ca-certificates.crt", // Debian, Ubuntu, Alpine
+  "/etc/pki/tls/certs/ca-bundle.crt", // RHEL, Fedora, CentOS
+  "/etc/ssl/ca-bundle.pem", // openSUSE
+] as const;
+
+/**
+ * Find the system CA bundle on this Linux host.
+ * Returns the first existing path, or `undefined` if none is found.
+ */
+export function resolveLinuxSystemCaBundle(): string | undefined {
+  for (const candidate of LINUX_CA_BUNDLE_PATHS) {
+    try {
+      fs.accessSync(candidate, fs.constants.R_OK);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Detect if Node.js was installed via nvm.
@@ -345,13 +366,13 @@ function resolveSharedServiceEnvironmentFields(
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
   // On Linux, nvm-installed Node uses a bundled CA store that is missing modern root CAs.
-  // Default to the system CA bundle when nvm is detected so TLS works out of the box.
+  // Default to the system CA bundle when nvm is detected and the bundle exists on disk.
   const nodeCaCerts =
     env.NODE_EXTRA_CA_CERTS ??
     (platform === "darwin"
       ? "/etc/ssl/cert.pem"
       : platform === "linux" && isNvmNode(env)
-        ? LINUX_SYSTEM_CA_BUNDLE
+        ? resolveLinuxSystemCaBundle()
         : undefined);
   const nodeUseSystemCa = env.NODE_USE_SYSTEM_CA ?? (platform === "darwin" ? "1" : undefined);
   return {
