@@ -108,6 +108,7 @@ export { ACP_ERROR_CODES, AcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
 export type {
   AnyAgentTool,
+  MediaUnderstandingProviderPlugin,
   OpenClawPluginConfigSchema,
   OpenClawPluginApi,
   OpenClawPluginService,

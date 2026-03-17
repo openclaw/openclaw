@@ -7,6 +7,7 @@ import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
   applyGoogleGeminiModelDefault,
 } from "../../src/commands/google-gemini-model-default.js";
+import { googleProvider } from "../../src/media-understanding/providers/google/index.js";
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
@@ -51,6 +52,7 @@ const googlePlugin = {
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
     registerGoogleGeminiCliProvider(api);
+    api.registerMediaUnderstandingProvider(googleProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "gemini",

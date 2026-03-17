@@ -7,6 +7,7 @@ import {
   getScopedCredentialValue,
   setScopedCredentialValue,
 } from "../../src/agents/tools/web-search-plugin-factory.js";
+import { moonshotProvider } from "../../src/media-understanding/providers/moonshot/index.js";
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
@@ -99,6 +100,7 @@ const moonshotPlugin = {
         return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
       },
     });
+    api.registerMediaUnderstandingProvider(moonshotProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "kimi",

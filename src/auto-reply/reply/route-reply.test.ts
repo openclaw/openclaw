@@ -92,6 +92,7 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   })),
   providers: [],
   speechProviders: [],
+  mediaUnderstandingProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],

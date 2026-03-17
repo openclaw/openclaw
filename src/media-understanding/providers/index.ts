@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../../agents/model-selection.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import type { MediaUnderstandingProvider } from "../types.js";
 import { anthropicProvider } from "./anthropic/index.js";
 import { deepgramProvider } from "./deepgram/index.js";
@@ -23,6 +24,22 @@ const PROVIDERS: MediaUnderstandingProvider[] = [
   deepgramProvider,
 ];
 
+function mergeProviderIntoRegistry(
+  registry: Map<string, MediaUnderstandingProvider>,
+  provider: MediaUnderstandingProvider,
+) {
+  const normalizedKey = normalizeMediaProviderId(provider.id);
+  const existing = registry.get(normalizedKey);
+  const merged = existing
+    ? {
+        ...existing,
+        ...provider,
+        capabilities: provider.capabilities ?? existing.capabilities,
+      }
+    : provider;
+  registry.set(normalizedKey, merged);
+}
+
 export function normalizeMediaProviderId(id: string): string {
   const normalized = normalizeProviderId(id);
   if (normalized === "gemini") {
@@ -36,7 +53,10 @@ export function buildMediaUnderstandingRegistry(
 ): Map<string, MediaUnderstandingProvider> {
   const registry = new Map<string, MediaUnderstandingProvider>();
   for (const provider of PROVIDERS) {
-    registry.set(normalizeMediaProviderId(provider.id), provider);
+    mergeProviderIntoRegistry(registry, provider);
+  }
+  for (const entry of getActivePluginRegistry()?.mediaUnderstandingProviders ?? []) {
+    mergeProviderIntoRegistry(registry, entry.provider);
   }
   if (overrides) {
     for (const [key, provider] of Object.entries(overrides)) {
