@@ -60,6 +60,12 @@ describe("splitTrailingAuthProfile", () => {
     });
   });
 
+  it("preserves claude model version suffix (e.g. @20250219)", () => {
+    expect(splitTrailingAuthProfile("claude-3-7-sonnet@20250219")).toEqual({
+      model: "claude-3-7-sonnet@20250219",
+    });
+  });
+
   it("preserves numeric version suffixes in custom provider models", () => {
     expect(splitTrailingAuthProfile("custom-litellm/vertex-ai_claude-haiku-4-5@20251001")).toEqual({
       model: "custom-litellm/vertex-ai_claude-haiku-4-5@20251001",

@@ -2,17 +2,14 @@
  * Check if a suffix looks like a version string rather than an auth profile.
  * Version suffixes are typically numeric dates (20251001) or semver-like (v1.2.3).
  * Auth profiles are alphanumeric names like "work", "default", or "cf:default".
+ *
+ * Note: A purely numeric auth profile (e.g., @1234) would be mistakenly treated as
+ * a version, but this is an unlikely edge case in practice.
  */
 function looksLikeVersionSuffix(suffix: string): boolean {
-  // Pure numeric (e.g., "20251001" for dates, "1234" for build numbers)
-  if (/^\d+$/.test(suffix)) {
-    return true;
-  }
-  // Semver-like patterns: v1, v1.2, v1.2.3, 1.2.3
-  if (/^v?\d+(\.\d+)*(-[\w.]+)?(\+[\w.]+)?$/.test(suffix)) {
-    return true;
-  }
-  return false;
+  // Semver-like patterns: v1, v1.2, v1.2.3, 1.2.3, or pure numeric (e.g., "20251001" for dates)
+  // Pure numeric strings match this pattern via the single \d+ group with optional parts absent.
+  return /^v?\d+(\.\d+)*(-[\w.]+)?(\+[\w.]+)?$/.test(suffix);
 }
 
 export function splitTrailingAuthProfile(raw: string): {
