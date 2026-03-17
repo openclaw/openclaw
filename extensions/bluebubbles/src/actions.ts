@@ -15,7 +15,11 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import { normalizeSecretInputString } from "./secret-input.js";
-import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
+import {
+  normalizeBlueBubblesHandle,
+  normalizeBlueBubblesMessagingTarget,
+  parseBlueBubblesTarget,
+} from "./targets.js";
 import type { BlueBubblesSendTarget } from "./types.js";
 
 const loadBlueBubblesActionsRuntime = createLazyRuntimeNamedExport(
@@ -63,7 +67,7 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
 ]);
 
 export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
+  listActions: ({ cfg, currentChannelId }) => {
     const account = resolveBlueBubblesAccount({ cfg: cfg });
     if (!account.enabled || !account.configured) {
       return [];
@@ -85,6 +89,22 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       }
       if (gate(spec.gate)) {
         actions.add(action);
+      }
+    }
+    const normalizedTarget = currentChannelId
+      ? normalizeBlueBubblesMessagingTarget(currentChannelId)
+      : undefined;
+    const lowered = normalizedTarget?.trim().toLowerCase() ?? "";
+    const isGroupTarget =
+      lowered.startsWith("chat_guid:") ||
+      lowered.startsWith("chat_id:") ||
+      lowered.startsWith("chat_identifier:") ||
+      lowered.startsWith("group:");
+    if (!isGroupTarget) {
+      for (const action of BLUEBUBBLES_ACTION_NAMES) {
+        if ("groupOnly" in BLUEBUBBLES_ACTIONS[action] && BLUEBUBBLES_ACTIONS[action].groupOnly) {
+          actions.delete(action);
+        }
       }
     }
     return Array.from(actions);
