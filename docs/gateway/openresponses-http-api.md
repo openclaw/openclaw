@@ -144,6 +144,8 @@ URL fetch defaults:
 - Optional hostname allowlists are supported per input type (`files.urlAllowlist`, `images.urlAllowlist`).
   - Exact host: `"cdn.example.com"`
   - Wildcard subdomains: `"*.assets.example.com"` (does not match apex)
+  - Empty or omitted allowlists mean no hostname allowlist restriction.
+- To disable URL-based fetches entirely, set `files.allowUrl: false` and/or `images.allowUrl: false`.
 
 ## File + image limits (config)
 
