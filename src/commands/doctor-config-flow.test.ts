@@ -70,6 +70,25 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("clarifies that best-effort config does not unblock gateway startup", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          gateway: { auth: { mode: "token", token: 123 } },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      expect(noteSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Gateway startup remains blocked until the config is fixed."),
+        "Config",
+      );
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
   it("does not warn on mutable account allowlists when dangerous name matching is inherited", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
