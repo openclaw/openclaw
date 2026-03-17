@@ -1,6 +1,8 @@
-import { monitorSignalProvider } from "../../../extensions/signal/src/index.js";
-import { probeSignal } from "../../../extensions/signal/src/probe.js";
-import { sendMessageSignal } from "../../../extensions/signal/src/send.js";
+import {
+  monitorSignalProvider,
+  probeSignal,
+  sendMessageSignal,
+} from "../../../extensions/signal/runtime-api.js";
 import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 

@@ -3,6 +3,9 @@ import { discordPlugin } from "./src/channel.js";
 import { setDiscordRuntime } from "./src/runtime.js";
 import { registerDiscordSubagentHooks } from "./src/subagent-hooks.js";
 
+export { discordPlugin } from "./src/channel.js";
+export { setDiscordRuntime } from "./src/runtime.js";
+
 export default defineChannelPluginEntry({
   id: "discord",
   name: "Discord",

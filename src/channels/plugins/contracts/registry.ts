@@ -2,10 +2,10 @@ import { expect, vi } from "vitest";
 import {
   __testing as discordThreadBindingTesting,
   createThreadBindingManager as createDiscordThreadBindingManager,
-} from "../../../../extensions/discord/src/monitor/thread-bindings.manager.js";
-import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/src/thread-bindings.js";
-import { setMatrixRuntime } from "../../../../extensions/matrix/src/runtime.js";
-import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/src/thread-bindings.js";
+} from "../../../../extensions/discord/api.js";
+import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
+import { setMatrixRuntime } from "../../../../extensions/matrix/api.js";
+import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
