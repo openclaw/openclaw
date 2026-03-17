@@ -1,4 +1,4 @@
-import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/compat";
+import { buildAccountScopedAllowlistConfigEditor } from "../../../src/plugin-sdk-internal/channel-config.js";
 import {
   buildChannelConfigSchema,
   buildAccountScopedDmSecurityPolicy,
@@ -24,7 +24,7 @@ import {
   WhatsAppConfigSchema,
   type ChannelMessageActionName,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/whatsapp";
+} from "../../../src/plugin-sdk-internal/whatsapp.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../src/whatsapp/normalize.js";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import {
@@ -34,15 +34,12 @@ import {
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
+import { whatsappSetupWizardProxy } from "./plugin-shared.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
 
 const meta = getChatChannelMeta("whatsapp");
-
-async function loadWhatsAppChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
 
 function normalizeWhatsAppPayloadText(text: string | undefined): string {
   return (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, "");
@@ -58,51 +55,6 @@ function parseWhatsAppExplicitTarget(raw: string) {
     chatType: isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const),
   };
 }
-
-const whatsappSetupWizardProxy = {
-  channel: "whatsapp",
-  status: {
-    configuredLabel: "linked",
-    unconfiguredLabel: "not linked",
-    configuredHint: "linked",
-    unconfiguredHint: "not linked",
-    configuredScore: 5,
-    unconfiguredScore: 4,
-    resolveConfigured: async ({ cfg }) =>
-      await (
-        await loadWhatsAppChannelRuntime()
-      ).whatsappSetupWizard.status.resolveConfigured({
-        cfg,
-      }),
-    resolveStatusLines: async ({ cfg, configured }) =>
-      (await (
-        await loadWhatsAppChannelRuntime()
-      ).whatsappSetupWizard.status.resolveStatusLines?.({
-        cfg,
-        configured,
-      })) ?? [],
-  },
-  resolveShouldPromptAccountIds: (params) =>
-    (params.shouldPromptAccountIds || params.options?.promptWhatsAppAccountId) ?? false,
-  credentials: [],
-  finalize: async (params) =>
-    await (
-      await loadWhatsAppChannelRuntime()
-    ).whatsappSetupWizard.finalize!(params),
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      whatsapp: {
-        ...cfg.channels?.whatsapp,
-        enabled: false,
-      },
-    },
-  }),
-  onAccountRecorded: (accountId, options) => {
-    options?.onWhatsAppAccountId?.(accountId);
-  },
-} satisfies NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   id: "whatsapp",
