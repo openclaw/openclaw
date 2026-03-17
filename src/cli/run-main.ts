@@ -127,6 +127,14 @@ export async function runCli(argv: string[] = process.argv) {
     });
 
     const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+
+    // Route logs to stderr for ACP gateway mode as soon as we know the target
+    // command, to keep stdout protocol-safe during command registration.
+    const [routePathPrimary, routePathSecondary] = getCommandPathWithRootOptions(parseArgv, 2);
+    if (routePathPrimary === "acp" && routePathSecondary === undefined) {
+      routeLogsToStderr();
+    }
+
     // Register the primary command (builtin or subcli) so help and command parsing
     // are correct even with lazy command registration.
     const primary = getPrimaryCommand(parseArgv);
@@ -139,13 +147,6 @@ export async function runCli(argv: string[] = process.argv) {
       }
       const { registerSubCliByName } = await import("./program/register.subclis.js");
       await registerSubCliByName(program, primary);
-    }
-
-    const [routePathPrimary, routePathSecondary] = getCommandPathWithRootOptions(parseArgv, 2);
-
-    // Route logs to stderr for ACP gateway mode so protocol JSON on stdout is never polluted.
-    if (routePathPrimary === "acp" && routePathSecondary === undefined) {
-      routeLogsToStderr();
     }
 
     const hasBuiltinPrimary =
