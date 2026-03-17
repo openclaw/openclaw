@@ -669,4 +669,62 @@ describe("extractMarkdownToolCalls (manusilized fault-tolerant adapter)", () => 
     const content = '```json\n{"tool": "bash", "arguments": {}}\n```';
     expect(extractMarkdownToolCalls(content)).toEqual([]);
   });
+
+  it("filters out tool calls whose name is not in the allowedToolNames set", () => {
+    const content = ["```json", '{"name": "bash", "arguments": {"command": "ls"}}', "```"].join(
+      "\n",
+    );
+    // 'bash' is not in the allowed set
+    const allowed = new Set(["read_file", "web_search"]);
+    expect(extractMarkdownToolCalls(content, allowed)).toEqual([]);
+  });
+
+  it("accepts tool calls whose name is in the allowedToolNames set", () => {
+    const content = ["```json", '{"name": "bash", "arguments": {"command": "ls"}}', "```"].join(
+      "\n",
+    );
+    const allowed = new Set(["bash", "read_file"]);
+    const result = extractMarkdownToolCalls(content, allowed);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.function.name).toBe("bash");
+  });
+
+  it("skips non-tool JSON objects even when tools are configured (name not in allowed set)", () => {
+    // A model outputs a data object that happens to have a 'name' field
+    const content = '```json\n{"name": "Alice", "age": 30}\n```';
+    const allowed = new Set(["bash", "read_file"]);
+    expect(extractMarkdownToolCalls(content, allowed)).toEqual([]);
+  });
+
+  it("extracts tool calls containing single backticks in argument values", () => {
+    // Shell commands often use backtick subshell syntax
+    const content = [
+      "```json",
+      '{"name": "bash", "arguments": {"command": "echo `date`"}}',
+      "```",
+    ].join("\n");
+    const result = extractMarkdownToolCalls(content);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.function.name).toBe("bash");
+    expect(result[0]?.function.arguments).toEqual({ command: "echo `date`" });
+  });
+
+  it("does not match across two separate fenced code blocks", () => {
+    // An explanatory block followed by a real tool-call block must not be merged
+    const content = [
+      "Here is an example:",
+      "```json",
+      '{"name": "example", "note": "this is not a tool call"}',
+      "```",
+      "Now the actual call:",
+      "```json",
+      '{"name": "bash", "arguments": {"command": "ls"}}',
+      "```",
+    ].join("\n");
+    const result = extractMarkdownToolCalls(content);
+    // Both blocks should be extracted independently, not merged
+    expect(result).toHaveLength(2);
+    expect(result[0]?.function.name).toBe("example");
+    expect(result[1]?.function.name).toBe("bash");
+  });
 });

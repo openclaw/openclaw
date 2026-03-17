@@ -392,15 +392,19 @@ export function buildAssistantMessage(
 // Returns a fresh RegExp instance each time to avoid shared mutable `lastIndex`
 // state across call-sites (extractMarkdownToolCalls + content stripping).
 //
-// The inner pattern uses [^`] to prevent matching across fence boundaries:
-// a single match cannot span two separate fenced blocks, so an explanatory
-// JSON block followed by a real tool-call block cannot be merged into one
-// corrupt payload.
+// The inner pattern uses a negative lookahead `(?!``)` to prevent matching
+// across fence boundaries (three consecutive backticks end the block) while
+// still allowing single or double backticks inside JSON string values (e.g.
+// shell commands like `echo \`date\``).  This is more permissive than the
+// previous `[^\`]` approach, which incorrectly rejected any backtick.
 function makeMarkdownToolCallRe(): RegExp {
-  return /```(?:json)?\s*\n?\s*(\{[^`]*?"name"\s*:\s*"[^"]+"[^`]*?\})\s*\n?```/g;
+  return /```(?:json)?\s*\n?\s*(\{(?:(?!```)[\s\S])*?"name"\s*:\s*"[^"]+"(?:(?!```)[\s\S])*?\})\s*\n?```/g;
 }
 
-export function extractMarkdownToolCalls(content: string): OllamaToolCall[] {
+export function extractMarkdownToolCalls(
+  content: string,
+  allowedToolNames?: Set<string>,
+): OllamaToolCall[] {
   const results: OllamaToolCall[] = [];
   const re = makeMarkdownToolCallRe();
   let match: RegExpExecArray | null;
@@ -412,6 +416,14 @@ export function extractMarkdownToolCalls(content: string): OllamaToolCall[] {
       const parsed = parseJsonPreservingUnsafeIntegers(raw) as Record<string, unknown>;
       const name = typeof parsed.name === "string" ? parsed.name : undefined;
       if (!name) {
+        continue;
+      }
+      // Guard: only promote to a tool call when the name matches a configured
+      // tool.  Without this check any fenced JSON with a `name` field (e.g.
+      // `{"name":"Alice","age":30}`) would be reclassified as a tool-use turn,
+      // stripping the JSON from visible content and corrupting the conversation.
+      if (allowedToolNames && !allowedToolNames.has(name)) {
+        log.debug(`[manusilized] Skipping Markdown block: '${name}' is not a configured tool`);
         continue;
       }
       const args =
@@ -633,7 +645,8 @@ export function createOllamaStreamFn(
         // an explanatory JSON code block (e.g. a README snippet) would be
         // misidentified as a tool call, corrupting the conversation.
         if (accumulatedToolCalls.length === 0 && accumulatedContent && ollamaTools.length > 0) {
-          const markdownCalls = extractMarkdownToolCalls(accumulatedContent);
+          const allowedNames = new Set(ollamaTools.map((t) => t.function.name));
+          const markdownCalls = extractMarkdownToolCalls(accumulatedContent, allowedNames);
           if (markdownCalls.length > 0) {
             log.debug(
               `[manusilized] Extracted ${markdownCalls.length} tool call(s) from Markdown fallback`,
