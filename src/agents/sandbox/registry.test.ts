@@ -172,6 +172,28 @@ async function seedBrowserRegistry(entries: SandboxBrowserRegistryEntry[]) {
 }
 
 describe("registry race safety", () => {
+  it("normalizes legacy registry entries on read", async () => {
+    await seedContainerRegistry([
+      {
+        containerName: "legacy-container",
+        sessionKey: "agent:main",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "openclaw-sandbox:test",
+      },
+    ]);
+
+    const registry = await readRegistry();
+    expect(registry.entries).toEqual([
+      expect.objectContaining({
+        containerName: "legacy-container",
+        backendId: "docker",
+        runtimeLabel: "legacy-container",
+        configLabelKind: "Image",
+      }),
+    ]);
+  });
+
   it("keeps both container updates under concurrent writes", async () => {
     await Promise.all([
       updateRegistry(containerEntry({ containerName: "container-a" })),

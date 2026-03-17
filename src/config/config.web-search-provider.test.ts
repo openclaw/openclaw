@@ -6,6 +6,45 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock("../plugins/web-search-providers.js", () => {
+  const getScoped = (key: string) => (search?: Record<string, unknown>) =>
+    (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
+  return {
+    resolvePluginWebSearchProviders: () => [
+      {
+        id: "brave",
+        envVars: ["BRAVE_API_KEY"],
+        getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
+      },
+      {
+        id: "firecrawl",
+        envVars: ["FIRECRAWL_API_KEY"],
+        getCredentialValue: getScoped("firecrawl"),
+      },
+      {
+        id: "gemini",
+        envVars: ["GEMINI_API_KEY"],
+        getCredentialValue: getScoped("gemini"),
+      },
+      {
+        id: "grok",
+        envVars: ["XAI_API_KEY"],
+        getCredentialValue: getScoped("grok"),
+      },
+      {
+        id: "kimi",
+        envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+        getCredentialValue: getScoped("kimi"),
+      },
+      {
+        id: "perplexity",
+        envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+        getCredentialValue: getScoped("perplexity"),
+      },
+    ],
+  };
+});
+
 const { __testing } = await import("../agents/tools/web-search.js");
 const { resolveSearchProvider } = __testing;
 
@@ -34,6 +73,21 @@ describe("web search provider config", () => {
         providerConfig: {
           apiKey: "test-key", // pragma: allowlist secret
           model: "gemini-2.5-flash",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts firecrawl provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "firecrawl",
+        providerConfig: {
+          apiKey: "fc-test-key", // pragma: allowlist secret
+          baseUrl: "https://api.firecrawl.dev",
         },
       }),
     );
@@ -83,6 +137,7 @@ describe("web search provider auto-detection", () => {
 
   beforeEach(() => {
     delete process.env.BRAVE_API_KEY;
+    delete process.env.FIRECRAWL_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
@@ -110,6 +165,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects gemini when only GEMINI_API_KEY is set", () => {
     process.env.GEMINI_API_KEY = "test-gemini-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("gemini");
+  });
+
+  it("auto-detects firecrawl when only FIRECRAWL_API_KEY is set", () => {
+    process.env.FIRECRAWL_API_KEY = "fc-test-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("firecrawl");
   });
 
   it("auto-detects kimi when only KIMI_API_KEY is set", () => {

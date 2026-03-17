@@ -5,6 +5,30 @@ export function createMockPluginRegistry(
   hooks: Array<{ hookName: string; handler: (...args: unknown[]) => unknown }>,
 ): PluginRegistry {
   return {
+    plugins: [
+      {
+        id: "test-plugin",
+        name: "Test Plugin",
+        source: "test",
+        origin: "workspace",
+        enabled: true,
+        status: "loaded",
+        toolNames: [],
+        hookNames: [],
+        channelIds: [],
+        providerIds: [],
+        speechProviderIds: [],
+        mediaUnderstandingProviderIds: [],
+        webSearchProviderIds: [],
+        gatewayMethods: [],
+        cliCommands: [],
+        services: [],
+        commands: [],
+        httpRoutes: 0,
+        hookCount: hooks.length,
+        configSchema: false,
+      },
+    ],
     hooks: hooks as never[],
     typedHooks: hooks.map((h) => ({
       pluginId: "test-plugin",
@@ -14,13 +38,18 @@ export function createMockPluginRegistry(
       source: "test",
     })),
     tools: [],
+    channels: [],
+    channelSetups: [],
+    providers: [],
+    speechProviders: [],
+    mediaUnderstandingProviders: [],
+    webSearchProviders: [],
     httpRoutes: [],
-    channelRegistrations: [],
     gatewayHandlers: {},
     cliRegistrars: [],
     services: [],
-    providers: [],
     commands: [],
+    diagnostics: [],
   } as unknown as PluginRegistry;
 }
 

@@ -63,6 +63,8 @@ export type RunEmbeddedPiAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Allow runtime plugins for this run to late-bind the gateway subagent. */
+  allowGatewaySubagentBinding?: boolean;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
@@ -79,6 +81,7 @@ export type RunEmbeddedPiAgentParams = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;
+  fastMode?: boolean;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;

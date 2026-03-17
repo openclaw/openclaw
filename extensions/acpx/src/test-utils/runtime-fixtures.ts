@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
 import type { ResolvedAcpxPluginConfig } from "../config.js";
 import { ACPX_PINNED_VERSION } from "../config.js";
 import { AcpxRuntime } from "../runtime.js";
@@ -204,6 +204,8 @@ if (command === "prompt") {
     sessionName: sessionFromOption,
     stdinText,
     openclawShell,
+    openaiApiKey: process.env.OPENAI_API_KEY || "",
+    githubToken: process.env.GITHUB_TOKEN || "",
   });
   const requestId = "req-1";
 
@@ -326,6 +328,7 @@ export async function createMockRuntimeFixture(params?: {
   const config: ResolvedAcpxPluginConfig = {
     command: scriptPath,
     allowPluginLocalInstall: false,
+    stripProviderAuthEnvVars: false,
     installCommand: "n/a",
     cwd: dir,
     permissionMode: params?.permissionMode ?? "approve-all",
@@ -378,6 +381,7 @@ export async function readMockRuntimeLogEntries(
 
 export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_LOG;
+  delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
   sharedMockCliScriptPath = null;
   logFileSequence = 0;
   while (tempDirs.length > 0) {

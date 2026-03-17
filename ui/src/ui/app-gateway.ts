@@ -2,7 +2,6 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -14,7 +13,8 @@ import {
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
-import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
+import { formatConnectError } from "./connect-error.ts";
+import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
@@ -26,6 +26,7 @@ import {
   parseExecApprovalResolved,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
+import { loadHealthState } from "./controllers/health.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import {
@@ -39,27 +40,13 @@ import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,
   PresenceEntry,
-  HealthSnapshot,
+  HealthSummary,
   StatusSummary,
   UpdateAvailable,
 } from "./types.ts";
 
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
-}
-
-function formatAuthCloseErrorMessage(code: string | null, fallback: string): string {
-  const resolvedCode = code ?? "";
-  if (resolvedCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
-    return "unauthorized: gateway token mismatch (open dashboard URL with current token)";
-  }
-  if (resolvedCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED) {
-    return "unauthorized: too many failed authentication attempts (retry later)";
-  }
-  if (resolvedCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED) {
-    return "unauthorized: authentication failed";
-  }
-  return fallback;
 }
 
 type GatewayHost = {
@@ -81,10 +68,10 @@ type GatewayHost = {
   agentsLoading: boolean;
   agentsList: AgentsListResult | null;
   agentsError: string | null;
-  toolsCatalogLoading: boolean;
-  toolsCatalogError: string | null;
-  toolsCatalogResult: import("./types.ts").ToolsCatalogResult | null;
-  debugHealth: HealthSnapshot | null;
+  healthLoading: boolean;
+  healthResult: HealthSummary | null;
+  healthError: string | null;
+  debugHealth: HealthSummary | null;
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
@@ -102,6 +89,10 @@ type SessionDefaultsSnapshot = {
   mainKey?: string;
   mainSessionKey?: string;
   scope?: string;
+};
+
+type GatewayHostWithShutdownMessage = GatewayHost & {
+  pendingShutdownMessage?: string | null;
 };
 
 export function resolveControlUiClientVersion(params: {
@@ -184,6 +175,8 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
 }
 
 export function connectGateway(host: GatewayHost) {
+  const shutdownHost = host as GatewayHostWithShutdownMessage;
+  shutdownHost.pendingShutdownMessage = null;
   host.lastError = null;
   host.lastErrorCode = null;
   host.hello = null;
@@ -208,6 +201,7 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
+      shutdownHost.pendingShutdownMessage = null;
       host.connected = true;
       host.lastError = null;
       host.lastErrorCode = null;
@@ -221,7 +215,7 @@ export function connectGateway(host: GatewayHost) {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
-      void loadToolsCatalog(host as unknown as OpenClawApp);
+      void loadHealthState(host as unknown as OpenClawApp);
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
@@ -239,13 +233,18 @@ export function connectGateway(host: GatewayHost) {
         if (error?.message) {
           host.lastError =
             host.lastErrorCode && isGenericBrowserFetchFailure(error.message)
-              ? formatAuthCloseErrorMessage(host.lastErrorCode, error.message)
+              ? formatConnectError({
+                  message: error.message,
+                  details: error.details,
+                  code: error.code,
+                } as Parameters<typeof formatConnectError>[0])
               : error.message;
           return;
         }
-        host.lastError = `disconnected (${code}): ${reason || "no reason"}`;
+        host.lastError =
+          shutdownHost.pendingShutdownMessage ?? `disconnected (${code}): ${reason || "no reason"}`;
       } else {
-        host.lastError = null;
+        host.lastError = shutdownHost.pendingShutdownMessage ?? null;
         host.lastErrorCode = null;
       }
     },
@@ -326,7 +325,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     { ts: Date.now(), event: evt.event, payload: evt.payload },
     ...host.eventLogBuffer,
   ].slice(0, 250);
-  if (host.tab === "debug") {
+  if (host.tab === "debug" || host.tab === "overview") {
     host.eventLog = host.eventLogBuffer;
   }
 
@@ -338,17 +337,6 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,
     );
-    // Reload history after each tool result so the persisted text + tool
-    // output replaces any truncated streaming fragments.
-    const agentPayload = evt.payload as AgentEventPayload | undefined;
-    const toolData = agentPayload?.data;
-    if (
-      agentPayload?.stream === "tool" &&
-      typeof toolData?.phase === "string" &&
-      toolData.phase === "result"
-    ) {
-      void loadChatHistory(host as unknown as OpenClawApp);
-    }
     return;
   }
 
@@ -364,6 +352,22 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       host.presenceError = null;
       host.presenceStatus = null;
     }
+    return;
+  }
+
+  if (evt.event === "shutdown") {
+    const payload = evt.payload as { reason?: unknown; restartExpectedMs?: unknown } | undefined;
+    const reason =
+      payload && typeof payload.reason === "string" && payload.reason.trim()
+        ? payload.reason.trim()
+        : "gateway stopping";
+    const shutdownMessage =
+      typeof payload?.restartExpectedMs === "number"
+        ? `Restarting: ${reason}`
+        : `Disconnected: ${reason}`;
+    (host as GatewayHostWithShutdownMessage).pendingShutdownMessage = shutdownMessage;
+    host.lastError = shutdownMessage;
+    host.lastErrorCode = null;
     return;
   }
 
@@ -406,7 +410,7 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   const snapshot = hello.snapshot as
     | {
         presence?: PresenceEntry[];
-        health?: HealthSnapshot;
+        health?: HealthSummary;
         sessionDefaults?: SessionDefaultsSnapshot;
         updateAvailable?: UpdateAvailable;
       }
@@ -416,6 +420,7 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
   }
   if (snapshot?.health) {
     host.debugHealth = snapshot.health;
+    host.healthResult = snapshot.health;
   }
   if (snapshot?.sessionDefaults) {
     applySessionDefaults(host, snapshot.sessionDefaults);
