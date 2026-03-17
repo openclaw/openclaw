@@ -1,61 +1,60 @@
+import { createLazyRuntimeMethod, createLazyRuntimeSurface } from "../../shared/lazy-runtime.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
-let runtimeSlackOpsPromise: Promise<typeof import("./runtime-slack-ops.runtime.js")> | null = null;
+type RuntimeSlackOps = typeof import("./runtime-slack-ops.runtime.js").runtimeSlackOps;
 
-function loadRuntimeSlackOps() {
-  runtimeSlackOpsPromise ??= import("./runtime-slack-ops.runtime.js");
-  return runtimeSlackOpsPromise;
-}
+const loadRuntimeSlackOps = createLazyRuntimeSurface(
+  () => import("./runtime-slack-ops.runtime.js"),
+  ({ runtimeSlackOps }) => runtimeSlackOps,
+);
 
-const listDirectoryGroupsLiveLazy: PluginRuntimeChannel["slack"]["listDirectoryGroupsLive"] =
-  async (...args) => {
-    const { listSlackDirectoryGroupsLive } = await loadRuntimeSlackOps();
-    return listSlackDirectoryGroupsLive(...args);
-  };
+const listDirectoryGroupsLiveLazy = createLazyRuntimeMethod<
+  RuntimeSlackOps,
+  Parameters<PluginRuntimeChannel["slack"]["listDirectoryGroupsLive"]>,
+  ReturnType<PluginRuntimeChannel["slack"]["listDirectoryGroupsLive"]>
+>(loadRuntimeSlackOps, (runtimeSlackOps) => runtimeSlackOps.listDirectoryGroupsLive);
 
-const listDirectoryPeersLiveLazy: PluginRuntimeChannel["slack"]["listDirectoryPeersLive"] = async (
-  ...args
-) => {
-  const { listSlackDirectoryPeersLive } = await loadRuntimeSlackOps();
-  return listSlackDirectoryPeersLive(...args);
-};
+const listDirectoryPeersLiveLazy = createLazyRuntimeMethod<
+  RuntimeSlackOps,
+  Parameters<PluginRuntimeChannel["slack"]["listDirectoryPeersLive"]>,
+  ReturnType<PluginRuntimeChannel["slack"]["listDirectoryPeersLive"]>
+>(loadRuntimeSlackOps, (runtimeSlackOps) => runtimeSlackOps.listDirectoryPeersLive);
 
-const probeSlackLazy: PluginRuntimeChannel["slack"]["probeSlack"] = async (...args) => {
-  const { probeSlack } = await loadRuntimeSlackOps();
-  return probeSlack(...args);
-};
+const probeSlackLazy = createLazyRuntimeMethod<
+  RuntimeSlackOps,
+  Parameters<PluginRuntimeChannel["slack"]["probeSlack"]>,
+  ReturnType<PluginRuntimeChannel["slack"]["probeSlack"]>
+>(loadRuntimeSlackOps, (runtimeSlackOps) => runtimeSlackOps.probeSlack);
 
-const resolveChannelAllowlistLazy: PluginRuntimeChannel["slack"]["resolveChannelAllowlist"] =
-  async (...args) => {
-    const { resolveSlackChannelAllowlist } = await loadRuntimeSlackOps();
-    return resolveSlackChannelAllowlist(...args);
-  };
+const resolveChannelAllowlistLazy = createLazyRuntimeMethod<
+  RuntimeSlackOps,
+  Parameters<PluginRuntimeChannel["slack"]["resolveChannelAllowlist"]>,
+  ReturnType<PluginRuntimeChannel["slack"]["resolveChannelAllowlist"]>
+>(loadRuntimeSlackOps, (runtimeSlackOps) => runtimeSlackOps.resolveChannelAllowlist);
 
-const resolveUserAllowlistLazy: PluginRuntimeChannel["slack"]["resolveUserAllowlist"] = async (
-  ...args
-) => {
-  const { resolveSlackUserAllowlist } = await loadRuntimeSlackOps();
-  return resolveSlackUserAllowlist(...args);
-};
+const resolveUserAllowlistLazy = createLazyRuntimeMethod<
+  RuntimeSlackOps,
+  Parameters<PluginRuntimeChannel["slack"]["resolveUserAllowlist"]>,
+  ReturnType<PluginRuntimeChannel["slack"]["resolveUserAllowlist"]>
+>(loadRuntimeSlackOps, (runtimeSlackOps) => runtimeSlackOps.resolveUserAllowlist);
 
-const sendMessageSlackLazy: PluginRuntimeChannel["slack"]["sendMessageSlack"] = async (...args) => {
-  const { sendMessageSlack } = await loadRuntimeSlackOps();
-  return sendMessageSlack(...args);
-};
+const sendMessageSlackLazy = createLazyRuntimeMethod<
+  RuntimeSlackOps,
+  Parameters<PluginRuntimeChannel["slack"]["sendMessageSlack"]>,
+  ReturnType<PluginRuntimeChannel["slack"]["sendMessageSlack"]>
+>(loadRuntimeSlackOps, (runtimeSlackOps) => runtimeSlackOps.sendMessageSlack);
 
-const monitorSlackProviderLazy: PluginRuntimeChannel["slack"]["monitorSlackProvider"] = async (
-  ...args
-) => {
-  const { monitorSlackProvider } = await loadRuntimeSlackOps();
-  return monitorSlackProvider(...args);
-};
+const monitorSlackProviderLazy = createLazyRuntimeMethod<
+  RuntimeSlackOps,
+  Parameters<PluginRuntimeChannel["slack"]["monitorSlackProvider"]>,
+  ReturnType<PluginRuntimeChannel["slack"]["monitorSlackProvider"]>
+>(loadRuntimeSlackOps, (runtimeSlackOps) => runtimeSlackOps.monitorSlackProvider);
 
-const handleSlackActionLazy: PluginRuntimeChannel["slack"]["handleSlackAction"] = async (
-  ...args
-) => {
-  const { handleSlackAction } = await loadRuntimeSlackOps();
-  return handleSlackAction(...args);
-};
+const handleSlackActionLazy = createLazyRuntimeMethod<
+  RuntimeSlackOps,
+  Parameters<PluginRuntimeChannel["slack"]["handleSlackAction"]>,
+  ReturnType<PluginRuntimeChannel["slack"]["handleSlackAction"]>
+>(loadRuntimeSlackOps, (runtimeSlackOps) => runtimeSlackOps.handleSlackAction);
 
 export function createRuntimeSlack(): PluginRuntimeChannel["slack"] {
   return {

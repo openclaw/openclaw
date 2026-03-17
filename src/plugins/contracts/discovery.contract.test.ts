@@ -5,9 +5,8 @@ import {
 } from "../../agents/auth-profiles/store.js";
 import { QWEN_OAUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import { runProviderCatalog } from "../provider-discovery.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
+import { registerProviders, requireProvider } from "./testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
@@ -60,22 +59,6 @@ const cloudflareAiGatewayPlugin = (
   await import("../../../extensions/cloudflare-ai-gateway/index.js")
 ).default;
 
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
-}
-
 function createModelConfig(id: string, name = id): ModelDefinitionConfig {
   return {
     id,
@@ -92,6 +75,64 @@ function createModelConfig(id: string, name = id): ModelDefinitionConfig {
     maxTokens: 8_192,
   };
 }
+
+function requireQwenPortalProvider() {
+  return requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
+}
+
+function requireGithubCopilotProvider() {
+  return requireProvider(registerProviders(githubCopilotPlugin), "github-copilot");
+}
+
+function setQwenPortalOauthSnapshot() {
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      store: {
+        version: 1,
+        profiles: {
+          "qwen-portal:default": {
+            type: "oauth",
+            provider: "qwen-portal",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+    },
+  ]);
+}
+
+function setGithubCopilotProfileSnapshot() {
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      store: {
+        version: 1,
+        profiles: {
+          "github-copilot:github": {
+            type: "token",
+            provider: "github-copilot",
+            token: "profile-token",
+          },
+        },
+      },
+    },
+  ]);
+}
+
+function runCatalog(params: {
+  provider: Awaited<ReturnType<typeof requireProvider>>;
+  env?: NodeJS.ProcessEnv;
+  resolveProviderApiKey?: () => { apiKey: string | undefined };
+}) {
+  return runProviderCatalog({
+    provider: params.provider,
+    config: {},
+    env: params.env ?? ({} as NodeJS.ProcessEnv),
+    resolveProviderApiKey: params.resolveProviderApiKey ?? (() => ({ apiKey: undefined })),
+  });
+}
+
 describe("provider discovery contract", () => {
   afterEach(() => {
     resolveCopilotApiTokenMock.mockReset();
@@ -102,30 +143,12 @@ describe("provider discovery contract", () => {
   });
 
   it("keeps qwen portal oauth marker fallback provider-owned", async () => {
-    const provider = requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        store: {
-          version: 1,
-          profiles: {
-            "qwen-portal:default": {
-              type: "oauth",
-              provider: "qwen-portal",
-              access: "access-token",
-              refresh: "refresh-token",
-              expires: Date.now() + 60_000,
-            },
-          },
-        },
-      },
-    ]);
+    const provider = requireQwenPortalProvider();
+    setQwenPortalOauthSnapshot();
 
     await expect(
-      runProviderCatalog({
+      runCatalog({
         provider,
-        config: {},
-        env: {} as NodeJS.ProcessEnv,
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
       }),
     ).resolves.toEqual({
       provider: {
@@ -141,28 +164,12 @@ describe("provider discovery contract", () => {
   });
 
   it("keeps qwen portal env api keys higher priority than oauth markers", async () => {
-    const provider = requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        store: {
-          version: 1,
-          profiles: {
-            "qwen-portal:default": {
-              type: "oauth",
-              provider: "qwen-portal",
-              access: "access-token",
-              refresh: "refresh-token",
-              expires: Date.now() + 60_000,
-            },
-          },
-        },
-      },
-    ]);
+    const provider = requireQwenPortalProvider();
+    setQwenPortalOauthSnapshot();
 
     await expect(
-      runProviderCatalog({
+      runCatalog({
         provider,
-        config: {},
         env: { QWEN_PORTAL_API_KEY: "env-key" } as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: "env-key" }),
       }),
@@ -174,41 +181,18 @@ describe("provider discovery contract", () => {
   });
 
   it("keeps GitHub Copilot catalog disabled without env tokens or profiles", async () => {
-    const provider = requireProvider(registerProviders(githubCopilotPlugin), "github-copilot");
+    const provider = requireGithubCopilotProvider();
 
-    await expect(
-      runProviderCatalog({
-        provider,
-        config: {},
-        env: {} as NodeJS.ProcessEnv,
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-      }),
-    ).resolves.toBeNull();
+    await expect(runCatalog({ provider })).resolves.toBeNull();
   });
 
   it("keeps GitHub Copilot profile-only catalog fallback provider-owned", async () => {
-    const provider = requireProvider(registerProviders(githubCopilotPlugin), "github-copilot");
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        store: {
-          version: 1,
-          profiles: {
-            "github-copilot:github": {
-              type: "token",
-              provider: "github-copilot",
-              token: "profile-token",
-            },
-          },
-        },
-      },
-    ]);
+    const provider = requireGithubCopilotProvider();
+    setGithubCopilotProfileSnapshot();
 
     await expect(
-      runProviderCatalog({
+      runCatalog({
         provider,
-        config: {},
-        env: {} as NodeJS.ProcessEnv,
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
       }),
     ).resolves.toEqual({
       provider: {
@@ -219,7 +203,7 @@ describe("provider discovery contract", () => {
   });
 
   it("keeps GitHub Copilot env-token base URL resolution provider-owned", async () => {
-    const provider = requireProvider(registerProviders(githubCopilotPlugin), "github-copilot");
+    const provider = requireGithubCopilotProvider();
     resolveCopilotApiTokenMock.mockResolvedValueOnce({
       token: "copilot-api-token",
       baseUrl: "https://copilot-proxy.example.com",
@@ -227,9 +211,8 @@ describe("provider discovery contract", () => {
     });
 
     await expect(
-      runProviderCatalog({
+      runCatalog({
         provider,
-        config: {},
         env: {
           GITHUB_TOKEN: "github-env-token",
         } as NodeJS.ProcessEnv,
