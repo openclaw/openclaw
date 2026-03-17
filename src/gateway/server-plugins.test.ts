@@ -29,6 +29,9 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   channelSetups: [],
   commands: [],
   providers: [],
+  speechProviders: [],
+  mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
@@ -52,7 +55,9 @@ async function importServerPluginsModule(): Promise<ServerPluginsModule> {
   return import("./server-plugins.js");
 }
 
-function createSubagentRuntime(serverPlugins: ServerPluginsModule): PluginRuntime["subagent"] {
+async function createSubagentRuntime(
+  serverPlugins: ServerPluginsModule,
+): Promise<PluginRuntime["subagent"]> {
   const log = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -68,17 +73,20 @@ function createSubagentRuntime(serverPlugins: ServerPluginsModule): PluginRuntim
     baseMethods: [],
   });
   const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
-    | { runtimeOptions?: { subagent?: PluginRuntime["subagent"] } }
+    | { runtimeOptions?: { allowGatewaySubagentBinding?: boolean } }
     | undefined;
-  if (!call?.runtimeOptions?.subagent) {
-    throw new Error("Expected loadGatewayPlugins to provide subagent runtime");
+  if (call?.runtimeOptions?.allowGatewaySubagentBinding !== true) {
+    throw new Error("Expected loadGatewayPlugins to opt into gateway subagent binding");
   }
-  return call.runtimeOptions.subagent;
+  const runtimeModule = await import("../plugins/runtime/index.js");
+  return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   loadOpenClawPlugins.mockReset();
   handleGatewayRequest.mockReset();
+  const runtimeModule = await import("../plugins/runtime/index.js");
+  runtimeModule.clearGatewaySubagentRuntime();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
       case "agent":
@@ -99,7 +107,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const runtimeModule = await import("../plugins/runtime/index.js");
+  runtimeModule.clearGatewaySubagentRuntime();
   vi.resetModules();
 });
 
@@ -156,15 +166,80 @@ describe("loadGatewayPlugins", () => {
       baseMethods: [],
     });
 
-    const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0];
-    const subagent = call?.runtimeOptions?.subagent;
+    const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
+      | { runtimeOptions?: { allowGatewaySubagentBinding?: boolean } }
+      | undefined;
+    expect(call?.runtimeOptions?.allowGatewaySubagentBinding).toBe(true);
+    const runtimeModule = await import("../plugins/runtime/index.js");
+    const subagent = runtimeModule.createPluginRuntime({
+      allowGatewaySubagentBinding: true,
+    }).subagent;
     expect(typeof subagent?.getSessionMessages).toBe("function");
     expect(typeof subagent?.getSession).toBe("function");
   });
 
+  test("can prefer setup-runtime channel plugins during startup loads", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      preferSetupRuntimeForChannelPlugins: true,
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferSetupRuntimeForChannelPlugins: true,
+      }),
+    );
+  });
+
+  test("can suppress duplicate diagnostics when reloading full runtime plugins", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    const diagnostics: PluginDiagnostic[] = [
+      {
+        level: "error",
+        pluginId: "telegram",
+        source: "/tmp/telegram/index.ts",
+        message: "failed to load plugin: boom",
+      },
+    ];
+    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      logDiagnostics: false,
+    });
+
+    expect(log.error).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
   test("shares fallback context across module reloads for existing runtimes", async () => {
     const first = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(first);
+    const runtime = await createSubagentRuntime(first);
 
     const staleContext = createTestContext("stale");
     first.setFallbackGatewayContext(staleContext);
@@ -182,7 +257,7 @@ describe("loadGatewayPlugins", () => {
 
   test("uses updated fallback context after context replacement", async () => {
     const serverPlugins = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(serverPlugins);
+    const runtime = await createSubagentRuntime(serverPlugins);
     const firstContext = createTestContext("before-restart");
     const secondContext = createTestContext("after-restart");
 
@@ -197,7 +272,7 @@ describe("loadGatewayPlugins", () => {
 
   test("reflects fallback context object mutation at dispatch time", async () => {
     const serverPlugins = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(serverPlugins);
+    const runtime = await createSubagentRuntime(serverPlugins);
     const context = { marker: "before-mutation" } as GatewayRequestContext & {
       marker: string;
     };

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildChannelSetupFlowAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
@@ -83,7 +83,7 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
-const whatsappConfigureAdapter = buildChannelSetupFlowAdapterFromSetupWizard({
+const whatsappConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: whatsappPlugin,
   wizard: whatsappPlugin.setupWizard!,
 });

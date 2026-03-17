@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withFetchPreconnect } from "../../../src/test-utils/fetch-mock.js";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { jsonResponse, urlToString } from "./test-http-helpers.js";
 

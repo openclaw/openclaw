@@ -1,20 +1,20 @@
 import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
-import { buildChannelSetupFlowAdapterFromSetupWizard } from "../../channels/plugins/setup-wizard.js";
+import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../channels/plugins/setup-wizard.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { ChannelChoice } from "../onboard-types.js";
-import type { ChannelSetupFlowAdapter } from "./types.js";
+import type { ChannelSetupWizardAdapter } from "./types.js";
 
-const setupWizardAdapters = new WeakMap<object, ChannelSetupFlowAdapter>();
+const setupWizardAdapters = new WeakMap<object, ChannelSetupWizardAdapter>();
 
-export function resolveChannelSetupFlowAdapterForPlugin(
+export function resolveChannelSetupWizardAdapterForPlugin(
   plugin?: ChannelPlugin,
-): ChannelSetupFlowAdapter | undefined {
+): ChannelSetupWizardAdapter | undefined {
   if (plugin?.setupWizard) {
     const cached = setupWizardAdapters.get(plugin);
     if (cached) {
       return cached;
     }
-    const adapter = buildChannelSetupFlowAdapterFromSetupWizard({
+    const adapter = buildChannelSetupWizardAdapterFromSetupWizard({
       plugin,
       wizard: plugin.setupWizard,
     });
@@ -24,10 +24,10 @@ export function resolveChannelSetupFlowAdapterForPlugin(
   return undefined;
 }
 
-const CHANNEL_SETUP_FLOW_ADAPTERS = () => {
-  const adapters = new Map<ChannelChoice, ChannelSetupFlowAdapter>();
+const getChannelSetupWizardAdapterMap = () => {
+  const adapters = new Map<ChannelChoice, ChannelSetupWizardAdapter>();
   for (const plugin of listChannelSetupPlugins()) {
-    const adapter = resolveChannelSetupFlowAdapterForPlugin(plugin);
+    const adapter = resolveChannelSetupWizardAdapterForPlugin(plugin);
     if (!adapter) {
       continue;
     }
@@ -36,12 +36,12 @@ const CHANNEL_SETUP_FLOW_ADAPTERS = () => {
   return adapters;
 };
 
-export function getChannelSetupFlowAdapter(
+export function getChannelSetupWizardAdapter(
   channel: ChannelChoice,
-): ChannelSetupFlowAdapter | undefined {
-  return CHANNEL_SETUP_FLOW_ADAPTERS().get(channel);
+): ChannelSetupWizardAdapter | undefined {
+  return getChannelSetupWizardAdapterMap().get(channel);
 }
 
-export function listChannelSetupFlowAdapters(): ChannelSetupFlowAdapter[] {
-  return Array.from(CHANNEL_SETUP_FLOW_ADAPTERS().values());
+export function listChannelSetupWizardAdapters(): ChannelSetupWizardAdapter[] {
+  return Array.from(getChannelSetupWizardAdapterMap().values());
 }

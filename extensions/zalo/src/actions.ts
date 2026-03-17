@@ -5,7 +5,13 @@ import type {
 } from "openclaw/plugin-sdk/zalo";
 import { extractToolSend, jsonResult, readStringParam } from "openclaw/plugin-sdk/zalo";
 import { listEnabledZaloAccounts } from "./accounts.js";
-import { sendMessageZalo } from "./send.js";
+
+let zaloActionsRuntimePromise: Promise<typeof import("./actions.runtime.js")> | null = null;
+
+async function loadZaloActionsRuntime() {
+  zaloActionsRuntimePromise ??= import("./actions.runtime.js");
+  return zaloActionsRuntimePromise;
+}
 
 const providerId = "zalo";
 
@@ -24,7 +30,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
     const actions = new Set<ChannelMessageActionName>(["send"]);
     return Array.from(actions);
   },
-  supportsButtons: () => false,
+  getCapabilities: () => [],
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
@@ -35,6 +41,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
       });
       const mediaUrl = readStringParam(params, "media", { trim: false });
 
+      const { sendMessageZalo } = await loadZaloActionsRuntime();
       const result = await sendMessageZalo(to ?? "", content ?? "", {
         accountId: accountId ?? undefined,
         mediaUrl: mediaUrl ?? undefined,
