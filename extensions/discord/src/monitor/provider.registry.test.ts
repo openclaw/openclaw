@@ -5,7 +5,7 @@ import {
   baseRuntime,
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
-} from "./provider.test-support.js";
+} from "../../../test-utils/discord-provider.test-support.js";
 
 const { createDiscordNativeCommandMock, clientHandleDeployRequestMock, monitorLifecycleMock } =
   getProviderMonitorTestMocks();
