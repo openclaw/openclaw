@@ -1,8 +1,6 @@
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
-  formatCliCommand,
-  formatDocsLink,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   normalizeE164,
@@ -19,6 +17,8 @@ import type {
   ChannelSetupWizard,
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
+import { formatCliCommand } from "../../../src/cli/command-format.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
