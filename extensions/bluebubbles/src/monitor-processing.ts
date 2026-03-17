@@ -79,6 +79,7 @@ type PendingOutboundMessageId = {
 
 const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
 let pendingOutboundMessageIdCounter = 0;
+let reactionFallbackSequence = 0;
 
 function trimOrUndefined(value?: string | null): string | undefined {
   const trimmed = value?.trim();
@@ -1548,7 +1549,7 @@ export async function processReaction(
       : `${senderLabel} reacted with ${reaction.emoji} [[reply_to:${messageDisplayId}]]${chatLabel}`;
   core.system.enqueueSystemEvent(text, {
     sessionKey: route.sessionKey,
-    contextKey: `bluebubbles:reaction:${reaction.action}:${peerId}:${reaction.messageId}:${knownSenderId ?? "unknown"}:${reaction.emoji}`,
+    contextKey: `bluebubbles:reaction:${reaction.action}:${peerId}:${reaction.messageId}:${knownSenderId ?? `unknown:${reactionFallbackSequence++}`}:${reaction.emoji}`,
   });
   logVerbose(core, runtime, `reaction event enqueued: ${text}`);
 }
