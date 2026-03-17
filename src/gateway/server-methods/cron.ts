@@ -4,8 +4,10 @@ import {
   readCronRunLogEntriesPageAll,
   resolveCronRunLogPath,
 } from "../../cron/run-log.js";
+import type { CronMutationCallerOptions } from "../../cron/service/ops.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -19,7 +21,27 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+
+/**
+ * Resolves the caller identity and admin-bypass flag from the connected client.
+ *
+ * ownerOverride is true when the client holds the operator.admin scope, meaning
+ * it can read and mutate any cron job regardless of ownership metadata.
+ */
+function resolveCronCallerOptions(
+  client: GatewayClient | null,
+  callerSessionKey?: string,
+): CronMutationCallerOptions {
+  const scopes: readonly string[] = Array.isArray(client?.connect?.scopes)
+    ? (client.connect.scopes as string[])
+    : [];
+  const ownerOverride = scopes.includes(ADMIN_SCOPE);
+  return {
+    callerSessionKey: callerSessionKey ?? undefined,
+    ownerOverride,
+  };
+}
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -41,7 +63,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const result = context.cron.wake({ mode: p.mode, text: p.text });
     respond(true, result, undefined);
   },
-  "cron.list": async ({ params, respond, context }) => {
+  "cron.list": async ({ params, respond, context, client }) => {
     if (!validateCronListParams(params)) {
       respond(
         false,
@@ -61,7 +83,9 @@ export const cronHandlers: GatewayRequestHandlers = {
       enabled?: "all" | "enabled" | "disabled";
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
+      sessionKey?: string;
     };
+    const callerOpts = resolveCronCallerOptions(client, p.sessionKey);
     const page = await context.cron.listPage({
       includeDisabled: p.includeDisabled,
       limit: p.limit,
@@ -70,6 +94,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       enabled: p.enabled,
       sortBy: p.sortBy,
       sortDir: p.sortDir,
+      callerSessionKey: callerOpts.callerSessionKey,
+      ownerOverride: callerOpts.ownerOverride,
     });
     respond(true, page, undefined);
   },
@@ -135,7 +161,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
-  "cron.update": async ({ params, respond, context }) => {
+  "cron.update": async ({ params, respond, context, client }) => {
     let normalizedPatch: ReturnType<typeof normalizeCronJobPatch>;
     try {
       normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
@@ -169,6 +195,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       id?: string;
       jobId?: string;
       patch: Record<string, unknown>;
+      sessionKey?: string;
     };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
@@ -191,11 +218,20 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const job = await context.cron.update(jobId, patch);
-    context.logGateway.info("cron: job updated", { jobId });
-    respond(true, job, undefined);
+    const callerOpts = resolveCronCallerOptions(client, p.sessionKey);
+    try {
+      const job = await context.cron.update(jobId, patch, callerOpts);
+      context.logGateway.info("cron: job updated", { jobId });
+      respond(true, job, undefined);
+    } catch (err) {
+      if ((err as { code?: string } | null)?.code === "CRON_PERMISSION_DENIED") {
+        respond(false, undefined, errorShape(ErrorCodes.PERMISSION_DENIED, "permission denied"));
+        return;
+      }
+      throw err;
+    }
   },
-  "cron.remove": async ({ params, respond, context }) => {
+  "cron.remove": async ({ params, respond, context, client }) => {
     if (!validateCronRemoveParams(params)) {
       respond(
         false,
@@ -207,7 +243,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as { id?: string; jobId?: string };
+    const p = params as { id?: string; jobId?: string; sessionKey?: string };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
       respond(
@@ -217,13 +253,22 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.remove(jobId);
-    if (result.removed) {
-      context.logGateway.info("cron: job removed", { jobId });
+    const callerOpts = resolveCronCallerOptions(client, p.sessionKey);
+    try {
+      const result = await context.cron.remove(jobId, callerOpts);
+      if (result.removed) {
+        context.logGateway.info("cron: job removed", { jobId });
+      }
+      respond(true, result, undefined);
+    } catch (err) {
+      if ((err as { code?: string } | null)?.code === "CRON_PERMISSION_DENIED") {
+        respond(false, undefined, errorShape(ErrorCodes.PERMISSION_DENIED, "permission denied"));
+        return;
+      }
+      throw err;
     }
-    respond(true, result, undefined);
   },
-  "cron.run": async ({ params, respond, context }) => {
+  "cron.run": async ({ params, respond, context, client }) => {
     if (!validateCronRunParams(params)) {
       respond(
         false,
@@ -235,7 +280,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as { id?: string; jobId?: string; mode?: "due" | "force" };
+    const p = params as {
+      id?: string;
+      jobId?: string;
+      mode?: "due" | "force";
+      sessionKey?: string;
+    };
     const jobId = p.id ?? p.jobId;
     if (!jobId) {
       respond(
@@ -245,18 +295,22 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
+    const callerOpts = resolveCronCallerOptions(client, p.sessionKey);
     try {
-      result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const result = await context.cron.enqueueRun(jobId, p.mode ?? "force", callerOpts);
+      respond(true, result, undefined);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       if (message === "invalid cron sessionTarget session id") {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
         return;
       }
-      throw error;
+      if ((err as { code?: string } | null)?.code === "CRON_PERMISSION_DENIED") {
+        respond(false, undefined, errorShape(ErrorCodes.PERMISSION_DENIED, "permission denied"));
+        return;
+      }
+      throw err;
     }
-    respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {
     if (!validateCronRunsParams(params)) {

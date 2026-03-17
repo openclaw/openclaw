@@ -44,6 +44,21 @@ export type CronListPageOptions = {
   enabled?: CronJobsEnabledFilter;
   sortBy?: CronJobsSortBy;
   sortDir?: CronSortDir;
+  /** When set, restricts results to jobs owned by this agentId. Ignored when ownerOverride is true. */
+  callerAgentId?: string;
+  /** When set, restricts results to jobs owned by this sessionKey. Ignored when ownerOverride is true. */
+  callerSessionKey?: string;
+  /** When true, bypasses caller-scoped filtering (admin/owner sessions only). */
+  ownerOverride?: boolean;
+};
+
+export type CronMutationCallerOptions = {
+  /** agentId of the caller requesting the mutation. */
+  callerAgentId?: string;
+  /** sessionKey of the caller requesting the mutation. */
+  callerSessionKey?: string;
+  /** When true, bypasses ownership checks (admin/owner sessions only). */
+  ownerOverride?: boolean;
 };
 
 export type CronListPageResult = {
@@ -54,6 +69,40 @@ export type CronListPageResult = {
   hasMore: boolean;
   nextOffset: number | null;
 };
+
+/**
+ * Returns true when the caller is permitted to mutate or read the given job.
+ *
+ * Ownership is determined by matching either agentId or sessionKey.
+ * When ownerOverride is true the check is skipped (admin/owner callers).
+ * When neither callerAgentId nor callerSessionKey are provided (e.g. direct
+ * CLI usage), the check is also skipped so backward compatibility is preserved.
+ */
+function callerOwnsJob(
+  job: { agentId?: string; sessionKey?: string },
+  caller: CronMutationCallerOptions,
+): boolean {
+  if (caller.ownerOverride) {
+    return true;
+  }
+  // No caller identity available — preserve backward compat (local CLI, tests).
+  if (!caller.callerAgentId && !caller.callerSessionKey) {
+    return true;
+  }
+  if (caller.callerAgentId && job.agentId && caller.callerAgentId === job.agentId) {
+    return true;
+  }
+  if (caller.callerSessionKey && job.sessionKey && caller.callerSessionKey === job.sessionKey) {
+    return true;
+  }
+  // Job has no owner metadata — allow access so pre-existing jobs without
+  // agentId/sessionKey remain accessible.
+  if (!job.agentId && !job.sessionKey) {
+    return true;
+  }
+  return false;
+}
+
 function mergeManualRunSnapshotAfterReload(params: {
   state: CronServiceState;
   jobId: string;
@@ -224,8 +273,16 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const enabledFilter = resolveEnabledFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
+    const callerOpts: CronMutationCallerOptions = {
+      callerAgentId: opts?.callerAgentId,
+      callerSessionKey: opts?.callerSessionKey,
+      ownerOverride: opts?.ownerOverride,
+    };
     const source = state.store?.jobs ?? [];
     const filtered = source.filter((job) => {
+      if (!callerOwnsJob(job, callerOpts)) {
+        return false;
+      }
       if (enabledFilter === "enabled" && !isJobEnabled(job)) {
         return false;
       }
@@ -290,11 +347,21 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   });
 }
 
-export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
+export async function update(
+  state: CronServiceState,
+  id: string,
+  patch: CronJobPatch,
+  caller?: CronMutationCallerOptions,
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
+    if (caller && !callerOwnsJob(job, caller)) {
+      throw Object.assign(new Error(`cron: permission denied for update on job ${id}`), {
+        code: "CRON_PERMISSION_DENIED",
+      });
+    }
     const now = state.deps.nowMs();
     applyJobPatch(job, patch, { defaultAgentId: state.deps.defaultAgentId });
     if (job.schedule.kind === "every") {
@@ -344,13 +411,25 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
   });
 }
 
-export async function remove(state: CronServiceState, id: string) {
+export async function remove(
+  state: CronServiceState,
+  id: string,
+  caller?: CronMutationCallerOptions,
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state);
     const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
       return { ok: false, removed: false } as const;
+    }
+    if (caller) {
+      const target = state.store.jobs.find((j) => j.id === id);
+      if (target && !callerOwnsJob(target, caller)) {
+        throw Object.assign(new Error(`cron: permission denied for remove on job ${id}`), {
+          code: "CRON_PERMISSION_DENIED",
+        });
+      }
     }
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
@@ -522,6 +601,7 @@ async function inspectManualRunPreflight(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
+  caller?: CronMutationCallerOptions,
 ): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
@@ -531,6 +611,11 @@ async function inspectManualRunPreflight(
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
     recomputeNextRunsForMaintenance(state);
     const job = findJobOrThrow(state, id);
+    if (caller && !callerOwnsJob(job, caller)) {
+      throw Object.assign(new Error(`cron: permission denied for run on job ${id}`), {
+        code: "CRON_PERMISSION_DENIED",
+      });
+    }
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
@@ -553,8 +638,9 @@ async function inspectManualRunDisposition(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
+  caller?: CronMutationCallerOptions,
 ): Promise<ManualRunDisposition | { ok: false }> {
-  const result = await inspectManualRunPreflight(state, id, mode);
+  const result = await inspectManualRunPreflight(state, id, mode, caller);
   if (!result.ok) {
     return result;
   }
@@ -568,8 +654,9 @@ async function prepareManualRun(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
+  caller?: CronMutationCallerOptions,
 ): Promise<PreparedManualRun> {
-  const preflight = await inspectManualRunPreflight(state, id, mode);
+  const preflight = await inspectManualRunPreflight(state, id, mode, caller);
   if (!preflight.ok) {
     return preflight;
   }
@@ -703,8 +790,13 @@ async function finishPreparedManualRun(
   });
 }
 
-export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
-  const prepared = await prepareManualRun(state, id, mode);
+export async function run(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+  caller?: CronMutationCallerOptions,
+) {
+  const prepared = await prepareManualRun(state, id, mode, caller);
   if (!prepared.ok || !prepared.ran) {
     return prepared;
   }
@@ -712,8 +804,13 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
   return { ok: true, ran: true } as const;
 }
 
-export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force") {
-  const disposition = await inspectManualRunDisposition(state, id, mode);
+export async function enqueueRun(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+  caller?: CronMutationCallerOptions,
+) {
+  const disposition = await inspectManualRunDisposition(state, id, mode, caller);
   if (!disposition.ok || !("runnable" in disposition && disposition.runnable)) {
     return disposition;
   }
@@ -722,6 +819,8 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
+      // Note: caller check already passed in inspectManualRunDisposition above;
+      // re-run without caller so the internal execution path is not gated twice.
       const result = await run(state, id, mode);
       if (result.ok && "ran" in result && !result.ran) {
         state.deps.log.info(

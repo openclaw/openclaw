@@ -7,6 +7,7 @@ export const ErrorCodes = {
   INVALID_REQUEST: "INVALID_REQUEST",
   APPROVAL_NOT_FOUND: "APPROVAL_NOT_FOUND",
   UNAVAILABLE: "UNAVAILABLE",
+  PERMISSION_DENIED: "PERMISSION_DENIED",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];

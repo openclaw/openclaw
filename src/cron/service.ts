@@ -1,4 +1,5 @@
 import * as ops from "./service/ops.js";
+import type { CronMutationCallerOptions } from "./service/ops.js";
 import { type CronServiceDeps, createCronServiceState } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -34,20 +35,20 @@ export class CronService {
     return await ops.add(this.state, input);
   }
 
-  async update(id: string, patch: CronJobPatch) {
-    return await ops.update(this.state, id, patch);
+  async update(id: string, patch: CronJobPatch, caller?: CronMutationCallerOptions) {
+    return await ops.update(this.state, id, patch, caller);
   }
 
-  async remove(id: string) {
-    return await ops.remove(this.state, id);
+  async remove(id: string, caller?: CronMutationCallerOptions) {
+    return await ops.remove(this.state, id, caller);
   }
 
-  async run(id: string, mode?: "due" | "force") {
-    return await ops.run(this.state, id, mode);
+  async run(id: string, mode?: "due" | "force", caller?: CronMutationCallerOptions) {
+    return await ops.run(this.state, id, mode, caller);
   }
 
-  async enqueueRun(id: string, mode?: "due" | "force") {
-    return await ops.enqueueRun(this.state, id, mode);
+  async enqueueRun(id: string, mode?: "due" | "force", caller?: CronMutationCallerOptions) {
+    return await ops.enqueueRun(this.state, id, mode, caller);
   }
 
   getJob(id: string): CronJob | undefined {
