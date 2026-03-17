@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {
   applySetupAccountConfigPatch,
+  createEnvPatchedAccountSetupAdapter,
   createPatchedAccountSetupAdapter,
   prepareScopedSetupConfig,
 } from "./setup-helpers.js";
@@ -159,6 +160,39 @@ describe("createPatchedAccountSetupAdapter", () => {
     });
     expect(next.channels?.whatsapp).not.toHaveProperty("enabled");
     expect(next.channels?.whatsapp).not.toHaveProperty("authDir");
+  });
+});
+
+describe("createEnvPatchedAccountSetupAdapter", () => {
+  it("rejects env mode for named accounts and requires credentials otherwise", () => {
+    const adapter = createEnvPatchedAccountSetupAdapter({
+      channelKey: "telegram",
+      defaultAccountOnlyEnvError: "env only on default",
+      missingCredentialError: "token required",
+      hasCredentials: (input) => Boolean(input.token || input.tokenFile),
+      buildPatch: (input) => ({ token: input.token }),
+    });
+
+    expect(
+      adapter.validateInput?.({
+        accountId: "work",
+        input: { useEnv: true },
+      }),
+    ).toBe("env only on default");
+
+    expect(
+      adapter.validateInput?.({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {},
+      }),
+    ).toBe("token required");
+
+    expect(
+      adapter.validateInput?.({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: { token: "tok" },
+      }),
+    ).toBeNull();
   });
 });
 
