@@ -5,7 +5,7 @@ import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -198,7 +198,7 @@ describe("runHeartbeatOnce – timeoutOverrideSeconds passthrough", () => {
           channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         };
-        const sessionKey = resolveMainSessionKey(cfg);
+        const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
         await seedSessionStore(storePath, sessionKey, {
           updatedAt: 0,
           lastChannel: "whatsapp",
