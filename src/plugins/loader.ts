@@ -64,7 +64,13 @@ export type PluginLoadOptions = {
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
-const registryCache = new Map<string, PluginRegistry>();
+// Use a process-global cache so all bundler-emitted copies of this module
+// share a single registry Map.  Without this, each chunk gets its own
+// module-scoped Map and cross-chunk calls produce cache misses, causing
+// redundant full plugin discovery + activation cycles.  See #47429, #48380.
+const registryCache: Map<string, PluginRegistry> =
+  ((globalThis as Record<string, unknown>).__ocPluginRegistryCache as Map<string, PluginRegistry> | undefined) ??
+  ((globalThis as Record<string, unknown>).__ocPluginRegistryCache = new Map<string, PluginRegistry>());
 const openAllowlistWarningCache = new Set<string>();
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
