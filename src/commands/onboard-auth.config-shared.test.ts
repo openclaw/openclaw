@@ -6,7 +6,7 @@ import {
   applyProviderConfigWithDefaultModel,
   applyProviderConfigWithDefaultModels,
   applyProviderConfigWithModelCatalog,
-} from "./onboard-auth.config-shared.js";
+} from "../plugins/provider-onboarding-config.js";
 
 function makeModel(id: string): ModelDefinitionConfig {
   return {

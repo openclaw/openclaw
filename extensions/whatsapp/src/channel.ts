@@ -34,7 +34,7 @@ import {
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
-import { whatsappSetupWizardProxy } from "./plugin-shared.js";
+import { loadWhatsAppChannelRuntime, whatsappSetupWizardProxy } from "./plugin-shared.js";
 import { getWhatsAppRuntime } from "./runtime.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";

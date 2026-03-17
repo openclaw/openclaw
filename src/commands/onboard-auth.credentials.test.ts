@@ -6,7 +6,7 @@ import {
   setOpencodeZenApiKey,
   setOpenaiApiKey,
   setVolcengineApiKey,
-} from "./onboard-auth.js";
+} from "../plugins/provider-auth-storage.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
