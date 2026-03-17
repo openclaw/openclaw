@@ -123,7 +123,11 @@ function getSafeWorkspaceRoot(): string {
 function getTimestamp(ms?: number, timezoneOffset: number = DEFAULT_TIMEZONE_OFFSET): string {
   const now = ms ? new Date(ms) : new Date();
   const adjusted = new Date(now.getTime() + timezoneOffset * 3600 * 1000);
-  return `${String(adjusted.getUTCHours()).padStart(2, "0")}:${String(adjusted.getUTCMinutes()).padStart(2, "0")}`;
+  const MM = String(adjusted.getUTCMonth() + 1).padStart(2, "0");
+  const DD = String(adjusted.getUTCDate()).padStart(2, "0");
+  const hh = String(adjusted.getUTCHours()).padStart(2, "0");
+  const mm = String(adjusted.getUTCMinutes()).padStart(2, "0");
+  return `${MM}-${DD} ${hh}:${mm}`;
 }
 
 function ensureDir(chatId: string): string {
@@ -143,6 +147,11 @@ function ensureDir(chatId: string): string {
 }
 
 function normalizeChatId(chatId: string): string {
+  // Handle OpenClaw session keys like "agent:main:feishu:direct:ou_xxx" or "agent:main:feishu:group:oc_xxx"
+  const colonParts = chatId.split(":");
+  if (colonParts.length >= 4 && colonParts[0] === "agent") {
+    return colonParts[colonParts.length - 1];
+  }
   return chatId
     .replace(/^feishu:group:/, "")
     .replace(/^feishu:/, "")
