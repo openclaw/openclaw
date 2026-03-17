@@ -298,7 +298,6 @@ function readTelegramAllowlistConfig(account: ResolvedTelegramAccount) {
 
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   ...createTelegramPluginBase({
-    configSchema: buildChannelConfigSchema(TelegramConfigSchema),
     setupWizard: telegramSetupWizard,
     setup: telegramSetupAdapter,
   }),

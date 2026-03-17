@@ -1,5 +1,5 @@
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
@@ -201,9 +201,11 @@ vi.mock("../pairing/pairing-store.js", () => ({
 }));
 
 describe("handleLineWebhookEvents", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
+  });
+
+  beforeEach(() => {
     buildLineMessageContextMock.mockClear();
     buildLinePostbackContextMock.mockClear();
     readAllowFromStoreMock.mockClear();
@@ -558,13 +560,12 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("mirrors in-flight replay failures so concurrent duplicates also fail", async () => {
-    let releaseFirst: (() => void) | undefined;
-    const firstDone = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
+    let rejectFirst: ((err: Error) => void) | undefined;
+    const firstDone = new Promise<void>((_, reject) => {
+      rejectFirst = reject;
     });
     const processMessage = vi.fn(async () => {
       await firstDone;
-      throw new Error("transient inflight failure");
     });
     const event = createReplayMessageEvent({
       messageId: "m-inflight-fail",
@@ -574,12 +575,10 @@ describe("handleLineWebhookEvents", () => {
       isRedelivery: true,
     });
     const { firstRun, secondRun } = await startInflightReplayDuplicate({ event, processMessage });
-    const firstFailure = expect(firstRun).rejects.toThrow("transient inflight failure");
-    const secondFailure = expect(secondRun).rejects.toThrow("transient inflight failure");
+    rejectFirst?.(new Error("transient inflight failure"));
 
-    releaseFirst?.();
-
-    await Promise.all([firstFailure, secondFailure]);
+    await expect(firstRun).rejects.toThrow("transient inflight failure");
+    await expect(secondRun).rejects.toThrow("transient inflight failure");
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 

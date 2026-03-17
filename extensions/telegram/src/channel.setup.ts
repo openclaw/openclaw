@@ -11,7 +11,6 @@ import { createTelegramPluginBase } from "./shared.js";
 
 export const telegramSetupPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   ...createTelegramPluginBase({
-    configSchema: buildChannelConfigSchema(TelegramConfigSchema),
     setupWizard: telegramSetupWizard,
     setup: telegramSetupAdapter,
   }),

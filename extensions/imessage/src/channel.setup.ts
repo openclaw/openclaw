@@ -9,7 +9,6 @@ import { createIMessagePluginBase, imessageSetupWizard } from "./shared.js";
 
 export const imessageSetupPlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   ...createIMessagePluginBase({
-    configSchema: buildChannelConfigSchema(IMessageConfigSchema),
     setupWizard: imessageSetupWizard,
     setup: imessageSetupAdapter,
   }),

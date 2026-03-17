@@ -150,6 +150,7 @@ describe("channel inbound contract", () => {
       cfg: {
         channels: { slack: { enabled: true } },
       } as OpenClawConfig,
+      defaultRequireMention: false,
     });
     // oxlint-disable-next-line typescript/no-explicit-any
     ctx.resolveUserName = async () => ({ name: "Alice" }) as any;

@@ -100,7 +100,6 @@ function resolveIMessageOutboundSessionRoute(params: {
 
 export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   ...createIMessagePluginBase({
-    configSchema: buildChannelConfigSchema(IMessageConfigSchema),
     setupWizard: imessageSetupWizard,
     setup: imessageSetupAdapter,
   }),

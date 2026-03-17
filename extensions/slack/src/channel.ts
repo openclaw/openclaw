@@ -309,7 +309,6 @@ async function resolveSlackAllowlistNames(params: {
 
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   ...createSlackPluginBase({
-    configSchema: buildChannelConfigSchema(SlackConfigSchema),
     setupWizard: slackSetupWizard,
     setup: slackSetupAdapter,
   }),

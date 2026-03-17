@@ -278,7 +278,6 @@ function resolveDiscordOutboundSessionRoute(params: {
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   ...createDiscordPluginBase({
-    configSchema: buildChannelConfigSchema(DiscordConfigSchema),
     setup: discordSetupAdapter,
   }),
   pairing: {

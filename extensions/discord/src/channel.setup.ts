@@ -9,7 +9,6 @@ import { createDiscordPluginBase } from "./shared.js";
 
 export const discordSetupPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   ...createDiscordPluginBase({
-    configSchema: buildChannelConfigSchema(DiscordConfigSchema),
     setup: discordSetupAdapter,
   }),
 };

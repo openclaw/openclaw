@@ -10,7 +10,6 @@ import { createSlackPluginBase } from "./shared.js";
 
 export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   ...createSlackPluginBase({
-    configSchema: buildChannelConfigSchema(SlackConfigSchema),
     setupWizard: slackSetupWizard,
     setup: slackSetupAdapter,
   }),

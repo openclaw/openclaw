@@ -279,7 +279,6 @@ async function sendFormattedSignalMedia(ctx: {
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   ...createSignalPluginBase({
-    configSchema: buildChannelConfigSchema(SignalConfigSchema),
     setupWizard: signalSetupWizard,
     setup: signalSetupAdapter,
   }),

@@ -13,12 +13,6 @@ import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js"
 
 export const whatsappSetupPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   ...createWhatsAppPluginBase({
-    configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
-    groups: {
-      resolveRequireMention: resolveWhatsAppGroupRequireMention,
-      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
-    },
     setupWizard: whatsappSetupWizardProxy,
     setup: whatsappSetupAdapter,
     isConfigured: async (account) => await webAuthExists(account.authDir),

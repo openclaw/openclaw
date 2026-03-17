@@ -49,12 +49,6 @@ function parseWhatsAppExplicitTarget(raw: string) {
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   ...createWhatsAppPluginBase({
-    configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
-    groups: {
-      resolveRequireMention: resolveWhatsAppGroupRequireMention,
-      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
-    },
     setupWizard: whatsappSetupWizardProxy,
     setup: whatsappSetupAdapter,
     isConfigured: async (account) =>

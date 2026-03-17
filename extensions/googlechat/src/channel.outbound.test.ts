@@ -5,15 +5,11 @@ const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
 const probeGoogleChatMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
-  return {
-    ...actual,
-    probeGoogleChat: probeGoogleChatMock,
-    sendGoogleChatMessage: sendGoogleChatMessageMock,
-    uploadGoogleChatAttachment: uploadGoogleChatAttachmentMock,
-  };
-});
+vi.mock("./api.js", () => ({
+  probeGoogleChat: probeGoogleChatMock,
+  sendGoogleChatMessage: sendGoogleChatMessageMock,
+  uploadGoogleChatAttachment: uploadGoogleChatAttachmentMock,
+}));
 
 import { googlechatPlugin } from "./channel.js";
 import { setGoogleChatRuntime } from "./runtime.js";

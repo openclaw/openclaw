@@ -9,7 +9,6 @@ import { createSignalPluginBase, signalSetupWizard } from "./shared.js";
 
 export const signalSetupPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   ...createSignalPluginBase({
-    configSchema: buildChannelConfigSchema(SignalConfigSchema),
     setupWizard: signalSetupWizard,
     setup: signalSetupAdapter,
   }),
