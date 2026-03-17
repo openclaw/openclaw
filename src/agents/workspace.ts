@@ -680,8 +680,8 @@ export async function ensureCompositeWorkspace(params: {
     nameCount.set(base, (nameCount.get(base) ?? 0) + 1);
   }
 
-  // Reserve internal workspace names (bootstrap files, memory dir) to prevent symlink collisions.
-  const reservedNames = new Set<string>([
+  // Internal workspace names (bootstrap files, memory dir) that must never be used as symlink names.
+  const internalNames = new Set<string>([
     DEFAULT_AGENTS_FILENAME,
     DEFAULT_SOUL_FILENAME,
     DEFAULT_TOOLS_FILENAME,
@@ -694,11 +694,13 @@ export async function ensureCompositeWorkspace(params: {
     "memory",
     WORKSPACE_STATE_DIRNAME,
   ]);
-  // Also collect all non-collision basenames so collision resolution can avoid them.
+  // Track all taken names so collision resolution avoids them. Seed with internal names
+  // and non-collision basenames (which keep their short names).
+  const takenNames = new Set<string>(internalNames);
   for (const ws of workspacePaths) {
     const base = path.basename(ws);
-    if ((nameCount.get(base) ?? 0) === 1) {
-      reservedNames.add(base);
+    if ((nameCount.get(base) ?? 0) === 1 && !internalNames.has(base)) {
+      takenNames.add(base);
     }
   }
 
@@ -706,14 +708,15 @@ export async function ensureCompositeWorkspace(params: {
   for (const ws of workspacePaths) {
     const base = path.basename(ws);
     let linkName: string;
-    const needsDedup = (nameCount.get(base) ?? 0) > 1 || reservedNames.has(base);
+    // Dedup when basename collides with another workspace or with an internal name.
+    const needsDedup = (nameCount.get(base) ?? 0) > 1 || internalNames.has(base);
     if (needsDedup) {
       const parentName = path.basename(path.dirname(ws));
       const candidate = `${parentName}-${base}`;
       let suffix = nameUsed.get(candidate) ?? 0;
       linkName = suffix > 0 ? `${candidate}-${suffix}` : candidate;
-      // Ensure the resolved name doesn't collide with any reserved or already-used name.
-      while (reservedNames.has(linkName)) {
+      // Ensure the resolved name doesn't collide with any taken name.
+      while (takenNames.has(linkName)) {
         suffix += 1;
         linkName = `${candidate}-${suffix}`;
       }
@@ -721,7 +724,7 @@ export async function ensureCompositeWorkspace(params: {
     } else {
       linkName = base;
     }
-    reservedNames.add(linkName);
+    takenNames.add(linkName);
     linkEntries.push({ linkName, target: ws });
   }
 
