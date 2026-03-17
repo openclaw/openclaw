@@ -13,6 +13,7 @@ import {
   type OpenClawConfig,
 } from "../../../src/plugin-sdk-internal/setup.js";
 import type { ChannelSetupWizard } from "../../../src/plugin-sdk-internal/setup.js";
+import { type DmPolicy } from "../../../src/plugin-sdk-internal/whatsapp.js";
 import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
 import { loginWeb } from "./login.js";
 import { whatsappSetupAdapter } from "./setup-core.js";

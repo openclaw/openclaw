@@ -1,4 +1,3 @@
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/telegram";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   coerceSecretRef,
@@ -6,7 +5,8 @@ import {
   normalizeSecretInputString,
 } from "../../../src/config/types.secrets.js";
 import { tryReadSecretFileSync } from "../../../src/infra/secret-file.js";
-import { resolveAccountWithDefaultFallback } from "../../../src/plugin-sdk/account-resolution.js";
+import { resolveAccountWithDefaultFallback } from "../../../src/plugin-sdk-internal/accounts.js";
+import type { TelegramAccountConfig } from "../../../src/plugin-sdk-internal/telegram.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
 import { resolveDefaultSecretProviderAlias } from "../../../src/secrets/ref-contract.js";
 import {

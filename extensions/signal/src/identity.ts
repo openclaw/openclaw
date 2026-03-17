@@ -1,4 +1,4 @@
-import { evaluateSenderGroupAccessForPolicy } from "../../../src/plugin-sdk/group-access.js";
+import { evaluateSenderGroupAccessForPolicy } from "../../../src/plugin-sdk-internal/signal.js";
 import { normalizeE164 } from "../../../src/utils.js";
 
 export type SignalSender =

@@ -7,7 +7,11 @@ export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
-export type { TelegramAccountConfig, TelegramActionConfig } from "../config/types.js";
+export type {
+  TelegramAccountConfig,
+  TelegramActionConfig,
+  TelegramNetworkConfig,
+} from "../config/types.js";
 export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export type { ResolvedTelegramAccount } from "../../extensions/telegram/src/accounts.js";
 export type { TelegramProbe } from "../../extensions/telegram/src/probe.js";
@@ -102,6 +106,9 @@ export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
+export { readBooleanParam } from "../plugin-sdk/boolean-param.js";
+export { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
+export { extractToolSend } from "../plugin-sdk/tool-send.js";
 export {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
