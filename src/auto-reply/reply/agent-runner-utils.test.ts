@@ -15,6 +15,7 @@ const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
+  formatResponseUsageLine,
   resolveModelFallbackOptions,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
@@ -155,6 +156,18 @@ describe("agent-runner-utils", () => {
       senderUsername: undefined,
       senderE164: undefined,
     });
+  });
+
+  it("formats response usage line with API call count", () => {
+    const line = formatResponseUsageLine({
+      usage: { input: 74_000, output: 309 },
+      showCost: true,
+      costConfig: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+      apiCallCount: 3,
+    });
+
+    expect(line).toContain("Usage: 74k in / 309 out");
+    expect(line).toContain("Calls: 3");
   });
 
   it("prefers OriginatingChannel over Provider for messageProvider", () => {

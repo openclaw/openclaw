@@ -598,6 +598,29 @@ describe("buildStatusMessage", () => {
     });
   }
 
+  it("shows API call count from the latest run", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "sess-calls",
+        updatedAt: 0,
+        totalTokens: 3,
+        contextTokens: 32_000,
+        callCount: 2,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      includeTranscriptUsage: true,
+      modelAuth: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Calls: 2");
+  });
+
   it("prefers cached prompt tokens from the session log", async () => {
     await withTempHome(
       async (dir) => {

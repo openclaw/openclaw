@@ -126,6 +126,8 @@ type UsageAccumulator = {
   lastCacheRead: number;
   lastCacheWrite: number;
   lastInput: number;
+  /** Number of API calls made in this run. */
+  callCount: number;
 };
 
 const createUsageAccumulator = (): UsageAccumulator => ({
@@ -137,6 +139,7 @@ const createUsageAccumulator = (): UsageAccumulator => ({
   lastCacheRead: 0,
   lastCacheWrite: 0,
   lastInput: 0,
+  callCount: 0,
 });
 
 function createCompactionDiagId(): string {
@@ -184,6 +187,7 @@ const mergeUsageIntoAccumulator = (
   target.lastCacheRead = usage.cacheRead ?? 0;
   target.lastCacheWrite = usage.cacheWrite ?? 0;
   target.lastInput = usage.input ?? 0;
+  target.callCount += 1;
 };
 
 const toNormalizedUsage = (usage: UsageAccumulator) => {
@@ -259,6 +263,9 @@ function buildErrorAgentMeta(params: {
     ...(usage ? { usage } : {}),
     ...(lastCallUsage ? { lastCallUsage } : {}),
     ...(promptTokens ? { promptTokens } : {}),
+    ...(params.usageAccumulator.callCount > 0
+      ? { callCount: params.usageAccumulator.callCount }
+      : {}),
   };
 }
 
@@ -1593,6 +1600,7 @@ export async function runEmbeddedPiAgent(
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
+            callCount: usageAccumulator.callCount > 0 ? usageAccumulator.callCount : undefined,
           };
 
           const payloads = buildEmbeddedRunPayloads({
