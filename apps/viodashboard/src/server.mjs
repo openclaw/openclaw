@@ -22,6 +22,7 @@ import { readJsonRequest } from './server/httpUtils.mjs';
 import { buildRoadmapFromReply, stripStructuredRoadmapBlock } from './server/utils.mjs';
 import { getClaudeState, resizeClaudeSession, restartClaudeSession, sendClaudeInput, startClaudeSession, stopClaudeSession } from './server/claudeTerminal.mjs';
 import { evaluateSetupState } from './server/setupState.mjs';
+import { handleSetupAction } from './server/setupActions.mjs';
 
 const terminalSessions = new Map();
 const MAX_TERMINAL_SESSIONS = 5;
@@ -562,6 +563,33 @@ const server = http.createServer((req, res) => {
   if (requestUrl.pathname === '/api/setup/state' && req.method === 'GET') {
     const claudeState = getClaudeState();
     sendJson(res, 200, evaluateSetupState({ bridgeConnected: bridge.connected, claudeState }));
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/setup/action' && req.method === 'POST') {
+    readJsonRequest(req)
+      .then(async body => {
+        const action = body && typeof body.action === 'string' ? body.action.trim() : '';
+        if (!action) {
+          sendJson(res, 400, { ok: false, error: 'missing "action" field' });
+          return;
+        }
+        const result = await handleSetupAction({
+          action,
+          bridgeConnected: bridge.connected,
+          claudeState: getClaudeState(),
+        });
+        // wrapper-reload: send response first, then schedule the reload.
+        const shouldReload = result._reload === true;
+        const { _reload: _, ...safeResult } = result;
+        sendJson(res, shouldReload ? 202 : 200, safeResult);
+        if (shouldReload) {
+          setTimeout(() => {
+            execFile('/bin/bash', [path.join(ROOT, 'launchd', 'reload.sh')], { cwd: ROOT }, () => {});
+          }, 120);
+        }
+      })
+      .catch(error => sendJson(res, 400, { ok: false, error: error?.message || String(error) }));
     return;
   }
 

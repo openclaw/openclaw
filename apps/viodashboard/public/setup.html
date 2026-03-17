@@ -260,6 +260,67 @@
       flex-shrink: 0;
     }
 
+    /* Quick action bar */
+    .setup-action-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      background: var(--color-card-bg, #1a1a1a);
+      border: 1px solid var(--color-border, #333);
+      border-radius: 6px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .setup-action-bar-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #666;
+      flex-shrink: 0;
+    }
+
+    .action-run-btn {
+      font-size: 11px;
+      padding: 4px 12px;
+      background: transparent;
+      border: 1px solid #334;
+      color: #88aacc;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .action-run-btn:hover { border-color: #557; color: #aaccee; }
+    .action-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Action result box */
+    .action-result-box {
+      padding: 10px 14px;
+      background: #0e1218;
+      border: 1px solid #1e3a5a;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      font-size: 11px;
+      font-family: var(--font-mono, monospace);
+    }
+
+    .action-result-header {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #5588bb;
+      margin-bottom: 6px;
+    }
+
+    .action-result-output {
+      color: #aaccaa;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .action-result-error { color: #cc4444; }
+    .action-result-note  { color: #888; font-style: italic; }
+
     /* Loading / error states */
     .setup-loading, .setup-error-msg {
       padding: 32px;
@@ -299,9 +360,17 @@
       <div class="setup-header">
         <p class="setup-title">Setup State</p>
         <p class="setup-subtitle">
-          Read-only deployment readiness check &mdash; all evaluations are local and non-mutating.
+          Deployment readiness check &mdash; evaluations are local. Low-risk actions available below.
         </p>
       </div>
+
+      <div class="setup-action-bar">
+        <span class="setup-action-bar-label">Actions</span>
+        <button class="action-run-btn" id="btnBootstrapPreview">Preview bootstrap</button>
+        <button class="action-run-btn" id="btnWrapperReload">Reload wrapper</button>
+      </div>
+
+      <div id="actionResult" style="display:none"></div>
 
       <div id="setupContent">
         <div class="setup-loading">Loading setup state&hellip;</div>
@@ -426,6 +495,51 @@
         content.innerHTML = `<div class="setup-error-msg">Failed to load setup state: ${escHtml(String(err))}</div>`;
       }
     }
+
+    function setActionBtnsDisabled(disabled) {
+      document.querySelectorAll('.action-run-btn').forEach(b => { b.disabled = disabled; });
+    }
+
+    function showActionResult(actionId, data) {
+      const resultBox = document.getElementById('actionResult');
+      resultBox.style.display = 'block';
+      let body;
+      if (!data.ok) {
+        body = `<div class="action-result-error">${escHtml(data.error || 'Unknown error')}</div>`;
+      } else if (data.output && data.output.length > 0) {
+        body = `<div class="action-result-output">${escHtml(data.output.join('\n'))}</div>`;
+      } else if (data.message) {
+        body = `<div class="action-result-note">${escHtml(data.message)}</div>`;
+      } else {
+        body = `<div class="action-result-note">Done.</div>`;
+      }
+      resultBox.innerHTML = `<div class="action-result-box"><div class="action-result-header">Action: ${escHtml(actionId)}</div>${body}</div>`;
+    }
+
+    async function runAction(actionId) {
+      const resultBox = document.getElementById('actionResult');
+      resultBox.style.display = 'block';
+      resultBox.innerHTML = `<div class="action-result-box"><div class="action-result-header">Action: ${escHtml(actionId)}</div><div class="action-result-note">Running\u2026</div></div>`;
+      setActionBtnsDisabled(true);
+      try {
+        const resp = await fetch('/api/setup/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: actionId }),
+        });
+        const data = await resp.json();
+        showActionResult(actionId, data);
+        // Refresh state after non-reload actions.
+        if (actionId !== 'wrapper-reload') { await load(); }
+      } catch (err) {
+        resultBox.innerHTML = `<div class="action-result-box"><div class="action-result-header">Action: ${escHtml(actionId)}</div><div class="action-result-error">Request failed: ${escHtml(String(err))}</div></div>`;
+      } finally {
+        setActionBtnsDisabled(false);
+      }
+    }
+
+    document.getElementById('btnBootstrapPreview')?.addEventListener('click', () => runAction('bootstrap-preview'));
+    document.getElementById('btnWrapperReload')?.addEventListener('click', () => runAction('wrapper-reload'));
 
     load();
   </script>

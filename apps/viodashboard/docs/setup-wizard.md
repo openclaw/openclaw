@@ -2,11 +2,13 @@
 
 ## Status
 
-Phase 2 + Phase 3 complete (as of 2026-03-16).
+Phase 4A complete (as of 2026-03-17). Phases 2 + 3 were complete as of 2026-03-16.
 
 - `GET /api/setup/state` is implemented in `src/server/setupState.mjs`.
+- `POST /api/setup/action` is implemented in `src/server/setupActions.mjs` (phase 4A).
 - Read-only setup UI is available at `/setup.html` (linked from the dashboard System panel).
-- Phases 4–5 (actionable buttons, expanded module readiness) remain future work.
+- The setup UI now exposes two action buttons: **Preview bootstrap** and **Reload wrapper**.
+- Phase 4 (remaining install actions) and Phase 5 (module readiness expansion) remain future work.
 
 ---
 
@@ -475,6 +477,59 @@ Those remain separate actions in later phases.
 
 ---
 
+## Action layer (phase 4A)
+
+### Endpoint
+
+- `POST /api/setup/action`
+
+### Request body
+
+```json
+{ "action": "setup-refresh" }
+```
+
+### Allowed actions
+
+| `action`           | Description                                                           |
+|--------------------|-----------------------------------------------------------------------|
+| `setup-refresh`    | Re-evaluates and returns fresh setup state. No side effects.          |
+| `bootstrap-preview`| Dry-runs the bootstrap script (`--print --yes`) and returns output.   |
+| `wrapper-reload`   | Schedules a launchd reload of the wrapper service after responding.   |
+
+### Response shape (success)
+
+```json
+{
+  "ok": true,
+  "action": "bootstrap-preview",
+  "output": ["line1", "line2"],
+  "state": { "...": "optional, returned for setup-refresh" }
+}
+```
+
+For `wrapper-reload` the HTTP status is `202` and the response includes a `message` field. The service restarts approximately 120 ms after the response is sent.
+
+### Response shape (error)
+
+```json
+{ "ok": false, "error": "Unknown action \"foo\". Allowed: ..." }
+```
+
+### Safety boundary
+
+- No automatic writes to `config/local.mjs`.
+- No install-source / install-runtime / bootstrap-generate actions in phase 4A.
+- Unknown action IDs are rejected with HTTP 400.
+- `bootstrap-preview` uses `--print --yes` (dry-run only, no file writes).
+
+### Implementation
+
+- Action dispatcher: `src/server/setupActions.mjs`
+- Route wired in: `src/server.mjs` (after `/api/setup/state`)
+
+---
+
 ## First-version UI shape
 
 V1 should be a **read-only setup page or setup tab**, not a full action wizard.
@@ -528,11 +583,16 @@ before we add buttons that mutate the machine.
 - build read-only setup UI
 - render summary + steps + recommended actions
 
-### Phase 4
-- incrementally add actions
+### Phase 4A (complete)
+- `POST /api/setup/action` endpoint with explicit allowlist
+- actions: `setup-refresh`, `bootstrap-preview`, `wrapper-reload`
+- setup UI action bar with **Preview bootstrap** and **Reload wrapper** buttons
+- inline action result display with auto-refresh of setup state
+
+### Phase 4 (remaining)
+- incrementally add further actions
   - bootstrap generate
-  - install launchd
-  - reload wrapper
+  - install launchd (source / runtime)
   - run verification checks
 
 ### Phase 5
