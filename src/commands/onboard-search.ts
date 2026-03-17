@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "exa" | "gemini" | "grok" | "kimi" | "perplexity";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -29,6 +29,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     envKeys: ["BRAVE_API_KEY"],
     placeholder: "BSA...",
     signupUrl: "https://brave.com/search/api/",
+  },
+  {
+    value: "exa",
+    label: "Exa Search",
+    hint: "Neural + keyword hybrid · semantic search",
+    envKeys: ["EXA_API_KEY"],
+    placeholder: "exa_...",
+    signupUrl: "https://exa.ai/",
   },
   {
     value: "gemini",
@@ -73,6 +81,8 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
   switch (provider) {
     case "brave":
       return search?.apiKey;
+    case "exa":
+      return search?.exa?.apiKey;
     case "gemini":
       return search?.gemini?.apiKey;
     case "grok":

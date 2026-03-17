@@ -85,7 +85,7 @@ describe("web search provider config", () => {
             enabled: true,
             provider: "exa",
             exa: {
-              apiKey: "exa-test-key",
+              apiKey: "exa-test-key", // pragma: allowlist secret
               type: "neural",
               contents: "highlights",
             },

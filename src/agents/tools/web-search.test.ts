@@ -558,14 +558,14 @@ describe("exa resolveExaApiKey", () => {
   it("prefers config apiKey over env var", () => {
     const original = process.env.EXA_API_KEY;
     process.env.EXA_API_KEY = "env-key";
-    expect(resolveExaApiKey({ apiKey: "config-key" })).toBe("config-key");
+    expect(resolveExaApiKey({ apiKey: "config-key" })).toBe("config-key"); // pragma: allowlist secret
     process.env.EXA_API_KEY = original;
   });
 
   it("falls back to EXA_API_KEY env var", () => {
     const original = process.env.EXA_API_KEY;
-    process.env.EXA_API_KEY = "env-exa-key";
-    expect(resolveExaApiKey({})).toBe("env-exa-key");
+    process.env.EXA_API_KEY = "env-exa-key"; // pragma: allowlist secret
+    expect(resolveExaApiKey({})).toBe("env-exa-key"); // pragma: allowlist secret
     process.env.EXA_API_KEY = original;
   });
 

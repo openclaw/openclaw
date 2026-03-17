@@ -79,7 +79,7 @@ Exa is a neural/semantic search provider that returns structured search results 
         enabled: true,
         provider: "exa",
         exa: {
-          apiKey: "exa_...", // optional if EXA_API_KEY is set
+          apiKey: "exa_...", // optional if EXA_API_KEY is set // pragma: allowlist secret
         },
       },
     },
