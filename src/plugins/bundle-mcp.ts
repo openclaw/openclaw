@@ -117,11 +117,17 @@ function expandBundleRootPlaceholders(value: string, rootDir: string): string {
   if (!value.includes(CLAUDE_PLUGIN_ROOT_PLACEHOLDER)) {
     return value;
   }
-  // After substituting the rootDir (which may use OS-native separators on
-  // Windows) the remainder of the template string may still have forward
-  // slashes, producing mixed separators like C:\foo/bar.  Normalize to make
-  // the result consistent on all platforms.
-  return path.normalize(value.split(CLAUDE_PLUGIN_ROOT_PLACEHOLDER).join(rootDir));
+  const expanded = value.split(CLAUDE_PLUGIN_ROOT_PLACEHOLDER).join(rootDir);
+  // Only normalize when the value is a pure path that starts with the
+  // placeholder (e.g. "${CLAUDE_PLUGIN_ROOT}/bin/server").  Calling
+  // path.normalize on flag-embedded values like
+  // "--config=${CLAUDE_PLUGIN_ROOT}/cfg.json" could corrupt the flag prefix
+  // on some platforms.  Windows accepts both separators in flag-embedded
+  // paths so skipping normalization there is safe.
+  if (value.startsWith(CLAUDE_PLUGIN_ROOT_PLACEHOLDER)) {
+    return path.normalize(expanded);
+  }
+  return expanded;
 }
 
 function absolutizeBundleMcpServer(params: {
