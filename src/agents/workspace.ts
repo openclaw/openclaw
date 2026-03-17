@@ -672,16 +672,21 @@ export async function ensureCompositeWorkspace(params: {
   const { compositeDir, workspacePaths } = params;
   await fs.mkdir(compositeDir, { recursive: true });
 
+  // On case-insensitive filesystems (macOS, Windows) names like "Repo" and "repo"
+  // resolve to the same on-disk entry, so we normalize all collision checks to lowercase.
+  const isCaseInsensitive = process.platform === "darwin" || process.platform === "win32";
+  const normalizeKey = (name: string) => (isCaseInsensitive ? name.toLowerCase() : name);
+
   // Build unique link names from basenames, deduping collisions.
   const linkEntries: Array<{ linkName: string; target: string }> = [];
   const nameCount = new Map<string, number>();
   for (const ws of workspacePaths) {
-    const base = path.basename(ws);
-    nameCount.set(base, (nameCount.get(base) ?? 0) + 1);
+    const key = normalizeKey(path.basename(ws));
+    nameCount.set(key, (nameCount.get(key) ?? 0) + 1);
   }
 
   // Internal workspace names (bootstrap files, memory dir) that must never be used as symlink names.
-  const internalNames = new Set<string>([
+  const internalNamesRaw = [
     DEFAULT_AGENTS_FILENAME,
     DEFAULT_SOUL_FILENAME,
     DEFAULT_TOOLS_FILENAME,
@@ -693,50 +698,55 @@ export async function ensureCompositeWorkspace(params: {
     DEFAULT_MEMORY_ALT_FILENAME,
     "memory",
     WORKSPACE_STATE_DIRNAME,
-  ]);
+  ];
+  const internalNames = new Set<string>(internalNamesRaw.map(normalizeKey));
   // Track all taken names so collision resolution avoids them. Seed with internal names
   // and non-collision basenames (which keep their short names).
   const takenNames = new Set<string>(internalNames);
   for (const ws of workspacePaths) {
-    const base = path.basename(ws);
-    if ((nameCount.get(base) ?? 0) === 1 && !internalNames.has(base)) {
-      takenNames.add(base);
+    const key = normalizeKey(path.basename(ws));
+    if ((nameCount.get(key) ?? 0) === 1 && !internalNames.has(key)) {
+      takenNames.add(key);
     }
   }
 
   const nameUsed = new Map<string, number>();
   for (const ws of workspacePaths) {
     const base = path.basename(ws);
+    const baseKey = normalizeKey(base);
     let linkName: string;
     // Dedup when basename collides with another workspace or with an internal name.
-    const needsDedup = (nameCount.get(base) ?? 0) > 1 || internalNames.has(base);
+    const needsDedup = (nameCount.get(baseKey) ?? 0) > 1 || internalNames.has(baseKey);
     if (needsDedup) {
       const parentName = path.basename(path.dirname(ws));
       const candidate = `${parentName}-${base}`;
-      let suffix = nameUsed.get(candidate) ?? 0;
+      const candidateKey = normalizeKey(candidate);
+      let suffix = nameUsed.get(candidateKey) ?? 0;
       linkName = suffix > 0 ? `${candidate}-${suffix}` : candidate;
       // Ensure the resolved name doesn't collide with any taken name.
-      while (takenNames.has(linkName)) {
+      while (takenNames.has(normalizeKey(linkName))) {
         suffix += 1;
         linkName = `${candidate}-${suffix}`;
       }
-      nameUsed.set(candidate, suffix + 1);
+      nameUsed.set(candidateKey, suffix + 1);
     } else {
       linkName = base;
     }
-    takenNames.add(linkName);
+    takenNames.add(normalizeKey(linkName));
     linkEntries.push({ linkName, target: ws });
   }
 
   // Remove stale symlinks in composite dir that are not in the current set.
-  const desiredNames = new Set(linkEntries.map((e) => e.linkName));
+  const desiredNames = new Set(
+    linkEntries.map((e) => (isCaseInsensitive ? e.linkName.toLowerCase() : e.linkName)),
+  );
   try {
     const existing = await fs.readdir(compositeDir, { withFileTypes: true });
     for (const entry of existing) {
       if (!entry.isSymbolicLink()) {
         continue;
       }
-      if (!desiredNames.has(entry.name)) {
+      if (!desiredNames.has(isCaseInsensitive ? entry.name.toLowerCase() : entry.name)) {
         const stalePath = path.join(compositeDir, entry.name);
         compositeLog.info(`Removing stale symlink: ${stalePath}`);
         await fs.unlink(stalePath).catch(() => {});
