@@ -99,7 +99,7 @@ next turn:
 ```bash
 openclaw cron add \
   --name "Process inbox" \
-  --at "$(date -u -d '+1 min' +%Y-%m-%dT%H:%M:%SZ)" \
+  --at "$(date -u -d '+1 min' +%Y-%m-%dT%H:%M:%SZ)" \  # GNU/Linux; on macOS use: date -u -v+1M
   --session main \
   --system-event "New files in inbox — check and process" \
   --wake now \
@@ -116,6 +116,7 @@ If you already have heartbeat polling enabled, add an inbox check to your
 
 ```markdown
 # HEARTBEAT.md
+
 - Check `inbox/` for new task files. Process any found, then delete them.
 ```
 
@@ -125,12 +126,12 @@ files sit unprocessed until the next poll.
 
 ## Choosing the Right Approach
 
-| Approach | Latency | Complexity | Best For |
-|----------|---------|-----------|----------|
-| `openclaw wake` | Immediate | Low | One-off scripts, urgent tasks |
-| Cron (isolated) | Scheduled | Medium | Recurring checks, batch processing |
-| System event | Immediate | Medium | Programmatic triggers from other tools |
-| Heartbeat | Minutes | Lowest | Low-priority, can tolerate delay |
+| Approach        | Latency   | Complexity | Best For                               |
+| --------------- | --------- | ---------- | -------------------------------------- |
+| `openclaw wake` | Immediate | Low        | One-off scripts, urgent tasks          |
+| Cron (isolated) | Scheduled | Medium     | Recurring checks, batch processing     |
+| System event    | Immediate | Medium     | Programmatic triggers from other tools |
+| Heartbeat       | Minutes   | Lowest     | Low-priority, can tolerate delay       |
 
 **Rule of thumb**: If the task is time-sensitive, wake the agent explicitly.
 If it can wait, let heartbeat or cron handle it.
@@ -140,12 +141,15 @@ If it can wait, let heartbeat or cron handle it.
 After setting up your wakeup script, confirm the agent actually responds:
 
 1. **Check agent logs**:
+
    ```bash
    openclaw status
    ```
+
    Look for a recent session turn triggered by your wake event.
 
 2. **Check cron history** (if using cron):
+
    ```bash
    openclaw cron runs --id <job-id>
    ```
@@ -155,13 +159,13 @@ After setting up your wakeup script, confirm the agent actually responds:
 
 ## Common Mistakes
 
-| Mistake | Symptom | Fix |
-|---------|---------|-----|
-| No wake signal | Files accumulate, agent silent | Add `openclaw wake` after file creation |
-| Wrong `--mode` | Agent wakes on next heartbeat, not immediately | Use `--mode now` for urgent tasks |
-| Script runs as different user | `openclaw` command not found or auth fails | Run as the same user that owns the gateway |
-| Inbox path mismatch | Agent checks wrong directory | Use absolute paths; match what the agent expects |
-| No cleanup | Agent reprocesses old files every cycle | Delete or move files after processing |
+| Mistake                       | Symptom                                        | Fix                                              |
+| ----------------------------- | ---------------------------------------------- | ------------------------------------------------ |
+| No wake signal                | Files accumulate, agent silent                 | Add `openclaw wake` after file creation          |
+| Wrong `--mode`                | Agent wakes on next heartbeat, not immediately | Use `--mode now` for urgent tasks                |
+| Script runs as different user | `openclaw` command not found or auth fails     | Run as the same user that owns the gateway       |
+| Inbox path mismatch           | Agent checks wrong directory                   | Use absolute paths; match what the agent expects |
+| No cleanup                    | Agent reprocesses old files every cycle        | Delete or move files after processing            |
 
 ## Full Example: Daily Report Script
 
@@ -185,7 +189,7 @@ cat > "$REPORT" << EOF
 
 ## System Status
 - Disk: $(df -h / | awk 'NR==2{print $5}') used
-- Memory: $(free -h | awk '/Mem/{print $3"/"$2}')
+- Memory: $(free -h 2>/dev/null | awk '/Mem/{print $3"/"$2}' || echo "N/A")  # free is Linux-only
 - Uptime: $(uptime -p)
 
 ## Action Items
