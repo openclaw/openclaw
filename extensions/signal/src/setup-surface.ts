@@ -1,7 +1,4 @@
-import {
-  setSetupChannelEnabled,
-  type ChannelSetupWizard,
-} from "openclaw/plugin-sdk/setup";
+import { setSetupChannelEnabled, type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { detectBinary } from "../../../src/plugins/setup-binary.js";
 import { installSignalCli } from "../../../src/plugins/signal-cli-install.js";
 import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
