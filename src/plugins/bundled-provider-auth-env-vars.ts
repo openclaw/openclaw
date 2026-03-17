@@ -26,6 +26,7 @@ import VENICE_MANIFEST from "../../extensions/venice/openclaw.plugin.json" with 
 import VERCEL_AI_GATEWAY_MANIFEST from "../../extensions/vercel-ai-gateway/openclaw.plugin.json" with { type: "json" };
 import VLLM_MANIFEST from "../../extensions/vllm/openclaw.plugin.json" with { type: "json" };
 import VOLCENGINE_MANIFEST from "../../extensions/volcengine/openclaw.plugin.json" with { type: "json" };
+import XAI_MANIFEST from "../../extensions/xai/openclaw.plugin.json" with { type: "json" };
 import XIAOMI_MANIFEST from "../../extensions/xiaomi/openclaw.plugin.json" with { type: "json" };
 import ZAI_MANIFEST from "../../extensions/zai/openclaw.plugin.json" with { type: "json" };
 
@@ -86,6 +87,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = collectBundledProviderAu
   VERCEL_AI_GATEWAY_MANIFEST,
   VLLM_MANIFEST,
   VOLCENGINE_MANIFEST,
+  XAI_MANIFEST,
   XIAOMI_MANIFEST,
   ZAI_MANIFEST,
 ]);

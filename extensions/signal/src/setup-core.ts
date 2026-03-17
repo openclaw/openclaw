@@ -1,22 +1,23 @@
+import { formatCliCommand } from "../../../src/cli/command-format.js";
 import {
   applyAccountNameToChannelSection,
+  DEFAULT_ACCOUNT_ID,
   migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import {
+  normalizeAccountId,
+  normalizeE164,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+  type OpenClawConfig,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
+import type {
+  ChannelSetupAdapter,
+  ChannelSetupDmPolicy,
+  ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "../../../src/terminal/links.js";
-import { normalizeE164 } from "../../../src/utils.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,

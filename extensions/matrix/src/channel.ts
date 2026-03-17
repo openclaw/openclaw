@@ -288,10 +288,27 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText!(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    sendText: async (params) => (await loadMatrixChannelRuntime()).matrixOutbound.sendText!(params),
-    sendMedia: async (params) =>
-      (await loadMatrixChannelRuntime()).matrixOutbound.sendMedia!(params),
-    sendPoll: async (params) => (await loadMatrixChannelRuntime()).matrixOutbound.sendPoll!(params),
+    sendText: async (params) => {
+      const outbound = (await loadMatrixChannelRuntime()).matrixOutbound;
+      if (!outbound.sendText) {
+        throw new Error("Matrix outbound text delivery is unavailable");
+      }
+      return await outbound.sendText(params);
+    },
+    sendMedia: async (params) => {
+      const outbound = (await loadMatrixChannelRuntime()).matrixOutbound;
+      if (!outbound.sendMedia) {
+        throw new Error("Matrix outbound media delivery is unavailable");
+      }
+      return await outbound.sendMedia(params);
+    },
+    sendPoll: async (params) => {
+      const outbound = (await loadMatrixChannelRuntime()).matrixOutbound;
+      if (!outbound.sendPoll) {
+        throw new Error("Matrix outbound poll delivery is unavailable");
+      }
+      return await outbound.sendPoll(params);
+    },
   },
   status: {
     defaultRuntime: {
