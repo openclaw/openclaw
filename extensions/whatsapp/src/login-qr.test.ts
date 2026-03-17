@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
+import { renderQrPngBase64 } from "./qr-image.js";
 import {
   createWaSocket,
   logoutWeb,
@@ -49,6 +50,7 @@ const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
 const logoutWebMock = vi.mocked(logoutWeb);
+const renderQrPngBase64Mock = vi.mocked(renderQrPngBase64);
 
 async function flushTasks() {
   await Promise.resolve();
@@ -88,5 +90,29 @@ describe("login-qr", () => {
     expect(result.connected).toBe(true);
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     expect(logoutWebMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the active QR when WhatsApp rotates refs", async () => {
+    let emitQr: ((qr: string) => void) | undefined;
+    createWaSocketMock.mockImplementationOnce(
+      async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
+        emitQr = opts?.onQr;
+        const sock = { ws: { close: vi.fn() } };
+        setImmediate(() => emitQr?.("qr-1"));
+        return sock as never;
+      },
+    );
+    waitForWaConnectionMock.mockReturnValue(new Promise<void>(() => {}));
+    renderQrPngBase64Mock.mockImplementation(async (qr) => `base64:${String(qr)}`);
+
+    const start = await startWebLoginWithQr({ timeoutMs: 5000 });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,base64:qr-1");
+
+    emitQr?.("qr-2");
+    await flushTasks();
+    await flushTasks();
+
+    const refreshed = await startWebLoginWithQr({ timeoutMs: 5000 });
+    expect(refreshed.qrDataUrl).toBe("data:image/png;base64,base64:qr-2");
   });
 });

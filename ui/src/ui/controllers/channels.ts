@@ -51,22 +51,54 @@ export async function startWhatsAppLogin(state: ChannelsState, force: boolean) {
   }
 }
 
-export async function waitWhatsAppLogin(state: ChannelsState) {
+async function refreshActiveWhatsAppQr(state: ChannelsState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const res = await state.client.request<{ message?: string; qrDataUrl?: string }>(
+    "web.login.start",
+    {
+      force: false,
+      timeoutMs: 5000,
+    },
+  );
+  if (res.qrDataUrl) {
+    state.whatsappLoginQrDataUrl = res.qrDataUrl;
+  }
+  if (res.message) {
+    state.whatsappLoginMessage = res.message;
+  }
+}
+
+export async function waitWhatsAppLogin(
+  state: ChannelsState,
+  opts: { timeoutMs?: number; pollMs?: number } = {},
+) {
   if (!state.client || !state.connected || state.whatsappBusy) {
     return;
   }
   state.whatsappBusy = true;
   try {
-    const res = await state.client.request<{ message?: string; connected?: boolean }>(
-      "web.login.wait",
-      {
-        timeoutMs: 120000,
-      },
-    );
-    state.whatsappLoginMessage = res.message ?? null;
-    state.whatsappLoginConnected = res.connected ?? null;
-    if (res.connected) {
-      state.whatsappLoginQrDataUrl = null;
+    const deadline = Date.now() + Math.max(opts.timeoutMs ?? 120_000, 1_000);
+    const pollMs = Math.max(opts.pollMs ?? 5_000, 1_000);
+    while (true) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        break;
+      }
+      const res = await state.client.request<{ message?: string; connected?: boolean }>(
+        "web.login.wait",
+        {
+          timeoutMs: Math.min(remaining, pollMs),
+        },
+      );
+      state.whatsappLoginMessage = res.message ?? null;
+      state.whatsappLoginConnected = res.connected ?? null;
+      if (res.connected) {
+        state.whatsappLoginQrDataUrl = null;
+        break;
+      }
+      await refreshActiveWhatsAppQr(state);
     }
   } catch (err) {
     state.whatsappLoginMessage = String(err);
