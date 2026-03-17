@@ -1,7 +1,13 @@
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
-const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
+const ISO_ARCHIVE_TIMESTAMP_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}-\d{2})$/;
+const COMPACT_ARCHIVE_TIMESTAMP_RE = /^\d{8}-\d{6}$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
+
+function isArchiveTimestamp(raw: string): boolean {
+  return ISO_ARCHIVE_TIMESTAMP_RE.test(raw) || COMPACT_ARCHIVE_TIMESTAMP_RE.test(raw);
+}
 
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
   const marker = `.${reason}.`;
@@ -10,7 +16,7 @@ function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boole
     return false;
   }
   const raw = fileName.slice(index + marker.length);
-  return ARCHIVE_TIMESTAMP_RE.test(raw);
+  return isArchiveTimestamp(raw);
 }
 
 export function isSessionArchiveArtifactName(fileName: string): boolean {
@@ -39,6 +45,21 @@ export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
 }
 
 function restoreSessionArchiveTimestamp(raw: string): string {
+  const compact = raw.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/);
+  if (compact) {
+    const [, year, month, day, hour, minute, second] = compact;
+    return `${year}-${month}-${day}T${hour}:${minute}:${second}Z`;
+  }
+
+  const iso = raw.match(
+    /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(\.\d{3})?(Z|[+-]\d{2}-\d{2})$/,
+  );
+  if (iso) {
+    const [, datePart, hour, minute, second, millis = "", zone] = iso;
+    const normalizedZone = zone === "Z" ? "Z" : zone.replace(/([+-]\d{2})-(\d{2})$/, "$1:$2");
+    return `${datePart}T${hour}:${minute}:${second}${millis}${normalizedZone}`;
+  }
+
   const [datePart, timePart] = raw.split("T");
   if (!datePart || !timePart) {
     return raw;
@@ -59,7 +80,7 @@ export function parseSessionArchiveTimestamp(
   if (!raw) {
     return null;
   }
-  if (!ARCHIVE_TIMESTAMP_RE.test(raw)) {
+  if (!isArchiveTimestamp(raw)) {
     return null;
   }
   const timestamp = Date.parse(restoreSessionArchiveTimestamp(raw));
