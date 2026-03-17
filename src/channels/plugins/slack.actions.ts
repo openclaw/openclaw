@@ -4,22 +4,11 @@ import {
   isSlackInteractiveRepliesEnabled,
   listSlackMessageActions,
   resolveSlackChannelId,
-} from "../../plugin-sdk-internal/slack.js";
-import { handleSlackMessageAction } from "../../plugin-sdk/slack-message-actions.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
+  handleSlackMessageAction,
+} from "../../plugin-sdk/slack.js";
+import type { ChannelMessageActionAdapter } from "./types.js";
 
-type SlackActionAdapterOptions = {
-  includeReadThreadId?: boolean;
-  invoke?: (
-    ctx: ChannelMessageActionContext,
-  ) => Parameters<typeof handleSlackMessageAction>[0]["invoke"];
-  skipNormalizeChannelId?: boolean;
-};
-
-export function createSlackActions(
-  providerId: string,
-  options?: SlackActionAdapterOptions,
-): ChannelMessageActionAdapter {
+export function createSlackActions(providerId: string): ChannelMessageActionAdapter {
   return {
     listActions: ({ cfg }) => listSlackMessageActions(cfg),
     getCapabilities: ({ cfg }) => {
@@ -34,19 +23,16 @@ export function createSlackActions(
     },
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async (ctx) => {
-      const invoke =
-        options?.invoke?.(ctx) ??
-        (async (action, cfg, toolContext) =>
-          await handleSlackAction(action, cfg, {
-            ...(toolContext as SlackActionContext | undefined),
-            mediaLocalRoots: ctx.mediaLocalRoots,
-          }));
       return await handleSlackMessageAction({
         providerId,
         ctx,
-        normalizeChannelId: options?.skipNormalizeChannelId ? undefined : resolveSlackChannelId,
-        includeReadThreadId: options?.includeReadThreadId ?? true,
-        invoke,
+        normalizeChannelId: resolveSlackChannelId,
+        includeReadThreadId: true,
+        invoke: async (action, cfg, toolContext) =>
+          await handleSlackAction(action, cfg, {
+            ...(toolContext as SlackActionContext | undefined),
+            mediaLocalRoots: ctx.mediaLocalRoots,
+          }),
       });
     },
   };

@@ -1,9 +1,9 @@
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
-  formatAllowFromLowercase,
-} from "../../../src/plugin-sdk-internal/channel-config.js";
-import { type OpenClawConfig } from "../../../src/plugin-sdk-internal/slack.js";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/slack";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,

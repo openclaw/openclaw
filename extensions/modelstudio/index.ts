@@ -1,6 +1,5 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   applyModelStudioConfig,
   applyModelStudioConfigCn,
@@ -79,13 +78,22 @@ const modelStudioPlugin = {
       ],
       catalog: {
         order: "simple",
-        run: (ctx) =>
-          buildSingleProviderApiKeyCatalog({
-            ctx,
-            providerId: PROVIDER_ID,
-            buildProvider: buildModelStudioProvider,
-            allowExplicitBaseUrl: true,
-          }),
+        run: async (ctx) => {
+          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+          const explicitProvider = ctx.config.models?.providers?.[PROVIDER_ID];
+          const explicitBaseUrl =
+            typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
+          return {
+            provider: {
+              ...buildModelStudioProvider(),
+              ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+              apiKey,
+            },
+          };
+        },
       },
     });
   },

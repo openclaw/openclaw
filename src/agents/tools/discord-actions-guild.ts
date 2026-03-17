@@ -19,8 +19,8 @@ import {
   setChannelPermissionDiscord,
   uploadEmojiDiscord,
   uploadStickerDiscord,
-} from "../../plugin-sdk-internal/discord.js";
-import { getPresence } from "../../plugin-sdk-internal/discord.js";
+} from "../../plugin-sdk/discord.js";
+import { getPresence } from "../../plugin-sdk/discord.js";
 import {
   type ActionGate,
   jsonResult,
