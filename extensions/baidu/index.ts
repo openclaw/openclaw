@@ -19,6 +19,8 @@ const baiduPlugin = {
         hint: "Structured results",
         envVars: ["BAIDU_SEARCH_API_KEY"],
         placeholder: "bce-...",
+        signupUrl: "https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey",
+        docsUrl: "https://docs.openclaw.ai/tools/web",
         getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "baidu"),
         setCredentialValue: (searchConfigTarget, value) =>
           setScopedCredentialValue(searchConfigTarget, "baidu", value),
