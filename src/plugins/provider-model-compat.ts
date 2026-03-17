@@ -69,6 +69,14 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
   return model.api === "openai-completions";
 }
 
+/**
+ * Self-hosted providers known to correctly support `stream_options.include_usage`
+ * (i.e., they return a terminal usage-only chunk at the end of the stream).
+ * Unlike arbitrary OpenAI-compatible proxies, these are well-tested inference
+ * engines that faithfully implement the OpenAI streaming usage spec.
+ */
+const STREAMING_USAGE_ALLOWLIST = new Set(["vllm", "sglang"]);
+
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
   return model.api === "anthropic-messages";
 }
@@ -115,22 +123,25 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
+  // Self-hosted inference engines (vLLM, SGLang) correctly implement the
+  // OpenAI streaming usage spec and return a terminal usage-only chunk.
+  // Default supportsUsageInStreaming to true for these known providers so
+  // token counts are recorded even when no explicit compat override is set.
+  const providerLower = (model.provider ?? "").toLowerCase();
+  const defaultStreamingUsage = STREAMING_USAGE_ALLOWLIST.has(providerLower)
+    || (detectedCompatDefaults?.supportsUsageInStreaming ?? false);
   return {
     ...model,
     compat: compat
       ? {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
-          ...(hasStreamingUsageOverride
-            ? {}
-            : {
-                supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
-              }),
+          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: defaultStreamingUsage }),
           supportsStrictMode: targetStrictMode,
         }
       : {
           supportsDeveloperRole: false,
-          supportsUsageInStreaming: detectedCompatDefaults?.supportsUsageInStreaming ?? false,
+          supportsUsageInStreaming: defaultStreamingUsage,
           supportsStrictMode: detectedCompatDefaults?.supportsStrictMode ?? false,
         },
   } as typeof model;

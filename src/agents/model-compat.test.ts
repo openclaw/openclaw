@@ -389,6 +389,81 @@ describe("normalizeModelCompat", () => {
   });
 });
 
+describe("normalizeModelCompat — vLLM and SGLang providers", () => {
+  function makeVllmModel(baseUrl: string): Model<Api> {
+    return {
+      id: "Qwen3.5-27B",
+      name: "Qwen3.5-27B",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 4096,
+    } as Model<Api>;
+  }
+
+  function makeSglangModel(baseUrl: string): Model<Api> {
+    return {
+      ...makeVllmModel(baseUrl),
+      provider: "sglang",
+    } as Model<Api>;
+  }
+
+  it("defaults supportsUsageInStreaming to true for vLLM self-hosted endpoints", () => {
+    const model = makeVllmModel("http://192.168.88.35:9090/v1");
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+  });
+
+  it("defaults supportsUsageInStreaming to true for vLLM localhost endpoints", () => {
+    const model = makeVllmModel("http://127.0.0.1:8000/v1");
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+  });
+
+  it("defaults supportsUsageInStreaming to true for SGLang self-hosted endpoints", () => {
+    const model = makeSglangModel("http://192.168.1.10:30000/v1");
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+  });
+
+  it("still forces supportsDeveloperRole off for vLLM endpoints", () => {
+    const model = makeVllmModel("http://192.168.88.35:9090/v1");
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+  });
+
+  it("still forces supportsStrictMode off for vLLM endpoints", () => {
+    const model = makeVllmModel("http://192.168.88.35:9090/v1");
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("respects explicit supportsUsageInStreaming false override for vLLM", () => {
+    const model = makeVllmModel("http://192.168.88.35:9090/v1");
+    (model as { compat?: unknown }).compat = { supportsUsageInStreaming: false };
+    const normalized = normalizeModelCompat(model);
+    expect(supportsUsageInStreaming(normalized)).toBe(false);
+  });
+
+  it("does not mutate caller model reference for vLLM", () => {
+    const model = makeVllmModel("http://192.168.88.35:9090/v1");
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized).not.toBe(model);
+    expect(supportsUsageInStreaming(model)).toBeUndefined();
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+  });
+});
+
 describe("isModernModelRef", () => {
   it("uses provider runtime hooks before fallback heuristics", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(false);
