@@ -328,6 +328,7 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  multipleWorkspaces?: string[];
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -341,6 +342,16 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   await fs.mkdir(dir, { recursive: true });
+
+  // If multipleWorkspaces is set, populate the composite directory with symlinks
+  // before any bootstrap file creation. This ensures all execution paths (reply,
+  // CLI, heartbeat, etc.) see the same composite workspace.
+  if (params?.multipleWorkspaces && params.multipleWorkspaces.length > 0) {
+    await ensureCompositeWorkspace({
+      compositeDir: dir,
+      workspacePaths: params.multipleWorkspaces,
+    });
+  }
 
   if (!params?.ensureBootstrapFiles) {
     return { dir };
@@ -669,8 +680,21 @@ export async function ensureCompositeWorkspace(params: {
     nameCount.set(base, (nameCount.get(base) ?? 0) + 1);
   }
 
-  // First pass: collect all non-collision names so collision resolution can avoid them.
-  const reservedNames = new Set<string>();
+  // Reserve internal workspace names (bootstrap files, memory dir) to prevent symlink collisions.
+  const reservedNames = new Set<string>([
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_HEARTBEAT_FILENAME,
+    DEFAULT_BOOTSTRAP_FILENAME,
+    DEFAULT_MEMORY_FILENAME,
+    DEFAULT_MEMORY_ALT_FILENAME,
+    "memory",
+    WORKSPACE_STATE_DIRNAME,
+  ]);
+  // Also collect all non-collision basenames so collision resolution can avoid them.
   for (const ws of workspacePaths) {
     const base = path.basename(ws);
     if ((nameCount.get(base) ?? 0) === 1) {
@@ -682,21 +706,22 @@ export async function ensureCompositeWorkspace(params: {
   for (const ws of workspacePaths) {
     const base = path.basename(ws);
     let linkName: string;
-    if ((nameCount.get(base) ?? 0) > 1) {
+    const needsDedup = (nameCount.get(base) ?? 0) > 1 || reservedNames.has(base);
+    if (needsDedup) {
       const parentName = path.basename(path.dirname(ws));
       const candidate = `${parentName}-${base}`;
       let suffix = nameUsed.get(candidate) ?? 0;
       linkName = suffix > 0 ? `${candidate}-${suffix}` : candidate;
-      // Ensure the resolved name doesn't collide with a non-collision entry or existing entry.
+      // Ensure the resolved name doesn't collide with any reserved or already-used name.
       while (reservedNames.has(linkName)) {
         suffix += 1;
         linkName = `${candidate}-${suffix}`;
       }
       nameUsed.set(candidate, suffix + 1);
-      reservedNames.add(linkName);
     } else {
       linkName = base;
     }
+    reservedNames.add(linkName);
     linkEntries.push({ linkName, target: ws });
   }
 

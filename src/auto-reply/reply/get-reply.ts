@@ -7,11 +7,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
-  ensureCompositeWorkspace,
-} from "../../agents/workspace.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -172,16 +168,10 @@ export async function getReplyFromConfig(
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-
-  // multipleWorkspaces: create composite symlink directory before bootstrapping.
-  const multiWsPaths = resolveAgentMultipleWorkspaces(cfg, agentId);
-  if (multiWsPaths) {
-    await ensureCompositeWorkspace({ compositeDir: workspaceDirRaw, workspacePaths: multiWsPaths });
-  }
-
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+    multipleWorkspaces: resolveAgentMultipleWorkspaces(cfg, agentId),
   });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
