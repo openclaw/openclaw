@@ -114,9 +114,13 @@ export const memoryConfigSchema = {
     const model = resolveEmbeddingModel(embedding);
     
     // Auto-detect Google provider if model is a known Google model and provider isn't explicitly set
-    let provider = typeof embedding.provider === "string" ? embedding.provider : "openai";
-    if (model.includes("text-embedding-004") || model.includes("gemini-embedding-001") || model.startsWith("models/")) {
-      provider = "google";
+    let provider = typeof embedding.provider === "string" ? embedding.provider : undefined;
+    if (!provider) {
+      if (model.includes("text-embedding-004") || model.includes("gemini-embedding-001") || model.startsWith("models/")) {
+        provider = "google";
+      } else {
+        provider = "openai";
+      }
     }
 
     const captureMaxChars =
