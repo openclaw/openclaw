@@ -67,7 +67,7 @@ function handleWrapperReload() {
   return {
     ok: true,
     action: 'wrapper-reload',
-    message: 'Reload initiated. The service will restart in a moment.',
+    message: 'Dashboard service restart initiated. The service will restart in a moment.',
     _reload: true,
   };
 }
