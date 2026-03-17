@@ -107,8 +107,13 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
   val trimmed = rawInput.trim()
   if (trimmed.isEmpty()) return null
 
+  // Accept full JSON from `openclaw qr --json` (has a "setupCode" key) or raw base64.
+  // Strip all whitespace to tolerate terminal line-wrap in copy-paste.
+  val code = (parseJsonObject(trimmed)?.let { jsonField(it, "setupCode") } ?: trimmed)
+    .replace(Regex("\\s"), "")
+
   val padded =
-    trimmed
+    code
       .replace('-', '+')
       .replace('_', '/')
       .let { normalized ->

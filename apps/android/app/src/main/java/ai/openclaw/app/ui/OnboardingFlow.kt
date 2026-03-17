@@ -1023,6 +1023,10 @@ private fun GatewayStep(
       ResolvedEndpoint(endpoint = resolvedEndpoint)
     }
 
+    if (!gatewayError.isNullOrBlank()) {
+      Text(gatewayError, color = onboardingWarning, style = onboardingCaption1Style)
+    }
+
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(12.dp),
@@ -1163,9 +1167,6 @@ private fun GatewayStep(
       }
     }
 
-    if (!gatewayError.isNullOrBlank()) {
-      Text(gatewayError, color = onboardingWarning, style = onboardingCaption1Style)
-    }
   }
 }
 
