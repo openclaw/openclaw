@@ -130,4 +130,30 @@ describe("createPatchedAccountSetupAdapter", () => {
     });
     expect(next.channels?.zalo).not.toHaveProperty("name");
   });
+
+  it("can store the default account in accounts.default", () => {
+    const adapter = createPatchedAccountSetupAdapter({
+      channelKey: "whatsapp",
+      alwaysUseAccounts: true,
+      buildPatch: (input) => ({ authDir: input.authDir }),
+    });
+
+    const next = adapter.applyAccountConfig({
+      cfg: asConfig({ channels: { whatsapp: {} } }),
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { name: "Phone", authDir: "/tmp/auth" },
+    });
+
+    expect(next.channels?.whatsapp).toMatchObject({
+      accounts: {
+        default: {
+          enabled: true,
+          name: "Phone",
+          authDir: "/tmp/auth",
+        },
+      },
+    });
+    expect(next.channels?.whatsapp).not.toHaveProperty("enabled");
+    expect(next.channels?.whatsapp).not.toHaveProperty("authDir");
+  });
 });
