@@ -15,6 +15,7 @@ GATEWAY_ERR_LOG="${HOME}/.openclaw/logs/gateway.err.log"
 WATCHDOG_ERR_LOG="/tmp/openclaw/gateway-watchdog.err.log"
 WATCHDOG_STABILIZE_SECONDS="${OPENCLAW_GATEWAY_WATCHDOG_STABILIZE_SECONDS:-8}"
 WATCHDOG_AUTO_DISABLE_ON_DUPLICATE="${OPENCLAW_GATEWAY_WATCHDOG_AUTO_DISABLE_ON_DUPLICATE:-1}"
+RECOVER_SCOPE="${OPENCLAW_GATEWAY_RECOVER_SCOPE:-stable-only}"
 
 log() {
   printf '[gateway-recover-main] %s\n' "$*"
@@ -161,7 +162,7 @@ stabilize_watchdog() {
   local all_gateway_pids=()
   while IFS= read -r pid; do
     [[ -n "${pid}" ]] && all_gateway_pids+=("${pid}")
-  done < <(pgrep -x openclaw-gateway || true)
+  done < <(lsof -nP -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)
 
   local extra_gateway_pids=()
   for pid in "${all_gateway_pids[@]}"; do
@@ -191,16 +192,34 @@ stabilize_watchdog() {
   exit 1
 }
 
-main() {
-  log "starting deterministic recovery (port=${PORT}, main=${MAIN_REPO})"
+stop_stable_runtime_only() {
+  local uid
+  uid="$(id -u)"
 
-  capture_best_effort "Baseline: status --deep --require-rpc" openclaw gateway status --deep --require-rpc
-  capture_best_effort "Baseline: lsof listener check" lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN
-  capture_best_effort \
-    "Baseline: launchctl print (program/arguments/pid/state)" \
-    bash -lc "launchctl print gui/\$(id -u)/${GATEWAY_LABEL} | rg 'program =|arguments =|pid =|state ='"
+  launchctl bootout "gui/${uid}/${GATEWAY_LABEL}" 2>/dev/null || true
+  launchctl bootout "gui/${uid}/${WATCHDOG_LABEL}" 2>/dev/null || true
+  openclaw gateway stop 2>/dev/null || true
 
-  log_block "Full clean stop"
+  local listener_pids=()
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] && listener_pids+=("${pid}")
+  done < <(lsof -nP -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)
+
+  if [[ "${#listener_pids[@]}" -gt 0 ]]; then
+    log "terminating existing listener(s) on ${PORT}: ${listener_pids[*]}"
+    for pid in "${listener_pids[@]}"; do
+      kill "${pid}" 2>/dev/null || true
+    done
+    sleep 1
+    for pid in "${listener_pids[@]}"; do
+      if kill -0 "${pid}" 2>/dev/null; then
+        kill -9 "${pid}" 2>/dev/null || true
+      fi
+    done
+  fi
+}
+
+stop_runtime_aggressive() {
   local uid
   uid="$(id -u)"
   launchctl bootout "gui/${uid}/${GATEWAY_LABEL}" 2>/dev/null || true
@@ -209,6 +228,23 @@ main() {
   pkill -9 -f openclaw-gateway 2>/dev/null || true
   pkill -9 -f 'dist/index.js gateway' 2>/dev/null || true
   pkill -9 -f 'openclaw.mjs gateway' 2>/dev/null || true
+}
+
+main() {
+  log "starting deterministic recovery (port=${PORT}, main=${MAIN_REPO}, scope=${RECOVER_SCOPE})"
+
+  capture_best_effort "Baseline: status --deep --require-rpc" openclaw gateway status --deep --require-rpc
+  capture_best_effort "Baseline: lsof listener check" lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN
+  capture_best_effort \
+    "Baseline: launchctl print (program/arguments/pid/state)" \
+    bash -lc "launchctl print gui/\$(id -u)/${GATEWAY_LABEL} | rg 'program =|arguments =|pid =|state ='"
+
+  log_block "Gateway stop"
+  if [[ "${RECOVER_SCOPE}" == "aggressive" ]]; then
+    stop_runtime_aggressive
+  else
+    stop_stable_runtime_only
+  fi
   run_strict bash -lc "ps aux | rg 'openclaw-gateway|dist/index.js gateway|openclaw.mjs gateway|ai.openclaw.gateway|gateway-health-watchdog' || true"
   run_strict bash -lc "lsof -nP -iTCP:${PORT} -sTCP:LISTEN || true"
 

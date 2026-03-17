@@ -9,25 +9,6 @@ This validates:
 3. Existing threads stay unchanged.
 4. `/models` catalog is lean allowlisted and disallowed models are rejected.
 
-## Quickstart
-
-Run these in every worktree before live Telegram E2E:
-
-```bash
-bash scripts/bootstrap-worktree-telegram.sh
-bash scripts/telegram-e2e/lane-up.sh
-# then run the E2E script you need
-```
-
-Lane rules:
-
-- One lane = one token slot = one profile = one port.
-- Token slot comes from the assigned `BOT_TOKEN` position in `.env.bots`.
-- Profile is derived as `tg-lane-<slot>`.
-- Port is derived as `19789 + (slot - 1) * 20` unless overridden.
-- Lane metadata is written to `.telegram-lane.env` and is local-only.
-- Do not use the shared default gateway/profile for parallel Telegram tests.
-
 ## One-time setup
 
 ### 1) Build `tg` (bot-side poll/inspect)
@@ -100,15 +81,78 @@ Use one source of truth in your main checkout, then copy into each worktree.
 2. Never commit or print raw secrets (`TELEGRAM_API_HASH`, `TG_BOT_TOKEN`, session contents).
 3. For every new worktree, run:
    - `bash scripts/bootstrap-worktree-telegram.sh`
-   - `bash scripts/telegram-e2e/lane-up.sh`
 4. Smoke check from that worktree:
    - `scripts/telegram-e2e/userbot-send-live.sh --chat "<chat-id-or-username>" --text "handoff smoke"`
+5. First runtime claim happens on first canonical ensure run:
+   - `scripts/telegram-live-runtime.sh ensure`
+   - This auto-claims a tester bot token for the worktree (or hard-fails if none are available).
+   - Pool tokens that are already present in the stable/main Telegram config are treated as reserved and are never claimed by worktree live tests.
 
-Lane auth continuity:
+## Scaling the tester bot pool
 
-- `lane-up.sh` now syncs the main agent auth store into the isolated lane when `~/.openclaw/agents/main/agent/auth-profiles.json` exists.
-- Override the source with `OPENCLAW_TG_LANE_AUTH_SOURCE=/path/to/auth-profiles.json` if needed.
-- Preflight prints `agent_auth_profiles=yes|no` so you can tell whether embedded Codex/Claude runs have credentials in that lane.
+If you want multiple Codex worktrees or agents to run Telegram live validation in parallel, grow the tester bot pool first.
+
+Rule of thumb:
+
+- one concurrently live-tested worktree needs one tester bot token
+- if you expect `5` parallel Telegram live lanes, provision at least `5` tester bots
+- keep stable/default, personal, and research bots out of the tester pool
+
+Create additional tester bots with BotFather:
+
+1. In Telegram, open `@BotFather`.
+2. Run `/newbot`.
+3. Give it a clear tester name (for example `Jarvis Email 2`).
+4. Save the bot token somewhere local-only.
+5. Add the bot to your dedicated Telegram E2E chats/topics.
+6. Grant whatever Telegram permissions your live checks require.
+
+Register new tester bots locally by appending them to `.env.bots`:
+
+```bash
+# email-2
+BOT_TOKEN=<botId>:<token>
+```
+
+Then rerun:
+
+```bash
+scripts/telegram-live-runtime.sh ensure
+```
+
+New worktrees auto-claim on first `ensure` run. They do not need a token claim at worktree creation time.
+
+## Token claim lifecycle
+
+Tester bot claims are worktree-scoped, not PR-scoped.
+
+This is intentional:
+
+- one worktree may produce multiple PRs over time
+- the same worktree should keep the same tester bot across reruns
+- PR merge/close/archive does not necessarily mean the worktree is done
+
+Current behavior:
+
+- first `ensure` auto-claims a tester bot for the current worktree
+- later `ensure` runs retain the same token when it is still valid for that worktree
+- `release` explicitly frees the current worktree claim and stops its isolated runtime
+- if no unclaimed tester bot exists, `ensure` hard-fails with `pool_exhausted`
+- merged or archived PRs do not automatically free tester tokens today
+
+Supported release flow for an inactive worktree:
+
+```bash
+scripts/telegram-live-runtime.sh release
+```
+
+After release, rerun `scripts/telegram-live-runtime.sh ensure` in the worktree that should claim next.
+
+Recommended follow-up after this PR:
+
+- add a stale-claim garbage collector that only releases claims for missing/inactive worktrees
+- keep release logic tied to worktree lifecycle, not PR lifecycle
+- optionally add a lease/queue mechanism if you want worktrees to wait for a free tester bot instead of hard-failing immediately
 
 ## Required values and anchors
 
@@ -117,7 +161,7 @@ Lane auth continuity:
 - `TELEGRAM_API_ID`
 - `TELEGRAM_API_HASH`
 - `USERBOT_SESSION` (optional override; default is `scripts/telegram-e2e/tmp/userbot.session`)
-- `TG_BOT_TOKEN` (`<botId>:<token>`)
+- `TG_BOT_TOKEN` (optional; worktree live runner prefers the claimed `TELEGRAM_BOT_TOKEN` from repo-root `.env.local`)
 - `TG_BIN` (absolute path to built `tg`)
 - `TG_FORUM_CHAT_ID` (group chat id, usually `-100...`)
 - `TG_DM_CHAT_ID` (bot DM chat id)
@@ -144,34 +188,33 @@ Default remains `openai-codex/gpt-5.3-codex`.
 
 ## Critical runtime rule (prevents false negatives)
 
-Always bring up the lane first:
+Use the canonical runtime entrypoint before live assertions:
 
 ```bash
-bash scripts/telegram-e2e/lane-up.sh
+scripts/telegram-live-runtime.sh ensure
 ```
 
-This binds live E2E to the current worktree's token slot, profile, and port. If another checkout or the shared default gateway is serving Telegram, your result is invalid for this branch.
+This enforces:
 
-The lane gate is strict now: lane-up/preflight only pass when all are true at the same time:
+1. named branch (not detached `HEAD`)
+2. tester token claim/pool guard
+3. deterministic isolated runtime (`runtime_port`, `runtime_state_dir`)
+4. ownership and health proof lines
+5. plugin isolation for live runtime (`plugins.allow=["telegram"]`, `plugins.slots.memory=none`)
 
-- `gateway status --deep --require-rpc` is healthy
-- lane port is actually listening
-- runtime ownership matches the current worktree
-- the listener PID is the runtime PID or a child of it (wrapper process is allowed)
+Do not manually start `gateway run` for Telegram live tests.
 
-If startup is flaky, `lane-up.sh` now does lane-targeted stop/start retries (default: `3`) before failing.
-Override with `OPENCLAW_TG_LANE_START_ATTEMPTS=<n>`.
-Default readiness timeout is `300s` (`OPENCLAW_TG_LANE_RPC_TIMEOUT_SECONDS=<n>` to override).
-If LaunchAgent is unavailable in the current shell context, or the lane still has no listener after the fallback grace window, lane-up falls back to a lane-targeted direct `gateway run` process.
+When a worktree is done with Telegram live testing, free its claim explicitly:
 
-Proof lines include:
+```bash
+scripts/telegram-live-runtime.sh release
+```
 
-- `branch=...`
-- `runtime_worktree=...`
-- `runtime_state_dir=...`
-- `runtime_port=...`
-- `token_fingerprint=...` (masked)
-- `agent_auth_profiles=...`
+### Plugin isolation note (important)
+
+The canonical worktree live runtime intentionally allows only the bundled Telegram plugin to keep startup deterministic and prevent cross-worktree plugin side effects.
+
+If your test case depends on plugin behavior, do not use the isolated Telegram live runtime path for that assertion. Run that plugin-specific validation in the appropriate plugin-focused test lane instead.
 
 ## Deterministic gateway recovery (main runtime)
 
@@ -239,6 +282,10 @@ scripts/telegram-e2e/run-model-inheritance-e2e.sh \
 ```
 
 Pass signal is `PASS: thread B reports expected model (...)`.
+The runner auto-calls `scripts/telegram-live-runtime.sh handoff-main` on exit.
+The runner also clears the isolated runtime's saved session for thread B before
+querying it, so a reused anchor topic behaves like a new thread for deterministic
+inheritance checks.
 
 ## Known behavior and failure recovery
 
@@ -246,7 +293,6 @@ Pass signal is `PASS: thread B reports expected model (...)`.
   - Runner auto-falls back to MTProto assertion (`userbot_wait.py`), no action needed.
 - `tg poll returned non-JSON output` means `tg` is not configured for polling in that shell.
   - Set `TG_BOT_TOKEN` in `.env.local` (recommended) or configure `tg bot add`.
-  - Runner now retries userbot assertion without thread-anchor filtering if bot replies are unanchored in DM flows.
 - `userbot_send failed: EOF when reading a line` means Telethon session is not authenticated.
   - Re-run `userbot_send.py` once interactively to refresh login.
 - `E_MISSING_SESSION`: no session file at canonical path.
