@@ -174,7 +174,7 @@ async function promptNextcloudTalkAllowFromForAccount(params: {
   });
 }
 
-const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
+export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   label: "Nextcloud Talk",
   channel,
   policyKey: "channels.nextcloud-talk.dmPolicy",
