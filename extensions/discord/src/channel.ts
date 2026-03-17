@@ -12,10 +12,8 @@ import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildComputedAccountStatusSnapshot,
-  buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
-  DiscordConfigSchema,
   getChatChannelMeta,
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -48,12 +46,12 @@ import {
   normalizeDiscordMessagingTarget,
   normalizeDiscordOutboundTarget,
 } from "./normalize.js";
-import { discordConfigAccessors, discordConfigBase, discordSetupWizard } from "./plugin-shared.js";
 import type { DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
 import { discordSetupAdapter } from "./setup-core.js";
+import { createDiscordPluginBase } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./targets.js";
 import { DiscordUiContainer } from "./ui.js";
@@ -300,11 +298,9 @@ function resolveDiscordOutboundSessionRoute(params: {
 }
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
-  id: "discord",
-  meta: {
-    ...meta,
-  },
-  setupWizard: discordSetupWizard,
+  ...createDiscordPluginBase({
+    setup: discordSetupAdapter,
+  }),
   pairing: {
     idLabel: "discordUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(discord|user):/i, ""),
@@ -314,31 +310,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         PAIRING_APPROVED_MESSAGE,
       );
     },
-  },
-  capabilities: {
-    chatTypes: ["direct", "channel", "thread"],
-    polls: true,
-    reactions: true,
-    threads: true,
-    media: true,
-    nativeCommands: true,
-  },
-  streaming: {
-    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-  },
-  reload: { configPrefixes: ["channels.discord"] },
-  configSchema: buildChannelConfigSchema(DiscordConfigSchema),
-  config: {
-    ...discordConfigBase,
-    isConfigured: (account) => Boolean(account.token?.trim()),
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.token?.trim()),
-      tokenSource: account.tokenSource,
-    }),
-    ...discordConfigAccessors,
   },
   allowlist: {
     supportsScope: ({ scope }) => scope === "dm",
