@@ -481,28 +481,47 @@ describe("update-cli", () => {
       expectedChannel: "beta" as const,
       expectedTag: undefined as string | undefined,
     },
-  ])("$name", async ({ mode, options, prepare, expectedChannel, expectedTag }) => {
-    await prepare();
-    if (mode) {
-      vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult({ mode }));
-    }
-
-    await updateCommand(options);
-
-    if (expectedChannel !== undefined) {
-      const call = expectUpdateCallChannel(expectedChannel);
-      if (expectedTag !== undefined) {
-        expect(call?.tag).toBe(expectedTag);
+    {
+      name: "uses explicit beta channel and persists it",
+      mode: "git" as const,
+      options: { channel: "beta" },
+      prepare: async () => {},
+      expectedChannel: undefined as string | undefined,
+      expectedTag: undefined as string | undefined,
+      expectedPersistedChannel: "beta" as const,
+    },
+  ])(
+    "$name",
+    async ({ mode, options, prepare, expectedChannel, expectedTag, expectedPersistedChannel }) => {
+      await prepare();
+      if (mode) {
+        vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult({ mode }));
       }
-      return;
-    }
 
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
-      expect.any(Object),
-    );
-  });
+      await updateCommand(options);
+
+      if (expectedChannel !== undefined) {
+        const call = expectUpdateCallChannel(expectedChannel);
+        if (expectedTag !== undefined) {
+          expect(call?.tag).toBe(expectedTag);
+        }
+        if (expectedPersistedChannel !== undefined) {
+          expect(writeConfigFile).toHaveBeenCalled();
+          const writeCall = vi.mocked(writeConfigFile).mock.calls[0]?.[0] as {
+            update?: { channel?: string };
+          };
+          expect(writeCall?.update?.channel).toBe(expectedPersistedChannel);
+        }
+        return;
+      }
+
+      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(
+        ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+        expect.any(Object),
+      );
+    },
+  );
 
   it("falls back to latest when beta tag is older than release", async () => {
     const tempDir = createCaseDir("openclaw-update");
@@ -934,18 +953,6 @@ describe("update-cli", () => {
       );
       expect(defaultRuntime.exit, testCase.name).toHaveBeenCalledWith(1);
     }
-  });
-
-  it("persists update channel when --channel is set", async () => {
-    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-
-    await updateCommand({ channel: "beta" });
-
-    expect(writeConfigFile).toHaveBeenCalled();
-    const call = vi.mocked(writeConfigFile).mock.calls[0]?.[0] as {
-      update?: { channel?: string };
-    };
-    expect(call?.update?.channel).toBe("beta");
   });
 
   it.each([
