@@ -378,8 +378,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
 function generateZshCompletion(program: Command): string {
   const rootCmd = program.name();
-  const script = `
-#compdef ${rootCmd}
+  const script = `#compdef ${rootCmd}
 
 _${rootCmd}_root_completion() {
   local -a commands
@@ -401,7 +400,13 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+if [[ "'\${zsh_eval_context[-1]}" == "loadautofunc" ]]; then
+  _${rootCmd}_root_completion "$@"
+else
+  compdef _${rootCmd}_root_completion ${rootCmd}
+fi
+
+
 `;
   return script;
 }
