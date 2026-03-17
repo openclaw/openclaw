@@ -6,13 +6,26 @@ import { getCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeg
 import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 
+function buildSafeguardFactories(cfg: OpenClawConfig) {
+  const sessionManager = {} as SessionManager;
+  const model = {
+    id: "claude-sonnet-4-20250514",
+    contextWindow: 200_000,
+  } as Model<Api>;
+
+  const factories = buildEmbeddedExtensionFactories({
+    cfg,
+    sessionManager,
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-20250514",
+    model,
+  });
+
+  return { factories, sessionManager };
+}
+
 describe("buildEmbeddedExtensionFactories", () => {
   it("does not opt safeguard mode into quality-guard retries", () => {
-    const sessionManager = {} as SessionManager;
-    const model = {
-      id: "claude-sonnet-4-20250514",
-      contextWindow: 200_000,
-    } as Model<Api>;
     const cfg = {
       agents: {
         defaults: {
@@ -22,14 +35,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         },
       },
     } as OpenClawConfig;
-
-    const factories = buildEmbeddedExtensionFactories({
-      cfg,
-      sessionManager,
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-20250514",
-      model,
-    });
+    const { factories, sessionManager } = buildSafeguardFactories(cfg);
 
     expect(factories).toContain(compactionSafeguardExtension);
     expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
@@ -38,11 +44,6 @@ describe("buildEmbeddedExtensionFactories", () => {
   });
 
   it("wires explicit safeguard quality-guard runtime flags", () => {
-    const sessionManager = {} as SessionManager;
-    const model = {
-      id: "claude-sonnet-4-20250514",
-      contextWindow: 200_000,
-    } as Model<Api>;
     const cfg = {
       agents: {
         defaults: {
@@ -56,14 +57,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         },
       },
     } as OpenClawConfig;
-
-    const factories = buildEmbeddedExtensionFactories({
-      cfg,
-      sessionManager,
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-20250514",
-      model,
-    });
+    const { factories, sessionManager } = buildSafeguardFactories(cfg);
 
     expect(factories).toContain(compactionSafeguardExtension);
     expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
