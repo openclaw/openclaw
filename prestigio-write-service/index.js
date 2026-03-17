@@ -26,7 +26,7 @@ const ACTION_FIELDS = {
   'apply-credit': ['order_item_id', 'xero_contact_id', 'xero_invoice_id', 'amount', 'description', 'source_context', 'reference', 'requested_at'],
   'search-xero-invoices': ['search', 'contact_id', 'invoice_number', 'statuses', 'requested_at'],
   'search-xero-quotes': ['search', 'contact_id', 'quote_number', 'statuses', 'requested_at'],
-  'search-xero-bank-transactions': ['search', 'contact_id', 'from_date', 'to_date', 'requested_at']
+  'search-xero-bank-transactions': ['search', 'contact_id', 'from_date', 'to_date', 'reference', 'requested_at']
 };
 
 // --- Write response atomically ---
