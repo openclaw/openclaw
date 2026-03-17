@@ -8,9 +8,15 @@ const getApiKeyForModelMock = vi.fn(async () => ({
   source: "test",
   mode: "oauth",
 }));
+const resolveApiKeyForProviderMock = vi.fn(async () => ({
+  apiKey: "oauth-test", // pragma: allowlist secret
+  source: "test",
+  mode: "oauth",
+}));
 const requireApiKeyMock = vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? "");
 const setRuntimeApiKeyMock = vi.fn();
 const discoverModelsMock = vi.fn();
+let imageImportSeq = 0;
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -34,6 +40,7 @@ vi.mock("../../agents/models-config.js", () => ({
 
 vi.mock("../../agents/model-auth.js", () => ({
   getApiKeyForModel: getApiKeyForModelMock,
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
   requireApiKey: requireApiKeyMock,
 }));
 
@@ -43,6 +50,11 @@ vi.mock("../../agents/pi-model-discovery-runtime.js", () => ({
   }),
   discoverModels: discoverModelsMock,
 }));
+
+async function importImageModule() {
+  imageImportSeq += 1;
+  return await import(/* @vite-ignore */ `./image.js?case=${imageImportSeq}`);
+}
 
 describe("describeImageWithModel", () => {
   beforeEach(() => {
@@ -59,7 +71,7 @@ describe("describeImageWithModel", () => {
   });
 
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
-    const { describeImageWithModel } = await import("./image.js");
+    const { describeImageWithModel } = await importImageModule();
 
     const result = await describeImageWithModel({
       cfg: {},
@@ -109,7 +121,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "generic ok" }],
     });
 
-    const { describeImageWithModel } = await import("./image.js");
+    const { describeImageWithModel } = await importImageModule();
 
     const result = await describeImageWithModel({
       cfg: {},
@@ -153,7 +165,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "flash ok" }],
     });
 
-    const { describeImageWithModel } = await import("./image.js");
+    const { describeImageWithModel } = await importImageModule();
 
     const result = await describeImageWithModel({
       cfg: {},
@@ -203,7 +215,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "flash lite ok" }],
     });
 
-    const { describeImageWithModel } = await import("./image.js");
+    const { describeImageWithModel } = await importImageModule();
 
     const result = await describeImageWithModel({
       cfg: {},

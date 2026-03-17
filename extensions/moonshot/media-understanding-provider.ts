@@ -1,11 +1,12 @@
 import {
-  assertOkOrThrowHttpError,
   describeImageWithModel,
-  normalizeBaseUrl,
-  postJsonRequest,
+  describeImagesWithModel,
   type MediaUnderstandingProvider,
   type VideoDescriptionRequest,
   type VideoDescriptionResult,
+  assertOkOrThrowHttpError,
+  normalizeBaseUrl,
+  postJsonRequest,
 } from "openclaw/plugin-sdk/media-understanding";
 
 export const DEFAULT_MOONSHOT_VIDEO_BASE_URL = "https://api.moonshot.ai/v1";
@@ -116,5 +117,6 @@ export const moonshotMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "moonshot",
   capabilities: ["image", "video"],
   describeImage: describeImageWithModel,
+  describeImages: describeImagesWithModel,
   describeVideo: describeMoonshotVideo,
 };

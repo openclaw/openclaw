@@ -2,6 +2,7 @@ import { normalizeGoogleModelId, parseGeminiAuth } from "openclaw/plugin-sdk/goo
 import {
   assertOkOrThrowHttpError,
   describeImageWithModel,
+  describeImagesWithModel,
   normalizeBaseUrl,
   postJsonRequest,
   type AudioTranscriptionRequest,
@@ -142,6 +143,7 @@ export const googleMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "google",
   capabilities: ["image", "audio", "video"],
   describeImage: describeImageWithModel,
+  describeImages: describeImagesWithModel,
   transcribeAudio: transcribeGeminiAudio,
   describeVideo: describeGeminiVideo,
 };
