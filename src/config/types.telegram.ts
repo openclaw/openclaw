@@ -26,6 +26,8 @@ export type TelegramActionConfig = {
   sticker?: boolean;
   /** Enable forum topic creation. */
   createForumTopic?: boolean;
+  /** Enable forum topic editing (rename / change icon). */
+  editForumTopic?: boolean;
 };
 
 export type TelegramNetworkConfig = {
@@ -186,6 +188,8 @@ export type TelegramAccountConfig = {
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /** Send Telegram bot error replies silently (no notification sound). Default: false. */
+  silentErrorReplies?: boolean;
   /**
    * Per-channel outbound response prefix override.
    *

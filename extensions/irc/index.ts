@@ -1,17 +1,12 @@
-import type { ChannelPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk/irc";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/irc";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { ircPlugin } from "./src/channel.js";
 import { setIrcRuntime } from "./src/runtime.js";
 
-const plugin = {
+export default defineChannelPluginEntry({
   id: "irc",
   name: "IRC",
   description: "IRC channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setIrcRuntime(api.runtime);
-    api.registerChannel({ plugin: ircPlugin as ChannelPlugin });
-  },
-};
-
-export default plugin;
+  plugin: ircPlugin as ChannelPlugin,
+  setRuntime: setIrcRuntime,
+});

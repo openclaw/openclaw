@@ -15,9 +15,11 @@ import {
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
+  prependBootstrapPromptWarning,
 } from "./bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+import { prepareCliBundleMcpConfig } from "./cli-runner/bundle-mcp.js";
 import {
   appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
@@ -62,7 +64,7 @@ export async function runCliAgent(params: {
   timeoutMs: number;
   runId: string;
   extraSystemPrompt?: string;
-  streamParams?: import("../commands/agent/types.js").AgentStreamParams;
+  streamParams?: import("./command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
@@ -92,7 +94,14 @@ export async function runCliAgent(params: {
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
-  const backend = backendResolved.config;
+  const preparedBackend = await prepareCliBundleMcpConfig({
+    backendId: backendResolved.id,
+    backend: backendResolved.config,
+    workspaceDir,
+    config: params.config,
+    warn: (message) => log.warn(message),
+  });
+  const backend = preparedBackend.backend;
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
@@ -154,7 +163,6 @@ export async function runCliAgent(params: {
     docsPath: docsPath ?? undefined,
     tools: [],
     contextFiles,
-    bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
     modelDisplay,
     agentId: sessionAgentId,
   });
@@ -210,7 +218,9 @@ export async function runCliAgent(params: {
 
     let imagePaths: string[] | undefined;
     let cleanupImages: (() => Promise<void>) | undefined;
-    let prompt = params.prompt;
+    let prompt = prependBootstrapPromptWarning(params.prompt, bootstrapPromptWarning.lines, {
+      preserveExactPrompt: heartbeatPrompt,
+    });
     if (params.images && params.images.length > 0) {
       const imagePayload = await writeCliImages(params.images);
       imagePaths = imagePayload.paths;
@@ -406,68 +416,72 @@ export async function runCliAgent(params: {
 
   // Try with the provided CLI session ID first
   try {
-    const output = await executeCliWithSession(params.cliSessionId);
-    const text = output.text?.trim();
-    const payloads = text ? [{ text }] : undefined;
+    try {
+      const output = await executeCliWithSession(params.cliSessionId);
+      const text = output.text?.trim();
+      const payloads = text ? [{ text }] : undefined;
 
-    return {
-      payloads,
-      meta: {
-        durationMs: Date.now() - started,
-        systemPromptReport,
-        agentMeta: {
-          sessionId: output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
+      return {
+        payloads,
+        meta: {
+          durationMs: Date.now() - started,
+          systemPromptReport,
+          agentMeta: {
+            sessionId: output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
+            provider: params.provider,
+            model: modelId,
+            usage: output.usage,
+          },
+        },
+      };
+    } catch (err) {
+      if (err instanceof FailoverError) {
+        // Check if this is a session expired error and we have a session to clear
+        if (err.reason === "session_expired" && params.cliSessionId && params.sessionKey) {
+          log.warn(
+            `CLI session expired, clearing session ID and retrying: provider=${params.provider} session=${redactRunIdentifier(params.cliSessionId)}`,
+          );
+
+          // Clear the expired session ID from the session entry
+          // This requires access to the session store, which we don't have here
+          // We'll need to modify the caller to handle this case
+
+          // For now, retry without the session ID to create a new session
+          const output = await executeCliWithSession(undefined);
+          const text = output.text?.trim();
+          const payloads = text ? [{ text }] : undefined;
+
+          return {
+            payloads,
+            meta: {
+              durationMs: Date.now() - started,
+              systemPromptReport,
+              agentMeta: {
+                sessionId: output.sessionId ?? params.sessionId ?? "",
+                provider: params.provider,
+                model: modelId,
+                usage: output.usage,
+              },
+            },
+          };
+        }
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      if (isFailoverErrorMessage(message)) {
+        const reason = classifyFailoverReason(message) ?? "unknown";
+        const status = resolveFailoverStatus(reason);
+        throw new FailoverError(message, {
+          reason,
           provider: params.provider,
           model: modelId,
-          usage: output.usage,
-        },
-      },
-    };
-  } catch (err) {
-    if (err instanceof FailoverError) {
-      // Check if this is a session expired error and we have a session to clear
-      if (err.reason === "session_expired" && params.cliSessionId && params.sessionKey) {
-        log.warn(
-          `CLI session expired, clearing session ID and retrying: provider=${params.provider} session=${redactRunIdentifier(params.cliSessionId)}`,
-        );
-
-        // Clear the expired session ID from the session entry
-        // This requires access to the session store, which we don't have here
-        // We'll need to modify the caller to handle this case
-
-        // For now, retry without the session ID to create a new session
-        const output = await executeCliWithSession(undefined);
-        const text = output.text?.trim();
-        const payloads = text ? [{ text }] : undefined;
-
-        return {
-          payloads,
-          meta: {
-            durationMs: Date.now() - started,
-            systemPromptReport,
-            agentMeta: {
-              sessionId: output.sessionId ?? params.sessionId ?? "",
-              provider: params.provider,
-              model: modelId,
-              usage: output.usage,
-            },
-          },
-        };
+          status,
+        });
       }
       throw err;
     }
-    const message = err instanceof Error ? err.message : String(err);
-    if (isFailoverErrorMessage(message)) {
-      const reason = classifyFailoverReason(message) ?? "unknown";
-      const status = resolveFailoverStatus(reason);
-      throw new FailoverError(message, {
-        reason,
-        provider: params.provider,
-        model: modelId,
-        status,
-      });
-    }
-    throw err;
+  } finally {
+    await preparedBackend.cleanup?.();
   }
 }
 

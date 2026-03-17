@@ -63,7 +63,17 @@ for (const item of docsConfig.redirects || []) {
 const allFiles = walk(DOCS_DIR);
 const relAllFiles = new Set(allFiles.map((abs) => normalizeSlashes(path.relative(DOCS_DIR, abs))));
 
-const markdownFiles = allFiles.filter((abs) => /\.(md|mdx)$/i.test(abs));
+function isGeneratedTranslatedDoc(relPath) {
+  return relPath.startsWith("zh-CN/");
+}
+
+const markdownFiles = allFiles.filter((abs) => {
+  if (!/\.(md|mdx)$/i.test(abs)) {
+    return false;
+  }
+  const rel = normalizeSlashes(path.relative(DOCS_DIR, abs));
+  return !isGeneratedTranslatedDoc(rel);
+});
 const routes = new Set();
 
 for (const abs of markdownFiles) {
@@ -257,6 +267,9 @@ for (const abs of markdownFiles) {
 }
 
 for (const page of collectNavPageEntries(docsConfig.navigation || [])) {
+  if (isGeneratedTranslatedDoc(String(page))) {
+    continue;
+  }
   checked++;
   const route = normalizeRoute(page);
   const resolvedRoute = resolveRoute(route);

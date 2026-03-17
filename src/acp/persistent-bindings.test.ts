@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { feishuPlugin } from "../../extensions/feishu/src/channel.js";
+import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
   closeSession: vi.fn(),
@@ -22,13 +27,13 @@ vi.mock("./runtime/session-meta.js", () => ({
   readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
-import {
-  buildConfiguredAcpSessionKey,
-  ensureConfiguredAcpBindingSession,
-  resetAcpSessionInPlace,
-  resolveConfiguredAcpBindingRecord,
-  resolveConfiguredAcpBindingSpecBySessionKey,
-} from "./persistent-bindings.js";
+type PersistentBindingsModule = typeof import("./persistent-bindings.js");
+
+let buildConfiguredAcpSessionKey: PersistentBindingsModule["buildConfiguredAcpSessionKey"];
+let ensureConfiguredAcpBindingSession: PersistentBindingsModule["ensureConfiguredAcpBindingSession"];
+let resetAcpSessionInPlace: PersistentBindingsModule["resetAcpSessionInPlace"];
+let resolveConfiguredAcpBindingRecord: PersistentBindingsModule["resolveConfiguredAcpBindingRecord"];
+let resolveConfiguredAcpBindingSpecBySessionKey: PersistentBindingsModule["resolveConfiguredAcpBindingSpecBySessionKey"];
 
 type ConfiguredBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 type BindingRecordInput = Parameters<typeof resolveConfiguredAcpBindingRecord>[0];
@@ -90,6 +95,27 @@ function createTelegramGroupBinding(params: {
   } as ConfiguredBinding;
 }
 
+function createFeishuBinding(params: {
+  agentId: string;
+  conversationId: string;
+  accountId?: string;
+  acp?: Record<string, unknown>;
+}): ConfiguredBinding {
+  return {
+    type: "acp",
+    agentId: params.agentId,
+    match: {
+      channel: "feishu",
+      accountId: params.accountId ?? defaultDiscordAccountId,
+      peer: {
+        kind: params.conversationId.includes(":topic:") ? "group" : "direct",
+        id: params.conversationId,
+      },
+    },
+    ...(params.acp ? { acp: params.acp } : {}),
+  } as ConfiguredBinding;
+}
+
 function resolveBindingRecord(cfg: OpenClawConfig, overrides: Partial<BindingRecordInput> = {}) {
   return resolveConfiguredAcpBindingRecord({
     cfg,
@@ -141,6 +167,13 @@ function mockReadySession(params: { spec: BindingSpec; cwd: string }) {
 }
 
 beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      { pluginId: "discord", plugin: discordPlugin, source: "test" },
+      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      { pluginId: "feishu", plugin: feishuPlugin, source: "test" },
+    ]),
+  );
   managerMocks.resolveSession.mockReset();
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
@@ -149,6 +182,17 @@ beforeEach(() => {
   managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
+});
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    buildConfiguredAcpSessionKey,
+    ensureConfiguredAcpBindingSession,
+    resetAcpSessionInPlace,
+    resolveConfiguredAcpBindingRecord,
+    resolveConfiguredAcpBindingSpecBySessionKey,
+  } = await import("./persistent-bindings.js"));
 });
 
 describe("resolveConfiguredAcpBindingRecord", () => {
@@ -202,6 +246,34 @@ describe("resolveConfiguredAcpBindingRecord", () => {
     });
 
     expect(resolved?.spec.conversationId).toBe("thread-123");
+    expect(resolved?.spec.agentId).toBe("claude");
+  });
+
+  it("prefers sender-scoped Feishu bindings over topic inheritance", () => {
+    const cfg = createCfgWithBindings([
+      createFeishuBinding({
+        agentId: "codex",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+        accountId: "work",
+      }),
+      createFeishuBinding({
+        agentId: "claude",
+        conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+        accountId: "work",
+      }),
+    ]);
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "work",
+      conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+      parentConversationId: "oc_group_chat",
+    });
+
+    expect(resolved?.spec.conversationId).toBe(
+      "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+    );
     expect(resolved?.spec.agentId).toBe("claude");
   });
 
@@ -281,6 +353,128 @@ describe("resolveConfiguredAcpBindingRecord", () => {
       accountId: "default",
       conversationId: "123456789:topic:42",
     });
+    expect(resolved).toBeNull();
+  });
+
+  it("resolves Feishu DM bindings using direct peer ids", () => {
+    const cfg = createCfgWithBindings([
+      createFeishuBinding({
+        agentId: "codex",
+        conversationId: "ou_user_1",
+      }),
+    ]);
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "ou_user_1",
+    });
+
+    expect(resolved?.spec.channel).toBe("feishu");
+    expect(resolved?.spec.conversationId).toBe("ou_user_1");
+    expect(resolved?.record.targetSessionKey).toContain("agent:codex:acp:binding:feishu:default:");
+  });
+
+  it("resolves Feishu DM bindings using user_id fallback peer ids", () => {
+    const cfg = createCfgWithBindings([
+      createFeishuBinding({
+        agentId: "codex",
+        conversationId: "user_123",
+      }),
+    ]);
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "user_123",
+    });
+
+    expect(resolved?.spec.channel).toBe("feishu");
+    expect(resolved?.spec.conversationId).toBe("user_123");
+    expect(resolved?.record.targetSessionKey).toContain("agent:codex:acp:binding:feishu:default:");
+  });
+
+  it("resolves Feishu topic bindings with parent chat ids", () => {
+    const cfg = createCfgWithBindings([
+      createFeishuBinding({
+        agentId: "claude",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+        acp: { backend: "acpx" },
+      }),
+    ]);
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat:topic:om_topic_root",
+      parentConversationId: "oc_group_chat",
+    });
+
+    expect(resolved?.spec.conversationId).toBe("oc_group_chat:topic:om_topic_root");
+    expect(resolved?.spec.agentId).toBe("claude");
+    expect(resolved?.record.conversation.parentConversationId).toBe("oc_group_chat");
+  });
+
+  it("inherits configured Feishu topic bindings for sender-scoped topic conversations", () => {
+    const cfg = createCfgWithBindings([
+      createFeishuBinding({
+        agentId: "claude",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+        acp: { backend: "acpx" },
+      }),
+    ]);
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      parentConversationId: "oc_group_chat",
+    });
+
+    expect(resolved?.spec.conversationId).toBe("oc_group_chat:topic:om_topic_root");
+    expect(resolved?.spec.agentId).toBe("claude");
+    expect(resolved?.spec.backend).toBe("acpx");
+    expect(resolved?.record.conversation.conversationId).toBe("oc_group_chat:topic:om_topic_root");
+  });
+
+  it("rejects non-matching Feishu topic roots", () => {
+    const cfg = createCfgWithBindings([
+      createFeishuBinding({
+        agentId: "claude",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+      }),
+    ]);
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat:topic:om_other_root",
+      parentConversationId: "oc_group_chat",
+    });
+
+    expect(resolved).toBeNull();
+  });
+
+  it("rejects Feishu non-topic group ACP bindings", () => {
+    const cfg = createCfgWithBindings([
+      createFeishuBinding({
+        agentId: "claude",
+        conversationId: "oc_group_chat",
+      }),
+    ]);
+
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat",
+    });
+
     expect(resolved).toBeNull();
   });
 
@@ -364,6 +558,31 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
     const spec = resolveDiscordBindingSpecBySession(cfg);
 
     expect(spec?.backend).toBe("exact");
+  });
+
+  it("maps a configured Feishu user_id DM binding session key back to its spec", () => {
+    const cfg = createCfgWithBindings([
+      createFeishuBinding({
+        agentId: "codex",
+        conversationId: "user_123",
+        acp: { backend: "acpx" },
+      }),
+    ]);
+    const resolved = resolveConfiguredAcpBindingRecord({
+      cfg,
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "user_123",
+    });
+    const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg,
+      sessionKey: resolved?.record.targetSessionKey ?? "",
+    });
+
+    expect(spec?.channel).toBe("feishu");
+    expect(spec?.conversationId).toBe("user_123");
+    expect(spec?.agentId).toBe("codex");
+    expect(spec?.backend).toBe("acpx");
   });
 });
 

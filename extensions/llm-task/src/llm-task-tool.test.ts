@@ -1,16 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-
-vi.mock("../../../src/agents/pi-embedded-runner.js", () => {
-  return {
-    runEmbeddedPiAgent: vi.fn(async () => ({
-      meta: { startedAt: Date.now() },
-      payloads: [{ text: "{}" }],
-    })),
-  };
-});
-
-import { runEmbeddedPiAgent } from "../../../src/agents/pi-embedded-runner.js";
 import { createLlmTaskTool } from "./llm-task-tool.js";
+
+const runEmbeddedPiAgent = vi.fn(async () => ({
+  meta: { startedAt: Date.now() },
+  payloads: [{ text: "{}" }],
+}));
 
 // oxlint-disable-next-line typescript/no-explicit-any
 function fakeApi(overrides: any = {}) {
@@ -22,7 +16,12 @@ function fakeApi(overrides: any = {}) {
       agents: { defaults: { workspace: "/tmp", model: { primary: "openai-codex/gpt-5.2" } } },
     },
     pluginConfig: {},
-    runtime: { version: "test" },
+    runtime: {
+      version: "test",
+      agent: {
+        runEmbeddedPiAgent,
+      },
+    },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     registerTool() {},
     ...overrides,
