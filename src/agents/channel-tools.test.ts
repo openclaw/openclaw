@@ -84,4 +84,31 @@ describe("channel tools", () => {
     expect(listChannelSupportedActions({ cfg, channel: "polltest" })).toEqual([]);
     expect(listAllChannelSupportedActions({ cfg })).toEqual([]);
   });
+
+  it("normalizes channel aliases before listing supported actions", () => {
+    const plugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "telegram plugin",
+        aliases: ["tg"],
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+      actions: {
+        listActions: () => ["react"],
+      },
+    };
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
+
+    const cfg = {} as OpenClawConfig;
+    expect(listChannelSupportedActions({ cfg, channel: "tg" })).toEqual(["react"]);
+  });
 });
