@@ -519,7 +519,6 @@ export function createAgentEventHandler({
       return runVerbose;
     }
     if (!sessionKey) {
-      chatRunState.verboseLevels.set(runId, null);
       return undefined;
     }
     try {
@@ -664,6 +663,7 @@ export function createAgentEventHandler({
     }
 
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
+      chatRunState.verboseLevels.delete(evt.runId);
       toolEventRecipients.markFinal(evt.runId);
       clearAgentRunContext(evt.runId);
       agentRunSeq.delete(evt.runId);
