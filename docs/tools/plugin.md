@@ -169,6 +169,76 @@ For example, TTS follows this shape:
 
 That same pattern should be preferred for future capabilities.
 
+### Multi-capability company plugin example
+
+A company plugin should feel cohesive from the outside. If OpenClaw has shared
+contracts for models, speech, media understanding, and web search, a vendor can
+own all of its surfaces in one place:
+
+```ts
+import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk";
+import {
+  buildOpenAISpeechProvider,
+  createPluginBackedWebSearchProvider,
+  describeImageWithModel,
+  transcribeOpenAiCompatibleAudio,
+} from "openclaw/plugin-sdk";
+
+const plugin: OpenClawPluginDefinition = {
+  id: "exampleai",
+  name: "ExampleAI",
+  register(api) {
+    api.registerProvider({
+      id: "exampleai",
+      // auth/model catalog/runtime hooks
+    });
+
+    api.registerSpeechProvider(
+      buildOpenAISpeechProvider({
+        id: "exampleai",
+        // vendor speech config
+      }),
+    );
+
+    api.registerMediaUnderstandingProvider({
+      id: "exampleai",
+      capabilities: ["image", "audio", "video"],
+      async describeImage(req) {
+        return describeImageWithModel({
+          provider: "exampleai",
+          model: req.model,
+          input: req.input,
+        });
+      },
+      async transcribeAudio(req) {
+        return transcribeOpenAiCompatibleAudio({
+          provider: "exampleai",
+          model: req.model,
+          input: req.input,
+        });
+      },
+    });
+
+    api.registerWebSearchProvider(
+      createPluginBackedWebSearchProvider({
+        id: "exampleai-search",
+        // credential + fetch logic
+      }),
+    );
+  },
+};
+
+export default plugin;
+```
+
+What matters is not the exact helper names. The shape matters:
+
+- one plugin owns the vendor surface
+- core still owns the capability contracts
+- channels and feature plugins consume `api.runtime.*` helpers, not vendor code
+- contract tests can assert that the plugin registered the capabilities it
+  claims to own
+
 ### Capability example: video understanding
 
 OpenClaw already treats image/audio/video understanding as one shared
