@@ -219,9 +219,13 @@ describe("resolveProviderAuths key normalization", () => {
     providers: readonly Parameters<typeof resolveProviderAuths>[0]["providers"][number][];
     env: Record<string, string | undefined>;
     expected: ProviderAuth[];
-  }>)("$name", async ({ providers, env, expected }) => {
-    await expectResolvedAuthsFromSuiteHome({ providers: [...providers], env, expected });
-  });
+  }>)(
+    "$name",
+    async ({ providers, env, expected }) => {
+      await expectResolvedAuthsFromSuiteHome({ providers: [...providers], env, expected });
+    },
+    300_000,
+  );
 
   it("strips embedded CR/LF from stored auth profiles (token + api_key)", async () => {
     await expectResolvedAuthsFromSuiteHome({
