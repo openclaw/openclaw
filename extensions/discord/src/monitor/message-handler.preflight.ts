@@ -440,6 +440,7 @@ export async function preflightDiscordMessage(
   const textForMentionCheck = baseText
     ? baseText
         .replace(/```[\s\S]*?```/g, "")   // fenced code blocks
+        .replace(/``[^`]*``/g, "")           // double-backtick code spans
         .replace(/`[^`]*`/g, "")            // inline code spans
         .replace(/\\<@/g, "")              // escaped mention literals \<@
     : undefined;
