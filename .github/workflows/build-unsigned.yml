@@ -13,11 +13,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 安装 pnpm（官方 action，自动加入 PATH）
+      # 安装 pnpm（不指定版本，自动使用 package.json 中的 packageManager 字段）
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 8  # 可根据需要调整，或使用 latest
+        # 不写 with.version，自动读取 package.json 的 packageManager
 
       # 设置 Node.js 22，并启用 pnpm 缓存
       - name: Setup Node.js
