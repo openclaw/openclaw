@@ -486,6 +486,49 @@ describe("message tool schema scoping", () => {
     expect(getToolProperties(unscopedTool).interactive).toBeUndefined();
   });
 
+  it("uses discovery account scope for other configured channel actions", () => {
+    const currentPlugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send"],
+    });
+    const scopedOtherPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      actions: ["send"],
+    });
+    scopedOtherPlugin.actions = {
+      ...scopedOtherPlugin.actions,
+      listActions: ({ accountId }) => (accountId === "ops" ? ["react"] : []),
+    };
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "discord", source: "test", plugin: currentPlugin },
+        { pluginId: "telegram", source: "test", plugin: scopedOtherPlugin },
+      ]),
+    );
+
+    const scopedTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+      agentAccountId: "ops",
+    });
+    const unscopedTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+    });
+
+    expect(getActionEnum(getToolProperties(scopedTool))).toContain("react");
+    expect(getActionEnum(getToolProperties(unscopedTool))).not.toContain("react");
+    expect(scopedTool.description).toContain("telegram (react, send)");
+    expect(unscopedTool.description).not.toContain("telegram (react, send)");
+  });
+
   it("routes full discovery context into plugin action discovery", () => {
     const seenContexts: Record<string, unknown>[] = [];
     const contextPlugin = createChannelPlugin({
