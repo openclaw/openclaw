@@ -230,6 +230,24 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     });
   });
 
+  it("sessions_spawn prefers target agent primary model over global subagent default", async () => {
+    await expectSpawnUsesConfiguredModel({
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            subagents: { model: "minimax/MiniMax-M2.5" },
+            model: { primary: "openai/gpt-5.4" },
+          },
+          list: [{ id: "research", model: { primary: "opencode/claude" } }],
+        },
+      },
+      runId: "run-agent-primary-over-subagent-default",
+      callId: "call-agent-primary-over-subagent-default",
+      expectedModel: "opencode/claude",
+    });
+  });
+
   it("sessions_spawn prefers target agent primary model over global default", async () => {
     await expectSpawnUsesConfiguredModel({
       config: {

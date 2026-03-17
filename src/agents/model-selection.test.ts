@@ -14,6 +14,7 @@ import {
   resolveConfiguredModelRef,
   resolveThinkingDefault,
   resolveModelRefFromString,
+  resolveSubagentConfiguredModelSelection,
 } from "./model-selection.js";
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
@@ -824,5 +825,23 @@ describe("normalizeModelSelection", () => {
     expect(normalizeModelSelection(undefined)).toBeUndefined();
     expect(normalizeModelSelection(null)).toBeUndefined();
     expect(normalizeModelSelection(42)).toBeUndefined();
+  });
+});
+
+describe("resolveSubagentConfiguredModelSelection", () => {
+  it("prefers the target agent primary model over the global subagent default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          subagents: { model: "minimax/MiniMax-M2.5" },
+          model: { primary: "openai/gpt-5.4" },
+        },
+        list: [{ id: "research", model: { primary: "opencode/claude" } }],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
+      "opencode/claude",
+    );
   });
 });
