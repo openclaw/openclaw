@@ -2650,105 +2650,180 @@ module.exports = {
     }
   });
 
-  it("warns when plugins.allow is empty and non-bundled plugins are discoverable", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "warn-open-allow",
-      body: `module.exports = { id: "warn-open-allow", register() {} };`,
-    });
-    const warnings: string[] = [];
-    loadOpenClawPlugins({
-      cache: false,
-      logger: createWarningLogger(warnings),
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-        },
-      },
-    });
-    expect(
-      warnings.some((msg) => msg.includes("plugins.allow is empty") && msg.includes(plugin.id)),
-    ).toBe(true);
-  });
-
-  it("dedupes the open allowlist warning for repeated loads of the same plugin set", () => {
+  it("warns about open allowlists for discoverable plugins once per plugin set", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();
-    const plugin = writePlugin({
-      id: "warn-open-allow-once",
-      body: `module.exports = { id: "warn-open-allow-once", register() {} };`,
-    });
-    const warnings: string[] = [];
-    const options = {
-      cache: false,
-      logger: createWarningLogger(warnings),
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-        },
+    const scenarios = [
+      {
+        label: "single load warns",
+        pluginId: "warn-open-allow",
+        loads: 1,
+        expectedWarnings: 1,
       },
-    };
+      {
+        label: "repeated identical loads dedupe warning",
+        pluginId: "warn-open-allow-once",
+        loads: 2,
+        expectedWarnings: 1,
+      },
+    ] as const;
 
-    loadOpenClawPlugins(options);
-    loadOpenClawPlugins(options);
+    for (const scenario of scenarios) {
+      const plugin = writePlugin({
+        id: scenario.pluginId,
+        body: `module.exports = { id: "${scenario.pluginId}", register() {} };`,
+      });
+      const warnings: string[] = [];
+      const options = {
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: {
+          plugins: {
+            load: { paths: [plugin.file] },
+          },
+        },
+      };
 
-    expect(warnings.filter((msg) => msg.includes("plugins.allow is empty"))).toHaveLength(1);
+      for (let index = 0; index < scenario.loads; index += 1) {
+        loadOpenClawPlugins(options);
+      }
+
+      const openAllowWarnings = warnings.filter((msg) => msg.includes("plugins.allow is empty"));
+      expect(openAllowWarnings, scenario.label).toHaveLength(scenario.expectedWarnings);
+      expect(
+        openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
+        scenario.label,
+      ).toBe(true);
+    }
   });
 
-  it("does not auto-load workspace-discovered plugins unless explicitly trusted", () => {
+  it("handles workspace-discovered plugins according to trust and precedence", () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
-    const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-helper");
-    mkdirSafe(workspaceExtDir);
-    writePlugin({
-      id: "workspace-helper",
-      body: `module.exports = { id: "workspace-helper", register() {} };`,
-      dir: workspaceExtDir,
-      filename: "index.cjs",
-    });
+    const scenarios = [
+      {
+        label: "untrusted workspace plugins stay disabled",
+        pluginId: "workspace-helper",
+        loadRegistry: () => {
+          const workspaceDir = makeTempDir();
+          const workspaceExtDir = path.join(
+            workspaceDir,
+            ".openclaw",
+            "extensions",
+            "workspace-helper",
+          );
+          mkdirSafe(workspaceExtDir);
+          writePlugin({
+            id: "workspace-helper",
+            body: `module.exports = { id: "workspace-helper", register() {} };`,
+            dir: workspaceExtDir,
+            filename: "index.cjs",
+          });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir,
-      config: {
-        plugins: {
-          enabled: true,
+          return loadOpenClawPlugins({
+            cache: false,
+            workspaceDir,
+            config: {
+              plugins: {
+                enabled: true,
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const workspacePlugin = registry.plugins.find((entry) => entry.id === "workspace-helper");
+          expect(workspacePlugin?.origin).toBe("workspace");
+          expect(workspacePlugin?.status).toBe("disabled");
+          expect(workspacePlugin?.error).toContain("workspace plugin (disabled by default)");
         },
       },
-    });
+      {
+        label: "trusted workspace plugins load",
+        pluginId: "workspace-helper",
+        loadRegistry: () => {
+          const workspaceDir = makeTempDir();
+          const workspaceExtDir = path.join(
+            workspaceDir,
+            ".openclaw",
+            "extensions",
+            "workspace-helper",
+          );
+          mkdirSafe(workspaceExtDir);
+          writePlugin({
+            id: "workspace-helper",
+            body: `module.exports = { id: "workspace-helper", register() {} };`,
+            dir: workspaceExtDir,
+            filename: "index.cjs",
+          });
 
-    const workspacePlugin = registry.plugins.find((entry) => entry.id === "workspace-helper");
-    expect(workspacePlugin?.origin).toBe("workspace");
-    expect(workspacePlugin?.status).toBe("disabled");
-    expect(workspacePlugin?.error).toContain("workspace plugin (disabled by default)");
-  });
-
-  it("loads workspace-discovered plugins when plugins.allow explicitly trusts them", () => {
-    useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
-    const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-helper");
-    mkdirSafe(workspaceExtDir);
-    writePlugin({
-      id: "workspace-helper",
-      body: `module.exports = { id: "workspace-helper", register() {} };`,
-      dir: workspaceExtDir,
-      filename: "index.cjs",
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir,
-      config: {
-        plugins: {
-          enabled: true,
-          allow: ["workspace-helper"],
+          return loadOpenClawPlugins({
+            cache: false,
+            workspaceDir,
+            config: {
+              plugins: {
+                enabled: true,
+                allow: ["workspace-helper"],
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const workspacePlugin = registry.plugins.find((entry) => entry.id === "workspace-helper");
+          expect(workspacePlugin?.origin).toBe("workspace");
+          expect(workspacePlugin?.status).toBe("loaded");
         },
       },
-    });
+      {
+        label: "bundled plugins stay ahead of trusted workspace duplicates",
+        pluginId: "shadowed",
+        loadRegistry: () => {
+          const bundledDir = makeTempDir();
+          writePlugin({
+            id: "shadowed",
+            body: `module.exports = { id: "shadowed", register() {} };`,
+            dir: bundledDir,
+            filename: "index.cjs",
+          });
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const workspacePlugin = registry.plugins.find((entry) => entry.id === "workspace-helper");
-    expect(workspacePlugin?.origin).toBe("workspace");
-    expect(workspacePlugin?.status).toBe("loaded");
+          const workspaceDir = makeTempDir();
+          const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions", "shadowed");
+          mkdirSafe(workspaceExtDir);
+          writePlugin({
+            id: "shadowed",
+            body: `module.exports = { id: "shadowed", register() {} };`,
+            dir: workspaceExtDir,
+            filename: "index.cjs",
+          });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            workspaceDir,
+            config: {
+              plugins: {
+                enabled: true,
+                allow: ["shadowed"],
+                entries: {
+                  shadowed: { enabled: true },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const entries = registry.plugins.filter((entry) => entry.id === "shadowed");
+          const loaded = entries.find((entry) => entry.status === "loaded");
+          const overridden = entries.find((entry) => entry.status === "disabled");
+          expect(loaded?.origin).toBe("bundled");
+          expect(overridden?.origin).toBe("workspace");
+          expect(overridden?.error).toContain("overridden by bundled plugin");
+        },
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const registry = scenario.loadRegistry();
+      scenario.assert(registry);
+    }
   });
 
   it("keeps scoped and unscoped plugin ids distinct", () => {
@@ -2779,48 +2854,6 @@ module.exports = {
     expect(
       registry.diagnostics.some((diag) => String(diag.message).includes("duplicate plugin id")),
     ).toBe(false);
-  });
-
-  it("keeps bundled plugins ahead of trusted workspace duplicates with the same id", () => {
-    const bundledDir = makeTempDir();
-    writePlugin({
-      id: "shadowed",
-      body: `module.exports = { id: "shadowed", register() {} };`,
-      dir: bundledDir,
-      filename: "index.cjs",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
-
-    const workspaceDir = makeTempDir();
-    const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions", "shadowed");
-    mkdirSafe(workspaceExtDir);
-    writePlugin({
-      id: "shadowed",
-      body: `module.exports = { id: "shadowed", register() {} };`,
-      dir: workspaceExtDir,
-      filename: "index.cjs",
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir,
-      config: {
-        plugins: {
-          enabled: true,
-          allow: ["shadowed"],
-          entries: {
-            shadowed: { enabled: true },
-          },
-        },
-      },
-    });
-
-    const entries = registry.plugins.filter((entry) => entry.id === "shadowed");
-    const loaded = entries.find((entry) => entry.status === "loaded");
-    const overridden = entries.find((entry) => entry.status === "disabled");
-    expect(loaded?.origin).toBe("bundled");
-    expect(overridden?.origin).toBe("workspace");
-    expect(overridden?.error).toContain("overridden by bundled plugin");
   });
 
   it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
