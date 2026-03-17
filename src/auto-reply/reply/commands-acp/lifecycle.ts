@@ -170,7 +170,7 @@ async function bindSpawnedAcpSessionToThread(params: {
     if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
       return {
         ok: false,
-        error: `Only ${boundBy} can rebind this ${channel === "telegram" ? "conversation" : "thread"}.`,
+        error: `Only ${boundBy} can rebind this ${channel === "telegram" || channel === "feishu" ? "conversation" : "thread"}.`,
       };
     }
   }
@@ -355,7 +355,10 @@ export async function handleAcpSpawnAction(
   if (binding) {
     const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
     const boundConversationId = binding.conversation.conversationId.trim();
-    const placementLabel = binding.conversation.channel === "telegram" ? "conversation" : "thread";
+    const placementLabel =
+      binding.conversation.channel === "telegram" || binding.conversation.channel === "feishu"
+        ? "conversation"
+        : "thread";
     if (currentConversationId && boundConversationId === currentConversationId) {
       parts.push(`Bound this ${placementLabel} to ${sessionKey}.`);
     } else {

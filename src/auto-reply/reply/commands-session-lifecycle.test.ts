@@ -336,11 +336,11 @@ describe("/session idle and /session max-age", () => {
     expect(result?.reply?.text).toContain("Max age disabled");
   });
 
-  it("is unavailable outside discord and telegram", async () => {
+  it("is unavailable outside discord, telegram, and feishu", async () => {
     const params = buildCommandTestParams("/session idle 2h", baseCfg);
     const result = await handleSessionCommand(params, true);
     expect(result?.reply?.text).toContain(
-      "currently available for Discord and Telegram bound sessions",
+      "currently available for Discord, Telegram, and Feishu bound sessions",
     );
   });
 

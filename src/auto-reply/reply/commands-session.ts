@@ -12,10 +12,16 @@ import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
-import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./channel-context.js";
+import {
+  isDiscordSurface,
+  isFeishuSurface,
+  isTelegramSurface,
+  resolveChannelAccountId,
+} from "./channel-context.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveFeishuConversationId } from "./feishu-context.js";
 import { resolveTelegramConversationId } from "./telegram-context.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
@@ -55,7 +61,7 @@ function formatSessionExpiry(expiresAt: number) {
   return new Date(expiresAt).toISOString();
 }
 
-function resolveTelegramBindingDurationMs(
+function resolveBindingDurationMs(
   binding: SessionBindingRecord,
   key: "idleTimeoutMs" | "maxAgeMs",
   fallbackMs: number,
@@ -67,7 +73,7 @@ function resolveTelegramBindingDurationMs(
   return Math.max(0, Math.floor(raw));
 }
 
-function resolveTelegramBindingLastActivityAt(binding: SessionBindingRecord): number {
+function resolveBindingLastActivityAt(binding: SessionBindingRecord): number {
   const raw = binding.metadata?.lastActivityAt;
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return binding.boundAt;
@@ -75,7 +81,7 @@ function resolveTelegramBindingLastActivityAt(binding: SessionBindingRecord): nu
   return Math.max(Math.floor(raw), binding.boundAt);
 }
 
-function resolveTelegramBindingBoundBy(binding: SessionBindingRecord): string {
+function resolveBindingBoundBy(binding: SessionBindingRecord): string {
   const raw = binding.metadata?.boundBy;
   return typeof raw === "string" ? raw.trim() : "";
 }
@@ -364,11 +370,12 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 
   const onDiscord = isDiscordSurface(params);
   const onTelegram = isTelegramSurface(params);
-  if (!onDiscord && !onTelegram) {
+  const onFeishu = isFeishuSurface(params);
+  if (!onDiscord && !onTelegram && !onFeishu) {
     return {
       shouldContinue: false,
       reply: {
-        text: "⚠️ /session idle and /session max-age are currently available for Discord and Telegram bound sessions.",
+        text: "⚠️ /session idle and /session max-age are currently available for Discord, Telegram, and Feishu bound sessions.",
       },
     };
   }
@@ -378,6 +385,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const threadId =
     params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : "";
   const telegramConversationId = onTelegram ? resolveTelegramConversationId(params) : undefined;
+  const feishuConversationId = onFeishu ? resolveFeishuConversationId(params) : undefined;
   const channelRuntime = getChannelRuntime();
 
   const discordManager = onDiscord
@@ -398,6 +406,14 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
           channel: "telegram",
           accountId,
           conversationId: telegramConversationId,
+        })
+      : null;
+  const feishuBinding =
+    onFeishu && feishuConversationId
+      ? sessionBindingService.resolveByConversation({
+          channel: "feishu",
+          accountId,
+          conversationId: feishuConversationId,
         })
       : null;
   if (onDiscord && !discordBinding) {
@@ -428,34 +444,51 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       reply: { text: "ℹ️ This conversation is not currently focused." },
     };
   }
+  if (onFeishu && !feishuBinding) {
+    if (!feishuConversationId) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ /session idle and /session max-age on Feishu require a DM or topic conversation.",
+        },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: "ℹ️ This conversation is not currently focused." },
+    };
+  }
+
+  // Resolve the active binding for the current channel.
+  const serviceBinding = telegramBinding ?? feishuBinding;
 
   const idleTimeoutMs = onDiscord
     ? channelRuntime.discord.threadBindings.resolveIdleTimeoutMs({
         record: discordBinding!,
         defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
       })
-    : resolveTelegramBindingDurationMs(telegramBinding!, "idleTimeoutMs", 24 * 60 * 60 * 1000);
+    : resolveBindingDurationMs(serviceBinding!, "idleTimeoutMs", 24 * 60 * 60 * 1000);
   const idleExpiresAt = onDiscord
     ? channelRuntime.discord.threadBindings.resolveInactivityExpiresAt({
         record: discordBinding!,
         defaultIdleTimeoutMs: discordManager!.getIdleTimeoutMs(),
       })
     : idleTimeoutMs > 0
-      ? resolveTelegramBindingLastActivityAt(telegramBinding!) + idleTimeoutMs
+      ? resolveBindingLastActivityAt(serviceBinding!) + idleTimeoutMs
       : undefined;
   const maxAgeMs = onDiscord
     ? channelRuntime.discord.threadBindings.resolveMaxAgeMs({
         record: discordBinding!,
         defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
       })
-    : resolveTelegramBindingDurationMs(telegramBinding!, "maxAgeMs", 0);
+    : resolveBindingDurationMs(serviceBinding!, "maxAgeMs", 0);
   const maxAgeExpiresAt = onDiscord
     ? channelRuntime.discord.threadBindings.resolveMaxAgeExpiresAt({
         record: discordBinding!,
         defaultMaxAgeMs: discordManager!.getMaxAgeMs(),
       })
     : maxAgeMs > 0
-      ? telegramBinding!.boundAt + maxAgeMs
+      ? serviceBinding!.boundAt + maxAgeMs
       : undefined;
 
   const durationArgRaw = tokens.slice(1).join("");
@@ -498,9 +531,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   }
 
   const senderId = params.command.senderId?.trim() || "";
-  const boundBy = onDiscord
-    ? discordBinding!.boundBy
-    : resolveTelegramBindingBoundBy(telegramBinding!);
+  const boundBy = onDiscord ? discordBinding!.boundBy : resolveBindingBoundBy(serviceBinding!);
   if (boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
     return {
       shouldContinue: false,
@@ -522,7 +553,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const updatedBindings = (() => {
+  const updatedBindings = await (async () => {
     if (onDiscord) {
       return action === SESSION_ACTION_IDLE
         ? channelRuntime.discord.threadBindings.setIdleTimeoutBySessionKey({
@@ -532,6 +563,20 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
           })
         : channelRuntime.discord.threadBindings.setMaxAgeBySessionKey({
             targetSessionKey: discordBinding!.targetSessionKey,
+            accountId,
+            maxAgeMs: durationMs,
+          });
+    }
+    if (onFeishu) {
+      const feishuBindings = await import("../../../extensions/feishu/src/thread-bindings.js");
+      return action === SESSION_ACTION_IDLE
+        ? feishuBindings.setFeishuThreadBindingIdleTimeoutBySessionKey({
+            targetSessionKey: feishuBinding!.targetSessionKey,
+            accountId,
+            idleTimeoutMs: durationMs,
+          })
+        : feishuBindings.setFeishuThreadBindingMaxAgeBySessionKey({
+            targetSessionKey: feishuBinding!.targetSessionKey,
             accountId,
             maxAgeMs: durationMs,
           });

@@ -13,6 +13,8 @@ import {
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 
+const FEISHU_THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
+
 type FeishuBindingTargetKind = "subagent" | "acp";
 
 type FeishuThreadBindingRecord = {
@@ -28,6 +30,8 @@ type FeishuThreadBindingRecord = {
   boundBy?: string;
   boundAt: number;
   lastActivityAt: number;
+  idleTimeoutMs?: number;
+  maxAgeMs?: number;
 };
 
 type FeishuThreadBindingManager = {
@@ -80,9 +84,16 @@ function toSessionBindingRecord(
   record: FeishuThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
 ): SessionBindingRecord {
-  const idleExpiresAt =
-    defaults.idleTimeoutMs > 0 ? record.lastActivityAt + defaults.idleTimeoutMs : undefined;
-  const maxAgeExpiresAt = defaults.maxAgeMs > 0 ? record.boundAt + defaults.maxAgeMs : undefined;
+  const effectiveIdleMs =
+    typeof record.idleTimeoutMs === "number" && Number.isFinite(record.idleTimeoutMs)
+      ? record.idleTimeoutMs
+      : defaults.idleTimeoutMs;
+  const effectiveMaxAgeMs =
+    typeof record.maxAgeMs === "number" && Number.isFinite(record.maxAgeMs)
+      ? record.maxAgeMs
+      : defaults.maxAgeMs;
+  const idleExpiresAt = effectiveIdleMs > 0 ? record.lastActivityAt + effectiveIdleMs : undefined;
+  const maxAgeExpiresAt = effectiveMaxAgeMs > 0 ? record.boundAt + effectiveMaxAgeMs : undefined;
   const expiresAt =
     idleExpiresAt != null && maxAgeExpiresAt != null
       ? Math.min(idleExpiresAt, maxAgeExpiresAt)
@@ -110,15 +121,48 @@ function toSessionBindingRecord(
       deliveryTo: record.deliveryTo,
       deliveryThreadId: record.deliveryThreadId,
       lastActivityAt: record.lastActivityAt,
-      idleTimeoutMs: defaults.idleTimeoutMs,
-      maxAgeMs: defaults.maxAgeMs,
+      idleTimeoutMs: effectiveIdleMs,
+      maxAgeMs: effectiveMaxAgeMs,
     },
   };
+}
+
+function shouldExpireByIdle(params: {
+  now: number;
+  record: FeishuThreadBindingRecord;
+  defaultIdleTimeoutMs: number;
+}): boolean {
+  const idleTimeoutMs =
+    typeof params.record.idleTimeoutMs === "number"
+      ? Math.max(0, Math.floor(params.record.idleTimeoutMs))
+      : params.defaultIdleTimeoutMs;
+  if (idleTimeoutMs <= 0) {
+    return false;
+  }
+  return (
+    params.now >= Math.max(params.record.lastActivityAt, params.record.boundAt) + idleTimeoutMs
+  );
+}
+
+function shouldExpireByMaxAge(params: {
+  now: number;
+  record: FeishuThreadBindingRecord;
+  defaultMaxAgeMs: number;
+}): boolean {
+  const maxAgeMs =
+    typeof params.record.maxAgeMs === "number"
+      ? Math.max(0, Math.floor(params.record.maxAgeMs))
+      : params.defaultMaxAgeMs;
+  if (maxAgeMs <= 0) {
+    return false;
+  }
+  return params.now >= params.record.boundAt + maxAgeMs;
 }
 
 export function createFeishuThreadBindingManager(params: {
   accountId?: string;
   cfg: OpenClawConfig;
+  enableSweeper?: boolean;
 }): FeishuThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
@@ -136,6 +180,11 @@ export function createFeishuThreadBindingManager(params: {
     channel: "feishu",
     accountId,
   });
+
+  const listBindingsForAccount = () =>
+    [...BINDINGS_BY_ACCOUNT_CONVERSATION.values()].filter((entry) => entry.accountId === accountId);
+
+  let sweepTimer: NodeJS.Timeout | null = null;
 
   const manager: FeishuThreadBindingManager = {
     accountId,
@@ -225,13 +274,20 @@ export function createFeishuThreadBindingManager(params: {
       return removed;
     },
     stop: () => {
+      if (sweepTimer) {
+        clearInterval(sweepTimer);
+        sweepTimer = null;
+      }
       for (const key of [...BINDINGS_BY_ACCOUNT_CONVERSATION.keys()]) {
         if (key.startsWith(`${accountId}:`)) {
           BINDINGS_BY_ACCOUNT_CONVERSATION.delete(key);
         }
       }
-      MANAGERS_BY_ACCOUNT_ID.delete(accountId);
       unregisterSessionBindingAdapter({ channel: "feishu", accountId });
+      const existingManager = MANAGERS_BY_ACCOUNT_ID.get(accountId);
+      if (existingManager === manager) {
+        MANAGERS_BY_ACCOUNT_ID.delete(accountId);
+      }
     },
   };
 
@@ -292,6 +348,30 @@ export function createFeishuThreadBindingManager(params: {
     },
   });
 
+  const sweeperEnabled = params.enableSweeper !== false;
+  if (sweeperEnabled) {
+    sweepTimer = setInterval(() => {
+      const now = Date.now();
+      for (const record of listBindingsForAccount()) {
+        const idleExpired = shouldExpireByIdle({
+          now,
+          record,
+          defaultIdleTimeoutMs: idleTimeoutMs,
+        });
+        const maxAgeExpired = shouldExpireByMaxAge({
+          now,
+          record,
+          defaultMaxAgeMs: maxAgeMs,
+        });
+        if (!idleExpired && !maxAgeExpired) {
+          continue;
+        }
+        manager.unbindConversation(record.conversationId);
+      }
+    }, FEISHU_THREAD_BINDINGS_SWEEP_INTERVAL_MS);
+    sweepTimer.unref?.();
+  }
+
   MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
   return manager;
 }
@@ -300,6 +380,60 @@ export function getFeishuThreadBindingManager(
   accountId?: string,
 ): FeishuThreadBindingManager | null {
   return MANAGERS_BY_ACCOUNT_ID.get(normalizeAccountId(accountId)) ?? null;
+}
+
+function normalizeDurationMs(raw: number, fallback: number): number {
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : fallback;
+}
+
+export function setFeishuThreadBindingIdleTimeoutBySessionKey(params: {
+  targetSessionKey: string;
+  accountId?: string;
+  idleTimeoutMs: number;
+}): FeishuThreadBindingRecord[] {
+  const manager = getFeishuThreadBindingManager(params.accountId);
+  if (!manager) {
+    return [];
+  }
+  const idleTimeoutMs = normalizeDurationMs(params.idleTimeoutMs, 0);
+  const now = Date.now();
+  const updated: FeishuThreadBindingRecord[] = [];
+  const entries = manager.listBySessionKey(params.targetSessionKey.trim());
+  for (const entry of entries) {
+    const key = resolveBindingKey({
+      accountId: manager.accountId,
+      conversationId: entry.conversationId,
+    });
+    const next = { ...entry, idleTimeoutMs, lastActivityAt: now };
+    BINDINGS_BY_ACCOUNT_CONVERSATION.set(key, next);
+    updated.push(next);
+  }
+  return updated;
+}
+
+export function setFeishuThreadBindingMaxAgeBySessionKey(params: {
+  targetSessionKey: string;
+  accountId?: string;
+  maxAgeMs: number;
+}): FeishuThreadBindingRecord[] {
+  const manager = getFeishuThreadBindingManager(params.accountId);
+  if (!manager) {
+    return [];
+  }
+  const maxAgeMs = normalizeDurationMs(params.maxAgeMs, 0);
+  const now = Date.now();
+  const updated: FeishuThreadBindingRecord[] = [];
+  const entries = manager.listBySessionKey(params.targetSessionKey.trim());
+  for (const entry of entries) {
+    const key = resolveBindingKey({
+      accountId: manager.accountId,
+      conversationId: entry.conversationId,
+    });
+    const next = { ...entry, maxAgeMs, lastActivityAt: now };
+    BINDINGS_BY_ACCOUNT_CONVERSATION.set(key, next);
+    updated.push(next);
+  }
+  return updated;
 }
 
 export const __testing = {
