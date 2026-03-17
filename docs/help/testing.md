@@ -94,25 +94,29 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
 
-### Apple container backend smoke
+### Apple container backend e2e
 
-- Suggested manual smoke:
+- Command: `OPENCLAW_E2E_APPLE_CONTAINER=1 pnpm test:e2e -- extensions/apple-container/src/backend.e2e.test.ts`
+- Requires: macOS 26+ Apple silicon host with `container` CLI and `container system status` reporting `running`
+- `OPENCLAW_E2E_APPLE_CONTAINER=1` to enable the tests when running the broader e2e suite manually
+- Scope:
+  - Container lifecycle (create, start, inspect, delete)
+  - Exec with stdout capture
+  - File write through exec with bind-mounted workspace verified on the host
+  - Network isolation (`--network none` blocks outbound)
+  - Inspect returns null for nonexistent containers
+- Expectations:
+  - Opt-in only; tests skip gracefully when the host or CLI is unavailable
+  - Requires a pullable `alpine:latest` image
+  - Browser coverage is intentionally out of scope for this backend right now
+
+- Suggested manual smoke (in addition to the e2e suite):
 
 ```bash
 container system status --format json
 openclaw sandbox recreate --all
 openclaw sandbox list
 ```
-
-- Scope:
-  - Confirms the host is macOS Apple silicon
-  - Confirms `container system status --format json` reports `running`
-  - Creates a sandbox runtime with `backend: "apple-container"`
-  - Verifies simple exec plus file-tool read/write behavior
-- Expectations:
-  - Opt-in only
-  - Requires Apple's `container` CLI and a working local image/network setup
-  - Browser coverage is intentionally out of scope for this backend right now
 
 ### Live (real providers + real models)
 

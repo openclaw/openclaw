@@ -71,6 +71,10 @@ Apple container-specific config lives under `plugins.entries.apple-container.con
 
 Use `backend: "apple-container"` when you want local sandboxed `exec` and file tools on a macOS 26+ Apple silicon host without Docker Desktop.
 
+Like the Docker backend, agent tools run inside a Linux container and cannot directly reach macOS-native APIs (iMessage, Shortcuts, AppleScript).
+This is a general sandbox limitation, not specific to Apple Containers.
+Unlike Docker, this backend runs on Virtualization.framework, which may enable tighter host integration in the future.
+
 ```json5
 {
   agents: {
