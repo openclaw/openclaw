@@ -85,8 +85,7 @@ export const vi: TranslationMap = {
       uptime: "Thời gian hoạt động",
       tickInterval: "Chu kỳ tick",
       lastChannelsRefresh: "Lần làm mới kênh cuối",
-      channelsHint:
-        "Sử dụng Kênh để liên kết WhatsApp, Telegram, Discord, Signal hoặc iMessage.",
+      channelsHint: "Sử dụng Kênh để liên kết WhatsApp, Telegram, Discord, Signal hoặc iMessage.",
     },
     stats: {
       instances: "Tiến trình",
@@ -100,16 +99,14 @@ export const vi: TranslationMap = {
       title: "Ghi chú",
       subtitle: "Nhắc nhở nhanh cho cài đặt điều khiển từ xa.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Ưu tiên chế độ serve để giữ gateway trên loopback với xác thực tailnet.",
+      tailscaleText: "Ưu tiên chế độ serve để giữ gateway trên loopback với xác thực tailnet.",
       sessionTitle: "Quản lý phiên",
       sessionText: "Dùng /new hoặc sessions.patch để đặt lại ngữ cảnh.",
       cronTitle: "Nhắc nhở Cron",
       cronText: "Dùng phiên cô lập cho các lần chạy định kỳ.",
     },
     auth: {
-      required:
-        "Gateway này yêu cầu xác thực. Thêm token hoặc mật khẩu, rồi nhấn Kết nối.",
+      required: "Gateway này yêu cầu xác thực. Thêm token hoặc mật khẩu, rồi nhấn Kết nối.",
       failed:
         "Xác thực thất bại. Sao chép lại URL có token bằng {command}, hoặc cập nhật token, rồi nhấn Kết nối.",
     },
@@ -126,11 +123,9 @@ export const vi: TranslationMap = {
       title: "Cách kết nối",
       step1: "Khởi động gateway trên máy chủ của bạn:",
       step2: "Lấy URL bảng điều khiển có token:",
-      step3:
-        "Dán WebSocket URL và token ở trên, hoặc mở URL có token trực tiếp.",
+      step3: "Dán WebSocket URL và token ở trên, hoặc mở URL có token trực tiếp.",
       step4: "Hoặc tạo token tái sử dụng:",
-      docsHint:
-        "Để truy cập từ xa, khuyến nghị dùng Tailscale Serve. ",
+      docsHint: "Để truy cập từ xa, khuyến nghị dùng Tailscale Serve. ",
       docsLink: "Đọc tài liệu →",
     },
     cards: {
@@ -273,33 +268,27 @@ export const vi: TranslationMap = {
       everyAmountPlaceholder: "30",
       timezoneOptional: "Múi giờ (tùy chọn)",
       timezonePlaceholder: "Asia/Ho_Chi_Minh",
-      timezoneHelp:
-        "Chọn múi giờ phổ biến hoặc nhập bất kỳ múi giờ IANA hợp lệ nào.",
-      jitterHelp:
-        "Cần jitter? Dùng Nâng cao → Cửa sổ phân tán / Đơn vị phân tán.",
+      timezoneHelp: "Chọn múi giờ phổ biến hoặc nhập bất kỳ múi giờ IANA hợp lệ nào.",
+      jitterHelp: "Cần jitter? Dùng Nâng cao → Cửa sổ phân tán / Đơn vị phân tán.",
       execution: "Thực thi",
       executionSub: "Chọn thời điểm đánh thức và tác vụ cần thực hiện.",
       session: "Phiên",
       main: "Chính",
       isolated: "Cô lập",
-      sessionHelp:
-        "Chính đăng sự kiện hệ thống. Cô lập chạy lượt agent riêng.",
+      sessionHelp: "Chính đăng sự kiện hệ thống. Cô lập chạy lượt agent riêng.",
       wakeMode: "Chế độ đánh thức",
       now: "Ngay",
       nextHeartbeat: "Nhịp tim tiếp theo",
-      wakeModeHelp:
-        "Ngay kích hoạt tức thì. Nhịp tim tiếp theo đợi chu kỳ kế tiếp.",
+      wakeModeHelp: "Ngay kích hoạt tức thì. Nhịp tim tiếp theo đợi chu kỳ kế tiếp.",
       payloadKind: "Nên chạy gì?",
       systemEvent: "Đăng tin nhắn lên timeline chính",
       agentTurn: "Chạy tác vụ trợ lý (cô lập)",
       systemEventHelp:
         "Gửi văn bản của bạn đến timeline chính của gateway (phù hợp cho nhắc nhở/kích hoạt).",
-      agentTurnHelp:
-        "Bắt đầu chạy trợ lý trong phiên riêng bằng prompt của bạn.",
+      agentTurnHelp: "Bắt đầu chạy trợ lý trong phiên riêng bằng prompt của bạn.",
       timeoutSeconds: "Hết giờ (giây)",
       timeoutPlaceholder: "Tùy chọn, ví dụ 90",
-      timeoutHelp:
-        "Tùy chọn. Để trống để dùng hành vi hết giờ mặc định của gateway.",
+      timeoutHelp: "Tùy chọn. Để trống để dùng hành vi hết giờ mặc định của gateway.",
       mainTimelineMessage: "Tin nhắn timeline chính",
       assistantTaskPrompt: "Prompt tác vụ trợ lý",
       deliverySection: "Gửi kết quả",
@@ -308,8 +297,7 @@ export const vi: TranslationMap = {
       announceDefault: "Thông báo tóm tắt (mặc định)",
       webhookPost: "Webhook POST",
       noneInternal: "Không (nội bộ)",
-      deliveryHelp:
-        "Thông báo đăng tóm tắt lên chat. Không giữ thực thi nội bộ.",
+      deliveryHelp: "Thông báo đăng tóm tắt lên chat. Không giữ thực thi nội bộ.",
       webhookUrl: "Webhook URL",
       channel: "Kênh",
       webhookPlaceholder: "https://example.com/cron",
@@ -317,17 +305,13 @@ export const vi: TranslationMap = {
       webhookHelp: "Gửi tóm tắt chạy đến endpoint webhook.",
       to: "Đến",
       toPlaceholder: "+84... hoặc chat id",
-      toHelp:
-        "Ghi đè người nhận tùy chọn (chat id, số điện thoại hoặc user id).",
+      toHelp: "Ghi đè người nhận tùy chọn (chat id, số điện thoại hoặc user id).",
       advanced: "Nâng cao",
-      advancedHelp:
-        "Ghi đè tùy chọn cho đảm bảo gửi, jitter lịch trình và điều khiển mô hình.",
+      advancedHelp: "Ghi đè tùy chọn cho đảm bảo gửi, jitter lịch trình và điều khiển mô hình.",
       deleteAfterRun: "Xóa sau khi chạy",
-      deleteAfterRunHelp:
-        "Phù hợp cho nhắc nhở một lần tự động dọn dẹp.",
+      deleteAfterRunHelp: "Phù hợp cho nhắc nhở một lần tự động dọn dẹp.",
       clearAgentOverride: "Xóa ghi đè agent",
-      clearAgentHelp:
-        "Buộc tác vụ này dùng trợ lý mặc định của gateway.",
+      clearAgentHelp: "Buộc tác vụ này dùng trợ lý mặc định của gateway.",
       exactTiming: "Thời gian chính xác (không phân tán)",
       exactTimingHelp: "Chạy đúng ranh giới cron, không phân tán.",
       staggerWindow: "Cửa sổ phân tán",
@@ -336,15 +320,12 @@ export const vi: TranslationMap = {
       seconds: "Giây",
       model: "Mô hình",
       modelPlaceholder: "openai/gpt-5.2",
-      modelHelp:
-        "Bắt đầu nhập để chọn mô hình đã biết, hoặc nhập tùy chỉnh.",
+      modelHelp: "Bắt đầu nhập để chọn mô hình đã biết, hoặc nhập tùy chỉnh.",
       thinking: "Suy nghĩ",
       thinkingPlaceholder: "thấp",
-      thinkingHelp:
-        "Dùng mức gợi ý hoặc nhập giá trị riêng theo nhà cung cấp.",
+      thinkingHelp: "Dùng mức gợi ý hoặc nhập giá trị riêng theo nhà cung cấp.",
       bestEffortDelivery: "Gửi nỗ lực tối đa",
-      bestEffortHelp:
-        "Không đánh dấu tác vụ thất bại nếu việc gửi kết quả thất bại.",
+      bestEffortHelp: "Không đánh dấu tác vụ thất bại nếu việc gửi kết quả thất bại.",
       cantAddYet: "Chưa thể thêm tác vụ",
       fillRequired: "Điền các trường bắt buộc bên dưới để bật gửi.",
       fixFields: "Sửa {count} trường để tiếp tục.",
