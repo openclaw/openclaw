@@ -16,7 +16,9 @@ import { log } from "./logger.js";
  * This function rewrites the file keeping:
  * 1. The session header
  * 2. All non-message session state (custom, model_change, thinking_level_change,
- *    session_info, label, branch_summary, custom_message, compaction entries)
+ *    session_info, custom_message, compaction entries)
+ *    Note: label and branch_summary entries referencing removed messages are
+ *    also dropped to avoid dangling metadata.
  * 3. All entries from sibling branches not covered by the compaction
  * 4. The compaction entry and all entries after it in the current branch
  *
@@ -81,12 +83,27 @@ export async function truncateSessionAfterCompaction(params: {
   const allEntries = sm.getEntries();
 
   // Only remove message-type entries that the compaction actually summarized.
-  // Non-message entries (custom, model_change, thinking_level_change,
-  // session_info, label, branch_summary, custom_message) are preserved even
-  // if they sit in the summarized portion of the branch.
+  // Non-message session state (custom, model_change, thinking_level_change,
+  // session_info, custom_message) is preserved even if it sits in the
+  // summarized portion of the branch.
+  //
+  // label and branch_summary entries that reference removed message IDs are
+  // also dropped to avoid dangling metadata (consistent with the approach in
+  // tool-result-truncation.ts).
   const removedIds = new Set<string>();
   for (const entry of allEntries) {
     if (summarizedBranchIds.has(entry.id) && entry.type === "message") {
+      removedIds.add(entry.id);
+    }
+  }
+
+  // Drop label/branch_summary entries whose parent points to a removed message
+  for (const entry of allEntries) {
+    if (
+      (entry.type === "label" || entry.type === "branch_summary") &&
+      entry.parentId !== null &&
+      removedIds.has(entry.parentId)
+    ) {
       removedIds.add(entry.id);
     }
   }
