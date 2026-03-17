@@ -41,9 +41,18 @@ describe("compaction hook wiring", () => {
     messages?: unknown[];
     compactionCount?: number;
     withRetryHooks?: boolean;
+    sessionKey?: string;
+    sessionId?: string;
+    agentId?: string;
   }) {
     return {
-      params: { runId: params.runId, session: { messages: params.messages ?? [] } },
+      params: {
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        agentId: params.agentId,
+        session: { messages: params.messages ?? [] },
+      },
       state: { compactionInFlight: true },
       log: { debug: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
@@ -65,6 +74,8 @@ describe("compaction hook wiring", () => {
       params: {
         runId: "r1",
         sessionKey: "agent:main:web-abc123",
+        sessionId: "session-r1",
+        agentId: "main",
         session: { messages: [1, 2, 3], sessionFile: "/tmp/test.jsonl" },
         onAgentEvent: vi.fn(),
       },
@@ -87,8 +98,14 @@ describe("compaction hook wiring", () => {
     expect(event?.messageCount).toBe(3);
     expect(event?.messages).toEqual([1, 2, 3]);
     expect(event?.sessionFile).toBe("/tmp/test.jsonl");
-    const hookCtx = beforeCalls[0]?.[1] as { sessionKey?: string } | undefined;
-    expect(hookCtx?.sessionKey).toBe("agent:main:web-abc123");
+    const hookCtx = beforeCalls[0]?.[1] as
+      | { sessionKey?: string; sessionId?: string; agentId?: string }
+      | undefined;
+    expect(hookCtx).toMatchObject({
+      sessionKey: "agent:main:web-abc123",
+      sessionId: "session-r1",
+      agentId: "main",
+    });
     expect(ctx.ensureCompactionPromise).toHaveBeenCalledTimes(1);
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
       runId: "r1",
@@ -108,6 +125,9 @@ describe("compaction hook wiring", () => {
       runId: "r2",
       messages: [1, 2],
       compactionCount: 1,
+      sessionKey: "agent:quant-trader:web-abc123",
+      sessionId: "session-r2",
+      agentId: "quant-trader",
     });
 
     handleAutoCompactionEnd(
@@ -122,13 +142,21 @@ describe("compaction hook wiring", () => {
     expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
 
     const afterCalls = hookMocks.runner.runAfterCompaction.mock.calls as unknown as Array<
-      [unknown]
+      [unknown, unknown]
     >;
     const event = afterCalls[0]?.[0] as
       | { messageCount?: number; compactedCount?: number }
       | undefined;
     expect(event?.messageCount).toBe(2);
     expect(event?.compactedCount).toBe(1);
+    const hookCtx = afterCalls[0]?.[1] as
+      | { sessionKey?: string; sessionId?: string; agentId?: string }
+      | undefined;
+    expect(hookCtx).toMatchObject({
+      sessionKey: "agent:quant-trader:web-abc123",
+      sessionId: "session-r2",
+      agentId: "quant-trader",
+    });
     expect(ctx.incrementCompactionCount).toHaveBeenCalledTimes(1);
     expect(ctx.maybeResolveCompactionWait).toHaveBeenCalledTimes(1);
     expect(hookMocks.emitAgentEvent).toHaveBeenCalledWith({
