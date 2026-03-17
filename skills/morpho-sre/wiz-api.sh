@@ -99,6 +99,80 @@ load_credentials() {
   die "missing Wiz credentials; tried Vault ${WIZ_API_VAULT_SECRET_PATH} and WIZ_CLIENT_ID/WIZ_CLIENT_SECRET"
 }
 
+load_cached_token() {
+  local cache="$WIZ_API_TOKEN_CACHE"
+  [[ -f "$cache" ]] || return 1
+  local expires_at
+  expires_at="$("$WIZ_API_JQ_BIN" -r '.expires_at // 0' "$cache" 2>/dev/null)" || return 1
+  local now
+  now="$(date +%s)"
+  if [[ "$expires_at" -gt $((now + 60)) ]]; then
+    WIZ_API_BEARER_TOKEN="$("$WIZ_API_JQ_BIN" -r '.access_token // empty' "$cache")"
+    [[ -n "$WIZ_API_BEARER_TOKEN" ]] || return 1
+    return 0
+  fi
+  return 1
+}
+
+save_cached_token() {
+  local token="$1"
+  local expires_in="$2"
+  local now expires_at tmp_file
+  now="$(date +%s)"
+  expires_at=$((now + expires_in))
+  tmp_file="$(mktemp "${WIZ_API_TOKEN_CACHE}.XXXXXX")"
+  "$WIZ_API_JQ_BIN" -nc \
+    --arg access_token "$token" \
+    --argjson expires_at "$expires_at" \
+    '{ access_token: $access_token, expires_at: $expires_at }' >"$tmp_file"
+  chmod 600 "$tmp_file"
+  mv -f "$tmp_file" "$WIZ_API_TOKEN_CACHE"
+}
+
+authenticate() {
+  local response access_token expires_in
+  response="$(
+    "$WIZ_API_CURL_BIN" -sS --max-time "$WIZ_API_TIMEOUT" \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      --data-urlencode "grant_type=client_credentials" \
+      --data-urlencode "client_id=${WIZ_API_ACTIVE_CLIENT_ID}" \
+      --data-urlencode "client_secret=${WIZ_API_ACTIVE_CLIENT_SECRET}" \
+      --data-urlencode "audience=wiz-api" \
+      "$WIZ_AUTH_URL"
+  )" || die "auth request failed"
+
+  access_token="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.access_token // empty')"
+  [[ -n "$access_token" ]] || die "auth response missing access_token"
+  expires_in="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.expires_in // 3600')"
+
+  save_cached_token "$access_token" "$expires_in"
+  WIZ_API_BEARER_TOKEN="$access_token"
+}
+
+ensure_token() {
+  if load_cached_token; then
+    return 0
+  fi
+  authenticate
+}
+
+cmd_probe_auth() {
+  ensure_token
+  local now expires_at
+  now="$(date +%s)"
+  expires_at="$("$WIZ_API_JQ_BIN" -r '.expires_at // 0' "$WIZ_API_TOKEN_CACHE" 2>/dev/null || printf '0')"
+  "$WIZ_API_JQ_BIN" -nc \
+    --arg credentialSource "$WIZ_API_CREDENTIAL_SOURCE" \
+    --argjson tokenExpiry "$expires_at" \
+    --argjson now "$now" \
+    '{
+      ok: true,
+      credentialSource: $credentialSource,
+      tokenExpiry: $tokenExpiry,
+      tokenTTL: ($tokenExpiry - $now)
+    }'
+}
+
 cmd_print_plan() {
   "$WIZ_API_JQ_BIN" -nc \
     --arg apiUrl "$WIZ_API_URL" \

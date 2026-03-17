@@ -90,5 +90,50 @@ else
   printf '  PASS: missing creds fail as expected\n'
 fi
 
+printf '\n=== test-wiz-api: OAuth2 auth + token caching ===\n'
+
+# --- mock curl that handles both auth and GraphQL ---
+cat >"${TMP}/mock-curl-auth.sh" <<'CURL_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+  case "$arg" in
+    */oauth/token)
+      printf '{"access_token":"test-bearer-abc","expires_in":3600,"token_type":"Bearer"}\n'
+      exit 0
+      ;;
+  esac
+done
+# GraphQL endpoint — echo back for inspection
+printf '{"data":{"ok":true}}\n'
+CURL_EOF
+chmod +x "${TMP}/mock-curl-auth.sh"
+
+# --- authenticate and probe ---
+probe_result="$(
+  export WIZ_API_SKIP_VAULT=1
+  export WIZ_CLIENT_ID='auth-test-id'
+  export WIZ_CLIENT_SECRET='auth-test-secret'
+  export WIZ_API_CURL_BIN="${TMP}/mock-curl-auth.sh"
+  export WIZ_API_JQ_BIN='jq'
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-auth.json"
+  "${SCRIPT_PATH}" --probe-auth 2>/dev/null
+)"
+
+assert_ok "auth: probe returns ok=true" \
+  "printf '%s' '$probe_result' | jq -e '.ok == true' >/dev/null"
+assert_ok "auth: probe returns credentialSource" \
+  "printf '%s' '$probe_result' | jq -e '.credentialSource == \"env\"' >/dev/null"
+
+# --- token cache file created with correct perms ---
+assert_ok "auth: token cache file exists" \
+  "[[ -f '${TMP}/token-auth.json' ]]"
+assert_ok "auth: token cache file has 600 perms" \
+  "[[ \"\$(stat -f '%Lp' '${TMP}/token-auth.json' 2>/dev/null || stat -c '%a' '${TMP}/token-auth.json' 2>/dev/null)\" == '600' ]]"
+
+# --- token cache is valid JSON with expires_at ---
+assert_ok "auth: token cache has expires_at" \
+  "jq -e '.expires_at > 0' '${TMP}/token-auth.json' >/dev/null"
+
 printf '\n=== Results: %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
