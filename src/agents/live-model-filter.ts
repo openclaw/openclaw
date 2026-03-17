@@ -22,10 +22,5 @@ export function isModernModelRef(ref: ModelRef): boolean {
   if (typeof pluginDecision === "boolean") {
     return pluginDecision;
   }
-  // AIMLAPI has not moved to bundled provider-runtime hooks yet.
-  if (provider === "aimlapi") {
-    return true;
-  }
-
   return false;
 }

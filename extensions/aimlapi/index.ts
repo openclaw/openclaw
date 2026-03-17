@@ -79,6 +79,7 @@ export default definePluginEntry({
             buildProvider: buildAimlapiProvider,
           }),
       },
+      isModernModelRef: () => true,
       wrapStreamFn: (ctx) => createAimlapiPayloadWrapper(ctx.streamFn),
     });
   },

@@ -57,7 +57,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { normalizeProviderId, resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { createConfiguredOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
+import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
@@ -701,21 +701,6 @@ function normalizeToolCallIdsInMessage(message: unknown): void {
     usedIds.add(fallbackId);
     assignedIds.add(fallbackId);
   }
-}
-
-export function resolveOllamaBaseUrlForRun(params: {
-  modelBaseUrl?: string;
-  providerBaseUrl?: string;
-}): string {
-  const providerBaseUrl = params.providerBaseUrl?.trim() ?? "";
-  if (providerBaseUrl) {
-    return providerBaseUrl;
-  }
-  const modelBaseUrl = params.modelBaseUrl?.trim() ?? "";
-  if (modelBaseUrl) {
-    return modelBaseUrl;
-  }
-  return OLLAMA_NATIVE_BASE_URL;
 }
 
 function trimWhitespaceFromToolCallNamesInMessage(
@@ -1559,11 +1544,10 @@ export async function runEmbeddedAttempt(
           },
         });
     const toolsEnabled = supportsModelTools(params.model);
-    const googleSanitizedTools = sanitizeToolsForGoogle({
+    const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsRaw : [],
       provider: params.provider,
     });
-    const tools = googleSanitizedTools;
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
@@ -1922,6 +1906,7 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
+
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
       if (params.model.api === "ollama") {
@@ -2105,6 +2090,7 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+
       try {
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
@@ -2134,12 +2120,10 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
-
-        cacheTrace?.recordStage("session:limited", {
-          messages: limited,
-        });
-
-        activeSession.agent.replaceMessages(limited);
+        cacheTrace?.recordStage("session:limited", { messages: limited });
+        if (limited.length > 0) {
+          activeSession.agent.replaceMessages(limited);
+        }
 
         if (params.contextEngine) {
           try {
@@ -2558,15 +2542,6 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
-          log.info("embedded run: sending prompt to provider", {
-            runId: params.runId,
-            sessionId: params.sessionId,
-            provider: params.provider,
-            model: params.modelId,
-            promptChars: effectivePrompt.length,
-            messageCount: activeSession.messages.length,
-            imageCount: imageResult.images.length,
-          });
           if (imageResult.images.length > 0) {
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
@@ -2597,9 +2572,8 @@ export async function runEmbeddedAttempt(
             promptErrorSource = "prompt";
           }
         } finally {
-          const promptDurationMs = Date.now() - promptStartedAt;
           log.debug(
-            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${promptDurationMs}`,
+            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );
         }
 

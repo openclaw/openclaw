@@ -1,3 +1,4 @@
+import AIMLAPI_MANIFEST from "../../extensions/aimlapi/openclaw.plugin.json" with { type: "json" };
 import ANTHROPIC_MANIFEST from "../../extensions/anthropic/openclaw.plugin.json" with { type: "json" };
 import BYTEPLUS_MANIFEST from "../../extensions/byteplus/openclaw.plugin.json" with { type: "json" };
 import CLOUDFLARE_AI_GATEWAY_MANIFEST from "../../extensions/cloudflare-ai-gateway/openclaw.plugin.json" with { type: "json" };
@@ -59,6 +60,7 @@ function collectBundledProviderAuthEnvVars(
 // Read bundled provider auth env metadata from manifests so env-based auth
 // lookup stays cheap and does not need to boot plugin runtime code.
 export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = collectBundledProviderAuthEnvVars([
+  AIMLAPI_MANIFEST,
   ANTHROPIC_MANIFEST,
   BYTEPLUS_MANIFEST,
   CLOUDFLARE_AI_GATEWAY_MANIFEST,

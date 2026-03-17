@@ -7,6 +7,7 @@ type AuthChoiceFlag = {
   authChoice: AuthChoice;
   label: string;
 };
+
 export type AuthChoiceInference = {
   choice?: AuthChoice;
   matches: AuthChoiceFlag[];

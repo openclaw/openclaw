@@ -1,3 +1,8 @@
+import {
+  QIANFAN_BASE_URL,
+  QIANFAN_DEFAULT_MODEL_ID,
+} from "../../extensions/qianfan/provider-catalog.js";
+import { XIAOMI_DEFAULT_MODEL_ID } from "../../extensions/xiaomi/provider-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";

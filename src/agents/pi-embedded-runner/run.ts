@@ -1309,7 +1309,6 @@ export async function runEmbeddedPiAgent(
               authRetryPending = true;
               continue;
             }
-
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               return {
