@@ -143,7 +143,7 @@ function formatInspectSection(title: string, lines: string[]): string[] {
   if (lines.length === 0) {
     return [];
   }
-  return ["", `${theme.muted(`${title}:`)}`, ...lines];
+  return ["", theme.muted(`${title}:`), ...lines];
 }
 
 function formatCapabilityKinds(

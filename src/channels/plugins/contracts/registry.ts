@@ -4,7 +4,7 @@ import {
   createThreadBindingManager as createDiscordThreadBindingManager,
 } from "../../../../extensions/discord/runtime-api.js";
 import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
-import { setMatrixRuntime } from "../../../../extensions/matrix/api.js";
+import { setMatrixRuntime } from "../../../../extensions/matrix/src/runtime.js";
 import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {

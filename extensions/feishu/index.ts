@@ -45,7 +45,6 @@ export {
   buildMentionedCardContent,
   type MentionTarget,
 } from "./src/mention.js";
-export { feishuPlugin } from "./src/channel.js";
 
 export default defineChannelPluginEntry({
   id: "feishu",

@@ -43,6 +43,7 @@ function buildForwardCompatTemplate(params: {
   provider: string;
   api: "anthropic-messages" | "google-gemini-cli" | "openai-completions" | "openai-responses";
   baseUrl: string;
+  reasoning?: boolean;
   input?: readonly ["text"] | readonly ["text", "image"];
   cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow?: number;
@@ -54,7 +55,7 @@ function buildForwardCompatTemplate(params: {
     provider: params.provider,
     api: params.api,
     baseUrl: params.baseUrl,
-    reasoning: true,
+    reasoning: params.reasoning ?? true,
     input: params.input ?? (["text", "image"] as const),
     cost: params.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: params.contextWindow ?? 200000,
