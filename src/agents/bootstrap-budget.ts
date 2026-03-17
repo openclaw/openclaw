@@ -330,7 +330,7 @@ export function buildBootstrapPromptWarning(params: {
   };
 }
 
-export function prependBootstrapPromptWarning(
+export function appendBootstrapPromptWarning(
   prompt: string,
   warningLines?: string[],
   options?: {
@@ -352,6 +352,9 @@ export function prependBootstrapPromptWarning(
   ].join("\n");
   return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
 }
+
+// Backward-compatible alias while older callers still import the prepend name.
+export const prependBootstrapPromptWarning = appendBootstrapPromptWarning;
 
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;

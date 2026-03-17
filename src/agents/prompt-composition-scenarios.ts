@@ -103,7 +103,6 @@ function buildSystemPrompt(params: {
   skillsPrompt?: string;
   reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
-  bootstrapTruncationWarningLines?: string[];
 }) {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames, toolSummaries } =
     buildCommonSystemParams(params.workspaceDir);
@@ -122,7 +121,6 @@ function buildSystemPrompt(params: {
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: params.reactionGuidance,
     contextFiles: params.contextFiles,
-    bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
   });
 }
 
