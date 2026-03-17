@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
-import type { AuthChoice } from "../../commands/onboard-types.js";
 import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
