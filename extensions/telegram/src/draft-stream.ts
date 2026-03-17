@@ -437,7 +437,7 @@ export function createTelegramDraftStream(params: {
       // update will arrive with more text that may produce valid HTML, and
       // the transport functions already disable parse_mode for this generation.
       if (isTelegramHtmlParseError(err)) {
-        parseModeDisabledForGeneration = generation;
+        parseModeDisabledForGeneration = sendGeneration;
         params.warn?.(
           `telegram stream preview: HTML parse error escaped to outer handler (degrading to plain text)`,
         );
