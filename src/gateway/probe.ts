@@ -47,7 +47,7 @@ export async function probeGateway(opts: {
       const hostname = new URL(opts.url).hostname;
       // Local authenticated probes should stay device-bound so read/detail RPCs
       // are not scope-limited by the shared-auth scope stripping hardening.
-      return isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password);
+      return isLoopbackHost(hostname) && opts.auth === undefined // Preserves device identity for empty but present auth objects (e.g. {});
     } catch {
       return false;
     }
