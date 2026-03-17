@@ -30,7 +30,7 @@ export const vi: TranslationMap = {
     agents: "Agents",
     overview: "Tổng quan",
     channels: "Kênh",
-    instances: "Phiên bản",
+    instances: "Tiến trình",
     sessions: "Phiên làm việc",
     usage: "Sử dụng",
     cron: "Tác vụ định kỳ",
@@ -89,7 +89,7 @@ export const vi: TranslationMap = {
         "Sử dụng Kênh để liên kết WhatsApp, Telegram, Discord, Signal hoặc iMessage.",
     },
     stats: {
-      instances: "Phiên bản",
+      instances: "Tiến trình",
       instancesHint: "Tín hiệu hiện diện trong 5 phút qua.",
       sessions: "Phiên",
       sessionsHint: "Các khóa phiên gần đây được gateway theo dõi.",
