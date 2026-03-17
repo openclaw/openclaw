@@ -79,8 +79,6 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   execApprovals?: ChannelExecApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
   bindings?: ChannelConfiguredBindingProvider;
-  /** @deprecated Use `bindings` instead. Kept for mixed-version plugin upgrades. */
-  acpBindings?: ChannelConfiguredBindingProvider;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;

@@ -1,5 +1,4 @@
 import * as compatSdk from "openclaw/plugin-sdk/compat";
-import * as conversationRuntimeSdk from "openclaw/plugin-sdk/conversation-runtime";
 import * as coreSdk from "openclaw/plugin-sdk/core";
 import type {
   ChannelMessageActionContext as CoreChannelMessageActionContext,
@@ -83,13 +82,6 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports runtime helpers from the dedicated subpath", () => {
     expect(typeof runtimeSdk.createLoggerBackedRuntime).toBe("function");
-  });
-
-  it("keeps legacy ACP conversation-runtime helpers available", () => {
-    expect(typeof conversationRuntimeSdk.resolveConfiguredBindingRoute).toBe("function");
-    expect(typeof conversationRuntimeSdk.ensureConfiguredBindingRouteReady).toBe("function");
-    expect(typeof conversationRuntimeSdk.resolveConfiguredAcpRoute).toBe("function");
-    expect(typeof conversationRuntimeSdk.ensureConfiguredAcpRouteReady).toBe("function");
   });
 
   it("exports provider setup helpers from the dedicated subpath", () => {
