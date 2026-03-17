@@ -7,11 +7,11 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import type { ProviderAuthMethod } from "../plugins/types.js";
+import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
+import type { ProviderAuthMethod, ProviderAuthOptionBag } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
-import { applyAuthProfileConfig } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import type { OnboardOptions } from "./onboard-types.js";
 import {
@@ -97,7 +97,7 @@ export async function runProviderPluginAuthMethod(params: {
     workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,
-    opts: params.opts,
+    opts: params.opts as ProviderAuthOptionBag | undefined,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
     isRemote,
@@ -173,7 +173,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
     workspaceDir,
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: false,
-    opts: params.opts,
+    opts: params.opts as ProviderAuthOptionBag | undefined,
   });
 
   let nextConfig = applied.config;
@@ -238,7 +238,7 @@ export async function applyAuthChoicePluginProvider(
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
     await params.prompter.note(
-      `${options.label} auth plugin is not available. Enable it and re-run the wizard.`,
+      `${options.label} auth plugin is not available. Enable it and re-run onboarding.`,
       options.label,
     );
     return { config: nextConfig };
@@ -260,7 +260,7 @@ export async function applyAuthChoicePluginProvider(
     workspaceDir,
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: false,
-    opts: params.opts,
+    opts: params.opts as ProviderAuthOptionBag | undefined,
   });
   nextConfig = applied.config;
 

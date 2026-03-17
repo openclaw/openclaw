@@ -1,18 +1,16 @@
-import {
-  parseSetupEntriesAllowingWildcard,
-  promptParsedAllowFromForScopedChannel,
-  setChannelDmPolicyWithAllowFrom,
-  setSetupChannelEnabled,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { formatCliCommand } from "../../../src/cli/command-format.js";
 import { detectBinary } from "../../../src/commands/onboard-helpers.js";
 import { installSignalCli } from "../../../src/commands/signal-install.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  type OpenClawConfig,
+  promptParsedAllowFromForScopedChannel,
+  setChannelDmPolicyWithAllowFrom,
+  setSetupChannelEnabled,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,

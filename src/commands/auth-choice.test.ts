@@ -26,16 +26,16 @@ import { setDetectZaiEndpointForTesting } from "../../extensions/zai/detect.js";
 import zaiPlugin from "../../extensions/zai/index.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import {
+  MINIMAX_CN_API_BASE_URL,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_GLOBAL_BASE_URL,
+} from "../plugins/provider-model-definitions.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
-import {
-  MINIMAX_CN_API_BASE_URL,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_CODING_GLOBAL_BASE_URL,
-} from "./onboard-auth.js";
 import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,
@@ -520,9 +520,9 @@ describe("applyAuthChoice", () => {
       {
         tokenProvider: "KIMI-CODING",
         token: "sk-kimi-token-provider-test",
-        profileId: "kimi-coding:default",
-        provider: "kimi-coding",
-        expectedModelPrefix: "kimi-coding/",
+        profileId: "kimi:default",
+        provider: "kimi",
+        expectedModelPrefix: "kimi/",
       },
       {
         tokenProvider: " GOOGLE  ",
@@ -600,9 +600,9 @@ describe("applyAuthChoice", () => {
     {
       authChoice: "kimi-code-api-key",
       tokenProvider: "kimi-code",
-      profileId: "kimi-coding:default",
-      provider: "kimi-coding",
-      modelPrefix: "kimi-coding/",
+      profileId: "kimi:default",
+      provider: "kimi",
+      modelPrefix: "kimi/",
     },
     {
       authChoice: "xiaomi-api-key",

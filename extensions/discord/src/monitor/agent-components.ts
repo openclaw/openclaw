@@ -18,41 +18,41 @@ import {
 } from "@buape/carbon";
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ButtonStyle, ChannelType } from "discord-api-types/v10";
-import { resolveHumanDelayConfig } from "../../../../src/agents/identity.js";
-import { resolveChunkMode, resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../../../src/auto-reply/envelope.js";
-import { finalizeInboundContext } from "../../../../src/auto-reply/reply/inbound-context.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../../../src/auto-reply/reply/provider-dispatcher.js";
-import { createReplyReferencePlanner } from "../../../../src/auto-reply/reply/reply-reference.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channels/command-gating.js";
-import { createReplyPrefixOptions } from "../../../../src/channels/reply-prefix.js";
-import { recordInboundSession } from "../../../../src/channels/session.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
-import { resolveMarkdownTableMode } from "../../../../src/config/markdown-tables.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../../../src/config/sessions.js";
-import type { DiscordAccountConfig } from "../../../../src/config/types.discord.js";
-import { logVerbose } from "../../../../src/globals.js";
-import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
-import { logDebug, logError } from "../../../../src/logger.js";
-import { getAgentScopedMediaLocalRoots } from "../../../../src/media/local-roots.js";
-import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
-import { upsertChannelPairingRequest } from "../../../../src/pairing/pairing-store.js";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { issuePairingChallenge } from "openclaw/plugin-sdk/conversation-runtime";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
-} from "../../../../src/plugins/conversation-binding.js";
-import { dispatchPluginInteractiveHandler } from "../../../../src/plugins/interactive.js";
-import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   readStoreAllowFromForDmPolicy,
   resolvePinnedMainDmOwnerFromAllowlist,
-} from "../../../../src/security/dm-policy-shared.js";
+} from "openclaw/plugin-sdk/security-runtime";
+import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
