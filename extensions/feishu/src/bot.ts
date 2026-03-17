@@ -45,12 +45,18 @@ import type { DynamicAgentCreationConfig } from "./types.js";
 // --- Active bot topic tracking (#40475) ---
 // Tracks group topics where the bot was @-mentioned, so that subsequent thread
 // replies can skip the mention check without responding in unrelated threads.
-// Keyed by "chatId:topicId", value is the last-activity epoch-ms timestamp.
+// Keyed by "accountId:chatId:topicId" (scoped per account so multi-account
+// setups do not leak activation across bots), value is last-activity epoch-ms.
 const activeBotTopicTimestamps = new Map<string, number>();
 const ACTIVE_TOPIC_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_ACTIVE_TOPICS = 500;
 
-function isActiveBotTopic(chatId: string, topicId: string): boolean {
-  const key = `${chatId}:${topicId}`;
+function buildTopicKey(accountId: string, chatId: string, topicId: string): string {
+  return `${accountId}:${chatId}:${topicId}`;
+}
+
+function isActiveBotTopic(accountId: string, chatId: string, topicId: string): boolean {
+  const key = buildTopicKey(accountId, chatId, topicId);
   const ts = activeBotTopicTimestamps.get(key);
   if (ts == null) return false;
   if (Date.now() - ts > ACTIVE_TOPIC_TTL_MS) {
@@ -60,14 +66,23 @@ function isActiveBotTopic(chatId: string, topicId: string): boolean {
   return true;
 }
 
-function markActiveBotTopic(chatId: string, topicId: string): void {
-  const key = `${chatId}:${topicId}`;
+function markActiveBotTopic(accountId: string, chatId: string, topicId: string): void {
+  const key = buildTopicKey(accountId, chatId, topicId);
   activeBotTopicTimestamps.set(key, Date.now());
-  // Lazy eviction when the map grows large
-  if (activeBotTopicTimestamps.size > 500) {
+  // Evict when the map exceeds the cap.
+  if (activeBotTopicTimestamps.size > MAX_ACTIVE_TOPICS) {
+    // First pass: remove expired entries.
     const cutoff = Date.now() - ACTIVE_TOPIC_TTL_MS;
     for (const [k, v] of activeBotTopicTimestamps) {
       if (v < cutoff) activeBotTopicTimestamps.delete(k);
+    }
+    // Second pass: if still over limit, evict oldest entries.
+    if (activeBotTopicTimestamps.size > MAX_ACTIVE_TOPICS) {
+      const sorted = [...activeBotTopicTimestamps.entries()].sort((a, b) => a[1] - b[1]);
+      const excess = activeBotTopicTimestamps.size - MAX_ACTIVE_TOPICS;
+      for (let i = 0; i < excess; i++) {
+        activeBotTopicTimestamps.delete(sorted[i][0]);
+      }
     }
   }
 }
@@ -1125,7 +1140,7 @@ export async function handleFeishuMessage(params: {
     // sessions unusable.
     //
     // threadFollowUp controls this behavior:
-    //   "off"    — always require @-mention, even in threads (legacy)
+    //   "off"    — always require @-mention, even in threads (pre-feature behaviour)
     //   "topic"  — skip @-mention for all thread replies in topic-scoped sessions
     //   "active" — skip @-mention only in topics the bot was previously
     //              @-mentioned in (prevents responding to unrelated human
@@ -1139,20 +1154,23 @@ export async function handleFeishuMessage(params: {
     const isTopicScoped =
       groupSession?.groupSessionScope === "group_topic" ||
       groupSession?.groupSessionScope === "group_topic_sender";
-    const topicId = ctx.rootId || ctx.messageId;
+    // Use rootId when available, fall back to threadId for topic continuity
+    // (some Feishu deliveries only carry thread_id without root_id).
+    const threadAnchorId = ctx.rootId || ctx.threadId;
+    const topicId = threadAnchorId || ctx.messageId;
 
     // Record active topics when the bot is explicitly @-mentioned so that the
     // "active" mode can recognise follow-ups later.
     if (isTopicScoped && ctx.mentionedBot) {
-      markActiveBotTopic(ctx.chatId, topicId);
+      markActiveBotTopic(account.accountId, ctx.chatId, topicId);
     }
 
     let skipMentionForThread = false;
-    if (isTopicScoped && ctx.rootId && !ctx.mentionedBot) {
+    if (isTopicScoped && threadAnchorId && !ctx.mentionedBot) {
       if (threadFollowUp === "topic") {
         skipMentionForThread = true;
       } else if (threadFollowUp === "active") {
-        skipMentionForThread = isActiveBotTopic(ctx.chatId, ctx.rootId);
+        skipMentionForThread = isActiveBotTopic(account.accountId, ctx.chatId, threadAnchorId);
       }
       // threadFollowUp === "off" → skipMentionForThread stays false
     }
@@ -1182,10 +1200,10 @@ export async function handleFeishuMessage(params: {
     // Refresh the active topic timestamp on successful follow-ups so that
     // long-running conversations stay alive.
     if (skipMentionForThread) {
-      markActiveBotTopic(ctx.chatId, ctx.rootId!);
+      markActiveBotTopic(account.accountId, ctx.chatId, threadAnchorId!);
       log(
         `feishu[${account.accountId}]: thread follow-up in group ${ctx.chatId} ` +
-          `(threadFollowUp=${threadFollowUp}, rootId=${ctx.rootId})`,
+          `(threadFollowUp=${threadFollowUp}, rootId=${ctx.rootId}, threadId=${ctx.threadId})`,
       );
     }
   } else {
@@ -1717,7 +1735,9 @@ export async function handleFeishuMessage(params: {
         ((cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined)
           ?.strategy || "parallel";
       const activeAgentId =
-        ctx.mentionedBot || !requireMention ? normalizeAgentId(route.agentId) : null;
+        ctx.mentionedBot || !requireMention || skipMentionForThread
+          ? normalizeAgentId(route.agentId)
+          : null;
       const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => normalizeAgentId(a.id));
       const hasKnownAgents = agentIds.length > 0;
 

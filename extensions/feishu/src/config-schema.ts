@@ -145,7 +145,7 @@ const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
  * @-mention.  Only effective when `groupSessionScope` is `"group_topic"` or
  * `"group_topic_sender"` — group-scoped sessions are never affected.
  *
- * - "off"     — always require @-mention, even inside threads (legacy default)
+ * - "off"     — always require @-mention, even inside threads (pre-feature behaviour)
  * - "topic"   — skip @-mention for all thread replies in topic-scoped sessions
  * - "active"  — skip @-mention only in topics where the bot was previously
  *               @-mentioned (prevents the bot from responding in unrelated
