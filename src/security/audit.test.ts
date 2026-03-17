@@ -771,83 +771,81 @@ description: test skill
     );
   });
 
-  it("treats Windows ACL-only perms as secure", async () => {
-    const tmp = await makeTmpDir("win");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-
-    const user = "DESKTOP-TEST\\Tester";
-    const execIcacls = async (_cmd: string, args: string[]) => ({
-      stdout: `${args[0]} NT AUTHORITY\\SYSTEM:(F)\n ${user}:(F)\n`,
-      stderr: "",
-    });
-
-    const res = await runSecurityAudit({
-      config: {},
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      stateDir,
-      configPath,
-      platform: "win32",
-      env: windowsAuditEnv,
-      execIcacls,
-      execDockerRawFn: execDockerRawUnavailable,
-    });
-
-    const forbidden = new Set([
-      "fs.state_dir.perms_world_writable",
-      "fs.state_dir.perms_group_writable",
-      "fs.state_dir.perms_readable",
-      "fs.config.perms_writable",
-      "fs.config.perms_world_readable",
-      "fs.config.perms_group_readable",
-    ]);
-    for (const id of forbidden) {
-      expect(res.findings.some((f) => f.checkId === id)).toBe(false);
-    }
-  });
-
-  it("flags Windows ACLs when Users can read the state dir", async () => {
-    const tmp = await makeTmpDir("win-open");
-    const stateDir = path.join(tmp, "state");
-    await fs.mkdir(stateDir, { recursive: true });
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, "{}\n", "utf-8");
-
-    const user = "DESKTOP-TEST\\Tester";
-    const execIcacls = async (_cmd: string, args: string[]) => {
-      const target = args[0];
-      if (target === stateDir) {
-        return {
-          stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(RX)\n ${user}:(F)\n`,
+  it("evaluates Windows ACL-derived filesystem findings", async () => {
+    const cases = [
+      {
+        name: "treats Windows ACL-only perms as secure",
+        label: "win",
+        execIcacls: async (_cmd: string, args: string[]) => ({
+          stdout: `${args[0]} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
           stderr: "",
-        };
-      }
-      return {
-        stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n ${user}:(F)\n`,
-        stderr: "",
-      };
-    };
+        }),
+        assert: (res: SecurityAuditReport) => {
+          const forbidden = new Set([
+            "fs.state_dir.perms_world_writable",
+            "fs.state_dir.perms_group_writable",
+            "fs.state_dir.perms_readable",
+            "fs.config.perms_writable",
+            "fs.config.perms_world_readable",
+            "fs.config.perms_group_readable",
+          ]);
+          for (const id of forbidden) {
+            expect(
+              res.findings.some((f) => f.checkId === id),
+              id,
+            ).toBe(false);
+          }
+        },
+      },
+      {
+        name: "flags Windows ACLs when Users can read the state dir",
+        label: "win-open",
+        execIcacls: async (_cmd: string, args: string[]) => {
+          const target = args[0];
+          if (target.endsWith(`${path.sep}state`)) {
+            return {
+              stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(RX)\n DESKTOP-TEST\\Tester:(F)\n`,
+              stderr: "",
+            };
+          }
+          return {
+            stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n DESKTOP-TEST\\Tester:(F)\n`,
+            stderr: "",
+          };
+        },
+        assert: (res: SecurityAuditReport) => {
+          expect(
+            res.findings.some(
+              (f) => f.checkId === "fs.state_dir.perms_readable" && f.severity === "warn",
+            ),
+          ).toBe(true);
+        },
+      },
+    ] as const;
 
-    const res = await runSecurityAudit({
-      config: {},
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      stateDir,
-      configPath,
-      platform: "win32",
-      env: windowsAuditEnv,
-      execIcacls,
-      execDockerRawFn: execDockerRawUnavailable,
-    });
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const tmp = await makeTmpDir(testCase.label);
+        const stateDir = path.join(tmp, "state");
+        await fs.mkdir(stateDir, { recursive: true });
+        const configPath = path.join(stateDir, "openclaw.json");
+        await fs.writeFile(configPath, "{}\n", "utf-8");
 
-    expect(
-      res.findings.some(
-        (f) => f.checkId === "fs.state_dir.perms_readable" && f.severity === "warn",
-      ),
-    ).toBe(true);
+        const res = await runSecurityAudit({
+          config: {},
+          includeFilesystem: true,
+          includeChannelSecurity: false,
+          stateDir,
+          configPath,
+          platform: "win32",
+          env: windowsAuditEnv,
+          execIcacls: testCase.execIcacls,
+          execDockerRawFn: execDockerRawUnavailable,
+        });
+
+        testCase.assert(res);
+      }),
+    );
   });
 
   it("evaluates sandbox browser container findings", async () => {
