@@ -3,20 +3,52 @@ import type { ToolCallContent, ToolPluginMappingRow } from "../types.js";
 
 /** Tools built into the OpenClaw agent runtime (not owned by any plugin) */
 const BUILTIN_TOOLS = new Set([
-  // Core agent tools
+  // File system tools
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  // Legacy file tool aliases
+  "read_file",
+  "write_file",
+  "edit_file",
+  "create_file",
+  "delete_file",
+  "list_files",
+  "search_code",
+  "search_files",
+  // Execution tools
+  "exec",
+  "process",
+  "run_command",
+  "run_shell",
+  // Web tools
   "web_search",
   "web_browse",
   "web_fetch",
-  "write_file",
-  "read_file",
-  "edit_file",
-  "list_files",
-  "run_command",
-  "run_shell",
-  "create_file",
-  "delete_file",
-  "search_code",
-  "search_files",
+  "browser",
+  // Memory tools
+  "memory_search",
+  "memory_get",
+  // Session / agent tools
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagents",
+  "session_status",
+  "agents_list",
+  // Media / UI tools
+  "canvas",
+  "image",
+  "tts",
+  "pdf",
+  "message",
+  // Infrastructure tools
+  "cron",
+  "gateway",
+  "nodes",
   // Our own tools (should never be attributed)
   "insights_show",
   "insights_compare",

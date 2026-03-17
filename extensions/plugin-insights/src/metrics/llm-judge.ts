@@ -79,9 +79,14 @@ export class LLMJudgeMetric {
         );
         if (score) {
           this.insertScore(turn.id, score);
+        } else {
+          // Mark as attempted so this turn is not retried and counts against
+          // the daily budget even when the API returns unparseable output.
+          this.insertFailedAttempt(turn.id);
         }
       } catch {
-        // Silently skip failed evaluations
+        // API error — still count against budget to prevent runaway retries
+        this.insertFailedAttempt(turn.id);
       }
     }
   }
@@ -93,25 +98,29 @@ export class LLMJudgeMetric {
     // Scores for turns where plugin was triggered.
     // Use a subquery to deduplicate: a turn with multiple plugin_events
     // for the same plugin should only count its LLM score once.
+    // Exclude failed attempts (overall_score = -1).
     const withPlugin = this.db
       .prepare(
         `SELECT AVG(ls.overall_score) as avg_score, COUNT(*) as cnt
          FROM llm_scores ls
-         WHERE ls.turn_id IN (
-           SELECT DISTINCT pe.turn_id FROM plugin_events pe
-           WHERE pe.plugin_id = ? AND pe.created_at >= ?
-         )
+         WHERE ls.overall_score > 0
+           AND ls.turn_id IN (
+             SELECT DISTINCT pe.turn_id FROM plugin_events pe
+             WHERE pe.plugin_id = ? AND pe.created_at >= ?
+           )
            AND ls.created_at >= ?`,
       )
       .get(pluginId, since, since) as { avg_score: number | null; cnt: number };
 
     // Baseline scores (turns without any plugin)
+    // Exclude failed attempts (overall_score = -1).
     const withoutPlugin = this.db
       .prepare(
         `SELECT AVG(ls.overall_score) as avg_score, COUNT(*) as cnt
          FROM llm_scores ls
          JOIN turns t ON t.id = ls.turn_id
-         WHERE (t.plugins_triggered_json IS NULL OR t.plugins_triggered_json = '[]')
+         WHERE ls.overall_score > 0
+           AND (t.plugins_triggered_json IS NULL OR t.plugins_triggered_json = '[]')
            AND ls.created_at >= ?`,
       )
       .get(since) as { avg_score: number | null; cnt: number };
@@ -206,6 +215,18 @@ export class LLMJudgeMetric {
         this.config.model,
         JSON.stringify(score),
       );
+  }
+
+  /** Record a failed API attempt so the turn is not retried and counts against budget */
+  private insertFailedAttempt(turnId: number): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO llm_scores (
+          turn_id, accuracy_score, completeness_score,
+          relevance_score, overall_score, judge_model, judge_response_json
+        ) VALUES (?, -1, -1, -1, -1, ?, '{"error":"failed"}')`,
+      )
+      .run(turnId, this.config.model);
   }
 
   private getTodayEvalCount(): number {
