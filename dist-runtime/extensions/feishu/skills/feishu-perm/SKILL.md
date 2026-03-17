@@ -1,0 +1,1 @@
+../../../../../dist/extensions/feishu/skills/feishu-perm/SKILL.md

@@ -42,6 +42,8 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  chatHistoryCursor: string | null;
+  chatHistoryHasMore: boolean;
 };
 
 export type ChatEventPayload = {
@@ -64,23 +66,43 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
-export async function loadChatHistory(state: ChatState) {
+export async function loadChatHistory(state: ChatState, before?: string) {
+  // Load earlier messages (pagination)
   if (!state.client || !state.connected) {
     return;
   }
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-      "chat.history",
-      {
-        sessionKey: state.sessionKey,
-        limit: 200,
-      },
-    );
+    const res = await state.client.request<{
+      messages?: Array<unknown>;
+      thinkingLevel?: string;
+      cursor?: string;
+      hasMore?: boolean;
+    }>("chat.history", {
+      sessionKey: state.sessionKey,
+      limit: 200,
+      before,
+    });
+    // API response handled
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    const filtered = messages.filter((message) => !isAssistantSilentReply(message));
+    // Filtered messages handled
+
+    if (before) {
+      // Prepend older messages when loading more
+      state.chatMessages = [...filtered, ...state.chatMessages];
+      // Prepend handled
+    } else {
+      // Initial load
+      state.chatMessages = filtered;
+    }
+
     state.chatThinkingLevel = res.thinkingLevel ?? null;
+    state.chatHistoryCursor = res.cursor ?? null;
+    state.chatHistoryHasMore = res.hasMore ?? false;
+    // State updated
+
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
     maybeResetToolStream(state);
@@ -90,6 +112,13 @@ export async function loadChatHistory(state: ChatState) {
     state.lastError = String(err);
   } finally {
     state.chatLoading = false;
+  }
+}
+
+export async function loadMoreChatHistory(state: ChatState) {
+  // Load more history called
+  if (state.chatHistoryCursor) {
+    await loadChatHistory(state, state.chatHistoryCursor);
   }
 }
 

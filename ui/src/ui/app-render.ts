@@ -1437,6 +1437,12 @@ export function renderApp(state: AppViewState) {
                 onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
                 onCloseSidebar: () => state.handleCloseSidebar(),
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+                // Pagination props
+                historyCursor: state.chatHistoryCursor,
+                historyHasMore: state.chatHistoryHasMore,
+                onLoadMoreHistory: () => {
+                  void loadChatHistory(state, state.chatHistoryCursor ?? undefined);
+                },
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
                 basePath: state.basePath ?? "",

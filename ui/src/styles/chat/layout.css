@@ -135,6 +135,36 @@
   border-color: var(--accent);
 }
 
+/* Load more history button */
+.chat-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-load-more__btn {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.chat-load-more__btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.chat-load-more__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .chat-new-messages svg {
   width: 16px;
   height: 16px;

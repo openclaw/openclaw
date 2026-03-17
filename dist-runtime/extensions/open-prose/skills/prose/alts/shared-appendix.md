@@ -1,0 +1,1 @@
+../../../../../../dist/extensions/open-prose/skills/prose/alts/shared-appendix.md

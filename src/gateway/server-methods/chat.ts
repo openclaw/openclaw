@@ -932,14 +932,27 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit } = params as {
+    // chat.history pagination
+    const { sessionKey, limit, before } = params as {
       sessionKey: string;
       limit?: number;
+      before?: string;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
-    const rawMessages =
+    let rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+
+    // Pagination: filter messages before the cursor
+    if (before) {
+      const beforeTs = parseInt(before, 10);
+      if (!isNaN(beforeTs)) {
+        rawMessages = rawMessages.filter((msg: { timestamp?: number }) => {
+          const ts = (msg as { timestamp?: number }).timestamp;
+          return ts && ts < beforeTs;
+        });
+      }
+    }
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -975,6 +988,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+
+    // Generate cursor and hasMore for pagination
+    const hasMore = rawMessages.length > sliced.length;
+    const oldestMessage = sliced.length > 0 ? (sliced[0] as { timestamp?: number }) : null;
+    const cursor = oldestMessage?.timestamp ? String(oldestMessage.timestamp) : null;
+
     respond(true, {
       sessionKey,
       sessionId,
@@ -982,6 +1001,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
+      cursor,
+      hasMore,
     });
   },
   "chat.abort": ({ params, respond, context, client }) => {

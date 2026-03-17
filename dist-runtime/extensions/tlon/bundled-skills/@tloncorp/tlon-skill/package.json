@@ -1,0 +1,40 @@
+{
+  "name": "@tloncorp/tlon-skill",
+  "version": "0.2.2",
+  "description": "Tlon/Urbit skill for OpenClaw agents",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tloncorp/tlon-skill.git"
+  },
+  "bin": {
+    "tlon": "./bin/tlon.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/postinstall.js",
+    "SKILL.md",
+    "references/"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "build:all": "node scripts/build-all.js",
+    "dev:link": "bun run build:all && cp \"npm/$(node -e 'console.log(process.platform + \"-\" + process.arch)')/tlon\" bin/",
+    "postinstall": "node scripts/postinstall.js",
+    "test": "bun test",
+    "version": "node scripts/bump-version.js"
+  },
+  "devDependencies": {
+    "@tloncorp/api": "git+https://github.com/tloncorp/api-beta.git#c5eb1720d94435b62503605acb294ef42a5440b3",
+    "@types/node": "^22.0.0",
+    "@urbit/aura": "^3.0.0",
+    "typescript": "^5.9.3"
+  },
+  "optionalDependencies": {
+    "@tloncorp/tlon-skill-darwin-arm64": "0.2.2",
+    "@tloncorp/tlon-skill-darwin-x64": "0.2.2",
+    "@tloncorp/tlon-skill-linux-arm64": "0.2.2",
+    "@tloncorp/tlon-skill-linux-x64": "0.2.2"
+  }
+}

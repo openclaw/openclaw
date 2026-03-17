@@ -1,0 +1,1 @@
+../../../../../../../../dist/extensions/tlon/bundled-skills/@tloncorp/tlon-skill/references/hooks-examples/delete-old-posts.hoon
