@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_PATH="${ROOT_DIR}/skills/morpho-sre/wiz-api.sh"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+PASS=0
+FAIL=0
+
+assert_ok() {
+  local desc="$1"
+  if eval "$2"; then
+    PASS=$((PASS + 1))
+    printf '  PASS: %s\n' "$desc"
+  else
+    FAIL=$((FAIL + 1))
+    printf '  FAIL: %s\n' "$desc" >&2
+  fi
+}
+
+printf '=== test-wiz-api: credential loading ===\n'
+
+# --- env credentials ---
+plan_env="$(
+  export WIZ_API_SKIP_VAULT=1
+  export WIZ_CLIENT_ID='test-client-id'
+  export WIZ_CLIENT_SECRET='test-client-secret'
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-env.json"
+  "${SCRIPT_PATH}" --print-plan 2>/dev/null
+)"
+
+assert_ok "env: credentialSource is env" \
+  "printf '%s' '$plan_env' | jq -e '.credentialSource == \"env\"' >/dev/null"
+assert_ok "env: does not leak client_secret" \
+  "! printf '%s' '$plan_env' | grep -q 'test-client-secret'"
+
+# --- vault credentials ---
+printf '%s\n' 'jwt-token' >"${TMP}/jwt"
+
+cat >"${TMP}/mock-curl-vault.sh" <<'CURL_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+  case "$arg" in
+    */v1/auth/kubernetes/login)
+      printf '{"auth":{"client_token":"vault-tok"}}\n'
+      exit 0
+      ;;
+    */v1/secret/data/wiz/api-token)
+      printf '{"data":{"data":{"client_id":"vault-cid","client_secret":"vault-csec"}}}\n'
+      exit 0
+      ;;
+  esac
+done
+# Default: auth token endpoint (will be added later)
+printf '{"access_token":"mock-token","expires_in":3600,"token_type":"Bearer"}\n'
+CURL_EOF
+chmod +x "${TMP}/mock-curl-vault.sh"
+
+plan_vault="$(
+  export VAULT_ADDR='https://vault.test'
+  export VAULT_KUBERNETES_AUTH_PATH='kubernetes'
+  export VAULT_KUBERNETES_ROLE='test-role'
+  export WIZ_API_CURL_BIN="${TMP}/mock-curl-vault.sh"
+  export WIZ_API_JQ_BIN='jq'
+  export WIZ_API_VAULT_JWT_FILE="${TMP}/jwt"
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-vault.json"
+  export WIZ_CLIENT_ID='stale-env-id'
+  export WIZ_CLIENT_SECRET='stale-env-secret'
+  "${SCRIPT_PATH}" --print-plan 2>/dev/null
+)"
+
+assert_ok "vault: credentialSource is vault" \
+  "printf '%s' '$plan_vault' | jq -e '.credentialSource == \"vault:secret/data/wiz/api-token\"' >/dev/null"
+assert_ok "vault: does not leak secrets" \
+  "! printf '%s' '$plan_vault' | grep -q 'vault-csec'"
+
+# --- missing credentials fail ---
+if (
+  unset WIZ_CLIENT_ID WIZ_CLIENT_SECRET VAULT_ADDR
+  export WIZ_API_SKIP_VAULT=1
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-missing.json"
+  "${SCRIPT_PATH}" --print-plan >/dev/null 2>&1
+); then
+  FAIL=$((FAIL + 1))
+  printf '  FAIL: missing creds should fail\n' >&2
+else
+  PASS=$((PASS + 1))
+  printf '  PASS: missing creds fail as expected\n'
+fi
+
+printf '\n=== Results: %d passed, %d failed ===\n' "$PASS" "$FAIL"
+[[ "$FAIL" -eq 0 ]] || exit 1
