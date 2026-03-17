@@ -12,7 +12,7 @@ import {
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
-import { providerContractRegistry } from "./registry.js";
+import { requireProviderContractProvider, uniqueProviderContractProviders } from "./registry.js";
 
 type ResolvePluginProviders =
   typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolvePluginProviders;
@@ -102,11 +102,7 @@ describe("provider auth-choice contract", () => {
 
   beforeEach(() => {
     resolvePreferredProviderPluginProvidersMock.mockReset();
-    resolvePreferredProviderPluginProvidersMock.mockReturnValue([
-      ...new Map(
-        providerContractRegistry.map((entry) => [entry.provider.id, entry.provider]),
-      ).values(),
-    ]);
+    resolvePreferredProviderPluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
   });
 
   afterEach(async () => {
@@ -130,10 +126,7 @@ describe("provider auth-choice contract", () => {
       "modelstudio",
       "ollama",
     ].map((providerId) => {
-      const provider = requireProvider(
-        providerContractRegistry.map((entry) => entry.provider),
-        providerId,
-      );
+      const provider = requireProviderContractProvider(providerId);
       return {
         authChoice: buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default"),
         expectedProvider: provider.id,

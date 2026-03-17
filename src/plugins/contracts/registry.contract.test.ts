@@ -4,6 +4,7 @@ import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
 import {
   mediaUnderstandingProviderContractRegistry,
   pluginRegistrationContractRegistry,
+  providerContractPluginIds,
   providerContractRegistry,
   speechProviderContractRegistry,
   webSearchProviderContractRegistry,
@@ -92,11 +93,7 @@ describe("plugin contract registry", () => {
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
 
-    expect(
-      [...new Set(providerContractRegistry.map((entry) => entry.pluginId))].toSorted(
-        (left, right) => left.localeCompare(right),
-      ),
-    ).toEqual(bundledProviderPluginIds);
+    expect(providerContractPluginIds).toEqual(bundledProviderPluginIds);
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
