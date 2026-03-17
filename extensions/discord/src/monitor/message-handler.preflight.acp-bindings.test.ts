@@ -1,18 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const ensureConfiguredAcpRouteReadyMock = vi.hoisted(() => vi.fn());
-const resolveConfiguredAcpRouteMock = vi.hoisted(() => vi.fn());
+const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
+const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
-    ensureConfiguredAcpRouteReady: (...args: unknown[]) =>
-      ensureConfiguredAcpRouteReadyMock(...args),
-    resolveConfiguredAcpRoute: (...args: unknown[]) => resolveConfiguredAcpRouteMock(...args),
     ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
-      ensureConfiguredAcpRouteReadyMock(...args),
-    resolveConfiguredBindingRoute: (...args: unknown[]) => resolveConfiguredAcpRouteMock(...args),
+      ensureConfiguredBindingRouteReadyMock(...args),
+    resolveConfiguredBindingRoute: (...args: unknown[]) =>
+      resolveConfiguredBindingRouteMock(...args),
   };
 });
 
@@ -171,10 +169,10 @@ function createBasePreflightParams(overrides?: Record<string, unknown>) {
 describe("preflightDiscordMessage configured ACP bindings", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    ensureConfiguredAcpRouteReadyMock.mockReset();
-    resolveConfiguredAcpRouteMock.mockReset();
-    resolveConfiguredAcpRouteMock.mockReturnValue(createConfiguredDiscordRoute());
-    ensureConfiguredAcpRouteReadyMock.mockResolvedValue({ ok: true });
+    ensureConfiguredBindingRouteReadyMock.mockReset();
+    resolveConfiguredBindingRouteMock.mockReset();
+    resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredDiscordRoute());
+    ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
   });
 
   it("does not initialize configured ACP bindings for rejected messages", async () => {
@@ -195,8 +193,8 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     );
 
     expect(result).toBeNull();
-    expect(resolveConfiguredAcpRouteMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpRouteReadyMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
   it("initializes configured ACP bindings only after preflight accepts the message", async () => {
@@ -218,8 +216,8 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     );
 
     expect(result).not.toBeNull();
-    expect(resolveConfiguredAcpRouteMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredAcpRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
   });
 
@@ -260,7 +258,7 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     );
 
     expect(result).not.toBeNull();
-    expect(ensureConfiguredAcpRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
     expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
   });
 
@@ -322,7 +320,7 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     expect(restGet).toHaveBeenCalledTimes(1);
     expect(result?.messageText).toBe("hello from rest");
     expect(result?.data.message.content).toBe("hello from rest");
-    expect(ensureConfiguredAcpRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 
   it("hydrates sticker-only guild message payloads from REST before ensuring configured ACP bindings", async () => {
@@ -388,6 +386,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
 
     expect(restGet).toHaveBeenCalledTimes(1);
     expect(result?.messageText).toBe("<media:sticker> (1 sticker)");
-    expect(ensureConfiguredAcpRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 });
