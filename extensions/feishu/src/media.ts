@@ -87,6 +87,20 @@ function readHeaderValue(
   return undefined;
 }
 
+// When the Feishu API returns Content-Disposition with a plain filename="..."
+// (no RFC 5987 filename*=UTF-8'' form), the HTTP client may decode the raw
+// UTF-8 bytes as Latin-1, turning CJK characters into mojibake.  Detect
+// high-byte Latin-1 artifacts and re-decode them as UTF-8.
+function tryRecoverLatin1AsUtf8(text: string): string {
+  if (!/[\x80-\xff]/.test(text)) return text;
+  try {
+    const bytes = Buffer.from(text, "latin1");
+    const decoded = bytes.toString("utf8");
+    if (!decoded.includes("\ufffd")) return decoded;
+  } catch {}
+  return text;
+}
+
 function decodeDispositionFileName(value: string): string | undefined {
   const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
   if (utf8Match?.[1]) {
@@ -98,7 +112,8 @@ function decodeDispositionFileName(value: string): string | undefined {
   }
 
   const plainMatch = value.match(/filename="?([^";]+)"?/i);
-  return plainMatch?.[1]?.trim();
+  const plain = plainMatch?.[1]?.trim();
+  return plain ? tryRecoverLatin1AsUtf8(plain) : undefined;
 }
 
 function extractFeishuDownloadMetadata(response: unknown): {
