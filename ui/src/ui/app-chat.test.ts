@@ -3,17 +3,35 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleSendChat, refreshChat, refreshChatAvatar, type ChatHost } from "./app-chat.ts";
 
-function makeHost(overrides?: Partial<ChatHost>): ChatHost {
+type TestChatHost = ChatHost & {
+  chatHasAutoScrolled: boolean;
+  chatNewMessagesBelow: boolean;
+  chatUserNearBottom: boolean;
+  chatStreamStartedAt: number | null;
+  chatStreamSegments: Array<{ text: string; ts: number }>;
+  chatToolMessages: Record<string, unknown>[];
+  toolStreamById: Map<string, Record<string, unknown>>;
+  toolStreamOrder: string[];
+  toolStreamSyncTimer: number | null;
+};
+
+function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
   return {
     client: null,
     chatMessages: [],
     chatStream: null,
+    chatStreamStartedAt: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
     connected: true,
     chatMessage: "",
     chatAttachments: [],
+    chatHasAutoScrolled: false,
+    chatNewMessagesBelow: false,
     chatQueue: [],
     chatRunId: null,
     chatSending: false,
+    chatUserNearBottom: true,
     lastError: null,
     sessionKey: "agent:main",
     basePath: "",
@@ -22,6 +40,9 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelOverrides: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
     refreshSessionsAfterChat: new Set<string>(),
     updateComplete: Promise.resolve(),
     ...overrides,
@@ -229,6 +250,74 @@ describe("refreshChat", () => {
     });
   });
 
+  it("resets tool stream and scroll state when missing-session fallback history reload fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.history") {
+        throw new Error(`history failed:${String(params?.sessionKey)}`);
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+          sessions: [{ key: "main", kind: "direct", updatedAt: null }],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:main:discord:channel:123",
+      settings: {
+        gatewayUrl: "",
+        token: "",
+        sessionKey: "agent:main:discord:channel:123",
+        lastActiveSessionKey: "agent:main:discord:channel:123",
+        theme: "claw",
+        themeMode: "dark",
+        chatFocusMode: false,
+        chatShowThinking: true,
+        chatShowToolCalls: true,
+        splitRatio: 0.6,
+        navCollapsed: false,
+        navWidth: 280,
+        navGroupsCollapsed: {},
+      },
+    });
+    host.chatHasAutoScrolled = true;
+    host.chatNewMessagesBelow = true;
+    host.chatUserNearBottom = false;
+    host.chatStreamStartedAt = 123;
+    host.chatStreamSegments = [{ text: "delta", ts: 1 }];
+    host.chatToolMessages = [{ role: "assistant", text: "tool" }];
+    host.toolStreamById = new Map([["call-1", { id: "call-1" }]]);
+    host.toolStreamOrder = ["call-1"];
+    host.toolStreamSyncTimer = null;
+
+    await refreshChat(host, { scheduleScroll: false });
+
+    expect(host.sessionKey).toBe("main");
+    expect(host.toolStreamById.size).toBe(0);
+    expect(host.toolStreamOrder).toEqual([]);
+    expect(host.chatToolMessages).toEqual([]);
+    expect(host.chatStreamSegments).toEqual([]);
+    expect(host.chatHasAutoScrolled).toBe(false);
+    expect(host.chatUserNearBottom).toBe(true);
+    expect(host.chatNewMessagesBelow).toBe(false);
+    expect(host.lastError).toContain("history failed:main");
+  });
+
   it("uses a fresh sessions snapshot before falling back when sessions are already loading", async () => {
     vi.stubGlobal(
       "fetch",
@@ -289,7 +378,7 @@ describe("refreshChat", () => {
       },
       applySettings,
       loadAssistantIdentity,
-    }) as ChatHost & {
+    }) as unknown as TestChatHost & {
       sessionsLoading: boolean;
       sessionsResult: unknown;
       chatSessionsResult?: unknown;

@@ -131,6 +131,8 @@ async function switchMissingChatSession(host: ChatHost, nextSessionKey: string) 
   host.chatQueue = [];
   const hostWithStream = host as ChatHost & { chatStreamStartedAt?: number | null };
   hostWithStream.chatStreamStartedAt = null;
+  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
   if (host.settings) {
     const nextSettings: UiSettings = {
       ...host.settings,

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionsListResult } from "../types.ts";
 import {
   deleteSession,
   deleteSessionAndRefresh,
@@ -119,14 +120,14 @@ describe("loadSessions", () => {
   });
 
   it("does not overwrite the chat snapshot for filtered refreshes by default", async () => {
-    const filtered = {
+    const filtered: SessionsListResult = {
       ts: 0,
       path: "",
       count: 1,
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [{ key: "main", kind: "direct", updatedAt: null }],
     };
-    const existingChatSnapshot = {
+    const existingChatSnapshot: SessionsListResult = {
       ts: 1,
       path: "",
       count: 2,
@@ -153,7 +154,7 @@ describe("loadSessions", () => {
   });
 
   it("updates the chat snapshot when a chat-driven refresh asks for it", async () => {
-    const filtered = {
+    const filtered: SessionsListResult = {
       ts: 0,
       path: "",
       count: 1,
