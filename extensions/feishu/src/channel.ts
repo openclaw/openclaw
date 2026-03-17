@@ -1,6 +1,7 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import {
   buildChannelConfigSchema,
@@ -422,6 +423,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         ? (["cards"] as const)
         : [];
     },
+    getToolSchema: ({ cfg }) =>
+      cfg.channels?.feishu?.enabled !== false &&
+      Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined))
+        ? {
+            properties: {
+              card: createMessageToolCardSchema(),
+            },
+          }
+        : null,
     handleAction: async (ctx) => {
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId ?? undefined });
       if (
