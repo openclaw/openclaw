@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import * as webSearchProviders from "../plugins/web-search-providers.js";
 import * as secretResolve from "./resolve.js";
 import { createResolverContext } from "./runtime-shared.js";
 import { resolveRuntimeWebTools } from "./runtime-web-tools.js";
@@ -65,9 +66,53 @@ function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): u
   return config.tools?.web?.search?.perplexity?.apiKey;
 }
 
+function expectInactiveFirecrawlSecretRef(params: {
+  resolveSpy: ReturnType<typeof vi.spyOn>;
+  metadata: Awaited<ReturnType<typeof runRuntimeWebTools>>["metadata"];
+  context: Awaited<ReturnType<typeof runRuntimeWebTools>>["context"];
+}) {
+  expect(params.resolveSpy).not.toHaveBeenCalled();
+  expect(params.metadata.fetch.firecrawl.active).toBe(false);
+  expect(params.metadata.fetch.firecrawl.apiKeySource).toBe("secretRef");
+  expect(params.context.warnings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "tools.web.fetch.firecrawl.apiKey",
+      }),
+    ]),
+  );
+}
+
 describe("runtime web tools resolution", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("skips loading web search providers when search config is absent", async () => {
+    const providerSpy = vi.spyOn(webSearchProviders, "resolvePluginWebSearchProviders");
+
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            fetch: {
+              firecrawl: {
+                apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY_REF" },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-runtime-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(providerSpy).not.toHaveBeenCalled();
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.fetch.firecrawl.active).toBe(true);
+    expect(metadata.fetch.firecrawl.apiKeySource).toBe("env");
   });
 
   it.each([
@@ -184,7 +229,7 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        BRAVE_API_KEY_REF: "brave-runtime-key",
+        BRAVE_API_KEY_REF: "brave-runtime-key", // pragma: allowlist secret
       },
     });
 
@@ -225,7 +270,7 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        GEMINI_API_KEY_REF: "gemini-runtime-key",
+        GEMINI_API_KEY_REF: "gemini-runtime-key", // pragma: allowlist secret
       },
     });
 
@@ -260,7 +305,7 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        GEMINI_API_KEY_REF: "gemini-runtime-key",
+        GEMINI_API_KEY_REF: "gemini-runtime-key", // pragma: allowlist secret
       },
     });
 
@@ -339,17 +384,7 @@ describe("runtime web tools resolution", () => {
       }),
     });
 
-    expect(resolveSpy).not.toHaveBeenCalled();
-    expect(metadata.fetch.firecrawl.active).toBe(false);
-    expect(metadata.fetch.firecrawl.apiKeySource).toBe("secretRef");
-    expect(context.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.fetch.firecrawl.apiKey",
-        }),
-      ]),
-    );
+    expectInactiveFirecrawlSecretRef({ resolveSpy, metadata, context });
   });
 
   it("does not resolve Firecrawl SecretRef when Firecrawl is disabled", async () => {
@@ -370,17 +405,7 @@ describe("runtime web tools resolution", () => {
       }),
     });
 
-    expect(resolveSpy).not.toHaveBeenCalled();
-    expect(metadata.fetch.firecrawl.active).toBe(false);
-    expect(metadata.fetch.firecrawl.apiKeySource).toBe("secretRef");
-    expect(context.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: "tools.web.fetch.firecrawl.apiKey",
-        }),
-      ]),
-    );
+    expectInactiveFirecrawlSecretRef({ resolveSpy, metadata, context });
   });
 
   it("uses env fallback for unresolved Firecrawl SecretRef when active", async () => {
@@ -397,7 +422,7 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        FIRECRAWL_API_KEY: "firecrawl-fallback-key",
+        FIRECRAWL_API_KEY: "firecrawl-fallback-key", // pragma: allowlist secret
       },
     });
 

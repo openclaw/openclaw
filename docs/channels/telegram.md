@@ -115,7 +115,7 @@ Token resolution order is account-aware. In practice, config values win over env
 
     `channels.telegram.allowFrom` accepts numeric Telegram user IDs. `telegram:` / `tg:` prefixes are accepted and normalized.
     `dmPolicy: "allowlist"` with empty `allowFrom` blocks all DMs and is rejected by config validation.
-    The onboarding wizard accepts `@username` input and resolves it to numeric IDs.
+    Onboarding accepts `@username` input and resolves it to numeric IDs.
     If you upgraded and your config contains `@username` allowlist entries, run `openclaw doctor --fix` to resolve them (best-effort; requires a Telegram bot token).
     If you previously relied on pairing-store allowlist files, `openclaw doctor --fix` can recover entries into `channels.telegram.allowFrom` in allowlist flows (for example when `dmPolicy: "allowlist"` has no explicit IDs yet).
 
@@ -155,6 +155,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
     `groupAllowFrom` entries should be numeric Telegram user IDs (`telegram:` / `tg:` prefixes are normalized).
+    Do not put Telegram group or supergroup chat IDs in `groupAllowFrom`. Negative chat IDs belong under `channels.telegram.groups`.
     Non-numeric entries are ignored for sender authorization.
     Security boundary (`2026.2.25+`): group sender auth does **not** inherit DM pairing-store approvals.
     Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
@@ -176,6 +177,31 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   },
 }
 ```
+
+    Example: allow only specific users inside one specific group:
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "-1001234567890": {
+          requireMention: true,
+          allowFrom: ["8734062810", "745123456"],
+        },
+      },
+    },
+  },
+}
+```
+
+    <Warning>
+      Common mistake: `groupAllowFrom` is not a Telegram group allowlist.
+
+      - Put negative Telegram group or supergroup chat IDs like `-1001234567890` under `channels.telegram.groups`.
+      - Put Telegram user IDs like `8734062810` under `groupAllowFrom` when you want to limit which people inside an allowed group can trigger the bot.
+      - Use `groupAllowFrom: ["*"]` only when you want any member of an allowed group to be able to talk to the bot.
+    </Warning>
 
   </Tab>
 
@@ -309,9 +335,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     If native commands are disabled, built-ins are removed. Custom/plugin commands may still register if configured.
 
-    Common setup failure:
+    Common setup failures:
 
-    - `setMyCommands failed` usually means outbound DNS/HTTPS to `api.telegram.org` is blocked.
+    - `setMyCommands failed` with `BOT_COMMANDS_TOO_MUCH` means the Telegram menu still overflowed after trimming; reduce plugin/skill/custom commands or disable `channels.telegram.commands.native`.
+    - `setMyCommands failed` with network/fetch errors usually means outbound DNS/HTTPS to `api.telegram.org` is blocked.
 
     ### Device pairing commands (`device-pair` plugin)
 
@@ -410,6 +437,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.actions.sticker` (default: disabled)
 
     Note: `edit` and `topic-create` are currently enabled by default and do not have separate `channels.telegram.actions.*` toggles.
+    Runtime sends use the active config/secrets snapshot (startup/reload), so action paths do not perform ad-hoc SecretRef re-resolution per send.
 
     Reaction removal semantics: [/tools/reactions](/tools/reactions)
 
@@ -754,6 +782,11 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     - `--poll-public`
     - `--thread-id` for forum topics (or use a `:topic:` target)
 
+    Telegram send also supports:
+
+    - `--buttons` for inline keyboards when `channels.telegram.capabilities.inlineButtons` allows it
+    - `--force-document` to send outbound images and GIFs as documents instead of compressed photo or animated-media uploads
+
     Action gating:
 
     - `channels.telegram.actions.sendMessage=false` disables outbound Telegram messages, including polls
@@ -816,7 +849,8 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
     - authorize your sender identity (pairing and/or numeric `allowFrom`)
     - command authorization still applies even when group policy is `open`
-    - `setMyCommands failed` usually indicates DNS/HTTPS reachability issues to `api.telegram.org`
+    - `setMyCommands failed` with `BOT_COMMANDS_TOO_MUCH` means the native menu has too many entries; reduce plugin/skill/custom commands or disable native menus
+    - `setMyCommands failed` with network/fetch errors usually indicates DNS/HTTPS reachability issues to `api.telegram.org`
 
   </Accordion>
 
@@ -865,7 +899,7 @@ Primary reference:
 
 - `channels.telegram.enabled`: enable/disable channel startup.
 - `channels.telegram.botToken`: bot token (BotFather).
-- `channels.telegram.tokenFile`: read token from file path.
+- `channels.telegram.tokenFile`: read token from a regular file path. Symlinks are rejected.
 - `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `allowlist` requires at least one sender ID. `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs and can recover allowlist entries from pairing-store files in allowlist migration flows.
 - `channels.telegram.actions.poll`: enable or disable Telegram poll creation (default: enabled; still requires `sendMessage`).
@@ -926,7 +960,7 @@ Primary reference:
 
 Telegram-specific high-signal fields:
 
-- startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*`
+- startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*` (`tokenFile` must point to a regular file; symlinks are rejected)
 - access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
 - exec approvals: `execApprovals`, `accounts.*.execApprovals`
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`

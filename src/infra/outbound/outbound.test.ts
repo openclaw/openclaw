@@ -2,8 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
@@ -38,6 +42,12 @@ import {
   normalizeOutboundPayloadsForJson,
 } from "./payloads.js";
 import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
+
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
+  );
+});
 
 describe("delivery-queue", () => {
   let tmpDir: string;
@@ -879,6 +889,10 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy", () => {
+  beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
+  });
+
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
@@ -921,6 +935,10 @@ describe("outbound policy", () => {
 });
 
 describe("resolveOutboundSessionRoute", () => {
+  beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
+  });
+
   const baseConfig = {} as OpenClawConfig;
 
   it("resolves provider-specific session routes", async () => {
@@ -1142,6 +1160,28 @@ describe("resolveOutboundSessionRoute", () => {
     });
   });
 
+  it("uses resolved Mattermost user targets to route bare ids as DMs", async () => {
+    const userId = "dthcxgoxhifn3pwh65cut3ud3w";
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "mattermost",
+      agentId: "main",
+      target: userId,
+      resolvedTarget: {
+        to: `user:${userId}`,
+        kind: "user",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: `agent:main:mattermost:direct:${userId}`,
+      from: `mattermost:${userId}`,
+      to: `user:${userId}`,
+      chatType: "direct",
+    });
+  });
+
   it("rejects bare numeric Discord targets when the caller has no kind hint", async () => {
     await expect(
       resolveOutboundSessionRoute({
@@ -1234,6 +1274,16 @@ describe("normalizeOutboundPayloads", () => {
       { text: "final answer" },
     ]);
     expect(normalized).toEqual([{ text: "final answer", mediaUrls: [] }]);
+  });
+
+  it("formats BTW replies prominently for external delivery", () => {
+    const normalized = normalizeOutboundPayloads([
+      {
+        text: "323",
+        btw: { question: "what is 17 * 19?" },
+      },
+    ]);
+    expect(normalized).toEqual([{ text: "BTW\nQuestion: what is 17 * 19?\n\n323", mediaUrls: [] }]);
   });
 });
 

@@ -1,14 +1,15 @@
+import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
+import { createScopedAccountConfigAccessors } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildAccountScopedDmSecurityPolicy,
   buildOpenGroupPolicyWarning,
   collectAllowlistProviderGroupPolicyWarnings,
-  createScopedAccountConfigAccessors,
-  formatNormalizedAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-policy";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
+  createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   getChatChannelMeta,
@@ -16,6 +17,7 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/irc";
+import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -30,11 +32,12 @@ import {
   isChannelTarget,
   normalizeIrcAllowEntry,
 } from "./normalize.js";
-import { ircOnboardingAdapter } from "./onboarding.js";
 import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
+import { ircSetupAdapter } from "./setup-core.js";
+import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
 
 const meta = getChatChannelMeta("irc");
@@ -64,7 +67,8 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
     ...meta,
     quickstartAllowFrom: true,
   },
-  onboarding: ircOnboardingAdapter,
+  setup: ircSetupAdapter,
+  setupWizard: ircSetupWizard,
   pairing: {
     idLabel: "ircUser",
     normalizeAllowEntry: (entry) => normalizeIrcAllowEntry(entry),
@@ -353,6 +357,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
+      const statusSink = createAccountStatusSink({
+        accountId: ctx.accountId,
+        setStatus: ctx.setStatus,
+      });
       if (!account.configured) {
         throw new Error(
           `IRC is not configured for account "${account.accountId}" (need host and nick in channels.irc).`,
@@ -361,14 +369,17 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = {
       ctx.log?.info(
         `[${account.accountId}] starting IRC provider (${account.host}:${account.port}${account.tls ? " tls" : ""})`,
       );
-      const { stop } = await monitorIrcProvider({
-        accountId: account.accountId,
-        config: ctx.cfg as CoreConfig,
-        runtime: ctx.runtime,
+      await runStoppablePassiveMonitor({
         abortSignal: ctx.abortSignal,
-        statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
+        start: async () =>
+          await monitorIrcProvider({
+            accountId: account.accountId,
+            config: ctx.cfg as CoreConfig,
+            runtime: ctx.runtime,
+            abortSignal: ctx.abortSignal,
+            statusSink,
+          }),
       });
-      return { stop };
     },
   },
 };

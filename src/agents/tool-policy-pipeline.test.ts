@@ -45,6 +45,31 @@ describe("tool-policy-pipeline", () => {
     expect(warnings[0]).toContain("unknown entries (wat)");
   });
 
+  test("warns gated core tools as unavailable instead of plugin-only unknowns", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["apply_patch"] },
+          label: "tools.profile (coding)",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("unknown entries (apply_patch)");
+    expect(warnings[0]).toContain(
+      "shipped core tools but unavailable in the current runtime/provider/model/config",
+    );
+    expect(warnings[0]).not.toContain("unless the plugin is enabled");
+  });
+
   test("applies allowlist filtering when core tools are explicitly listed", () => {
     const tools = [{ name: "exec" }, { name: "process" }] as unknown as DummyTool[];
     const filtered = applyToolPolicyPipeline({
