@@ -434,10 +434,15 @@ export function renderCron(props: CronProps) {
               <div class="card-title">${t("cron.jobs.title")}</div>
               <div class="card-sub">${t("cron.jobs.subtitle")}</div>
             </div>
-            <div class="muted">${t("cron.jobs.shownOf", {
-              shown: String(props.jobs.length),
-              total: String(props.jobsTotal),
-            })}</div>
+            <div class="row" style="gap: 8px; align-items: center;">
+              <div class="muted">${t("cron.jobs.shownOf", {
+                shown: String(props.jobs.length),
+                total: String(props.jobsTotal),
+              })}</div>
+              <button class="btn primary" @click=${props.onCancelEdit}>
+                ${t("cron.jobs.new") || "New Cron"}
+              </button>
+            </div>
           </div>
           <div class="filters" style="margin-top: 12px;">
             <label class="field cron-filter-search">
