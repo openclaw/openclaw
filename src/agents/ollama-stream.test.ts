@@ -610,3 +610,63 @@ describe("createConfiguredOllamaStreamFn", () => {
     );
   });
 });
+
+// ── manusilized: extractMarkdownToolCalls tests ──────────────────────────────
+import { extractMarkdownToolCalls } from "./ollama-stream.js";
+
+describe("extractMarkdownToolCalls (manusilized fault-tolerant adapter)", () => {
+  it("extracts a single tool call from a json fenced code block", () => {
+    const content = `Sure, let me run that for you.\n\`\`\`json\n{"name": "bash", "arguments": {"command": "ls -la"}}\n\`\`\``;
+    const result = extractMarkdownToolCalls(content);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.function.name).toBe("bash");
+    expect(result[0]?.function.arguments).toEqual({ command: "ls -la" });
+  });
+
+  it("extracts a tool call using 'parameters' key as fallback for 'arguments'", () => {
+    const content = '```json\n{"name": "read_file", "parameters": {"path": "/etc/hosts"}}\n```';
+    const result = extractMarkdownToolCalls(content);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.function.name).toBe("read_file");
+    expect(result[0]?.function.arguments).toEqual({ path: "/etc/hosts" });
+  });
+
+  it("extracts multiple tool calls from a single content string", () => {
+    const content = [
+      "Step 1:",
+      "```json",
+      '{"name": "bash", "arguments": {"command": "pwd"}}',
+      "```",
+      "Step 2:",
+      "```json",
+      '{"name": "read_file", "arguments": {"path": "README.md"}}',
+      "```",
+    ].join("\n");
+    const result = extractMarkdownToolCalls(content);
+    expect(result).toHaveLength(2);
+    expect(result[0]?.function.name).toBe("bash");
+    expect(result[1]?.function.name).toBe("read_file");
+  });
+
+  it("extracts a tool call from an unlabelled fenced code block", () => {
+    const content = '```\n{"name": "web_search", "arguments": {"query": "openclaw"}}\n```';
+    const result = extractMarkdownToolCalls(content);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.function.name).toBe("web_search");
+  });
+
+  it("returns empty array when content has no tool calls", () => {
+    const content = "Here is a summary of the results: everything looks good.";
+    expect(extractMarkdownToolCalls(content)).toEqual([]);
+  });
+
+  it("returns empty array for malformed JSON in code block", () => {
+    const content = '```json\n{"name": "bash", broken json\n```';
+    expect(extractMarkdownToolCalls(content)).toEqual([]);
+  });
+
+  it("returns empty array when JSON block has no 'name' field", () => {
+    const content = '```json\n{"tool": "bash", "arguments": {}}\n```';
+    expect(extractMarkdownToolCalls(content)).toEqual([]);
+  });
+});

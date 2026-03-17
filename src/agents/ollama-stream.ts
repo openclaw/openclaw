@@ -13,6 +13,7 @@ import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
+  buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
   buildUsageWithNoCost,
 } from "./stream-message-shared.js";
@@ -374,6 +375,52 @@ export function buildAssistantMessage(
   });
 }
 
+// ── Markdown tool-call fallback extractor ──────────────────────────────────
+//
+// Some open-source models (e.g. older Llama3, GLM variants) do not emit
+// structured `tool_calls` in the Ollama response.  Instead they embed a JSON
+// object inside a fenced code block in the `content` field, e.g.:
+//
+//   ```json
+//   {"name": "bash", "arguments": {"command": "ls"}}
+//   ```
+//
+// `extractMarkdownToolCalls` scans the accumulated content string for these
+// patterns and converts them into proper `OllamaToolCall` objects so the rest
+// of the pipeline can treat them identically to native tool calls.
+
+const MARKDOWN_TOOL_CALL_RE =
+  /```(?:json)?\s*\n?\s*\{[\s\S]*?"name"\s*:\s*"([^"]+)"[\s\S]*?\}\s*\n?```/g;
+
+export function extractMarkdownToolCalls(content: string): OllamaToolCall[] {
+  const results: OllamaToolCall[] = [];
+  let match: RegExpExecArray | null;
+  MARKDOWN_TOOL_CALL_RE.lastIndex = 0;
+  while ((match = MARKDOWN_TOOL_CALL_RE.exec(content)) !== null) {
+    const raw = match[0]
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "")
+      .trim();
+    try {
+      const parsed = parseJsonPreservingUnsafeIntegers(raw) as Record<string, unknown>;
+      const name = typeof parsed.name === "string" ? parsed.name : undefined;
+      if (!name) {
+        continue;
+      }
+      const args =
+        parsed.arguments != null && typeof parsed.arguments === "object"
+          ? (parsed.arguments as Record<string, unknown>)
+          : parsed.parameters != null && typeof parsed.parameters === "object"
+            ? (parsed.parameters as Record<string, unknown>)
+            : {};
+      results.push({ function: { name, arguments: args } });
+    } catch {
+      log.warn(`[manusilized] Failed to parse Markdown tool call: ${raw.slice(0, 120)}`);
+    }
+  }
+  return results;
+}
+
 // ── NDJSON streaming parser ─────────────────────────────────────────────────
 
 export async function* parseNdjsonStream(
@@ -499,10 +546,35 @@ export function createOllamaStreamFn(
         let accumulatedContent = "";
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
+        let contentIndex = 0;
+
+        // Emit a "start" event so consumers know the assistant has begun.
+        stream.push({
+          type: "start",
+          partial: buildAssistantMessageWithZeroUsage({
+            model,
+            content: [],
+            stopReason: "stop",
+          }),
+        });
 
         for await (const chunk of parseNdjsonStream(reader)) {
+          // ── Real-time text_delta events (manusilized: incremental streaming) ──
+          // Emit each content fragment immediately so the UI can render a
+          // live typewriter effect instead of waiting for the full response.
           if (chunk.message?.content) {
-            accumulatedContent += chunk.message.content;
+            const delta = chunk.message.content;
+            accumulatedContent += delta;
+            stream.push({
+              type: "text_delta",
+              contentIndex,
+              delta,
+              partial: buildAssistantMessageWithZeroUsage({
+                model,
+                content: [{ type: "text", text: accumulatedContent }],
+                stopReason: "stop",
+              }),
+            });
           }
 
           // Ollama sends tool_calls in intermediate (done:false) chunks,
@@ -522,9 +594,32 @@ export function createOllamaStreamFn(
         }
 
         finalResponse.message.content = accumulatedContent;
+
+        // ── Markdown tool-call fallback (manusilized: fault-tolerant adapter) ──
+        // If the model produced no native tool_calls but embedded a JSON tool
+        // call inside a fenced code block, extract it as a fallback so that
+        // open-source models that don't support structured output still work.
+        if (accumulatedToolCalls.length === 0 && accumulatedContent) {
+          const markdownCalls = extractMarkdownToolCalls(accumulatedContent);
+          if (markdownCalls.length > 0) {
+            log.debug(
+              `[manusilized] Extracted ${markdownCalls.length} tool call(s) from Markdown fallback`,
+            );
+            accumulatedToolCalls.push(...markdownCalls);
+            // Strip the tool-call JSON blocks from the visible content so the
+            // user doesn't see raw JSON in the chat bubble.
+            finalResponse.message.content = accumulatedContent
+              .replace(MARKDOWN_TOOL_CALL_RE, "")
+              .trim();
+          }
+        }
+
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
+
+        // Increment contentIndex after text is done (mirrors OpenAI WS pattern).
+        contentIndex += 1;
 
         const assistantMessage = buildAssistantMessage(finalResponse, {
           api: model.api,

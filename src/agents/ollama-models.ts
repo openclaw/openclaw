@@ -100,9 +100,24 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
-/** Heuristic: treat models with "r1", "reasoning", or "think" in the name as reasoning models. */
+/**
+ * Heuristic: treat models with known reasoning-capable name patterns as
+ * reasoning models.  The list is intentionally broad to cover the rapidly
+ * evolving open-source landscape (2025-2026).
+ *
+ * Patterns added by manusilized:
+ *   - qwen3          (Qwen3 series – all variants have extended thinking)
+ *   - qwq            (QwQ reasoning model family)
+ *   - glm-5 / glm5   (GLM-5 supports deep reasoning)
+ *   - kimi-k2 / k2.5 (Kimi K2.5 trillion-parameter reasoning)
+ *   - deepseek-v3    (DeepSeek V3.2 with integrated thinking mode)
+ *   - marco-o1       (Marco-o1 reasoning model)
+ *   - skywork-o      (Skywork-o series)
+ */
 export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
+  return /r1|reasoning|think|reason|qwen3|qwq|glm-?5|kimi-?k2|deepseek-v3|marco-o|skywork-o/i.test(
+    modelId,
+  );
 }
 
 /** Build a ModelDefinitionConfig for an Ollama model with default values. */
