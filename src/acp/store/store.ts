@@ -9,6 +9,7 @@ import type {
   AcpGatewayLeaseRecord,
   AcpGatewayLeaseReconcileRecord,
   AcpGatewayRecoveryReason,
+  AcpGatewayRunDeliveryTargetRecord,
   AcpGatewayRunEventRecord,
   AcpGatewayRunRecord,
   AcpGatewaySessionRecord,
@@ -29,6 +30,7 @@ function createEmptyStore(): AcpGatewayStoreData {
     events: {},
     leases: {},
     checkpoints: {},
+    deliveryTargets: {},
     idempotency: {},
   };
 }
@@ -110,6 +112,14 @@ function resolveStorePath(stateDir = resolveStateDir(process.env)): string {
   return path.join(stateDir, "acp", "gateway-node-runtime-store.json");
 }
 
+function makeDeliveryTargetKey(runId: string, targetId: string): string {
+  return `${runId}:${targetId}`;
+}
+
+function makeProjectorCheckpointKey(runId: string, targetId: string): string {
+  return `projector:${runId}:${targetId}`;
+}
+
 export class AcpGatewayStore {
   private readonly withLock = createAsyncLock();
   private didApplyRestartRecoveryLoad = false;
@@ -167,6 +177,32 @@ export class AcpGatewayStore {
   async getCheckpoint(checkpointKey: string): Promise<AcpGatewayCheckpointRecord | null> {
     return await this.withLock(async () =>
       cloneValue((await this.readStore()).checkpoints[checkpointKey] ?? null),
+    );
+  }
+
+  async getRunDeliveryTarget(
+    runId: string,
+    targetId: string,
+  ): Promise<AcpGatewayRunDeliveryTargetRecord | null> {
+    const targetKey = makeDeliveryTargetKey(runId, targetId);
+    return await this.withLock(async () =>
+      cloneValue((await this.readStore()).deliveryTargets[targetKey] ?? null),
+    );
+  }
+
+  async listRunDeliveryTargets(runId: string): Promise<AcpGatewayRunDeliveryTargetRecord[]> {
+    return await this.withLock(async () =>
+      cloneValue(
+        Object.values((await this.readStore()).deliveryTargets).filter(
+          (target) => target.runId === runId,
+        ),
+      ),
+    );
+  }
+
+  async listDeliveryTargets(): Promise<AcpGatewayRunDeliveryTargetRecord[]> {
+    return await this.withLock(async () =>
+      cloneValue(Object.values((await this.readStore()).deliveryTargets)),
     );
   }
 
@@ -240,6 +276,8 @@ export class AcpGatewayStore {
     sessionKey: string;
     runId: string;
     cursorSeq: number;
+    targetId?: string;
+    deliveredEffectCount?: number;
     now?: number;
   }): Promise<AcpGatewayCheckpointRecord> {
     const now = params.now ?? Date.now();
@@ -249,10 +287,110 @@ export class AcpGatewayStore {
         sessionKey: params.sessionKey,
         runId: params.runId,
         cursorSeq: params.cursorSeq,
+        ...(params.targetId ? { targetId: params.targetId } : {}),
+        ...(typeof params.deliveredEffectCount === "number"
+          ? { deliveredEffectCount: params.deliveredEffectCount }
+          : {}),
         updatedAt: now,
       };
       store.checkpoints[params.checkpointKey] = next;
       return next;
+    });
+  }
+
+  async recordRunDeliveryTarget(params: {
+    sessionKey: string;
+    runId: string;
+    targetId?: string;
+    channel: string;
+    to: string;
+    provider?: string;
+    accountId?: string;
+    threadId?: string | number;
+    routeMode: "originating" | "session";
+    toolReplayPolicy?: "append_only_after_restart";
+    isGroup?: boolean;
+    groupId?: string;
+    now?: number;
+  }): Promise<AcpGatewayRunDeliveryTargetRecord> {
+    const now = params.now ?? Date.now();
+    return await this.mutateStore(async (store) => {
+      const session = store.sessions[params.sessionKey];
+      if (!session) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_SESSION_NOT_FOUND",
+          `ACP session ${params.sessionKey} does not exist.`,
+        );
+      }
+      const run = store.runs[params.runId];
+      if (run && run.sessionKey !== params.sessionKey) {
+        throw new AcpGatewayStoreError(
+          "ACP_NODE_RUN_NOT_FOUND",
+          `ACP run ${params.runId} is not known for session ${params.sessionKey}.`,
+        );
+      }
+      const targetId = params.targetId?.trim() || "primary";
+      const targetKey = makeDeliveryTargetKey(params.runId, targetId);
+      const existing = store.deliveryTargets[targetKey];
+      const next: AcpGatewayRunDeliveryTargetRecord = {
+        targetKey,
+        targetId,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        channel: params.channel,
+        to: params.to,
+        ...(params.provider ? { provider: params.provider } : {}),
+        ...(params.accountId ? { accountId: params.accountId } : {}),
+        ...(params.threadId != null ? { threadId: params.threadId } : {}),
+        routeMode: params.routeMode,
+        toolReplayPolicy: params.toolReplayPolicy ?? "append_only_after_restart",
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        ...(typeof params.isGroup === "boolean" ? { isGroup: params.isGroup } : {}),
+        ...(params.groupId ? { groupId: params.groupId } : {}),
+      };
+      store.deliveryTargets[targetKey] = next;
+      return next;
+    });
+  }
+
+  async getProjectionState(params: { runId: string; targetId?: string }): Promise<{
+    events: AcpGatewayRunEventRecord[];
+    run: AcpGatewayRunRecord | null;
+    checkpoint: AcpGatewayCheckpointRecord | null;
+    target: AcpGatewayRunDeliveryTargetRecord | null;
+  }> {
+    const targetId = params.targetId?.trim() || "primary";
+    const targetKey = makeDeliveryTargetKey(params.runId, targetId);
+    const checkpointKey = makeProjectorCheckpointKey(params.runId, targetId);
+    return await this.withLock(async () => {
+      const store = await this.readStore();
+      return cloneValue({
+        events: store.events[params.runId] ?? [],
+        run: store.runs[params.runId] ?? null,
+        checkpoint: store.checkpoints[checkpointKey] ?? null,
+        target: store.deliveryTargets[targetKey] ?? null,
+      });
+    });
+  }
+
+  async recordProjectorCheckpoint(params: {
+    sessionKey: string;
+    runId: string;
+    targetId?: string;
+    cursorSeq: number;
+    deliveredEffectCount: number;
+    now?: number;
+  }): Promise<AcpGatewayCheckpointRecord> {
+    const targetId = params.targetId?.trim() || "primary";
+    return await this.recordCheckpoint({
+      checkpointKey: makeProjectorCheckpointKey(params.runId, targetId),
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      cursorSeq: params.cursorSeq,
+      targetId,
+      deliveredEffectCount: params.deliveredEffectCount,
+      now: params.now,
     });
   }
 
@@ -857,6 +995,7 @@ export class AcpGatewayStore {
       events: candidate.events ?? {},
       leases: candidate.leases ?? {},
       checkpoints: candidate.checkpoints ?? {},
+      deliveryTargets: candidate.deliveryTargets ?? {},
       idempotency: candidate.idempotency ?? {},
     };
     if (!this.didApplyRestartRecoveryLoad) {

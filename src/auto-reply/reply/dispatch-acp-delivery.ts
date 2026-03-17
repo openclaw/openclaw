@@ -1,3 +1,4 @@
+import type { AcpGatewayRunDeliveryTargetRecord } from "../../acp/store/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -42,10 +43,57 @@ export type AcpDispatchDeliveryCoordinator = {
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
 
+export function buildAcpRunDeliveryTarget(params: {
+  sessionKey: string;
+  runId: string;
+  ctx: FinalizedMsgContext;
+  shouldRouteToOriginating: boolean;
+  originatingChannel?: string;
+  originatingTo?: string;
+  now?: number;
+}): AcpGatewayRunDeliveryTargetRecord | null {
+  const now = params.now ?? Date.now();
+  const routeMode =
+    params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo
+      ? "originating"
+      : "session";
+  const channel =
+    routeMode === "originating"
+      ? params.originatingChannel?.trim()
+      : String(params.ctx.Surface ?? params.ctx.Provider ?? "").trim();
+  const to =
+    routeMode === "originating" ? params.originatingTo?.trim() : String(params.ctx.To ?? "").trim();
+  if (!channel || !to) {
+    return null;
+  }
+  return {
+    targetKey: `${params.runId}:primary`,
+    targetId: "primary",
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    channel,
+    to,
+    ...((params.ctx.Surface ?? params.ctx.Provider)
+      ? { provider: String(params.ctx.Surface ?? params.ctx.Provider) }
+      : {}),
+    ...(params.ctx.AccountId ? { accountId: params.ctx.AccountId } : {}),
+    ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+    routeMode,
+    toolReplayPolicy: "append_only_after_restart",
+    createdAt: now,
+    updatedAt: now,
+    ...(params.ctx.ChatType === "group" || params.ctx.ChatType === "channel"
+      ? { isGroup: true }
+      : {}),
+    ...(params.ctx.NativeChannelId ? { groupId: params.ctx.NativeChannelId } : {}),
+  };
+}
+
 export function createAcpDispatchDeliveryCoordinator(params: {
   cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
-  dispatcher: ReplyDispatcher;
+  ctx?: FinalizedMsgContext;
+  dispatcher?: ReplyDispatcher;
+  target?: AcpGatewayRunDeliveryTargetRecord;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
@@ -53,6 +101,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
+  restartMode?: boolean;
 }): AcpDispatchDeliveryCoordinator {
   const state: AcpDispatchDeliveryState = {
     startedReplyLifecycle: false,
@@ -78,7 +127,19 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     toolCallId: string,
   ): Promise<boolean> => {
-    if (!params.shouldRouteToOriginating || !params.originatingChannel || !params.originatingTo) {
+    const sessionKey = params.ctx?.SessionKey ?? params.target?.sessionKey;
+    if (!sessionKey) {
+      return false;
+    }
+    if (params.restartMode) {
+      return false;
+    }
+    const routeChannel =
+      params.target?.channel ??
+      (params.shouldRouteToOriginating ? params.originatingChannel : undefined);
+    const routeTo =
+      params.target?.to ?? (params.shouldRouteToOriginating ? params.originatingTo : undefined);
+    if (!routeChannel || !routeTo) {
       return false;
     }
     const handle = state.toolMessageByCallId.get(toolCallId);
@@ -102,7 +163,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           messageId: handle.messageId,
           message,
         },
-        sessionKey: params.ctx.SessionKey,
+        sessionKey,
       });
       state.routedCounts.tool += 1;
       return true;
@@ -140,7 +201,20 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       ttsAuto: params.sessionTtsAuto,
     });
 
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+    const routeChannel =
+      params.target?.channel ??
+      (params.shouldRouteToOriginating ? params.originatingChannel : undefined);
+    const routeTo =
+      params.target?.to ?? (params.shouldRouteToOriginating ? params.originatingTo : undefined);
+    const routeSessionKey = params.ctx?.SessionKey ?? params.target?.sessionKey;
+    const routeAccountId = params.ctx?.AccountId ?? params.target?.accountId;
+    const routeThreadId = params.ctx?.MessageThreadId ?? params.target?.threadId;
+    const routeProvider = params.ctx?.Surface ?? params.ctx?.Provider ?? params.target?.provider;
+    const shouldUseRouteReply =
+      Boolean(routeChannel && routeTo) &&
+      (params.target != null || params.shouldRouteToOriginating);
+
+    if (shouldUseRouteReply && routeChannel && routeTo) {
       const toolCallId = meta?.toolCallId?.trim();
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
         const edited = await tryEditToolMessage(ttsPayload, toolCallId);
@@ -151,12 +225,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 
       const result = await routeReply({
         payload: ttsPayload,
-        channel: params.originatingChannel,
-        to: params.originatingTo,
-        sessionKey: params.ctx.SessionKey,
-        accountId: params.ctx.AccountId,
-        threadId: params.ctx.MessageThreadId,
+        channel: routeChannel,
+        to: routeTo,
+        sessionKey: routeSessionKey,
+        accountId: routeAccountId,
+        threadId: routeThreadId,
         cfg: params.cfg,
+        ...(params.target?.isGroup != null ? { isGroup: params.target.isGroup } : {}),
+        ...(params.target?.groupId ? { groupId: params.target.groupId } : {}),
       });
       if (!result.ok) {
         logVerbose(
@@ -166,10 +242,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
-          channel: params.originatingChannel,
-          accountId: params.ctx.AccountId,
-          to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          channel: routeChannel,
+          accountId: routeAccountId,
+          to: routeTo,
+          ...(routeThreadId != null ? { threadId: routeThreadId } : {}),
           messageId: result.messageId,
         });
       }
@@ -177,6 +253,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return true;
     }
 
+    if (!params.dispatcher) {
+      logVerbose(
+        `dispatch-acp: no dispatcher or routable target available for acp/${kind}${routeProvider ? ` on ${routeProvider}` : ""}`,
+      );
+      return false;
+    }
     if (kind === "tool") {
       return params.dispatcher.sendToolResult(ttsPayload);
     }

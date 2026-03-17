@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 describe("AcpGatewayStore", () => {
-  it("persists sessions, runs, events, checkpoints, leases, and idempotency across reload", async () => {
+  it("persists sessions, runs, events, checkpoints, delivery targets, leases, and idempotency across reload", async () => {
     const { root, store } = await createStore();
     const now = 1_700_000_000_000;
 
@@ -73,6 +73,25 @@ describe("AcpGatewayStore", () => {
       cursorSeq: 1,
       now: now + 2,
     });
+    await store.recordRunDeliveryTarget({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "primary",
+      channel: "telegram",
+      to: "telegram:thread-1",
+      accountId: "acct-1",
+      threadId: "thread-1",
+      routeMode: "originating",
+      now: now + 2,
+    });
+    await store.recordProjectorCheckpoint({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "primary",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
+      now: now + 2,
+    });
     await store.resolveTerminal({
       nodeId: "node-1",
       sessionKey: "agent:main:acp:test-session",
@@ -118,6 +137,19 @@ describe("AcpGatewayStore", () => {
     expect(snapshot.checkpoints["projector:run-1"]).toMatchObject({
       cursorSeq: 1,
     });
+    expect(snapshot.checkpoints["projector:run-1:primary"]).toMatchObject({
+      cursorSeq: 1,
+      targetId: "primary",
+      deliveredEffectCount: 2,
+    });
+    expect(snapshot.deliveryTargets["run-1:primary"]).toMatchObject({
+      targetId: "primary",
+      runId: "run-1",
+      channel: "telegram",
+      to: "telegram:thread-1",
+      routeMode: "originating",
+      toolReplayPolicy: "append_only_after_restart",
+    });
     expect(snapshot.leases["agent:main:acp:test-session"]).toMatchObject({
       leaseId: "lease-1",
       leaseEpoch: 1,
@@ -128,6 +160,154 @@ describe("AcpGatewayStore", () => {
       scope: "turn.start",
       status: "accepted",
     });
+  });
+
+  it("keeps runtime and projector checkpoints separate per run and per target", async () => {
+    const { store } = await createStore();
+    await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 10,
+    });
+
+    await store.recordRunDeliveryTarget({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "route-a",
+      channel: "telegram",
+      to: "telegram:a",
+      routeMode: "originating",
+      now: 11,
+    });
+    await store.recordRunDeliveryTarget({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "route-b",
+      channel: "discord",
+      to: "discord:b",
+      routeMode: "session",
+      now: 12,
+    });
+    await store.recordCheckpoint({
+      checkpointKey: "runtime:run-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      cursorSeq: 7,
+      now: 13,
+    });
+    await store.recordProjectorCheckpoint({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "route-a",
+      cursorSeq: 3,
+      deliveredEffectCount: 4,
+      now: 14,
+    });
+    await store.recordProjectorCheckpoint({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "route-b",
+      cursorSeq: 5,
+      deliveredEffectCount: 6,
+      now: 15,
+    });
+
+    expect(await store.getCheckpoint("runtime:run-1")).toMatchObject({
+      cursorSeq: 7,
+    });
+    expect(await store.getCheckpoint("projector:run-1:route-a")).toMatchObject({
+      cursorSeq: 3,
+      targetId: "route-a",
+      deliveredEffectCount: 4,
+    });
+    expect(await store.getCheckpoint("projector:run-1:route-b")).toMatchObject({
+      cursorSeq: 5,
+      targetId: "route-b",
+      deliveredEffectCount: 6,
+    });
+  });
+
+  it("keeps run-scoped delivery targets isolated across multiple runs on one session", async () => {
+    const { store } = await createStore();
+    await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-a",
+      requestId: "req-a",
+      now: 10,
+    });
+    await store.recordRunDeliveryTarget({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-a",
+      targetId: "primary",
+      channel: "telegram",
+      to: "telegram:a",
+      routeMode: "originating",
+      now: 11,
+    });
+    await store.resolveTerminal({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-a",
+      leaseId: "lease-1",
+      leaseEpoch: 1,
+      terminalEventId: "term-a",
+      finalSeq: 0,
+      terminal: {
+        kind: "completed",
+      },
+      now: 12,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-b",
+      requestId: "req-b",
+      now: 13,
+    });
+    await store.recordRunDeliveryTarget({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-b",
+      targetId: "primary",
+      channel: "discord",
+      to: "discord:b",
+      routeMode: "session",
+      now: 14,
+    });
+
+    expect(await store.getRunDeliveryTarget("run-a", "primary")).toMatchObject({
+      runId: "run-a",
+      channel: "telegram",
+      to: "telegram:a",
+    });
+    expect(await store.getRunDeliveryTarget("run-b", "primary")).toMatchObject({
+      runId: "run-b",
+      channel: "discord",
+      to: "discord:b",
+    });
+    expect(await store.listRunDeliveryTargets("run-a")).toMatchObject([
+      {
+        runId: "run-a",
+        channel: "telegram",
+      },
+    ]);
+    expect(await store.listRunDeliveryTargets("run-b")).toMatchObject([
+      {
+        runId: "run-b",
+        channel: "discord",
+      },
+    ]);
   });
 
   it("idempotently absorbs byte-equivalent duplicate events and rejects mismatched duplicates", async () => {

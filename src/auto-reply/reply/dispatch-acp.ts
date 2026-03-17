@@ -30,7 +30,10 @@ import {
 } from "../commands-registry.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
-import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import {
+  buildAcpRunDeliveryTarget,
+  createAcpDispatchDeliveryCoordinator,
+} from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 
 type DispatchProcessedRecorder = (
@@ -249,6 +252,19 @@ export async function tryDispatchAcpReply(params: {
           resolveAgentIdFromSessionKey(sessionKey)
         ).trim()
       : resolveAgentIdFromSessionKey(sessionKey);
+  const requestId = resolveAcpRequestId(params.ctx);
+  const shouldUseDurableAcpNodeProjection =
+    acpResolution.kind === "ready" && acpResolution.meta.backend === "acp-node";
+  const durableTarget = shouldUseDurableAcpNodeProjection
+    ? buildAcpRunDeliveryTarget({
+        sessionKey,
+        runId: requestId,
+        ctx: params.ctx,
+        shouldRouteToOriginating: params.shouldRouteToOriginating,
+        originatingChannel: params.originatingChannel,
+        originatingTo: params.originatingTo,
+      })
+    : null;
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
@@ -301,17 +317,89 @@ export async function tryDispatchAcpReply(params: {
       );
     }
 
-    await acpManager.runTurn({
-      cfg: params.cfg,
-      sessionKey,
-      text: promptText,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      mode: "prompt",
-      requestId: resolveAcpRequestId(params.ctx),
-      onEvent: async (event) => await projector.onEvent(event),
-    });
+    if (durableTarget) {
+      const [{ getAcpGatewayNodeRuntime }, { AcpDurableProjectionService }] = await Promise.all([
+        import("../../acp/store/gateway-events.js"),
+        import("./dispatch-acp-replay.js"),
+      ]);
+      const gatewayRuntime = getAcpGatewayNodeRuntime();
+      await gatewayRuntime.store.ensureSession({
+        sessionKey,
+      });
+      await gatewayRuntime.store.recordRunDeliveryTarget({
+        sessionKey,
+        runId: requestId,
+        targetId: durableTarget.targetId,
+        channel: durableTarget.channel,
+        to: durableTarget.to,
+        ...(durableTarget.provider ? { provider: durableTarget.provider } : {}),
+        ...(durableTarget.accountId ? { accountId: durableTarget.accountId } : {}),
+        ...(durableTarget.threadId != null ? { threadId: durableTarget.threadId } : {}),
+        routeMode: durableTarget.routeMode,
+        toolReplayPolicy: durableTarget.toolReplayPolicy,
+        ...(typeof durableTarget.isGroup === "boolean" ? { isGroup: durableTarget.isGroup } : {}),
+        ...(durableTarget.groupId ? { groupId: durableTarget.groupId } : {}),
+      });
+      const projectionService = new AcpDurableProjectionService({
+        store: gatewayRuntime.store,
+        coordinatorFactory: ({ target, restartMode }) =>
+          createAcpDispatchDeliveryCoordinator({
+            cfg: params.cfg,
+            ctx: params.ctx,
+            dispatcher: params.dispatcher,
+            target,
+            inboundAudio: params.inboundAudio,
+            sessionTtsAuto: params.sessionTtsAuto,
+            ttsChannel: params.ttsChannel,
+            shouldRouteToOriginating: params.shouldRouteToOriginating,
+            originatingChannel: params.originatingChannel,
+            originatingTo: params.originatingTo,
+            onReplyStart: params.onReplyStart,
+            restartMode,
+          }),
+      });
+      let turnError: unknown;
+      try {
+        await Promise.all([
+          projectionService.ensureProjection({
+            cfg: params.cfg,
+            target: durableTarget,
+            shouldSendToolSummaries: params.shouldSendToolSummaries,
+            restartMode: false,
+            waitForRunStart: true,
+          }),
+          acpManager.runTurn({
+            cfg: params.cfg,
+            sessionKey,
+            text: promptText,
+            attachments: attachments.length > 0 ? attachments : undefined,
+            mode: "prompt",
+            requestId,
+          }),
+        ]);
+      } catch (error) {
+        turnError = error;
+      }
+      const durableRun = await gatewayRuntime.store.getRun(requestId);
+      if (turnError && !durableRun) {
+        throw turnError;
+      }
+      if (turnError && durableRun?.terminal?.kind !== "failed") {
+        throw turnError;
+      }
+    } else {
+      await acpManager.runTurn({
+        cfg: params.cfg,
+        sessionKey,
+        text: promptText,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        mode: "prompt",
+        requestId,
+        onEvent: async (event) => await projector.onEvent(event),
+      });
 
-    await projector.flush(true);
+      await projector.flush(true);
+    }
     const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
     const accumulatedBlockText = delivery.getAccumulatedBlockText();
     if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {

@@ -11,8 +11,24 @@ const ttsMocks = vi.hoisted(() => ({
   }),
 }));
 
+const routeMocks = vi.hoisted(() => ({
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+}));
+
+const messageActionMocks = vi.hoisted(() => ({
+  runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
+}));
+
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+
+vi.mock("./route-reply.js", () => ({
+  routeReply: (params: unknown) => routeMocks.routeReply(params),
+}));
+
+vi.mock("../../infra/outbound/message-action-runner.js", () => ({
+  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
 }));
 
 function createDispatcher(): ReplyDispatcher {
@@ -38,6 +54,27 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
     inboundAudio: false,
     shouldRouteToOriginating: false,
     ...(onReplyStart ? { onReplyStart } : {}),
+  });
+}
+
+function createRestartCoordinator() {
+  return createAcpDispatchDeliveryCoordinator({
+    cfg: createAcpTestConfig(),
+    target: {
+      targetKey: "run-1:primary",
+      targetId: "primary",
+      sessionKey: "agent:codex-acp:session-1",
+      runId: "run-1",
+      channel: "telegram",
+      to: "telegram:thread-1",
+      routeMode: "originating",
+      toolReplayPolicy: "append_only_after_restart",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    inboundAudio: false,
+    shouldRouteToOriginating: false,
+    restartMode: true,
   });
 }
 
@@ -71,5 +108,47 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await coordinator.deliver("final", {});
 
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("downgrades restarted tool updates to append-only delivery for interleaved tool calls", async () => {
+    const coordinator = createRestartCoordinator();
+
+    await coordinator.deliver(
+      "tool",
+      { text: "tool-a pending" },
+      { toolCallId: "tool-a", allowEdit: true },
+    );
+    await coordinator.deliver(
+      "tool",
+      { text: "tool-b pending" },
+      { toolCallId: "tool-b", allowEdit: true },
+    );
+    await coordinator.deliver(
+      "tool",
+      { text: "tool-a completed" },
+      { toolCallId: "tool-a", allowEdit: true },
+    );
+    await coordinator.deliver(
+      "tool",
+      { text: "tool-b completed" },
+      { toolCallId: "tool-b", allowEdit: true },
+    );
+
+    expect(messageActionMocks.runMessageAction).not.toHaveBeenCalled();
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(4);
+    expect(routeMocks.routeReply.mock.calls.map(([params]) => params)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "telegram",
+          to: "telegram:thread-1",
+          payload: expect.objectContaining({ text: "tool-a pending" }),
+        }),
+        expect.objectContaining({
+          channel: "telegram",
+          to: "telegram:thread-1",
+          payload: expect.objectContaining({ text: "tool-b completed" }),
+        }),
+      ]),
+    );
   });
 });

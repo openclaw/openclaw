@@ -52,6 +52,60 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
+const gatewayRuntimeMocks = vi.hoisted(() => ({
+  ensureSession: vi.fn(async () => ({})),
+  recordRunDeliveryTarget: vi.fn(async () => ({})),
+  getRun: vi.fn(async () => null),
+}));
+
+const projectionServiceMocks = vi.hoisted(() => ({
+  ensureProjection: vi.fn(async () => undefined),
+}));
+
+const zodMocks = vi.hoisted(() => {
+  const createSchema = (): unknown =>
+    new Proxy(
+      {},
+      {
+        get: (_target, prop) => {
+          if (prop === "parse") {
+            return (value: unknown) => value;
+          }
+          if (prop === "safeParse") {
+            return (value: unknown) => ({ success: true, data: value });
+          }
+          if (prop === "spa") {
+            return async (value: unknown) => ({ success: true, data: value });
+          }
+          return (..._args: unknown[]) => createSchema();
+        },
+      },
+    );
+  const z = new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "coerce") {
+          return new Proxy(
+            {},
+            {
+              get:
+                () =>
+                (..._args: unknown[]) =>
+                  createSchema(),
+            },
+          );
+        }
+        if (prop === "ZodIssueCode") {
+          return {};
+        }
+        return (..._args: unknown[]) => createSchema();
+      },
+    },
+  );
+  return { z };
+});
+
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -85,6 +139,28 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
   }),
+}));
+
+vi.mock("../../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("zod", () => zodMocks);
+
+vi.mock("../../acp/store/gateway-events.js", () => ({
+  getAcpGatewayNodeRuntime: () => ({
+    store: {
+      ensureSession: gatewayRuntimeMocks.ensureSession,
+      recordRunDeliveryTarget: gatewayRuntimeMocks.recordRunDeliveryTarget,
+      getRun: gatewayRuntimeMocks.getRun,
+    },
+  }),
+}));
+
+vi.mock("./dispatch-acp-replay.js", () => ({
+  AcpDurableProjectionService: class {
+    ensureProjection = projectionServiceMocks.ensureProjection;
+  },
 }));
 
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
@@ -232,6 +308,14 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
+    gatewayRuntimeMocks.ensureSession.mockReset();
+    gatewayRuntimeMocks.ensureSession.mockResolvedValue({});
+    gatewayRuntimeMocks.recordRunDeliveryTarget.mockReset();
+    gatewayRuntimeMocks.recordRunDeliveryTarget.mockResolvedValue({});
+    gatewayRuntimeMocks.getRun.mockReset();
+    gatewayRuntimeMocks.getRun.mockResolvedValue(null);
+    projectionServiceMocks.ensureProjection.mockReset();
+    projectionServiceMocks.ensureProjection.mockResolvedValue(undefined);
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -341,6 +425,57 @@ describe("tryDispatchAcpReply", () => {
     await dispatchVisibleTurn(onReplyStart);
 
     expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists a run-scoped delivery target and starts durable projection for acp-node turns", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({
+        backend: "acp-node",
+      }),
+    });
+    managerMocks.runTurn.mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "reply from durable path",
+      shouldRouteToOriginating: true,
+      ctxOverrides: {
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:thread-1",
+      },
+    });
+
+    expect(gatewayRuntimeMocks.ensureSession).toHaveBeenCalledWith({
+      sessionKey,
+    });
+    expect(gatewayRuntimeMocks.recordRunDeliveryTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        runId: expect.any(String),
+        channel: "telegram",
+        to: "telegram:thread-1",
+        routeMode: "originating",
+      }),
+    );
+    expect(projectionServiceMocks.ensureProjection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        target: expect.objectContaining({
+          runId: expect.any(String),
+          channel: "telegram",
+          to: "telegram:thread-1",
+        }),
+        restartMode: false,
+        waitForRunStart: true,
+      }),
+    );
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: expect.any(String),
+      }),
+    );
+    expect(managerMocks.runTurn.mock.calls[0]?.[0]).not.toHaveProperty("onEvent");
   });
 
   it("does not start reply lifecycle for empty ACP prompt", async () => {

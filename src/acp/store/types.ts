@@ -105,7 +105,27 @@ export type AcpGatewayCheckpointRecord = {
   sessionKey: string;
   runId: string;
   cursorSeq: number;
+  targetId?: string;
+  deliveredEffectCount?: number;
   updatedAt: number;
+};
+
+export type AcpGatewayRunDeliveryTargetRecord = {
+  targetKey: string;
+  targetId: string;
+  sessionKey: string;
+  runId: string;
+  channel: string;
+  to: string;
+  provider?: string;
+  accountId?: string;
+  threadId?: string | number;
+  routeMode: "originating" | "session";
+  toolReplayPolicy: "append_only_after_restart";
+  createdAt: number;
+  updatedAt: number;
+  isGroup?: boolean;
+  groupId?: string;
 };
 
 export type AcpGatewayIdempotencyRecord = {
@@ -124,6 +144,7 @@ export type AcpGatewayStoreData = {
   events: Record<string, AcpGatewayRunEventRecord[]>;
   leases: Record<string, AcpGatewayLeaseRecord>;
   checkpoints: Record<string, AcpGatewayCheckpointRecord>;
+  deliveryTargets: Record<string, AcpGatewayRunDeliveryTargetRecord>;
   idempotency: Record<string, AcpGatewayIdempotencyRecord>;
 };
 
