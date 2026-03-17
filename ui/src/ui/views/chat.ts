@@ -430,7 +430,7 @@ function resetSlashMenuState(): void {
 
 function updateSlashMenu(value: string, requestUpdate: () => void): void {
   // Arg mode: /command <partial-arg>
-  const argMatch = value.match(/^\/(\S+)\s(.*)$/);
+  const argMatch = value.match(/^\/( \S+)\s(.*)$/);
   if (argMatch) {
     const cmdName = argMatch[1].toLowerCase();
     const argFilter = argMatch[2].toLowerCase();
@@ -850,7 +850,14 @@ export function renderChat(props: ChatProps) {
   };
 
   const chatItems = buildChatItems(props);
-  const isEmpty = chatItems.length === 0 && !props.loading;
+  // Don't show the welcome screen when a context warning is also active (#44869).
+  // High-context sessions have accumulated history (even if compacted), and the
+  // welcome state + context-notice badge together overflow the flex layout,
+  // pushing .agent-chat__input below the overflow:hidden boundary of .card.chat.
+  const contextUsed = activeSession?.inputTokens ?? 0;
+  const contextLimit = activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? 0;
+  const hasContextWarning = Boolean(contextUsed && contextLimit && contextUsed / contextLimit >= 0.85);
+  const isEmpty = chatItems.length === 0 && !props.loading && !hasContextWarning;
 
   const thread = html`
     <div
