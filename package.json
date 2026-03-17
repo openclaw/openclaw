@@ -616,7 +616,6 @@
     "file-type": "^21.3.2",
     "gaxios": "^7.1.3",
     "google-auth-library": "^10.6.1",
-    "gaxios": "7.1.3",
     "grammy": "^1.41.1",
     "hono": "4.12.7",
     "https-proxy-agent": "^8.0.0",
