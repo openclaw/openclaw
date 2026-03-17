@@ -1,8 +1,7 @@
 import {
-  createScopedAccountConfigAccessors,
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-} from "openclaw/plugin-sdk/compat";
+} from "../../../src/plugin-sdk-internal/channel-config.js";
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -12,34 +11,15 @@ import {
   setAccountEnabledInConfigSection,
   SignalConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal";
+} from "../../../src/plugin-sdk-internal/signal.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "./accounts.js";
-import { createSignalSetupWizardProxy, signalSetupAdapter } from "./setup-core.js";
-
-async function loadSignalChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
-const signalSetupWizard = createSignalSetupWizardProxy(async () => ({
-  signalSetupWizard: (await loadSignalChannelRuntime()).signalSetupWizard,
-}));
-
-const signalConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }),
-  resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    allowFrom
-      .map((entry) => String(entry).trim())
-      .filter(Boolean)
-      .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
-      .filter(Boolean),
-  resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
-});
+import { signalConfigAccessors, signalSetupWizard } from "./plugin-shared.js";
+import { signalSetupAdapter } from "./setup-core.js";
 
 export const signalSetupPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   id: "signal",
