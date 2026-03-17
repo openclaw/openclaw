@@ -113,9 +113,13 @@ That means:
 Examples:
 
 - the bundled `openai` plugin owns OpenAI model-provider behavior and OpenAI
-  speech behavior
+  speech + media-understanding + image-generation behavior
 - the bundled `elevenlabs` plugin owns ElevenLabs speech behavior
 - the bundled `microsoft` plugin owns Microsoft speech behavior
+- the bundled `google` plugin owns Google model-provider behavior plus Google
+  media-understanding + image-generation + web-search behavior
+- the bundled `minimax`, `mistral`, `moonshot`, and `zai` plugins own their
+  media-understanding backends
 - the `voice-call` plugin is a feature plugin: it owns call transport, tools,
   CLI, routes, and runtime, but it consumes core TTS/STT capability instead of
   inventing a second speech stack
@@ -167,17 +171,96 @@ For example, TTS follows this shape:
 
 That same pattern should be preferred for future capabilities.
 
-### Capability example: video
+### Multi-capability company plugin example
 
-If OpenClaw adds video, prefer this order:
+A company plugin should feel cohesive from the outside. If OpenClaw has shared
+contracts for models, speech, media understanding, and web search, a vendor can
+own all of its surfaces in one place:
 
-1. define a core video capability
-2. decide the shared contract: input media shape, provider result shape, cache/fallback behavior, and runtime helpers
-3. let vendor plugins such as `openai` or a future video vendor register video implementations
-4. let channels or feature plugins consume `api.runtime.video` instead of wiring directly to a provider plugin
+```ts
+import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk";
+import {
+  buildOpenAISpeechProvider,
+  createPluginBackedWebSearchProvider,
+  describeImageWithModel,
+  transcribeOpenAiCompatibleAudio,
+} from "openclaw/plugin-sdk";
 
-This avoids baking one provider's video assumptions into core. The plugin owns
-the vendor surface; core owns the capability contract.
+const plugin: OpenClawPluginDefinition = {
+  id: "exampleai",
+  name: "ExampleAI",
+  register(api) {
+    api.registerProvider({
+      id: "exampleai",
+      // auth/model catalog/runtime hooks
+    });
+
+    api.registerSpeechProvider(
+      buildOpenAISpeechProvider({
+        id: "exampleai",
+        // vendor speech config
+      }),
+    );
+
+    api.registerMediaUnderstandingProvider({
+      id: "exampleai",
+      capabilities: ["image", "audio", "video"],
+      async describeImage(req) {
+        return describeImageWithModel({
+          provider: "exampleai",
+          model: req.model,
+          input: req.input,
+        });
+      },
+      async transcribeAudio(req) {
+        return transcribeOpenAiCompatibleAudio({
+          provider: "exampleai",
+          model: req.model,
+          input: req.input,
+        });
+      },
+    });
+
+    api.registerWebSearchProvider(
+      createPluginBackedWebSearchProvider({
+        id: "exampleai-search",
+        // credential + fetch logic
+      }),
+    );
+  },
+};
+
+export default plugin;
+```
+
+What matters is not the exact helper names. The shape matters:
+
+- one plugin owns the vendor surface
+- core still owns the capability contracts
+- channels and feature plugins consume `api.runtime.*` helpers, not vendor code
+- contract tests can assert that the plugin registered the capabilities it
+  claims to own
+
+### Capability example: video understanding
+
+OpenClaw already treats image/audio/video understanding as one shared
+capability. The same ownership model applies there:
+
+1. core defines the media-understanding contract
+2. vendor plugins register `describeImage`, `transcribeAudio`, and
+   `describeVideo` as applicable
+3. channels and feature plugins consume the shared core behavior instead of
+   wiring directly to vendor code
+
+That avoids baking one provider's video assumptions into core. The plugin owns
+the vendor surface; core owns the capability contract and fallback behavior.
+
+If OpenClaw adds a new domain later, such as video generation, use the same
+sequence again: define the core capability first, then let vendor plugins
+register implementations against it.
+
+Need a concrete rollout checklist? See
+[Capability Cookbook](/tools/capability-cookbook).
 
 ## Compatible bundles
 
@@ -206,18 +289,23 @@ plugins:
   OpenClaw skill loader
 - supported now: Claude bundle `settings.json` defaults for embedded Pi agent
   settings (with shell override keys sanitized)
+- supported now: bundle MCP config, merged into embedded Pi agent settings as
+  `mcpServers`, with supported stdio bundle MCP tools exposed during embedded
+  Pi agent turns
 - supported now: Cursor `.cursor/commands/*.md` roots, mapped into the normal
   OpenClaw skill loader
 - supported now: Codex bundle hook directories that use the OpenClaw hook-pack
   layout (`HOOK.md` + `handler.ts`/`handler.js`)
 - detected but not wired yet: other declared bundle capabilities such as
-  agents, Claude hook automation, Cursor rules/hooks/MCP metadata, MCP/app/LSP
+  agents, Claude hook automation, Cursor rules/hooks metadata, app/LSP
   metadata, output styles
 
 That means bundle install/discovery/list/info/enablement all work, and bundle
 skills, Claude command-skills, Claude bundle settings defaults, and compatible
-Codex hook directories load when the bundle is enabled, but bundle runtime code
-is not executed in-process.
+Codex hook directories load when the bundle is enabled. Supported bundle MCP
+servers may also run as subprocesses for embedded Pi tool calls when they use
+supported stdio transport, but bundle runtime modules are not loaded
+in-process.
 
 Bundle hook support is limited to the normal OpenClaw hook directory format
 (`HOOK.md` plus `handler.ts`/`handler.js` under the declared hook roots).
@@ -717,10 +805,48 @@ Notes:
   text, speech, image, and future media providers as OpenClaw adds those
   capability contracts.
 
-For STT/transcription, plugins can call:
+For image/audio/video understanding, plugins register one typed
+media-understanding provider instead of a generic key/value bag:
 
 ```ts
-const { text } = await api.runtime.stt.transcribeAudioFile({
+api.registerMediaUnderstandingProvider({
+  id: "google",
+  capabilities: ["image", "audio", "video"],
+  describeImage: async (req) => ({ text: "..." }),
+  transcribeAudio: async (req) => ({ text: "..." }),
+  describeVideo: async (req) => ({ text: "..." }),
+});
+```
+
+Notes:
+
+- Keep orchestration, fallback, config, and channel wiring in core.
+- Keep vendor behavior in the provider plugin.
+- Additive expansion should stay typed: new optional methods, new optional
+  result fields, new optional capabilities.
+- If OpenClaw adds a new capability such as video generation later, define the
+  core capability contract first, then let vendor plugins register against it.
+
+For media-understanding runtime helpers, plugins can call:
+
+```ts
+const image = await api.runtime.mediaUnderstanding.describeImageFile({
+  filePath: "/tmp/inbound-photo.jpg",
+  cfg: api.config,
+  agentDir: "/tmp/agent",
+});
+
+const video = await api.runtime.mediaUnderstanding.describeVideoFile({
+  filePath: "/tmp/inbound-video.mp4",
+  cfg: api.config,
+});
+```
+
+For audio transcription, plugins can use either the media-understanding runtime
+or the older STT alias:
+
+```ts
+const { text } = await api.runtime.mediaUnderstanding.transcribeAudioFile({
   filePath: "/tmp/inbound-audio.ogg",
   cfg: api.config,
   // Optional when MIME cannot be inferred reliably:
@@ -730,8 +856,37 @@ const { text } = await api.runtime.stt.transcribeAudioFile({
 
 Notes:
 
+- `api.runtime.mediaUnderstanding.*` is the preferred shared surface for
+  image/audio/video understanding.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
+- `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
+
+For web search, plugins can consume the shared runtime helper instead of
+reaching into the agent tool wiring:
+
+```ts
+const providers = api.runtime.webSearch.listProviders({
+  config: api.config,
+});
+
+const result = await api.runtime.webSearch.search({
+  config: api.config,
+  args: {
+    query: "OpenClaw plugin runtime helpers",
+    count: 5,
+  },
+});
+```
+
+Plugins can also register web-search providers via
+`api.registerWebSearchProvider(...)`.
+
+Notes:
+
+- Keep provider selection, credential resolution, and shared request semantics in core.
+- Use web-search providers for vendor-specific search transports.
+- `api.runtime.webSearch.*` is the preferred shared surface for feature/channel plugins that need search behavior without depending on the agent tool wrapper.
 
 ## Gateway HTTP routes
 
@@ -770,8 +925,16 @@ Notes:
 Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
 authoring plugins:
 
-- `openclaw/plugin-sdk/core` for generic plugin APIs, provider auth types, and shared helpers such as routing/session utilities and logger-backed runtimes.
-- `openclaw/plugin-sdk/compat` for bundled/internal plugin code that needs broader shared runtime helpers than `core`.
+- `openclaw/plugin-sdk/core` for the smallest generic plugin-facing contract.
+- Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
+  `openclaw/plugin-sdk/channel-config-schema`,
+  `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/reply-history`,
+  `openclaw/plugin-sdk/routing`,
+  `openclaw/plugin-sdk/runtime-store`, and
+  `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
+- `openclaw/plugin-sdk/compat` remains as a legacy migration surface for older
+  external plugins. Bundled plugins should not use it.
 - `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.
@@ -832,8 +995,8 @@ Compatibility note:
 
 - `openclaw/plugin-sdk` remains supported for existing external plugins.
 - New and migrated bundled plugins should use channel or extension-specific
-  subpaths; use `core` for generic surfaces and `compat` only when broader
-  shared helpers are required.
+  subpaths; use `core` plus explicit domain subpaths for generic surfaces, and
+  treat `compat` as migration-only.
 
 ## Read-only channel inspection
 
@@ -1294,6 +1457,7 @@ Plugins export either:
 - `registerChannel`
 - `registerProvider`
 - `registerSpeechProvider`
+- `registerMediaUnderstandingProvider`
 - `registerWebSearchProvider`
 - `registerHttpRoute`
 - `registerCommand`
@@ -1335,6 +1499,65 @@ Recommended sequence:
 
 This is how OpenClaw stays opinionated without becoming hardcoded to one
 provider's worldview.
+
+### Capability checklist
+
+When you add a new capability, the implementation should usually touch these
+surfaces together:
+
+- core contract types in `src/<capability>/types.ts`
+- core runner/runtime helper in `src/<capability>/runtime.ts`
+- plugin API registration surface in `src/plugins/types.ts`
+- plugin registry wiring in `src/plugins/registry.ts`
+- plugin runtime exposure in `src/plugins/runtime/*` when feature/channel
+  plugins need to consume it
+- capture/test helpers in `src/test-utils/plugin-registration.ts`
+- ownership/contract assertions in `src/plugins/contracts/registry.ts`
+- operator/plugin docs in `docs/`
+
+If one of those surfaces is missing, that is usually a sign the capability is
+not fully integrated yet.
+
+### Capability template
+
+Minimal pattern:
+
+```ts
+// core contract
+export type VideoGenerationProviderPlugin = {
+  id: string;
+  label: string;
+  generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
+};
+
+// plugin API
+api.registerVideoGenerationProvider({
+  id: "openai",
+  label: "OpenAI",
+  async generateVideo(req) {
+    return await generateOpenAiVideo(req);
+  },
+});
+
+// shared runtime helper for feature/channel plugins
+const clip = await api.runtime.videoGeneration.generateFile({
+  prompt: "Show the robot walking through the lab.",
+  cfg,
+});
+```
+
+Contract test pattern:
+
+```ts
+expect(findVideoGenerationProviderIdsForPlugin("openai")).toEqual(["openai"]);
+```
+
+That keeps the rule simple:
+
+- core owns the capability contract + orchestration
+- vendor plugins own vendor implementations
+- feature/channel plugins consume runtime helpers
+- contract tests keep ownership explicit
 
 Context engine plugins can also register a runtime-owned context manager:
 

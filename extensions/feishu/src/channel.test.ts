@@ -28,22 +28,28 @@ vi.mock("./client.js", () => ({
 }));
 
 vi.mock("./channel.runtime.js", () => ({
-  addReactionFeishu: addReactionFeishuMock,
-  createPinFeishu: createPinFeishuMock,
-  editMessageFeishu: editMessageFeishuMock,
-  getChatInfo: getChatInfoMock,
-  getChatMembers: getChatMembersMock,
-  getFeishuMemberInfo: getFeishuMemberInfoMock,
-  getMessageFeishu: getMessageFeishuMock,
-  listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveMock,
-  listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
-  listPinsFeishu: listPinsFeishuMock,
-  listReactionsFeishu: listReactionsFeishuMock,
-  probeFeishu: probeFeishuMock,
-  removePinFeishu: removePinFeishuMock,
-  removeReactionFeishu: removeReactionFeishuMock,
-  sendCardFeishu: sendCardFeishuMock,
-  sendMessageFeishu: sendMessageFeishuMock,
+  feishuChannelRuntime: {
+    addReactionFeishu: addReactionFeishuMock,
+    createPinFeishu: createPinFeishuMock,
+    editMessageFeishu: editMessageFeishuMock,
+    getChatInfo: getChatInfoMock,
+    getChatMembers: getChatMembersMock,
+    getFeishuMemberInfo: getFeishuMemberInfoMock,
+    getMessageFeishu: getMessageFeishuMock,
+    listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveMock,
+    listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
+    listPinsFeishu: listPinsFeishuMock,
+    listReactionsFeishu: listReactionsFeishuMock,
+    probeFeishu: probeFeishuMock,
+    removePinFeishu: removePinFeishuMock,
+    removeReactionFeishu: removeReactionFeishuMock,
+    sendCardFeishu: sendCardFeishuMock,
+    sendMessageFeishu: sendMessageFeishuMock,
+    feishuOutbound: {
+      sendText: vi.fn(),
+      sendMedia: vi.fn(),
+    },
+  },
 }));
 
 import { feishuPlugin } from "./channel.js";
