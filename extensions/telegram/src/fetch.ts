@@ -419,7 +419,7 @@ export function resolveTelegramTransport(
   const explicitProxyUrl = proxyFetch ? getProxyUrlFromFetch(proxyFetch) : undefined;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
   const sourceFetch = explicitProxyUrl
-    ? undiciSourceFetch
+    ? resolveWrappedFetch(proxyFetch as unknown as typeof fetch)
     : proxyFetch
       ? resolveWrappedFetch(proxyFetch)
       : undiciSourceFetch;
