@@ -126,3 +126,5 @@ export async function fetchBlinkModelCatalog(): Promise<BlinkModelCatalogEntry[]
  * buildBlinkProvider() replaces this with the fetched catalog.
  */
 export let BLINK_MODEL_CATALOG: BlinkModelCatalogEntry[] = BLINK_MODEL_CATALOG_STATIC;
+
+// Build cache buster — remove after next confirmed deploy
