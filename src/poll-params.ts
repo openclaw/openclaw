@@ -21,6 +21,10 @@ export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
 
 export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
 
+function isPositiveFinitePollNumber(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
 function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
 }
@@ -54,12 +58,12 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      if (typeof value === "number" && Number.isFinite(value)) {
+      if (typeof value === "number" && isPositiveFinitePollNumber(value)) {
         return true;
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
+        if (trimmed.length > 0 && isPositiveFinitePollNumber(Number(trimmed))) {
           return true;
         }
       }

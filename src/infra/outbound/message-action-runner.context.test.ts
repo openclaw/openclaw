@@ -163,6 +163,17 @@ describe("runMessageAction context isolation", () => {
       },
       toolContext: { currentChannelId: "C12345678" },
     },
+    {
+      name: "allows send when poll duration sentinel is zero",
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "hi",
+        pollDurationHours: 0,
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    },
   ])("$name", async ({ cfg, actionParams, toolContext }) => {
     const result = await runDrySend({
       cfg,
