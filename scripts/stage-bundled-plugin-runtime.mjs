@@ -19,6 +19,9 @@ const RUNTIME_COPY_MANIFESTS = [
         : defaultExistingPaths(sourceDir, ["skills"]);
     },
   },
+  // Claude and Cursor bundle manifests treat declared skill/command roots as additive
+  // in OpenClaw bundle loading. Keep runtime copies aligned so default roots still
+  // stay inside dist-runtime and pass later realpath containment checks.
   {
     manifestRelativePath: ".claude-plugin/plugin.json",
     resolvePaths(manifest, sourceDir) {
@@ -123,8 +126,8 @@ function readJsonFileIfExists(filePath) {
   const raw = fs.readFileSync(filePath, "utf8");
   try {
     return JSON.parse(raw);
-  } catch {
-    throw new Error(`Failed to parse manifest JSON at ${filePath}`);
+  } catch (error) {
+    throw new Error(`Failed to parse manifest JSON at ${filePath}`, { cause: error });
   }
 }
 
