@@ -130,7 +130,38 @@ export function validatePluginCommandDefinition(
   if (!command.description.trim()) {
     return "Command description cannot be empty";
   }
-  return validateCommandName(command.name.trim());
+  const nameError = validateCommandName(command.name.trim());
+  if (nameError) {
+    return nameError;
+  }
+  for (const [label, alias] of Object.entries(command.nativeNames ?? {})) {
+    if (typeof alias !== "string") {
+      continue;
+    }
+    const aliasError = validateCommandName(alias.trim());
+    if (aliasError) {
+      return `Native command alias "${label}" invalid: ${aliasError}`;
+    }
+  }
+  return null;
+}
+
+function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
+  const keys = new Set<string>();
+  const push = (value: string | undefined) => {
+    const normalized = value?.trim().toLowerCase();
+    if (!normalized) {
+      return;
+    }
+    keys.add(`/${normalized}`);
+  };
+
+  push(command.name);
+  push(command.nativeNames?.default);
+  push(command.nativeNames?.telegram);
+  push(command.nativeNames?.discord);
+
+  return [...keys];
 }
 
 /**
@@ -154,22 +185,31 @@ export function registerPluginCommand(
 
   const name = command.name.trim();
   const description = command.description.trim();
-
-  const key = `/${name.toLowerCase()}`;
-
-  // Check for duplicate registration
-  if (pluginCommands.has(key)) {
-    const existing = pluginCommands.get(key)!;
-    return {
-      ok: false,
-      error: `Command "${name}" already registered by plugin "${existing.pluginId}"`,
-    };
-  }
-
-  pluginCommands.set(key, {
+  const normalizedCommand = {
     ...command,
     name,
     description,
+  };
+  const invocationKeys = listPluginInvocationKeys(normalizedCommand);
+  const key = `/${name.toLowerCase()}`;
+
+  // Check for duplicate registration
+  for (const invocationKey of invocationKeys) {
+    const existing =
+      pluginCommands.get(invocationKey) ??
+      Array.from(pluginCommands.values()).find((candidate) =>
+        listPluginInvocationKeys(candidate).includes(invocationKey),
+      );
+    if (existing) {
+      return {
+        ok: false,
+        error: `Command "${invocationKey.slice(1)}" already registered by plugin "${existing.pluginId}"`,
+      };
+    }
+  }
+
+  pluginCommands.set(key, {
+    ...normalizedCommand,
     pluginId,
     pluginName: opts?.pluginName,
     pluginRoot: opts?.pluginRoot,
@@ -463,21 +503,7 @@ function resolvePluginNativeName(
 }
 
 function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): string[] {
-  const names = new Set<string>();
-  const push = (value: string | undefined) => {
-    const normalized = value?.trim().toLowerCase();
-    if (!normalized) {
-      return;
-    }
-    names.add(`/${normalized}`);
-  };
-
-  push(command.name);
-  push(command.nativeNames?.default);
-  push(command.nativeNames?.telegram);
-  push(command.nativeNames?.discord);
-
-  return [...names];
+  return listPluginInvocationKeys(command);
 }
 
 /**
