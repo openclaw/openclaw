@@ -173,8 +173,8 @@ export const buildTelegramMessageContext = async ({
   resolveTelegramGroupConfig,
   sendChatActionHandler,
 }: BuildTelegramMessageContextParams) => {
-  const triggerSource = (primaryCtx as unknown as { update?: { _triggerSource?: string } }).update
-    ?._triggerSource;
+  const triggerSource = (primaryCtx.message as unknown as Record<string, unknown>)
+    ?._triggerSource as string | undefined;
 
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
