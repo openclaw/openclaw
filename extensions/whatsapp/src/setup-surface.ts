@@ -9,6 +9,7 @@ import {
   pathExists,
   splitSetupEntries,
   setSetupChannelEnabled,
+  type DmPolicy,
   type OpenClawConfig,
 } from "../../../src/plugin-sdk-internal/setup.js";
 import type { ChannelSetupWizard } from "../../../src/plugin-sdk-internal/setup.js";
