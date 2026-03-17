@@ -8,6 +8,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { resolvePromptModeForSession } from "../../routing/session-key.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
@@ -16,7 +17,8 @@ import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
-import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { buildAgentSystemPrompt, type PromptMode } from "../system-prompt.js";
+
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
 
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
@@ -50,6 +52,7 @@ export function buildSystemPrompt(params: {
   contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
   agentId?: string;
+  sessionKey?: string;
 }) {
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
@@ -73,6 +76,8 @@ export function buildSystemPrompt(params: {
   });
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
+  // cron and subagent sessions use minimal mode — suppress heartbeat instructions
+  const promptMode: PromptMode = resolvePromptModeForSession(params.sessionKey);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
@@ -93,6 +98,7 @@ export function buildSystemPrompt(params: {
     contextFiles: params.contextFiles,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
+    promptMode,
   });
 }
 

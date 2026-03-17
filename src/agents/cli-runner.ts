@@ -165,6 +165,7 @@ export async function runCliAgent(params: {
     contextFiles,
     modelDisplay,
     agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
   });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
