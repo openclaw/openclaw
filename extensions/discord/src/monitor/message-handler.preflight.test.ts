@@ -786,6 +786,31 @@ describe("preflightDiscordMessage", () => {
       expect(result).not.toBeNull();
       expect(result?.wasMentioned).toBe(true);
     });
+
+    it("does not false-positive on bot mention inside double-backtick code span", async () => {
+      // ``<@botId>`` should be treated as inline code, not a real mention
+      const botUserId = "bot-123";
+      const channelId = "ch-tf-5";
+      const message = createDiscordMessage({
+        id: "m-tf-5",
+        content: `here is a code snippet: \`\`<@${botUserId}>\`\` do not trigger`,
+        channelId,
+        mentionedUsers: [], // no real mention in the array
+        author: { id: "u5", bot: false, username: "Eve" },
+      });
+      const result = await preflightDiscordMessage({
+        ...createPreflightArgs({
+          cfg: DEFAULT_PREFLIGHT_CFG,
+          discordConfig: {} as DiscordConfig,
+          data: createGuildEvent({ channelId, guildId, author: message.author, message }),
+          client: createGuildTextClient(channelId),
+        }),
+        botUserId,
+        guildEntries: { [guildId]: { requireMention: true } },
+      });
+      // double-backtick code span should be stripped, so no mention detected → drop
+      expect(result).toBeNull();
+    });
   });
 
 });
