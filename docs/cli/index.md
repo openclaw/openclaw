@@ -283,7 +283,7 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 Manage extensions and their config:
 
 - `openclaw plugins list` — discover plugins (use `--json` for machine output).
-- `openclaw plugins info <id>` — show details for a plugin.
+- `openclaw plugins inspect <id>` — show details for a plugin (`info` is an alias).
 - `openclaw plugins install <path|.tgz|npm-spec|plugin@marketplace>` — install a plugin (or add a plugin path to `plugins.load.paths`).
 - `openclaw plugins marketplace list <marketplace>` — list marketplace entries before install.
 - `openclaw plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
