@@ -176,6 +176,7 @@ After OpenClaw install or first hardening pass, run at least one baseline audit 
 
 Ongoing monitoring is recommended. Use the OpenClaw cron tool/CLI to schedule periodic audits (Gateway scheduler). Do not create scheduled tasks without explicit approval. Store outputs in a user-approved location and avoid secrets in logs.
 When scheduling headless cron runs, include a note in the output that instructs the user to call `healthcheck` so issues can be fixed.
+If the scheduled output includes a timestamped heading (for example, security alerts or update notices), use the local timestamp from the injected `Current time:` line and avoid UTC-only headings unless the user explicitly asked for UTC.
 
 ### Required prompt to schedule (always)
 

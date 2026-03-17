@@ -4,6 +4,8 @@ import {
   resolveUserTimeFormat,
   resolveUserTimezone,
 } from "./date-time.js";
+import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
+import { formatLocalIsoWithOffset } from "../logging/timestamps.js";
 
 export type CronStyleNow = {
   userTimezone: string;
@@ -21,12 +23,20 @@ type TimeConfigLike = {
 };
 
 export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
+  const now = new Date(nowMs);
   const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
   const formattedTime =
-    formatUserTime(new Date(nowMs), userTimezone, userTimeFormat) ?? new Date(nowMs).toISOString();
-  const utcTime = new Date(nowMs).toISOString().replace("T", " ").slice(0, 16) + " UTC";
-  const timeLine = `Current time: ${formattedTime} (${userTimezone}) / ${utcTime}`;
+    formatUserTime(now, userTimezone, userTimeFormat) ?? now.toISOString();
+  const compactLocalTime = formatZonedTimestamp(now, { timeZone: userTimezone });
+  const localIsoWithOffset = formatLocalIsoWithOffset(now, userTimezone);
+  const offset = localIsoWithOffset.match(/([+-]\d{2}:\d{2})$/)?.[1];
+  const localTimeDetail =
+    compactLocalTime && offset
+      ? `${compactLocalTime} (${offset})`
+      : compactLocalTime ?? localIsoWithOffset;
+  const utcTime = now.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  const timeLine = `Current time: ${formattedTime} (${userTimezone}) / Local: ${localTimeDetail} / UTC: ${utcTime}`;
   return { userTimezone, formattedTime, timeLine };
 }
 
