@@ -1,6 +1,6 @@
-import type { SlackAccountConfig } from "openclaw/plugin-sdk/slack";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { SlackAccountConfig } from "../../../src/config/types.slack.js";
 import {
-  type OpenClawConfig,
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,

@@ -1,10 +1,10 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   applyModelStudioConfig,
   applyModelStudioConfigCn,
   MODELSTUDIO_DEFAULT_MODEL_REF,
-} from "../../src/commands/onboard-auth.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+} from "./onboard.js";
 import { buildModelStudioProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "modelstudio";

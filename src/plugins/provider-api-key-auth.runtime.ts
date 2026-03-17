@@ -1,8 +1,10 @@
-import { normalizeApiKeyInput, validateApiKeyInput } from "../commands/auth-choice.api-key.js";
-import { ensureApiKeyFromOptionEnvOrPrompt } from "../commands/auth-choice.apply-helpers.js";
-import { applyPrimaryModel } from "../commands/model-picker.js";
-import { buildApiKeyCredential } from "../commands/onboard-auth.credentials.js";
-import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
+import { applyAuthProfileConfig, buildApiKeyCredential } from "./provider-auth-helpers.js";
+import {
+  ensureApiKeyFromOptionEnvOrPrompt,
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./provider-auth-input.js";
+import { applyPrimaryModel } from "./provider-model-primary.js";
 
 export {
   applyAuthProfileConfig,

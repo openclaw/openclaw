@@ -47,7 +47,19 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
+    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
     textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
+    listVoices: typeof import("../../tts/tts.js").listSpeechVoices;
+  };
+  mediaUnderstanding: {
+    runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
+    describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
+    describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
+    transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
+  };
+  webSearch: {
+    listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
+    search: typeof import("../../web-search/runtime.js").runWebSearch;
   };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;

@@ -1,6 +1,6 @@
-import type { SignalAccountConfig } from "openclaw/plugin-sdk/signal";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { SignalAccountConfig } from "../../../src/config/types.js";
 import {
-  type OpenClawConfig,
   createAccountListHelpers,
   normalizeAccountId,
   resolveAccountEntry,
