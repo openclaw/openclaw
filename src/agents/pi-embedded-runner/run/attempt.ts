@@ -2506,8 +2506,8 @@ export async function runEmbeddedAttempt(
           }
 
           if (hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
+            try {
+              const llmInputResult = await hookRunner.runLlmInput(
                 {
                   runId: params.runId,
                   sessionId: params.sessionId,
@@ -2527,10 +2527,26 @@ export async function runEmbeddedAttempt(
                   trigger: params.trigger,
                   channelId: params.messageChannel ?? params.messageProvider ?? undefined,
                 },
-              )
-              .catch((err) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
+              );
+
+              if (llmInputResult?.block) {
+                const reason = llmInputResult.blockReason ?? "Blocked by llm_input plugin hook";
+                log.warn(`llm_input hook blocked LLM call: ${reason}`);
+                throw new Error(`LLM call blocked by plugin: ${reason}`);
+              }
+
+              if (llmInputResult?.prompt) {
+                effectivePrompt = llmInputResult.prompt;
+              }
+              if (llmInputResult?.systemPrompt !== undefined) {
+                systemPromptText = llmInputResult.systemPrompt;
+              }
+            } catch (err) {
+              if (err instanceof Error && err.message.startsWith("LLM call blocked by plugin:")) {
+                throw err;
+              }
+              log.warn(`llm_input hook failed: ${String(err)}`);
+            }
           }
 
           const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
@@ -2811,6 +2827,8 @@ export async function runEmbeddedAttempt(
         .toReversed()
         .find((m) => m.role === "assistant");
 
+      let finalAssistantTexts = assistantTexts;
+
       const toolMetasNormalized = toolMetas
         .filter(
           (entry): entry is { toolName: string; meta?: string } =>
@@ -2819,8 +2837,8 @@ export async function runEmbeddedAttempt(
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
 
       if (hookRunner?.hasHooks("llm_output")) {
-        hookRunner
-          .runLlmOutput(
+        try {
+          const llmOutputResult = await hookRunner.runLlmOutput(
             {
               runId: params.runId,
               sessionId: params.sessionId,
@@ -2839,10 +2857,14 @@ export async function runEmbeddedAttempt(
               trigger: params.trigger,
               channelId: params.messageChannel ?? params.messageProvider ?? undefined,
             },
-          )
-          .catch((err) => {
-            log.warn(`llm_output hook failed: ${String(err)}`);
-          });
+          );
+
+          if (llmOutputResult?.assistantTexts) {
+            finalAssistantTexts = llmOutputResult.assistantTexts;
+          }
+        } catch (err) {
+          log.warn(`llm_output hook failed: ${String(err)}`);
+        }
       }
 
       return {
@@ -2855,7 +2877,7 @@ export async function runEmbeddedAttempt(
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
         messagesSnapshot,
-        assistantTexts,
+        assistantTexts: finalAssistantTexts,
         toolMetas: toolMetasNormalized,
         lastAssistant,
         lastToolError: getLastToolError?.(),
