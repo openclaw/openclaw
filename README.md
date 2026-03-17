@@ -12,9 +12,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/openclaw/openclaw/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/openclaw/openclaw/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="https://github.com/openclaw/openclaw/releases"><img src="https://img.shields.io/github/v/release/openclaw/openclaw?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
-  <a href="https://discord.gg/clawd"><img src="https://img.shields.io/discord/1456350064065904867?label=Discord&logo=discord&logoColor=white&color=5865F2&style=for-the-badge" alt="Discord"></a>
+  <a href="https://github.com/Interstellar-code/operator1/actions"><img src="https://img.shields.io/github/actions/workflow/status/Interstellar-code/operator1/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
+  <a href="https://github.com/Interstellar-code/operator1/releases"><img src="https://img.shields.io/github/v/release/Interstellar-code/operator1?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
@@ -24,23 +23,15 @@ Built on [OpenClaw](#openclaw-foundation), Operator1 extends the personal AI ass
 
 If you want autonomous agents that organize their work hierarchically, delegate to specialists, track progress, and execute code changes, this is it.
 
-[Architecture](docs/operator1/architecture.md) · [Agent Hierarchy](docs/operator1/agent-hierarchy.md) · [Task Delegation](docs/operator1/delegation.md) · [OpenClaw Docs](https://docs.openclaw.ai) · [Showcase](https://docs.openclaw.ai/start/showcase) · [Discord](https://discord.gg/clawd)
+[Architecture](docs/operator1/architecture.md) · [Agent Hierarchy](docs/operator1/agent-hierarchy.md) · [Task Delegation](docs/operator1/delegation.md) · [OpenClaw Docs](https://docs.openclaw.ai)
 
 **Operator1 runs on top of OpenClaw**, which provides the gateway, channels, and runtime infrastructure. Start with the onboarding wizard (`openclaw onboard`) to set up the gateway, then configure agents and projects.
 The wizard works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
 
-## Sponsors
+## Supported Models
 
-| OpenAI                                                            | Vercel                                                            | Blacksmith                                                                   | Convex                                                                |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| [![OpenAI](docs/assets/sponsors/openai.svg)](https://openai.com/) | [![Vercel](docs/assets/sponsors/vercel.svg)](https://vercel.com/) | [![Blacksmith](docs/assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) | [![Convex](docs/assets/sponsors/convex.svg)](https://www.convex.dev/) |
-
-**Subscriptions (OAuth):**
-
-- **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
-
-Model note: while many providers/models are supported, for the best experience and lower prompt-injection risk use the strongest latest-generation model available to you. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
+While many providers/models are supported, for the best experience and lower prompt-injection risk use the strongest latest-generation model available to you. See [Onboarding](https://docs.openclaw.ai/start/onboarding) for configuration.
 
 ## Models (selection + auth)
 
@@ -559,23 +550,6 @@ Use these when you’re past the onboarding flow and want the deeper reference.
 
 - [docs.openclaw.ai/gmail-pubsub](https://docs.openclaw.ai/automation/gmail-pubsub)
 
-## Molty
-
-OpenClaw was built for **Molty**, a space lobster AI assistant. 🦞
-by Peter Steinberger and the community.
-
-- [openclaw.ai](https://openclaw.ai)
-- [soul.md](https://soul.md)
-- [steipete.me](https://steipete.me)
-- [@openclaw](https://x.com/openclaw)
-
-## Community
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
-AI/vibe-coded PRs welcome! 🤖
-
-Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for
-[pi-mono](https://github.com/badlogic/pi-mono).
 Special thanks to Adam Doppelt for lobster.bot.
 
 Thanks to all clawtributors:
