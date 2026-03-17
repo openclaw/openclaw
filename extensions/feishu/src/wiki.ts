@@ -37,7 +37,7 @@ async function listSpaces(client: Lark.Client) {
   };
 }
 
-async function listNodes(
+export async function listNodes(
   client: Lark.Client,
   spaceId: string,
   parentNodeToken?: string,
