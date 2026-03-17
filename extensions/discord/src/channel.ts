@@ -26,6 +26,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { normalizeOutboundThreadId } from "../../../src/infra/outbound/thread-id.js";
 import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
 import {
   listDiscordAccountIds,
@@ -194,20 +195,6 @@ function parseDiscordExplicitTarget(raw: string) {
   } catch {
     return null;
   }
-}
-
-function normalizeOutboundThreadId(value?: string | number | null): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return undefined;
-    }
-    return String(Math.trunc(value));
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function buildDiscordBaseSessionKey(params: {
