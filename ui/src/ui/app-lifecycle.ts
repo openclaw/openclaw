@@ -17,6 +17,7 @@ import {
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { scheduleMermaidRender } from "./mermaid.ts";
 import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
@@ -109,6 +110,7 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
       forcedByTab || forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
     );
+    scheduleMermaidRender();
   }
   if (
     host.tab === "logs" &&

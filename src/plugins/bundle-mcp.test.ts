@@ -56,7 +56,7 @@ describe("loadEnabledBundleMcpConfig", () => {
         throw new Error("expected bundled MCP args to include the server path");
       }
       expect(await fs.realpath(loadedServerPath)).toBe(resolvedServerPath);
-      expect(loadedServer.cwd).toBe(resolvedPluginRoot);
+      expect(await fs.realpath(loadedServer.cwd as string)).toBe(resolvedPluginRoot);
     } finally {
       env.restore();
     }
@@ -181,17 +181,32 @@ describe("loadEnabledBundleMcpConfig", () => {
       const resolvedPluginRoot = await fs.realpath(pluginRoot);
 
       expect(loaded.diagnostics).toEqual([]);
-      expect(loaded.config.mcpServers.inlineProbe).toEqual({
-        command: path.join(resolvedPluginRoot, "bin", "server.sh"),
-        args: [
-          path.join(resolvedPluginRoot, "servers", "probe.mjs"),
-          path.join(resolvedPluginRoot, "local-probe.mjs"),
-        ],
-        cwd: resolvedPluginRoot,
-        env: {
-          PLUGIN_ROOT: resolvedPluginRoot,
-        },
-      });
+      const inlineProbe = loaded.config.mcpServers.inlineProbe as {
+        command?: string;
+        args?: string[];
+        cwd?: string;
+        env?: Record<string, string>;
+      };
+      expect(inlineProbe).toBeDefined();
+      expect(inlineProbe.command).toBeDefined();
+      expect(inlineProbe.cwd).toBeDefined();
+      expect(Array.isArray(inlineProbe.args)).toBe(true);
+
+      const resolvedCwd = await fs.realpath(inlineProbe.cwd as string);
+      expect(inlineProbe.env?.PLUGIN_ROOT).toBeDefined();
+      const resolvedPluginRootFromEnv = await fs.realpath(inlineProbe.env?.PLUGIN_ROOT as string);
+
+      expect(
+        path.normalize(path.relative(inlineProbe.cwd as string, inlineProbe.command as string)),
+      ).toBe(path.join("bin", "server.sh"));
+      expect(
+        path.normalize(path.relative(inlineProbe.cwd as string, (inlineProbe.args as string[])[0])),
+      ).toBe(path.join("servers", "probe.mjs"));
+      expect(
+        path.normalize(path.relative(inlineProbe.cwd as string, (inlineProbe.args as string[])[1])),
+      ).toBe("local-probe.mjs");
+      expect(resolvedCwd).toBe(resolvedPluginRoot);
+      expect(resolvedPluginRootFromEnv).toBe(resolvedPluginRoot);
     } finally {
       env.restore();
     }

@@ -15,6 +15,7 @@
     "dompurify": "^3.3.3",
     "lit": "^3.3.2",
     "marked": "^17.0.4",
+    "mermaid": "11.13.0",
     "signal-polyfill": "^0.2.2",
     "signal-utils": "^0.21.1",
     "vite": "8.0.0"
