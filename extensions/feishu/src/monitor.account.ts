@@ -28,7 +28,7 @@ import { getMessageFeishu } from "./send.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
-const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 10_000;
+const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 10_000; // Feishu message API can take several seconds to be consistent after reaction event fires
 
 export type FeishuReactionCreatedEvent = {
   message_id: string;
