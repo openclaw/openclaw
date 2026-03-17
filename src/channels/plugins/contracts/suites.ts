@@ -33,7 +33,6 @@ function sortStrings(values: readonly string[]) {
 }
 
 const contractRuntime = createNonExitingRuntime();
-
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
   expect(typeof entry.id).toBe("string");
@@ -403,7 +402,6 @@ export function installChannelDirectoryContractSuite(params: {
     if (params.invokeLookups === false) {
       return;
     }
-
     const self = await directory?.self?.({
       cfg: {} as OpenClawConfig,
       accountId: "default",

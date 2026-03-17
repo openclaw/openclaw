@@ -117,18 +117,20 @@ describe("plugin-sdk exports", () => {
     }
   });
 
+  // Use pre-built dist/plugin-sdk. The programmatic tsdown build hits Rolldown plugin
+  // compatibility issues (BindingPluginOptions error). CI runs `pnpm build` before test.
   it.skipIf(!hasBuiltPluginSdkDist)(
     "emits importable bundled subpath entries",
     { timeout: 60_000 },
     async () => {
-      // Use pre-built dist/plugin-sdk. The programmatic tsdown build hits Rolldown plugin
-      // compatibility issues (BindingPluginOptions error). CI runs `pnpm build` before test.
-      const outDir = path.join(process.cwd(), "dist", "plugin-sdk");
       const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));
+      const repoDistDir = path.join(process.cwd(), "dist");
 
       try {
         for (const entry of pluginSdkEntrypoints) {
-          const module = await import(pathToFileURL(path.join(outDir, `${entry}.js`)).href);
+          const module = await import(
+            pathToFileURL(path.join(repoDistDir, "plugin-sdk", `${entry}.js`)).href
+          );
           expect(module).toBeTypeOf("object");
         }
 
@@ -136,8 +138,8 @@ describe("plugin-sdk exports", () => {
         const consumerDir = path.join(fixtureDir, "consumer");
         const consumerEntry = path.join(consumerDir, "import-plugin-sdk.mjs");
 
-        await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
-        await fs.symlink(outDir, path.join(packageDir, "dist", "plugin-sdk"), "dir");
+        await fs.mkdir(packageDir, { recursive: true });
+        await fs.symlink(repoDistDir, path.join(packageDir, "dist"), "dir");
         await fs.writeFile(
           path.join(packageDir, "package.json"),
           JSON.stringify(

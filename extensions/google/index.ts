@@ -11,6 +11,7 @@ import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { googleMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 
 const googlePlugin = {
@@ -51,6 +52,7 @@ const googlePlugin = {
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
     registerGoogleGeminiCliProvider(api);
+    api.registerMediaUnderstandingProvider(googleMediaUnderstandingProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "gemini",

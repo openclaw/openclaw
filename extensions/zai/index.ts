@@ -19,18 +19,15 @@ import {
   validateApiKeyInput,
 } from "../../src/commands/auth-choice.api-key.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "../../src/commands/auth-choice.apply-helpers.js";
-import { buildApiKeyCredential } from "../../src/commands/onboard-auth.credentials.js";
-import {
-  applyAuthProfileConfig,
-  applyZaiConfig,
-  applyZaiProviderConfig,
-  ZAI_DEFAULT_MODEL_REF,
-} from "../../src/commands/onboard-auth.js";
+import { buildApiKeyCredential } from "../../src/commands/auth-credentials.js";
+import { applyAuthProfileConfig } from "../../src/commands/onboard-auth.js";
 import type { SecretInput } from "../../src/config/types.secrets.js";
 import { resolveRequiredHomeDir } from "../../src/infra/home-dir.js";
 import { fetchZaiUsage } from "../../src/infra/provider-usage.fetch.js";
 import { normalizeOptionalSecretInput } from "../../src/utils/normalize-secret-input.js";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
+import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_MODEL_ID = "glm-5";
@@ -338,6 +335,7 @@ const zaiPlugin = {
       fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
       isCacheTtlEligible: () => true,
     });
+    api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },
 };
 

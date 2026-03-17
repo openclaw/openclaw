@@ -1,12 +1,9 @@
 import { Separator, TextDisplay } from "@buape/carbon";
-import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
-  createScopedAccountConfigAccessors,
-  formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
 import {
   buildAgentSessionKey,
@@ -15,11 +12,8 @@ import {
 } from "openclaw/plugin-sdk/core";
 import {
   buildComputedAccountStatusSnapshot,
-  buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
-  DiscordConfigSchema,
-  getChatChannelMeta,
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
   PAIRING_APPROVED_MESSAGE,
@@ -32,12 +26,11 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/discord";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { normalizeOutboundThreadId } from "../../../src/infra/outbound/thread-id.js";
 import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
-import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
-  resolveDefaultDiscordAccountId,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { collectDiscordAuditChannelIds } from "./audit.js";
@@ -54,7 +47,8 @@ import type { DiscordProbe } from "./probe.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { fetchChannelPermissionsDiscord } from "./send.js";
-import { createDiscordSetupWizardProxy, discordSetupAdapter } from "./setup-core.js";
+import { discordSetupAdapter } from "./setup-core.js";
+import { createDiscordPluginBase, discordConfigAccessors } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./targets.js";
 import { DiscordUiContainer } from "./ui.js";
@@ -63,12 +57,7 @@ type DiscordSendFn = ReturnType<
   typeof getDiscordRuntime
 >["channel"]["discord"]["sendMessageDiscord"];
 
-const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
-
-async function loadDiscordChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
 
 function formatDiscordIntents(intents?: {
   messageContent?: string;
@@ -208,20 +197,6 @@ function parseDiscordExplicitTarget(raw: string) {
   }
 }
 
-function normalizeOutboundThreadId(value?: string | number | null): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return undefined;
-    }
-    return String(Math.trunc(value));
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function buildDiscordBaseSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -304,32 +279,10 @@ function resolveDiscordOutboundSessionRoute(params: {
   };
 }
 
-const discordConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
-  resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
-});
-
-const discordConfigBase = createScopedChannelConfigBase({
-  sectionKey: "discord",
-  listAccountIds: listDiscordAccountIds,
-  resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
-  inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
-  defaultAccountId: resolveDefaultDiscordAccountId,
-  clearBaseFields: ["token", "name"],
-});
-
-const discordSetupWizard = createDiscordSetupWizardProxy(async () => ({
-  discordSetupWizard: (await loadDiscordChannelRuntime()).discordSetupWizard,
-}));
-
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
-  id: "discord",
-  meta: {
-    ...meta,
-  },
-  setupWizard: discordSetupWizard,
+  ...createDiscordPluginBase({
+    setup: discordSetupAdapter,
+  }),
   pairing: {
     idLabel: "discordUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(discord|user):/i, ""),
@@ -339,31 +292,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         PAIRING_APPROVED_MESSAGE,
       );
     },
-  },
-  capabilities: {
-    chatTypes: ["direct", "channel", "thread"],
-    polls: true,
-    reactions: true,
-    threads: true,
-    media: true,
-    nativeCommands: true,
-  },
-  streaming: {
-    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-  },
-  reload: { configPrefixes: ["channels.discord"] },
-  configSchema: buildChannelConfigSchema(DiscordConfigSchema),
-  config: {
-    ...discordConfigBase,
-    isConfigured: (account) => Boolean(account.token?.trim()),
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: Boolean(account.token?.trim()),
-      tokenSource: account.tokenSource,
-    }),
-    ...discordConfigAccessors,
   },
   allowlist: {
     supportsScope: ({ scope }) => scope === "dm",
