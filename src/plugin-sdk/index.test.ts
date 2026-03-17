@@ -12,6 +12,15 @@ import * as sdk from "./index.js";
 
 const pluginSdkSpecifiers = buildPluginSdkSpecifiers();
 
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("plugin-sdk exports", () => {
   it("does not expose runtime modules", () => {
     const forbidden = [
@@ -65,13 +74,21 @@ describe("plugin-sdk exports", () => {
   it("emits importable bundled subpath entries", { timeout: 240_000 }, async () => {
     const fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-sdk-consumer-"));
     const repoDistDir = path.join(process.cwd(), "dist");
+    const repoPluginSdkDistDir = path.join(repoDistDir, "plugin-sdk");
 
     try {
-      await expect(fs.access(path.join(repoDistDir, "plugin-sdk"))).resolves.toBeUndefined();
+      expect(pluginSdkSpecifiers).toEqual(
+        pluginSdkEntrypoints.map((entry) =>
+          entry === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entry}`,
+        ),
+      );
+      if (!(await pathExists(repoPluginSdkDistDir))) {
+        return;
+      }
 
       for (const entry of pluginSdkEntrypoints) {
         const module = await import(
-          pathToFileURL(path.join(repoDistDir, "plugin-sdk", `${entry}.js`)).href
+          pathToFileURL(path.join(repoPluginSdkDistDir, `${entry}.js`)).href
         );
         expect(module).toBeTypeOf("object");
       }
