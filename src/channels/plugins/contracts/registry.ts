@@ -133,6 +133,47 @@ type SessionBindingContractEntry = {
   cleanup: () => Promise<void> | void;
 };
 
+function expectResolvedSessionBinding(params: {
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  targetSessionKey: string;
+}) {
+  expect(
+    getSessionBindingService().resolveByConversation({
+      channel: params.channel,
+      accountId: params.accountId,
+      conversationId: params.conversationId,
+    }),
+  )?.toMatchObject({
+    targetSessionKey: params.targetSessionKey,
+  });
+}
+
+async function unbindAndExpectClearedSessionBinding(binding: SessionBindingRecord) {
+  const service = getSessionBindingService();
+  const removed = await service.unbind({
+    bindingId: binding.bindingId,
+    reason: "contract-test",
+  });
+  expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
+  expect(service.resolveByConversation(binding.conversation)).toBeNull();
+}
+
+function expectClearedSessionBinding(params: {
+  channel: string;
+  accountId: string;
+  conversationId: string;
+}) {
+  expect(
+    getSessionBindingService().resolveByConversation({
+      channel: params.channel,
+      accountId: params.accountId,
+      conversationId: params.conversationId,
+    }),
+  ).toBeNull();
+}
+
 const telegramListActionsMock = vi.fn();
 const telegramGetCapabilitiesMock = vi.fn();
 const discordListActionsMock = vi.fn();
@@ -617,26 +658,15 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
           label: "codex-discord",
         },
       });
-      expect(
-        service.resolveByConversation({
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel:123456789012345678",
-        }),
-      )?.toMatchObject({
+      expectResolvedSessionBinding({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:123456789012345678",
         targetSessionKey: "agent:discord:child:thread-1",
       });
       return binding;
     },
-    unbindAndVerify: async (binding) => {
-      const service = getSessionBindingService();
-      const removed = await service.unbind({
-        bindingId: binding.bindingId,
-        reason: "contract-test",
-      });
-      expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
-      expect(service.resolveByConversation(binding.conversation)).toBeNull();
-    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
       const manager = createDiscordThreadBindingManager({
         accountId: "default",
@@ -645,13 +675,11 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
       });
       manager.stop();
       discordThreadBindingTesting.resetThreadBindingsForTests();
-      expect(
-        getSessionBindingService().resolveByConversation({
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel:123456789012345678",
-        }),
-      ).toBeNull();
+      expectClearedSessionBinding({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:123456789012345678",
+      });
     },
   },
   {
@@ -687,39 +715,26 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
           label: "codex-main",
         },
       });
-      expect(
-        service.resolveByConversation({
-          channel: "feishu",
-          accountId: "default",
-          conversationId: "oc_group_chat:topic:om_topic_root",
-        }),
-      )?.toMatchObject({
+      expectResolvedSessionBinding({
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root",
         targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
       });
       return binding;
     },
-    unbindAndVerify: async (binding) => {
-      const service = getSessionBindingService();
-      const removed = await service.unbind({
-        bindingId: binding.bindingId,
-        reason: "contract-test",
-      });
-      expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
-      expect(service.resolveByConversation(binding.conversation)).toBeNull();
-    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
       const manager = createFeishuThreadBindingManager({
         cfg: baseSessionBindingCfg,
         accountId: "default",
       });
       manager.stop();
-      expect(
-        getSessionBindingService().resolveByConversation({
-          channel: "feishu",
-          accountId: "default",
-          conversationId: "oc_group_chat:topic:om_topic_root",
-        }),
-      ).toBeNull();
+      expectClearedSessionBinding({
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+      });
     },
   },
   {
@@ -761,26 +776,15 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
           boundBy: "user-1",
         },
       });
-      expect(
-        service.resolveByConversation({
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-100200300:topic:77",
-        }),
-      )?.toMatchObject({
+      expectResolvedSessionBinding({
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100200300:topic:77",
         targetSessionKey: "agent:main:subagent:child-1",
       });
       return binding;
     },
-    unbindAndVerify: async (binding) => {
-      const service = getSessionBindingService();
-      const removed = await service.unbind({
-        bindingId: binding.bindingId,
-        reason: "contract-test",
-      });
-      expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
-      expect(service.resolveByConversation(binding.conversation)).toBeNull();
-    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
       const manager = createTelegramThreadBindingManager({
         accountId: "default",
@@ -788,13 +792,11 @@ export const sessionBindingContractRegistry: SessionBindingContractEntry[] = [
         enableSweeper: false,
       });
       manager.stop();
-      expect(
-        getSessionBindingService().resolveByConversation({
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-100200300:topic:77",
-        }),
-      ).toBeNull();
+      expectClearedSessionBinding({
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100200300:topic:77",
+      });
     },
   },
 ];
