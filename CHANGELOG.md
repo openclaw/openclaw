@@ -133,6 +133,7 @@ Docs: https://docs.openclaw.ai
 - macOS/launch at login: stop emitting `KeepAlive` for the desktop app launch agent so OpenClaw no longer relaunches immediately after a manual quit while launch at login remains enabled. (#40213) Thanks @stablegenius49.
 - ACP/gateway startup: use direct Telegram and Discord startup/status helpers instead of routing probes through the plugin runtime, and prepend the selected daemon Node bin dir to service PATH so plugin-local installs can still find `npm` and `pnpm`.
 - ACP/configured bindings: reinitialize configured ACP sessions that are stuck in `error` state instead of reusing the failed runtime.
+- Mattermost/DM send: retry transient direct-channel creation failures for DM deliveries, with configurable backoff and per-request timeout. (#42398) Thanks @JonathanJing.
 
 ## 2026.3.13
 
