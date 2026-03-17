@@ -69,6 +69,7 @@ describe("agent event handler", () => {
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
+      thinkingEventRecipients,
       handler,
     };
   }
