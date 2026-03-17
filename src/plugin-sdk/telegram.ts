@@ -65,7 +65,6 @@ export {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramPollActionGateState,
-  resolveTelegramAccount,
 } from "../../extensions/telegram/src/accounts.js";
 export { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export {

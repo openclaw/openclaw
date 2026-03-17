@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "../../src/config/types.models.js";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
 
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_MODEL_ID = "grok-4";

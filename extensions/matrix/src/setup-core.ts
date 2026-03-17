@@ -1,7 +1,9 @@
-import { prepareScopedSetupConfig } from "../../../src/channels/plugins/setup-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { normalizeSecretInputString } from "../../../src/config/types.secrets.js";
-import { normalizeAccountId } from "../../../src/routing/session-key.js";
+import {
+  normalizeAccountId,
+  normalizeSecretInputString,
+  prepareScopedSetupConfig,
+  type ChannelSetupAdapter,
+} from "openclaw/plugin-sdk/setup";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;

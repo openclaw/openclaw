@@ -47,7 +47,6 @@ export {
   listEnabledSignalAccounts,
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
-  resolveSignalAccount,
 } from "../../extensions/signal/src/accounts.js";
 export { resolveSignalReactionLevel } from "../../extensions/signal/src/reaction-level.js";
 export {

@@ -21,8 +21,10 @@ export { normalizeE164, pathExists } from "../utils.js";
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
+  createPatchedAccountSetupAdapter,
   migrateBaseNameToDefaultAccount,
   patchScopedAccountConfig,
+  prepareScopedSetupConfig,
 } from "../channels/plugins/setup-helpers.js";
 export {
   addWildcardAllowFrom,
