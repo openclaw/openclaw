@@ -13,7 +13,7 @@ import {
   resolveIMessageConfigDefaultTo,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/imessage";
+} from "openclaw/plugin-sdk/imessage-core";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,

@@ -1,14 +1,8 @@
 export type { ChannelMessageActionName } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
-export type {
-  WebChannelStatus,
-  WebMonitorTuning,
-} from "../../extensions/whatsapp/src/auto-reply.js";
-export type {
-  WebInboundMessage,
-  WebListenerCloseReason,
-} from "../../extensions/whatsapp/src/inbound.js";
+export type { WebChannelStatus, WebMonitorTuning } from "../../extensions/whatsapp/api.js";
+export type { WebInboundMessage, WebListenerCloseReason } from "../../extensions/whatsapp/api.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -28,6 +22,8 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
+export { formatCliCommand } from "../cli/command-format.js";
+export { formatDocsLink } from "../terminal/links.js";
 export {
   formatWhatsAppConfigAllowFromEntries,
   resolveWhatsAppConfigAllowFrom,
@@ -70,14 +66,14 @@ export {
   hasAnyWhatsAppAuth,
   listEnabledWhatsAppAccounts,
   resolveWhatsAppAccount,
-} from "../../extensions/whatsapp/src/accounts.js";
+} from "../../extensions/whatsapp/api.js";
 export {
   WA_WEB_AUTH_DIR,
   logWebSelfId,
   logoutWeb,
   pickWebChannel,
   webAuthExists,
-} from "../../extensions/whatsapp/src/auth-store.js";
+} from "../../extensions/whatsapp/api.js";
 export {
   DEFAULT_WEB_MEDIA_BYTES,
   HEARTBEAT_PROMPT,
@@ -85,28 +81,28 @@ export {
   monitorWebChannel,
   resolveHeartbeatRecipients,
   runWebHeartbeatOnce,
-} from "../../extensions/whatsapp/src/auto-reply.js";
+} from "../../extensions/whatsapp/api.js";
 export {
   extractMediaPlaceholder,
   extractText,
   monitorWebInbox,
-} from "../../extensions/whatsapp/src/inbound.js";
-export { loginWeb } from "../../extensions/whatsapp/src/login.js";
+} from "../../extensions/whatsapp/api.js";
+export { loginWeb } from "../../extensions/whatsapp/api.js";
 export {
   getDefaultLocalRoots,
   loadWebMedia,
   loadWebMediaRaw,
   optimizeImageToJpeg,
-} from "../../extensions/whatsapp/src/media.js";
+} from "../../extensions/whatsapp/api.js";
 export {
   sendMessageWhatsApp,
   sendPollWhatsApp,
   sendReactionWhatsApp,
-} from "../../extensions/whatsapp/src/send.js";
+} from "../../extensions/whatsapp/api.js";
 export {
   createWaSocket,
   formatError,
   getStatusCode,
   waitForWaConnection,
-} from "../../extensions/whatsapp/src/session.js";
-export { createWhatsAppLoginTool } from "../../extensions/whatsapp/src/agent-tools-login.js";
+} from "../../extensions/whatsapp/api.js";
+export { createWhatsAppLoginTool } from "../../extensions/whatsapp/api.js";
