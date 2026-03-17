@@ -807,8 +807,25 @@ export async function collectChannelSecurityFindings(params: {
         storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
 
       const hasTopLevelRestriction =
-        (groupAllowFrom.length > 0 && !groupAllowFromHasWildcard) ||
-        (storeAllowFrom.length > 0 && !storeHasWildcard);
+        groupAllowFrom.length > 0 && !groupAllowFromHasWildcard;
+
+      if (invalidTelegramAllowFromEntries.size > 0) {
+        const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);
+        const more =
+          invalidTelegramAllowFromEntries.size > examples.length
+            ? ` (+${invalidTelegramAllowFromEntries.size - examples.length} more)`
+            : "";
+        findings.push({
+          checkId: "channels.telegram.allowFrom.invalid_entries",
+          severity: "warn",
+          title: "Telegram allowlist contains non-numeric entries",
+          detail:
+            "Telegram sender authorization requires numeric Telegram user IDs. " +
+            `Found non-numeric allowFrom entries: ${examples.join(", ")}${more}.`,
+          remediation:
+            "Replace @username entries with numeric Telegram user IDs (use setup to resolve), then re-run the audit.",
+        });
+      }
 
       if (storeHasWildcard || groupAllowFromHasWildcard) {
         findings.push({
@@ -834,24 +851,7 @@ export async function collectChannelSecurityFindings(params: {
           remediation:
             'Remove "*" from per-group allowFrom, or set channels.telegram.groupAllowFrom to restrict access globally.',
         });
-      }
-
-      if (invalidTelegramAllowFromEntries.size > 0) {
-        const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);
-        const more =
-          invalidTelegramAllowFromEntries.size > examples.length
-            ? ` (+${invalidTelegramAllowFromEntries.size - examples.length} more)`
-            : "";
-        findings.push({
-          checkId: "channels.telegram.allowFrom.invalid_entries",
-          severity: "warn",
-          title: "Telegram allowlist contains non-numeric entries",
-          detail:
-            "Telegram sender authorization requires numeric Telegram user IDs. " +
-            `Found non-numeric allowFrom entries: ${examples.join(", ")}${more}.`,
-          remediation:
-            "Replace @username entries with numeric Telegram user IDs (use setup to resolve), then re-run the audit.",
-        });
+        continue;
       }
 
       if (!hasAnySenderAllowlist) {
