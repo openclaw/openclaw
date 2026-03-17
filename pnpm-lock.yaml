@@ -454,8 +454,6 @@ importers:
         specifier: ^6.29.0
         version: 6.31.0(ws@8.19.0)(zod@4.3.6)
 
-  extensions/microsoft: {}
-
   extensions/minimax: {}
 
   extensions/mistral: {}
