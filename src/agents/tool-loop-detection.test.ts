@@ -553,6 +553,48 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("does not treat google.evil.com search pages as Google search hops", () => {
+      const state = createState();
+      for (let i = 0; i < BROWSER_SEARCH_CRITICAL_THRESHOLD + 2; i += 1) {
+        const fixture = createBrowserSearchFixture(`evil google issue ${i}`, "google.evil.com");
+        recordSuccessfulCall(state, fixture.toolName, fixture.params, fixture.result, i);
+      }
+
+      const current = createBrowserSearchFixture("evil google issue next", "google.evil.com");
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not treat yandex.evil.com search pages as Yandex search hops", () => {
+      const state = createState();
+      for (let i = 0; i < BROWSER_SEARCH_CRITICAL_THRESHOLD + 2; i += 1) {
+        const fixture = createBrowserSearchFixture(`evil yandex issue ${i}`, "yandex.evil.com", {
+          path: "/search/",
+          queryParam: "text",
+        });
+        recordSuccessfulCall(state, fixture.toolName, fixture.params, fixture.result, i);
+      }
+
+      const current = createBrowserSearchFixture("evil yandex issue next", "yandex.evil.com", {
+        path: "/search/",
+        queryParam: "text",
+      });
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("does not flag normal browser page opens as a browser search storm", () => {
       const state = createState();
       for (let i = 0; i < BROWSER_SEARCH_CRITICAL_THRESHOLD + 2; i += 1) {

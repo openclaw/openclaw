@@ -179,14 +179,17 @@ type BrowserSearchLoopRecord = NonNullable<
   NonNullable<ToolCallRecord["loopHint"]>["browserSearch"]
 >;
 
+const GOOGLE_SEARCH_HOST_PATTERN = /(^|\.)google\.(?:com|[a-z]{2,3}|co\.[a-z]{2}|com\.[a-z]{2})$/;
+const YANDEX_SEARCH_HOST_PATTERN = /(^|\.)yandex\.(?:com|ru|by|kz|ua|net)$/;
+
 const BROWSER_SEARCH_MATCHERS: BrowserSearchMatcher[] = [
-  { hostPattern: /(^|\.)google\./, pathPattern: /^\/search$/, queryParam: "q" },
+  { hostPattern: GOOGLE_SEARCH_HOST_PATTERN, pathPattern: /^\/search$/, queryParam: "q" },
   { hostPattern: /(^|\.)bing\.com$/, pathPattern: /^\/search$/, queryParam: "q" },
   { hostPattern: /(^|\.)search\.brave\.com$/, pathPattern: /^\/search$/, queryParam: "q" },
   { hostPattern: /(^|\.)duckduckgo\.com$/, pathPattern: /^\/(?:html)?\/?$/, queryParam: "q" },
   { hostPattern: /(^|\.)baidu\.com$/, pathPattern: /^\/s$/, queryParam: "wd" },
   { hostPattern: /(^|\.)yahoo\.com$/, pathPattern: /^\/search$/, queryParam: "p" },
-  { hostPattern: /(^|\.)yandex\./, pathPattern: /^\/search\/?$/, queryParam: "text" },
+  { hostPattern: YANDEX_SEARCH_HOST_PATTERN, pathPattern: /^\/search\/?$/, queryParam: "text" },
 ];
 
 function normalizeHostname(hostname: string): string {
