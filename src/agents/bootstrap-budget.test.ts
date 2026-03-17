@@ -7,7 +7,6 @@ import {
   buildBootstrapTruncationReportMeta,
   buildBootstrapTruncationSignature,
   formatBootstrapTruncationWarningLines,
-  prependBootstrapPromptWarning,
   resolveBootstrapWarningSignaturesSeen,
 } from "./bootstrap-budget.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
