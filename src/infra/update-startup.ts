@@ -407,6 +407,7 @@ export async function runGatewayUpdateCheck(params: {
       const updateCommand = formatPackageUpdateCommand({
         root: status.root,
         packageManager: status.packageManager,
+        tag,
       });
       params.log.info(
         `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand(updateCommand)}`,

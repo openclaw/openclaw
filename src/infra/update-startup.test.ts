@@ -241,6 +241,26 @@ describe("update-startup", () => {
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining("Run: brew upgrade openclaw"));
   });
 
+  it("keeps beta package installs on the beta tag in update hints", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+
+    const log = { info: vi.fn() };
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "beta" } },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("update available (beta): v2.0.0-beta.1"),
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Run: npm install -g openclaw@beta"),
+    );
+  });
+
   it("hydrates cached update from persisted state during throttle window", async () => {
     const statePath = path.join(tempDir, "update-check.json");
     await fs.writeFile(

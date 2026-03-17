@@ -108,18 +108,20 @@ export function formatPackageInstallLabel(params: {
 export function formatPackageUpdateCommand(params: {
   root: string | null;
   packageManager: PackageManager;
+  tag?: string | null;
 }): string {
   if (detectPackageInstallSource(params.root) === "brew") {
     return "brew upgrade openclaw";
   }
+  const tag = params.tag?.trim() || "latest";
   if (params.packageManager === "pnpm") {
-    return "pnpm add -g openclaw@latest";
+    return `pnpm add -g openclaw@${tag}`;
   }
   if (params.packageManager === "npm") {
-    return "npm install -g openclaw@latest";
+    return `npm install -g openclaw@${tag}`;
   }
   if (params.packageManager === "bun") {
-    return "bun add -g openclaw@latest";
+    return `bun add -g openclaw@${tag}`;
   }
   return "openclaw update";
 }
