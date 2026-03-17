@@ -11,77 +11,85 @@ import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createDiscordActionGate, listEnabledDiscordAccounts } from "./accounts.js";
 import { handleDiscordMessageAction } from "./actions/handle-action.js";
 
+function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscordAccounts>[0]) {
+  const accounts = listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg));
+  if (accounts.length === 0) {
+    return null;
+  }
+  const unionGate = createUnionActionGate(accounts, (account) =>
+    createDiscordActionGate({
+      cfg,
+      accountId: account.accountId,
+    }),
+  );
+  return {
+    isEnabled: (key: keyof DiscordActionConfig, defaultValue = true) =>
+      unionGate(key, defaultValue),
+  };
+}
+
 export const discordMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const accounts = listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg));
-    if (accounts.length === 0) {
+    const discovery = resolveDiscordActionDiscovery(cfg);
+    if (!discovery) {
       return [];
     }
-    // Union of all accounts' action gates (any account enabling an action makes it available)
-    const gate = createUnionActionGate(accounts, (account) =>
-      createDiscordActionGate({
-        cfg,
-        accountId: account.accountId,
-      }),
-    );
-    const isEnabled = (key: keyof DiscordActionConfig, defaultValue = true) =>
-      gate(key, defaultValue);
     const actions = new Set<ChannelMessageActionName>(["send"]);
-    if (isEnabled("polls")) {
+    if (discovery.isEnabled("polls")) {
       actions.add("poll");
     }
-    if (isEnabled("reactions")) {
+    if (discovery.isEnabled("reactions")) {
       actions.add("react");
       actions.add("reactions");
     }
-    if (isEnabled("messages")) {
+    if (discovery.isEnabled("messages")) {
       actions.add("read");
       actions.add("edit");
       actions.add("delete");
     }
-    if (isEnabled("pins")) {
+    if (discovery.isEnabled("pins")) {
       actions.add("pin");
       actions.add("unpin");
       actions.add("list-pins");
     }
-    if (isEnabled("permissions")) {
+    if (discovery.isEnabled("permissions")) {
       actions.add("permissions");
     }
-    if (isEnabled("threads")) {
+    if (discovery.isEnabled("threads")) {
       actions.add("thread-create");
       actions.add("thread-list");
       actions.add("thread-reply");
     }
-    if (isEnabled("search")) {
+    if (discovery.isEnabled("search")) {
       actions.add("search");
     }
-    if (isEnabled("stickers")) {
+    if (discovery.isEnabled("stickers")) {
       actions.add("sticker");
     }
-    if (isEnabled("memberInfo")) {
+    if (discovery.isEnabled("memberInfo")) {
       actions.add("member-info");
     }
-    if (isEnabled("roleInfo")) {
+    if (discovery.isEnabled("roleInfo")) {
       actions.add("role-info");
     }
-    if (isEnabled("reactions")) {
+    if (discovery.isEnabled("reactions")) {
       actions.add("emoji-list");
     }
-    if (isEnabled("emojiUploads")) {
+    if (discovery.isEnabled("emojiUploads")) {
       actions.add("emoji-upload");
     }
-    if (isEnabled("stickerUploads")) {
+    if (discovery.isEnabled("stickerUploads")) {
       actions.add("sticker-upload");
     }
-    if (isEnabled("roles", false)) {
+    if (discovery.isEnabled("roles", false)) {
       actions.add("role-add");
       actions.add("role-remove");
     }
-    if (isEnabled("channelInfo")) {
+    if (discovery.isEnabled("channelInfo")) {
       actions.add("channel-info");
       actions.add("channel-list");
     }
-    if (isEnabled("channels")) {
+    if (discovery.isEnabled("channels")) {
       actions.add("channel-create");
       actions.add("channel-edit");
       actions.add("channel-delete");
@@ -90,29 +98,27 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       actions.add("category-edit");
       actions.add("category-delete");
     }
-    if (isEnabled("voiceStatus")) {
+    if (discovery.isEnabled("voiceStatus")) {
       actions.add("voice-status");
     }
-    if (isEnabled("events")) {
+    if (discovery.isEnabled("events")) {
       actions.add("event-list");
       actions.add("event-create");
     }
-    if (isEnabled("moderation", false)) {
+    if (discovery.isEnabled("moderation", false)) {
       actions.add("timeout");
       actions.add("kick");
       actions.add("ban");
     }
-    if (isEnabled("presence", false)) {
+    if (discovery.isEnabled("presence", false)) {
       actions.add("set-presence");
     }
     return Array.from(actions);
   },
   getCapabilities: ({ cfg }) =>
-    listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg)).length > 0
-      ? (["interactive", "components"] as const)
-      : [],
+    resolveDiscordActionDiscovery(cfg) ? (["interactive", "components"] as const) : [],
   getToolSchema: ({ cfg }) =>
-    listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg)).length > 0
+    resolveDiscordActionDiscovery(cfg)
       ? {
           properties: {
             components: createDiscordMessageToolComponentsSchema(),
