@@ -1,42 +1,54 @@
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import {
+  formatThinkingLevels as formatThinkingLevelsFallback,
+  formatXHighModelHint as formatXHighModelHintFallback,
+  isBinaryThinkingProvider as isBinaryThinkingProviderFallback,
+  listThinkingLevelLabels as listThinkingLevelLabelsFallback,
+  listThinkingLevels as listThinkingLevelsFallback,
+  normalizeProviderId,
+  resolveThinkingDefaultForModel as resolveThinkingDefaultForModelFallback,
+} from "./thinking.shared.js";
+import type {
+  ThinkLevel,
+  ThinkingCatalogEntry as SharedThinkingCatalogEntry,
+} from "./thinking.shared.js";
+export {
+  normalizeElevatedLevel,
+  normalizeFastMode,
+  normalizeNoticeLevel,
+  normalizeReasoningLevel,
+  normalizeThinkLevel,
+  normalizeUsageDisplay,
+  normalizeVerboseLevel,
+  resolveResponseUsageMode,
+  resolveElevatedMode,
+} from "./thinking.shared.js";
+export type {
+  ElevatedLevel,
+  ElevatedMode,
+  NoticeLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  UsageDisplayLevel,
+  VerboseLevel,
+} from "./thinking.shared.js";
+import {
   resolveProviderBinaryThinking,
   resolveProviderDefaultThinkingLevel,
   resolveProviderXHighThinking,
 } from "../plugins/provider-runtime.js";
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
-export type VerboseLevel = "off" | "on" | "full";
-export type NoticeLevel = "off" | "on" | "full";
-export type ElevatedLevel = "off" | "on" | "ask" | "full";
-export type ElevatedMode = "off" | "ask" | "full";
-export type ReasoningLevel = "off" | "on" | "stream";
-export type UsageDisplayLevel = "off" | "tokens" | "full";
-export type ThinkingCatalogEntry = {
-  provider: string;
-  id: string;
-  reasoning?: boolean;
+export type ThinkingCatalogEntry = SharedThinkingCatalogEntry & {
   compat?: Pick<ModelCompatConfig, "supportsXHighThinking">;
 };
+
 export type ThinkingSupportSource = {
   config?: Pick<OpenClawConfig, "models"> | null;
   catalog?: ThinkingCatalogEntry[] | null;
 };
 
-function normalizeProviderId(provider?: string | null): string {
-  if (!provider) {
-    return "";
-  }
-  const normalized = provider.trim().toLowerCase();
-  if (normalized === "z.ai" || normalized === "z-ai") {
-    return "zai";
-  }
-  if (normalized === "bedrock" || normalized === "aws-bedrock") {
-    return "amazon-bedrock";
-  }
-  return normalized;
-}
+const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 
 function normalizeModelId(model?: string | null): string {
   return model?.trim().toLowerCase() ?? "";
@@ -175,12 +187,16 @@ function collectExplicitXHighRefs(
     }
   }
 
-  // Match resolveExplicitXHighOverride(): catalog entries override config for the same ref.
   for (const entry of source?.catalog ?? []) {
     add(entry.provider, entry.id, entry.compat?.supportsXHighThinking);
   }
 
   return [...out.values()];
+}
+
+function listSupportedXHighModelRefs(source?: ThinkingSupportSource): string[] {
+  const explicit = collectExplicitXHighRefs(source);
+  return explicit.filter((entry) => entry.supported).map((entry) => entry.ref);
 }
 
 export function isBinaryThinkingProvider(provider?: string | null, model?: string | null): boolean {
@@ -200,51 +216,7 @@ export function isBinaryThinkingProvider(provider?: string | null, model?: strin
   if (typeof pluginDecision === "boolean") {
     return pluginDecision;
   }
-  return false;
-}
-
-function listSupportedXHighModelRefs(source?: ThinkingSupportSource): string[] {
-  const explicit = collectExplicitXHighRefs(source);
-  return explicit.filter((entry) => entry.supported).map((entry) => entry.ref);
-}
-
-// Normalize user-provided thinking level strings to the canonical enum.
-export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.trim().toLowerCase();
-  const collapsed = key.replace(/[\s_-]+/g, "");
-  if (collapsed === "adaptive" || collapsed === "auto") {
-    return "adaptive";
-  }
-  if (collapsed === "xhigh" || collapsed === "extrahigh") {
-    return "xhigh";
-  }
-  if (["off"].includes(key)) {
-    return "off";
-  }
-  if (["on", "enable", "enabled"].includes(key)) {
-    return "low";
-  }
-  if (["min", "minimal"].includes(key)) {
-    return "minimal";
-  }
-  if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) {
-    return "low";
-  }
-  if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
-    return "medium";
-  }
-  if (
-    ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
-  ) {
-    return "high";
-  }
-  if (["think"].includes(key)) {
-    return "minimal";
-  }
-  return undefined;
+  return isBinaryThinkingProviderFallback(provider);
 }
 
 export function supportsXHighThinking(
@@ -281,12 +253,15 @@ export function listThinkingLevels(
   model?: string | null,
   source?: ThinkingSupportSource,
 ): ThinkLevel[] {
-  const levels: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
-  if (supportsXHighThinking(provider, model, source)) {
-    levels.push("xhigh");
+  const levels = listThinkingLevelsFallback(provider, model);
+  if (!supportsXHighThinking(provider, model, source) || levels.includes("xhigh")) {
+    return levels;
   }
-  levels.push("adaptive");
-  return levels;
+  const adaptiveIndex = levels.lastIndexOf("adaptive");
+  if (adaptiveIndex === -1) {
+    return [...levels, "xhigh"];
+  }
+  return [...levels.slice(0, adaptiveIndex), "xhigh", ...levels.slice(adaptiveIndex)];
 }
 
 export function listThinkingLevelLabels(
@@ -297,7 +272,9 @@ export function listThinkingLevelLabels(
   if (isBinaryThinkingProvider(provider, model)) {
     return ["off", "on"];
   }
-  return listThinkingLevels(provider, model, source);
+  return supportsXHighThinking(provider, model, source)
+    ? listThinkingLevels(provider, model, source)
+    : listThinkingLevelLabelsFallback(provider, model);
 }
 
 export function formatThinkingLevels(
@@ -306,13 +283,15 @@ export function formatThinkingLevels(
   separator = ", ",
   source?: ThinkingSupportSource,
 ): string {
-  return listThinkingLevelLabels(provider, model, source).join(separator);
+  return supportsXHighThinking(provider, model, source)
+    ? listThinkingLevelLabels(provider, model, source).join(separator)
+    : formatThinkingLevelsFallback(provider, model, separator);
 }
 
 export function formatXHighModelHint(source?: ThinkingSupportSource): string {
   const refs = listSupportedXHighModelRefs(source);
   if (refs.length === 0) {
-    return "provider models that advertise xhigh reasoning";
+    return formatXHighModelHintFallback();
   }
   if (refs.length === 1) {
     return `provider models that advertise xhigh reasoning, including ${refs[0]}`;
@@ -329,6 +308,7 @@ export function resolveThinkingDefaultForModel(params: {
   catalog?: ThinkingCatalogEntry[];
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
+  const modelKey = normalizeModelId(params.model);
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
@@ -343,129 +323,11 @@ export function resolveThinkingDefaultForModel(params: {
   if (pluginDecision) {
     return pluginDecision;
   }
-  if (candidate?.reasoning) {
-    return "low";
+  if (
+    (normalizedProvider === "anthropic" || normalizedProvider === "amazon-bedrock") &&
+    CLAUDE_46_MODEL_RE.test(modelKey)
+  ) {
+    return "adaptive";
   }
-  return "off";
-}
-
-type OnOffFullLevel = "off" | "on" | "full";
-
-function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0"].includes(key)) {
-    return "off";
-  }
-  if (["full", "all", "everything"].includes(key)) {
-    return "full";
-  }
-  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
-    return "on";
-  }
-  return undefined;
-}
-
-// Normalize verbose flags used to toggle agent verbosity.
-export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
-  return normalizeOnOffFullLevel(raw);
-}
-
-// Normalize system notice flags used to toggle system notifications.
-export function normalizeNoticeLevel(raw?: string | null): NoticeLevel | undefined {
-  return normalizeOnOffFullLevel(raw);
-}
-
-// Normalize response-usage display modes used to toggle per-response usage footers.
-export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0", "disable", "disabled"].includes(key)) {
-    return "off";
-  }
-  if (["on", "true", "yes", "1", "enable", "enabled"].includes(key)) {
-    return "tokens";
-  }
-  if (["tokens", "token", "tok", "minimal", "min"].includes(key)) {
-    return "tokens";
-  }
-  if (["full", "session"].includes(key)) {
-    return "full";
-  }
-  return undefined;
-}
-
-export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
-  return normalizeUsageDisplay(raw) ?? "off";
-}
-
-// Normalize fast-mode flags used to toggle low-latency model behavior.
-export function normalizeFastMode(raw?: string | boolean | null): boolean | undefined {
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
-    return false;
-  }
-  if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
-    return true;
-  }
-  return undefined;
-}
-
-// Normalize elevated flags used to toggle elevated bash permissions.
-export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0"].includes(key)) {
-    return "off";
-  }
-  if (["full", "auto", "auto-approve", "autoapprove"].includes(key)) {
-    return "full";
-  }
-  if (["ask", "prompt", "approval", "approve"].includes(key)) {
-    return "ask";
-  }
-  if (["on", "true", "yes", "1"].includes(key)) {
-    return "on";
-  }
-  return undefined;
-}
-
-export function resolveElevatedMode(level?: ElevatedLevel | null): ElevatedMode {
-  if (!level || level === "off") {
-    return "off";
-  }
-  if (level === "full") {
-    return "full";
-  }
-  return "ask";
-}
-
-// Normalize reasoning visibility flags used to toggle reasoning exposure.
-export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0", "hide", "hidden", "disable", "disabled"].includes(key)) {
-    return "off";
-  }
-  if (["on", "true", "yes", "1", "show", "visible", "enable", "enabled"].includes(key)) {
-    return "on";
-  }
-  if (["stream", "streaming", "draft", "live"].includes(key)) {
-    return "stream";
-  }
-  return undefined;
+  return resolveThinkingDefaultForModelFallback(params);
 }

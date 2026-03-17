@@ -9,15 +9,17 @@ import {
   formatTrimmedAllowFromEntries,
   getChatChannelMeta,
   IMessageConfigSchema,
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-  type ResolvedIMessageAccount,
 } from "openclaw/plugin-sdk/imessage";
+import {
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+  type ResolvedIMessageAccount,
+} from "./accounts.js";
 import { createIMessageSetupWizardProxy, imessageSetupAdapter } from "./setup-core.js";
 
 async function loadIMessageChannelRuntime() {

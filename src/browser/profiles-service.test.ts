@@ -150,6 +150,7 @@ describe("BrowserProfilesService", () => {
     expect(result.transport).toBe("chrome-mcp");
     expect(result.cdpPort).toBeNull();
     expect(result.cdpUrl).toBeNull();
+    expect(result.userDataDir).toBeNull();
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles["chrome-live"]).toEqual({
       driver: "existing-session",
@@ -184,6 +185,51 @@ describe("BrowserProfilesService", () => {
         cdpUrl: "http://127.0.0.1:9222",
       }),
     ).rejects.toThrow(/does not accept cdpUrl/i);
+  });
+
+  it("creates existing-session profiles with an explicit userDataDir", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx, state } = createCtx(resolved);
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
+    fs.mkdirSync(userDataDir, { recursive: true });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({
+      name: "brave-live",
+      driver: "existing-session",
+      userDataDir,
+    });
+
+    expect(result.transport).toBe("chrome-mcp");
+    expect(result.userDataDir).toBe(userDataDir);
+    expect(state.resolved.profiles["brave-live"]).toEqual({
+      driver: "existing-session",
+      attachOnly: true,
+      userDataDir,
+      color: expect.any(String),
+    });
+  });
+
+  it("rejects userDataDir for non-existing-session profiles", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
+    const userDataDir = path.join(tempDir, "BraveSoftware", "Brave-Browser");
+    fs.mkdirSync(userDataDir, { recursive: true });
+
+    const service = createBrowserProfilesService(ctx);
+
+    await expect(
+      service.createProfile({
+        name: "brave-live",
+        userDataDir,
+      }),
+    ).rejects.toThrow(/driver=existing-session is required/i);
   });
 
   it("deletes remote profiles without stopping or removing local data", async () => {
