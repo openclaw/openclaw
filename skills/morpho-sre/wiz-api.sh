@@ -19,7 +19,9 @@ WIZ_API_BEARER_TOKEN=""
 WIZ_API_TMP_DIR=""
 
 cleanup_tmp() {
-  [[ -n "$WIZ_API_TMP_DIR" && -d "$WIZ_API_TMP_DIR" ]] && rm -rf "$WIZ_API_TMP_DIR"
+  if [[ -n "$WIZ_API_TMP_DIR" && -d "$WIZ_API_TMP_DIR" ]]; then
+    rm -rf "$WIZ_API_TMP_DIR"
+  fi
 }
 ensure_tmp_dir() {
   if [[ -z "$WIZ_API_TMP_DIR" ]]; then
