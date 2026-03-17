@@ -175,7 +175,10 @@ export async function startTelegramWebhook(opts: {
         ? triggerSourceHeader[0]
         : triggerSourceHeader;
       if (triggerSource) {
-        (body.value as Record<string, unknown>)._triggerSource = triggerSource;
+        const msg = (body.value as Record<string, unknown>).message;
+        if (msg && typeof msg === "object") {
+          (msg as Record<string, unknown>)._triggerSource = triggerSource;
+        }
       }
 
       let replied = false;
