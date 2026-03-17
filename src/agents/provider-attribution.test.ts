@@ -52,18 +52,44 @@ describe("provider attribution", () => {
     });
   });
 
-  it("tracks SDK-hook-only providers without enabling them", () => {
+  it("returns a hidden-spec OpenAI attribution policy", () => {
     expect(resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.14" })).toEqual({
       provider: "openai",
-      enabledByDefault: false,
-      verification: "vendor-sdk-hook-only",
-      hook: "default-headers",
+      enabledByDefault: true,
+      verification: "vendor-hidden-api-spec",
+      hook: "request-headers",
       reviewNote:
-        "OpenAI JS SDK exposes defaultHeaders, but public app attribution support is not yet verified.",
+        "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
       product: "OpenClaw",
       version: "2026.3.14",
+      headers: {
+        originator: "openclaw",
+        "User-Agent": "openclaw/2026.3.14",
+      },
     });
-    expect(resolveProviderAttributionHeaders("openai")).toBeUndefined();
+    expect(resolveProviderAttributionHeaders("openai", { OPENCLAW_VERSION: "2026.3.14" })).toEqual({
+      originator: "openclaw",
+      "User-Agent": "openclaw/2026.3.14",
+    });
+  });
+
+  it("returns a hidden-spec OpenAI Codex attribution policy", () => {
+    expect(
+      resolveProviderAttributionPolicy("openai-codex", { OPENCLAW_VERSION: "2026.3.14" }),
+    ).toEqual({
+      provider: "openai-codex",
+      enabledByDefault: true,
+      verification: "vendor-hidden-api-spec",
+      hook: "request-headers",
+      reviewNote:
+        "OpenAI Codex ChatGPT-backed traffic supports the same hidden originator/User-Agent attribution contract.",
+      product: "OpenClaw",
+      version: "2026.3.14",
+      headers: {
+        originator: "openclaw",
+        "User-Agent": "openclaw/2026.3.14",
+      },
+    });
   });
 
   it("lists the current attribution support matrix", () => {
@@ -76,11 +102,12 @@ describe("provider attribution", () => {
       ]),
     ).toEqual([
       ["openrouter", true, "vendor-documented", "request-headers"],
+      ["openai", true, "vendor-hidden-api-spec", "request-headers"],
+      ["openai-codex", true, "vendor-hidden-api-spec", "request-headers"],
       ["anthropic", false, "vendor-sdk-hook-only", "default-headers"],
       ["google", false, "vendor-sdk-hook-only", "user-agent-extra"],
       ["groq", false, "vendor-sdk-hook-only", "default-headers"],
       ["mistral", false, "vendor-sdk-hook-only", "custom-user-agent"],
-      ["openai", false, "vendor-sdk-hook-only", "default-headers"],
       ["together", false, "vendor-sdk-hook-only", "default-headers"],
     ]);
   });
