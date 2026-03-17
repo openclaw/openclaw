@@ -433,7 +433,18 @@ function resolveMessageToolSchemaActions(params: {
       if (plugin.id === currentChannel) {
         continue;
       }
-      for (const action of listChannelSupportedActions({ cfg: params.cfg, channel: plugin.id })) {
+      for (const action of listChannelSupportedActions({
+        cfg: params.cfg,
+        channel: plugin.id,
+        currentChannelId: params.currentChannelId,
+        currentThreadTs: params.currentThreadTs,
+        currentMessageId: params.currentMessageId,
+        accountId: params.currentAccountId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        agentId: params.agentId,
+        requesterSenderId: params.requesterSenderId,
+      })) {
         allActions.add(action);
       }
     }
@@ -579,6 +590,14 @@ function buildMessageToolDescription(options?: {
         const actions = listChannelSupportedActions({
           cfg: resolvedOptions.config,
           channel: plugin.id,
+          currentChannelId: resolvedOptions.currentChannelId,
+          currentThreadTs: resolvedOptions.currentThreadTs,
+          currentMessageId: resolvedOptions.currentMessageId,
+          accountId: resolvedOptions.currentAccountId,
+          sessionKey: resolvedOptions.sessionKey,
+          sessionId: resolvedOptions.sessionId,
+          agentId: resolvedOptions.agentId,
+          requesterSenderId: resolvedOptions.requesterSenderId,
         });
         if (actions.length > 0) {
           const all = new Set(["send", ...actions]);
