@@ -32,6 +32,7 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
+export { formatDocsLink } from "../terminal/links.js";
 
 export {
   projectCredentialSnapshotFields,

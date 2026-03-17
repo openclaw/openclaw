@@ -13,8 +13,10 @@ import { normalizeMessageChannel } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
 import {
   buildComputedAccountStatusSnapshot,
+  buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
+  DiscordConfigSchema,
   getChatChannelMeta,
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -275,6 +277,7 @@ function resolveDiscordOutboundSessionRoute(params: {
 
 export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   ...createDiscordPluginBase({
+    configSchema: buildChannelConfigSchema(DiscordConfigSchema),
     setup: discordSetupAdapter,
   }),
   pairing: {

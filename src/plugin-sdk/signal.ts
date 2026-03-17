@@ -21,11 +21,15 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
+export { formatCliCommand } from "../cli/command-format.js";
+export { formatDocsLink } from "../terminal/links.js";
 
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
 } from "../channels/plugins/normalize/signal.js";
+export { detectBinary } from "../plugins/setup-binary.js";
+export { installSignalCli } from "../plugins/signal-cli-install.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

@@ -1,8 +1,6 @@
 import {
   createEnvPatchedAccountSetupAdapter,
   DEFAULT_ACCOUNT_ID,
-  formatCliCommand,
-  formatDocsLink,
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   splitSetupEntries,
@@ -10,6 +8,7 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/telegram";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { fetchTelegramChatId } from "./api-fetch.js";
 

@@ -469,12 +469,10 @@ description: test skill
       },
     ] as const;
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await testCase.run();
-        testCase.assert(res);
-      }),
-    );
+    for (const testCase of cases) {
+      const res = await testCase.run();
+      testCase.assert(res);
+    }
   });
 
   it("scores dangerous gateway.tools.allow over HTTP by exposure", async () => {
@@ -1072,11 +1070,12 @@ description: test skill
         },
         assert: (
           res: SecurityAuditReport,
-          fixture: { stateDir: string; workspaceDir: string; outsideSkillPath: string },
+          fixture: { stateDir: string; workspaceDir: string; outsideSkillPath?: string },
         ) => {
           const finding = res.findings.find((f) => f.checkId === "skills.workspace.symlink_escape");
           expect(finding?.severity).toBe("warn");
-          expect(finding?.detail).toContain(fixture.outsideSkillPath);
+          expect(fixture.outsideSkillPath).toBeTruthy();
+          expect(finding?.detail).toContain(fixture.outsideSkillPath ?? "");
         },
       },
       {
@@ -1258,7 +1257,8 @@ description: test skill
             ),
           );
         }
-        for (const checkId of testCase.expectedAbsent ?? []) {
+        const expectedAbsent = "expectedAbsent" in testCase ? testCase.expectedAbsent : [];
+        for (const checkId of expectedAbsent) {
           expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
         }
       }),
@@ -1313,7 +1313,8 @@ description: test skill
         for (const text of testCase.detailIncludes) {
           expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
         }
-        for (const text of testCase.detailExcludes ?? []) {
+        const detailExcludes = "detailExcludes" in testCase ? testCase.detailExcludes : [];
+        for (const text of detailExcludes) {
           expect(finding?.detail, `${testCase.name}:${text}`).not.toContain(text);
         }
       }),
@@ -1359,15 +1360,20 @@ description: test skill
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
-        if (testCase.expectedAbsent) {
+        if ("expectedAbsent" in testCase && testCase.expectedAbsent) {
           expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
+          return;
+        }
+        const expectedSeverity =
+          "expectedSeverity" in testCase ? testCase.expectedSeverity : undefined;
+        if (!expectedSeverity) {
           return;
         }
 
         const finding = res.findings.find(
           (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
         );
-        expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+        expect(finding?.severity, testCase.name).toBe(expectedSeverity);
         expect(finding?.detail, testCase.name).toContain("camera.snap");
         expect(finding?.detail, testCase.name).toContain("screen.record");
       }),
@@ -1550,7 +1556,7 @@ description: test skill
 
     for (const testCase of cases) {
       const res = await audit(testCase.cfg);
-      if (testCase.expectedFinding) {
+      if ("expectedFinding" in testCase) {
         expect(res.findings, testCase.name).toEqual(
           expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
         );
@@ -2824,9 +2830,10 @@ description: test skill
 
     await Promise.all(
       cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg, testCase.env ? { env: testCase.env } : undefined);
+        const env = "env" in testCase ? testCase.env : undefined;
+        const res = await audit(testCase.cfg, env ? { env } : undefined);
         expectFinding(res, testCase.expectedFinding, testCase.expectedSeverity);
-        if (testCase.expectedExtraFinding) {
+        if ("expectedExtraFinding" in testCase) {
           expectFinding(
             res,
             testCase.expectedExtraFinding.checkId,
@@ -3111,10 +3118,12 @@ description: test skill
 
     for (const testCase of cases) {
       const res = await testCase.run();
-      for (const checkId of testCase.expectedPresent ?? []) {
+      const expectedPresent = "expectedPresent" in testCase ? testCase.expectedPresent : [];
+      for (const checkId of expectedPresent) {
         expect(hasFinding(res, checkId, "warn"), `${testCase.name}:${checkId}`).toBe(true);
       }
-      for (const checkId of testCase.expectedAbsent ?? []) {
+      const expectedAbsent = "expectedAbsent" in testCase ? testCase.expectedAbsent : [];
+      for (const checkId of expectedAbsent) {
         expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
       }
     }

@@ -1,8 +1,5 @@
-import {
-  detectBinary,
-  setSetupChannelEnabled,
-  type ChannelSetupWizard,
-} from "openclaw/plugin-sdk/setup";
+import { detectBinary } from "openclaw/plugin-sdk/imessage";
+import { setSetupChannelEnabled, type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { listIMessageAccountIds, resolveIMessageAccount } from "./accounts.js";
 import {
   createIMessageCliPathTextInput,

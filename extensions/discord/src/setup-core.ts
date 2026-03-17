@@ -1,8 +1,8 @@
 import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-runtime";
+import { formatDocsLink } from "openclaw/plugin-sdk/discord";
 import {
   DEFAULT_ACCOUNT_ID,
   createEnvPatchedAccountSetupAdapter,
-  formatDocsLink,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
