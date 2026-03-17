@@ -67,6 +67,13 @@ export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {
   return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
 }
 
+function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): boolean {
+  return (
+    isPrivateNetworkAllowedByPolicy(policy) ||
+    normalizeHostnameSet(policy?.allowedHostnames).has(hostname)
+  );
+}
+
 function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseBlockOptions {
   return {
     allowRfc2544BenchmarkRange: policy?.allowRfc2544BenchmarkRange === true,
@@ -309,11 +316,8 @@ export async function resolvePinnedHostnameWithPolicy(
     throw new Error("Invalid hostname");
   }
 
-  const allowPrivateNetwork = isPrivateNetworkAllowedByPolicy(params.policy);
-  const allowedHostnames = normalizeHostnameSet(params.policy?.allowedHostnames);
   const hostnameAllowlist = normalizeHostnameAllowlist(params.policy?.hostnameAllowlist);
-  const isExplicitAllowed = allowedHostnames.has(normalized);
-  const skipPrivateNetworkChecks = allowPrivateNetwork || isExplicitAllowed;
+  const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, params.policy);
 
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
     throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
@@ -366,6 +370,7 @@ function withPinnedLookup(
 function resolvePinnedDispatcherLookup(
   pinned: PinnedHostname,
   override?: PinnedHostnameOverride,
+  policy?: SsrFPolicy,
 ): PinnedHostname["lookup"] {
   if (!override) {
     return pinned.lookup;
@@ -375,6 +380,13 @@ function resolvePinnedDispatcherLookup(
     throw new Error(
       `Pinned dispatcher override hostname mismatch: expected ${pinned.hostname}, got ${override.hostname}`,
     );
+  }
+  const records = override.addresses.map((address) => ({
+    address,
+    family: address.includes(":") ? 6 : 4,
+  }));
+  if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
+    assertAllowedResolvedAddressesOrThrow(records, policy);
   }
   return createPinnedLookup({
     hostname: pinned.hostname,
@@ -386,8 +398,9 @@ function resolvePinnedDispatcherLookup(
 export function createPinnedDispatcher(
   pinned: PinnedHostname,
   policy?: PinnedDispatcherPolicy,
+  ssrfPolicy?: SsrFPolicy,
 ): Dispatcher {
-  const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname);
+  const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
     return new Agent({

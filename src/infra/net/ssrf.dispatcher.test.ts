@@ -109,6 +109,29 @@ describe("createPinnedDispatcher", () => {
     expect(originalLookup).not.toHaveBeenCalled();
   });
 
+  it("rejects pinned override addresses that violate SSRF policy", () => {
+    const originalLookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.221"],
+      lookup: originalLookup,
+    };
+
+    expect(() =>
+      createPinnedDispatcher(
+        pinned,
+        {
+          mode: "direct",
+          pinnedHostname: {
+            hostname: "api.telegram.org",
+            addresses: ["127.0.0.1"],
+          },
+        },
+        undefined,
+      ),
+    ).toThrow(/private|internal|blocked/i);
+  });
+
   it("keeps env proxy route while pinning the direct no-proxy path", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const pinned: PinnedHostname = {
