@@ -128,6 +128,27 @@ Allowlist:
 - `agents.list[].subagents.allowAgents`: list of agent ids that can be targeted via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 
+Example:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        subagents: {
+          allowAgents: ["researcher", "reviewer"],
+        },
+      },
+      { id: "researcher" },
+      { id: "reviewer" },
+    ],
+  },
+}
+```
+
+Put `allowAgents` on the spawning agent entry under `agents.list[].subagents`. Do not put spawn permissions under `agents.defaults.subagents`, which only holds shared sub-agent defaults like `model`, `thinking`, `maxSpawnDepth`, and `runTimeoutSeconds`.
+
 Discovery:
 
 - Use `agents_list` to see which agent ids are currently allowed for `sessions_spawn`.

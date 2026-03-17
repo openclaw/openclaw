@@ -508,7 +508,11 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "agents.defaults.memorySearch.query.minScore",
   "agents.defaults.memorySearch.sync.onSessionStart",
   "agents.defaults.memorySearch.sync.watchDebounceMs",
+  "agents.defaults.subagents",
+  "agents.defaults.subagents.maxSpawnDepth",
   "agents.defaults.workspace",
+  "agents.list[].subagents",
+  "agents.list[].subagents.allowAgents",
   "agents.list[].tools.alsoAllow",
   "agents.list[].tools.byProvider",
   "agents.list[].tools.profile",
@@ -744,6 +748,16 @@ describe("config help copy quality", () => {
     const broadcastMap = FIELD_HELP["broadcast.*"];
     expect(/source peer ID/i.test(broadcastMap)).toBe(true);
     expect(/destination peer IDs/i.test(broadcastMap)).toBe(true);
+  });
+
+  it("documents subagent defaults vs per-agent spawn permissions clearly", () => {
+    const defaultsHelp = FIELD_HELP["agents.defaults.subagents"];
+    expect(defaultsHelp).toContain("agents.list[].subagents.allowAgents");
+    expect(/global|shared/i.test(defaultsHelp)).toBe(true);
+
+    const allowAgentsHelp = FIELD_HELP["agents.list[].subagents.allowAgents"];
+    expect(allowAgentsHelp).toContain("sessions_spawn");
+    expect(allowAgentsHelp).toContain('["*"]');
   });
 
   it("documents hook transform safety and queue behavior options", () => {

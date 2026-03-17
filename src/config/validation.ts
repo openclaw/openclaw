@@ -33,6 +33,31 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 
+const AGENT_DEFAULTS_SUBAGENT_FIELDS = [
+  "maxConcurrent",
+  "maxSpawnDepth",
+  "maxChildrenPerAgent",
+  "archiveAfterMinutes",
+  "model",
+  "thinking",
+  "runTimeoutSeconds",
+  "announceTimeoutMs",
+] as const;
+
+const AGENT_ENTRY_ONLY_DEFAULTS_FIELDS = [
+  "id",
+  "default",
+  "name",
+  "workspace",
+  "agentDir",
+  "skills",
+  "identity",
+  "groupChat",
+  "tools",
+  "runtime",
+  "params",
+] as const;
+
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -114,6 +139,60 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+function collectUnrecognizedKeys(issue: unknown): string[] {
+  const record = toIssueRecord(issue);
+  if (typeof record?.code !== "string" || record.code !== "unrecognized_keys") {
+    return [];
+  }
+  const keys = record.keys;
+  if (!Array.isArray(keys)) {
+    return [];
+  }
+  return keys
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function isAgentListSubagentsPath(path: string): boolean {
+  return /^agents\.list\.\d+\.subagents$/.test(path);
+}
+
+function enhanceConfigIssueMessage(path: string, issue: unknown, message: string): string {
+  const keys = collectUnrecognizedKeys(issue);
+  if (keys.length === 0) {
+    return message;
+  }
+
+  const keySet = new Set(keys);
+  if (isAgentListSubagentsPath(path) && (keySet.has("allow") || keySet.has("allowlist"))) {
+    return `${message} Use "allowAgents" here to allow specific target agent IDs for sessions_spawn.`;
+  }
+
+  if (
+    path === "agents.defaults.subagents" &&
+    (keySet.has("allow") || keySet.has("allowlist") || keySet.has("allowAgents"))
+  ) {
+    return (
+      `${message} agents.defaults.subagents only defines shared spawn defaults ` +
+      `(${AGENT_DEFAULTS_SUBAGENT_FIELDS.join(", ")}). Put per-agent spawn permissions under ` +
+      "agents.list[].subagents.allowAgents."
+    );
+  }
+
+  if (
+    path === "agents.defaults" &&
+    AGENT_ENTRY_ONLY_DEFAULTS_FIELDS.some((field) => keySet.has(field))
+  ) {
+    return (
+      `${message} agents.defaults is a shared-defaults block, not an agent entry. ` +
+      'Move agent-specific fields into agents.list[] (for example `{ "id": "main", ... }`).'
+    );
+  }
+
+  return message;
+}
+
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = Array.isArray(record?.path)
@@ -124,7 +203,8 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
         })
         .join(".")
     : "";
-  const message = typeof record?.message === "string" ? record.message : "Invalid input";
+  const rawMessage = typeof record?.message === "string" ? record.message : "Invalid input";
+  const message = enhanceConfigIssueMessage(path, issue, rawMessage);
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
   if (!allowedValuesSummary) {

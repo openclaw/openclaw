@@ -211,9 +211,35 @@ export const FIELD_HELP: Record<string, string> = {
   agents:
     "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
   "agents.defaults":
-    "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
+    "Shared default settings inherited by agents unless overridden per entry in agents.list. This block is not an agent entry, so per-agent fields like id, name, tools, and spawn permissions belong under agents.list[].",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
+  "agents.defaults.subagents":
+    "Shared sub-agent spawn defaults inherited by all agents. Use this for global concurrency, depth, timeout, model, and thinking defaults; per-agent spawn permissions belong under agents.list[].subagents.allowAgents.",
+  "agents.defaults.subagents.maxConcurrent":
+    'Global concurrency cap for the shared "subagent" lane.',
+  "agents.defaults.subagents.maxSpawnDepth":
+    "Use this to cap nested sessions_spawn depth before further delegation is blocked.",
+  "agents.defaults.subagents.maxChildrenPerAgent":
+    "Maximum number of active child runs a single requester session may own at once.",
+  "agents.defaults.subagents.archiveAfterMinutes":
+    "Auto-archive completed sub-agent sessions after this many minutes.",
+  "agents.defaults.subagents.model":
+    "Default model selection applied to spawned sub-agents when no explicit override is passed.",
+  "agents.defaults.subagents.thinking":
+    "Default thinking level for spawned sub-agents when the caller does not override it.",
+  "agents.defaults.subagents.runTimeoutSeconds":
+    "Default run timeout for spawned sub-agents (0 disables the timeout).",
+  "agents.defaults.subagents.announceTimeoutMs":
+    "Gateway timeout for delivering completion announcements from sub-agents back to the requester.",
+  "agents.list[].subagents":
+    'Per-agent sub-agent settings for spawn permissions and per-agent spawn defaults. Put this on the spawning agent entry (for example the agent with id "main") when it needs to delegate to other agents.',
+  "agents.list[].subagents.allowAgents":
+    'Allowlist of target agent IDs this agent may spawn via sessions_spawn agentId. Use ["*"] to allow any configured agent; omit it to allow only the same agent id.',
+  "agents.list[].subagents.model":
+    "Per-agent default model selection for sub-agents spawned by this agent.",
+  "agents.list[].subagents.thinking":
+    "Per-agent default thinking level for sub-agents spawned by this agent.",
   "agents.list[].runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.list[].runtime.type":

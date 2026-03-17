@@ -320,7 +320,7 @@
         "advanced"
       ],
       "label": "Agent Defaults",
-      "help": "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
+      "help": "Shared default settings inherited by agents unless overridden per entry in agents.list. This block is not an agent entry, so per-agent fields like id, name, tools, and spawn permissions belong under agents.list[].",
       "hasChildren": true
     },
     {
@@ -3867,7 +3867,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced"
+      ],
+      "label": "Subagent Defaults",
+      "help": "Shared sub-agent spawn defaults inherited by all agents. Use this for global concurrency, depth, timeout, model, and thinking defaults; per-agent spawn permissions belong under agents.list[].subagents.allowAgents.",
       "hasChildren": true
     },
     {
@@ -3877,7 +3881,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance"
+      ],
+      "label": "Subagent Announce Timeout (ms)",
+      "help": "Gateway timeout for delivering completion announcements from sub-agents back to the requester.",
       "hasChildren": false
     },
     {
@@ -3887,7 +3895,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced"
+      ],
+      "label": "Subagent Archive After (min)",
+      "help": "Auto-archive completed sub-agent sessions after this many minutes.",
       "hasChildren": false
     },
     {
@@ -3897,7 +3909,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance"
+      ],
+      "label": "Subagent Max Children per Agent",
+      "help": "Maximum number of active child runs a single requester session may own at once.",
       "hasChildren": false
     },
     {
@@ -3907,7 +3923,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance"
+      ],
+      "label": "Subagent Max Concurrent",
+      "help": "Global concurrency cap for the shared \"subagent\" lane.",
       "hasChildren": false
     },
     {
@@ -3917,7 +3937,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance"
+      ],
+      "label": "Subagent Max Spawn Depth",
+      "help": "Use this to cap nested sessions_spawn depth before further delegation is blocked.",
       "hasChildren": false
     },
     {
@@ -3930,7 +3954,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "models"
+      ],
+      "label": "Subagent Default Model",
+      "help": "Default model selection applied to spawned sub-agents when no explicit override is passed.",
       "hasChildren": true
     },
     {
@@ -3970,7 +3998,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "performance"
+      ],
+      "label": "Subagent Run Timeout (sec)",
+      "help": "Default run timeout for spawned sub-agents (0 disables the timeout).",
       "hasChildren": false
     },
     {
@@ -3980,7 +4012,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced"
+      ],
+      "label": "Subagent Default Thinking",
+      "help": "Default thinking level for spawned sub-agents when the caller does not override it.",
       "hasChildren": false
     },
     {
@@ -6211,7 +6247,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Subagent Settings",
+      "help": "Per-agent sub-agent settings for spawn permissions and per-agent spawn defaults. Put this on the spawning agent entry (for example the agent with id \"main\") when it needs to delegate to other agents.",
       "hasChildren": true
     },
     {
@@ -6221,7 +6261,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "access"
+      ],
+      "label": "Agent Subagent Target Allowlist",
+      "help": "Allowlist of target agent IDs this agent may spawn via sessions_spawn agentId. Use [\"*\"] to allow any configured agent; omit it to allow only the same agent id.",
       "hasChildren": true
     },
     {
@@ -6244,7 +6288,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "models"
+      ],
+      "label": "Agent Subagent Default Model",
+      "help": "Per-agent default model selection for sub-agents spawned by this agent.",
       "hasChildren": true
     },
     {
@@ -6284,7 +6332,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced"
+      ],
+      "label": "Agent Subagent Default Thinking",
+      "help": "Per-agent default thinking level for sub-agents spawned by this agent.",
       "hasChildren": false
     },
     {
