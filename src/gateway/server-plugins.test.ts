@@ -22,14 +22,15 @@ vi.mock("./server-methods.js", () => ({
 }));
 
 vi.mock("../channels/registry.js", () => ({
-  CHAT_CHANNEL_ORDER: [],
-  CHANNEL_IDS: [],
+  CHAT_CHANNEL_ORDER: ["telegram", "discord", "slack"],
+  CHANNEL_IDS: ["telegram", "discord", "slack"],
   listChatChannels: () => [],
   listChatChannelAliases: () => [],
   getChatChannelMeta: () => null,
   normalizeChatChannelId: () => null,
   normalizeChannelId: () => null,
-  normalizeAnyChannelId: () => null,
+  normalizeAnyChannelId: (raw?: string | null) =>
+    typeof raw === "string" && raw.trim().length > 0 ? raw.trim().toLowerCase() : null,
   formatChannelPrimerLine: () => "",
   formatChannelSelectionLine: () => "",
 }));
@@ -538,7 +539,7 @@ describe("loadGatewayPlugins", () => {
 
   test("forwards structured plugin subagent options to gateway agent methods", async () => {
     const serverPlugins = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(serverPlugins);
+    const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("structured-output"));
 
     await runtime.run({
@@ -604,7 +605,7 @@ describe("loadGatewayPlugins", () => {
 
   test("returns pending tool calls from gateway agent.wait", async () => {
     const serverPlugins = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(serverPlugins);
+    const runtime = await createSubagentRuntime(serverPlugins);
 
     const result = await runtime.waitForRun({
       runId: "run-1",

@@ -149,14 +149,23 @@ describe("cacheRetention default behavior", () => {
     const baseStreamFn = vi.fn(async () => undefined);
     const agent: { streamFn?: StreamFn } = { streamFn: baseStreamFn as unknown as StreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-4.1", {
-      toolChoice: {
-        type: "function",
-        function: {
-          name: "emit_structured_result",
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openai",
+      "gpt-4.1",
+      {
+        toolChoice: {
+          type: "function",
+          function: {
+            name: "emit_structured_result",
+          },
         },
       },
-    });
+      undefined,
+      undefined,
+      new Set(["emit_structured_result"]),
+    );
 
     expect(agent.streamFn).toBeDefined();
     await agent.streamFn?.(
