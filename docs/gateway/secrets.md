@@ -41,6 +41,9 @@ Examples of inactive surfaces:
 - Web search provider-specific keys that are not selected by `tools.web.search.provider`.
   In auto mode (provider unset), keys are consulted by precedence for provider auto-detection until one resolves.
   After selection, non-selected provider keys are treated as inactive until selected.
+- Sandbox SSH auth material (`agents.defaults.sandbox.ssh.identityData`,
+  `certificateData`, `knownHostsData`, plus per-agent overrides) is active only
+  when the effective sandbox backend is `ssh` for the default agent or an enabled agent.
 - `gateway.remote.token` / `gateway.remote.password` SecretRefs are active if one of these is true:
   - `gateway.mode=remote`
   - `gateway.remote.url` is configured
@@ -67,7 +70,7 @@ active-surface policy, so you can see why a credential was treated as active or 
 
 When onboarding runs in interactive mode and you choose SecretRef storage, OpenClaw runs preflight validation before saving:
 
-- Env refs: validates env var name and confirms a non-empty value is visible during onboarding.
+- Env refs: validates env var name and confirms a non-empty value is visible during setup.
 - Provider refs (`file` or `exec`): validates provider selection, resolves `id`, and checks resolved value type.
 - Quickstart reuse path: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, and `exec` refs) using the same fail-fast gate.
 
@@ -285,6 +288,35 @@ Optional per-id errors:
 }
 ```
 
+## Sandbox SSH auth material
+
+The core `ssh` sandbox backend also supports SecretRefs for SSH auth material:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "ssh",
+        ssh: {
+          target: "user@gateway-host:22",
+          identityData: { source: "env", provider: "default", id: "SSH_IDENTITY" },
+          certificateData: { source: "env", provider: "default", id: "SSH_CERTIFICATE" },
+          knownHostsData: { source: "env", provider: "default", id: "SSH_KNOWN_HOSTS" },
+        },
+      },
+    },
+  },
+}
+```
+
+Runtime behavior:
+
+- OpenClaw resolves these refs during sandbox activation, not lazily during each SSH call.
+- Resolved values are written to temp files with restrictive permissions and used in generated SSH config.
+- If the effective sandbox backend is not `ssh`, these refs stay inactive and do not block startup.
+
 ## Supported credential surface
 
 Canonical supported and unsupported credentials are listed in:
@@ -348,7 +380,7 @@ Command paths can opt into supported SecretRef resolution via gateway snapshot R
 There are two broad behaviors:
 
 - Strict command paths (for example `openclaw memory` remote-memory paths and `openclaw qr --remote`) read from the active snapshot and fail fast when a required SecretRef is unavailable.
-- Read-only command paths (for example `openclaw status`, `openclaw status --all`, `openclaw channels status`, `openclaw channels resolve`, and read-only doctor/config repair flows) also prefer the active snapshot, but degrade instead of aborting when a targeted SecretRef is unavailable in that command path.
+- Read-only command paths (for example `openclaw status`, `openclaw status --all`, `openclaw channels status`, `openclaw channels resolve`, `openclaw security audit`, and read-only doctor/config repair flows) also prefer the active snapshot, but degrade instead of aborting when a targeted SecretRef is unavailable in that command path.
 
 Read-only behavior:
 

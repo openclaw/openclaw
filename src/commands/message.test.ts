@@ -301,6 +301,13 @@ describe("messageCommand", () => {
         commandName: "message",
       }),
     );
+    const secretResolveCall = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
+      targetIds?: Set<string>;
+    };
+    expect(secretResolveCall.targetIds).toBeInstanceOf(Set);
+    expect(
+      [...(secretResolveCall.targetIds ?? [])].every((id) => id.startsWith("channels.telegram.")),
+    ).toBe(true);
     expect(handleTelegramAction).toHaveBeenCalledWith(
       expect.objectContaining({ action: "send", to: "123456", accountId: undefined }),
       resolvedConfig,

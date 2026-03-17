@@ -1,17 +1,17 @@
-import { resolveHumanDelayConfig } from "../../../../../src/agents/identity.js";
-import { dispatchInboundMessage } from "../../../../../src/auto-reply/dispatch.js";
-import { clearHistoryEntriesIfEnabled } from "../../../../../src/auto-reply/reply/history.js";
-import { createReplyDispatcherWithTyping } from "../../../../../src/auto-reply/reply/reply-dispatcher.js";
-import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
-import { removeAckReactionAfterReply } from "../../../../../src/channels/ack-reactions.js";
-import { logAckFailure, logTypingFailure } from "../../../../../src/channels/logging.js";
-import { createReplyPrefixOptions } from "../../../../../src/channels/reply-prefix.js";
-import { createTypingCallbacks } from "../../../../../src/channels/typing.js";
-import { resolveStorePath, updateLastRoute } from "../../../../../src/config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../../../../src/globals.js";
-import { resolveAgentOutboundIdentity } from "../../../../../src/infra/outbound/identity.js";
-import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../../../src/security/dm-policy-shared.js";
-import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { removeAckReactionAfterReply } from "openclaw/plugin-sdk/channel-runtime";
+import { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
+import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
+import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/config-runtime";
+import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
+import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { editSlackMessage, reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -24,7 +24,12 @@ import type { SlackStreamSession } from "../../streaming.js";
 import { appendSlackStream, startSlackStream, stopSlackStream } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
-import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
+import {
+  createSlackReplyDeliveryPlan,
+  deliverReplies,
+  readSlackReplyBlocks,
+  resolveSlackThreadTs,
+} from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 function hasMedia(payload: ReplyPayload): boolean {
@@ -245,7 +250,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
-    if (streamFailed || hasMedia(payload) || !payload.text?.trim()) {
+    if (
+      streamFailed ||
+      hasMedia(payload) ||
+      readSlackReplyBlocks(payload)?.length ||
+      !payload.text?.trim()
+    ) {
       await deliverNormally(payload, streamSession?.threadTs);
       return;
     }
@@ -302,28 +312,34 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
 
       const mediaCount = payload.mediaUrls?.length ?? (payload.mediaUrl ? 1 : 0);
+      const slackBlocks = readSlackReplyBlocks(payload);
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
-      const finalText = payload.text;
+      const finalText = payload.text ?? "";
+      const trimmedFinalText = finalText.trim();
       const canFinalizeViaPreviewEdit =
         previewStreamingEnabled &&
         streamMode !== "status_final" &&
         mediaCount === 0 &&
         !payload.isError &&
-        typeof finalText === "string" &&
-        finalText.trim().length > 0 &&
+        (trimmedFinalText.length > 0 || Boolean(slackBlocks?.length)) &&
         typeof draftMessageId === "string" &&
         typeof draftChannelId === "string";
 
       if (canFinalizeViaPreviewEdit) {
         draftStream?.stop();
         try {
-          await ctx.app.client.chat.update({
-            token: ctx.botToken,
-            channel: draftChannelId,
-            ts: draftMessageId,
-            text: normalizeSlackOutboundText(finalText.trim()),
-          });
+          await editSlackMessage(
+            draftChannelId,
+            draftMessageId,
+            normalizeSlackOutboundText(trimmedFinalText),
+            {
+              token: ctx.botToken,
+              accountId: account.accountId,
+              client: ctx.app.client,
+              ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
+            },
+          );
           return;
         } catch (err) {
           logVerbose(

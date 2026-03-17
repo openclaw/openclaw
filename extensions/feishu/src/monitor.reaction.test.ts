@@ -5,7 +5,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../../src/auto-reply/inbound-debounce.js";
-import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import * as dedup from "./dedup.js";
 import { monitorSingleAccount } from "./monitor.account.js";
@@ -17,6 +17,7 @@ const handleFeishuMessageMock = vi.hoisted(() => vi.fn(async (_params: { event?:
 const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
+const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 
@@ -35,6 +36,10 @@ vi.mock("./bot.js", async () => {
 vi.mock("./monitor.transport.js", () => ({
   monitorWebSocket: monitorWebSocketMock,
   monitorWebhook: monitorWebhookMock,
+}));
+
+vi.mock("./thread-bindings.js", () => ({
+  createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
 }));
 
 const cfg = {} as ClawdbotConfig;
@@ -416,6 +421,94 @@ describe("resolveReactionSyntheticEvent", () => {
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("ignoring reaction on non-bot/unverified message om_msg1"),
     );
+  });
+});
+
+describe("monitorSingleAccount lifecycle", () => {
+  beforeEach(() => {
+    createFeishuThreadBindingManagerMock.mockReset().mockImplementation(() => ({
+      stop: vi.fn(),
+    }));
+    createEventDispatcherMock.mockReset().mockReturnValue({
+      register: vi.fn(),
+    });
+  });
+
+  it("stops the Feishu thread binding manager when the monitor exits", async () => {
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        channel: {
+          debounce: {
+            resolveInboundDebounceMs,
+            createInboundDebouncer,
+          },
+          text: {
+            hasControlCommand,
+          },
+        },
+      }),
+    );
+
+    await monitorSingleAccount({
+      cfg: buildDebounceConfig(),
+      account: buildDebounceAccount(),
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      } as RuntimeEnv,
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: "ou_bot",
+      },
+    });
+
+    const manager = createFeishuThreadBindingManagerMock.mock.results[0]?.value as
+      | { stop: ReturnType<typeof vi.fn> }
+      | undefined;
+    expect(manager?.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the Feishu thread binding manager when setup fails before transport starts", async () => {
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        channel: {
+          debounce: {
+            resolveInboundDebounceMs,
+            createInboundDebouncer,
+          },
+          text: {
+            hasControlCommand,
+          },
+        },
+      }),
+    );
+    createEventDispatcherMock.mockReturnValue({
+      get register() {
+        throw new Error("register failed");
+      },
+    });
+
+    await expect(
+      monitorSingleAccount({
+        cfg: buildDebounceConfig(),
+        account: buildDebounceAccount(),
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        } as RuntimeEnv,
+        botOpenIdSource: {
+          kind: "prefetched",
+          botOpenId: "ou_bot",
+        },
+      }),
+    ).rejects.toThrow("register failed");
+
+    const manager = createFeishuThreadBindingManagerMock.mock.results[0]?.value as
+      | { stop: ReturnType<typeof vi.fn> }
+      | undefined;
+    expect(manager?.stop).toHaveBeenCalledTimes(1);
   });
 });
 

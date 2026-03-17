@@ -76,6 +76,9 @@ Welcome to the lobster tank! 🦞
 - **Tengji (George) Zhang** - Chinese model APIs, cloud, pi
   - GitHub: [@odysseus0](https://github.com/odysseus0) · X: [@odysseus0z](https://x.com/odysseus0z)
 
+- **Andrew (Bubbles) Demczuk** - Agents/Gateway/TTS/VTT
+  - GitHub: [@ademczuk](https://github.com/ademczuk) · X: [@ademczuk](https://x.com/ademczuk)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
@@ -86,6 +89,12 @@ Welcome to the lobster tank! 🦞
 
 - Test locally with your OpenClaw instance
 - Run tests: `pnpm build && pnpm check && pnpm test`
+- For extension/plugin changes, run the fast local lane first:
+  - `pnpm test:extension <extension-name>`
+  - `pnpm test:extension --list` to see valid extension ids
+  - If you changed shared plugin or channel surfaces, run `pnpm test:contracts`
+  - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
+  - If you changed broader runtime behavior, still run the relevant wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
 - If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
@@ -93,6 +102,7 @@ Welcome to the lobster tank! 🦞
 - Reply to or resolve bot review conversations you addressed before asking for review again
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 - Use American English spelling and grammar in code, comments, docs, and UI strings
+- Do not edit files covered by `CODEOWNERS` security ownership unless a listed owner explicitly asked for the change or is already reviewing it with you. Treat those paths as restricted review surfaces, not opportunistic cleanup targets.
 
 ## Review Conversations Are Author-Owned
 

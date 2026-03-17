@@ -257,6 +257,18 @@ describe("buildMinimalServicePath", () => {
     const unique = [...new Set(parts)];
     expect(parts.length).toBe(unique.length);
   });
+
+  it("prepends explicit runtime bin directories before guessed user paths", () => {
+    const result = buildMinimalServicePath({
+      platform: "linux",
+      extraDirs: ["/home/alice/.nvm/versions/node/v22.22.0/bin"],
+      env: { HOME: "/home/alice" },
+    });
+    const parts = splitPath(result, "linux");
+
+    expect(parts[0]).toBe("/home/alice/.nvm/versions/node/v22.22.0/bin");
+    expect(parts).toContain("/home/alice/.nvm/current/bin");
+  });
 });
 
 describe("buildServiceEnvironment", () => {
@@ -344,6 +356,19 @@ describe("buildServiceEnvironment", () => {
     expect(env).not.toHaveProperty("PATH");
     expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
   });
+
+  it("prepends extra runtime directories to the gateway service PATH", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "linux",
+      extraPathDirs: ["/home/user/.nvm/versions/node/v22.22.0/bin"],
+    });
+
+    expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
+      "/home/user/.nvm/versions/node/v22.22.0/bin",
+    );
+  });
 });
 
 describe("buildNodeServiceEnvironment", () => {
@@ -415,6 +440,18 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
+  });
+
+  it("prepends extra runtime directories to the node service PATH", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "linux",
+      extraPathDirs: ["/home/user/.nvm/versions/node/v22.22.0/bin"],
+    });
+
+    expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
+      "/home/user/.nvm/versions/node/v22.22.0/bin",
+    );
   });
 });
 

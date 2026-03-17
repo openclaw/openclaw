@@ -2,9 +2,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import {
   normalizeAntigravityModelId,
-  normalizeGoogleModelId,
   normalizeProviders,
   type ProviderConfig,
 } from "./models-config.providers.js";
