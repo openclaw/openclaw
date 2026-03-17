@@ -486,7 +486,8 @@ export async function runSetupWizard(
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,
-      allowKeep: true,
+      // For ollama, don't allow "keep current" since we may need to download the selected model
+      allowKeep: authChoice !== "ollama",
       ignoreAllowlist: true,
       includeProviderPluginSetups: true,
       preferredProvider: await resolvePreferredProviderForAuthChoice({
