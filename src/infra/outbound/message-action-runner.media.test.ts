@@ -239,68 +239,63 @@ describe("runMessageAction media behavior", () => {
       );
     });
 
-    it("rewrites sandboxed media paths for sendAttachment", async () => {
-      await withSandbox(async (sandboxDir) => {
-        await runMessageAction({
-          cfg,
-          action: "sendAttachment",
-          params: {
-            channel: "bluebubbles",
-            target: "+15551234567",
-            media: "./data/pic.png",
-            message: "caption",
-          },
-          sandboxRoot: sandboxDir,
+    it("enforces sandboxed attachment paths for attachment actions", async () => {
+      for (const testCase of [
+        {
+          name: "sendAttachment rewrite",
+          action: "sendAttachment" as const,
+          target: "+15551234567",
+          media: "./data/pic.png",
+          message: "caption",
+          expectedPath: path.join("data", "pic.png"),
+        },
+        {
+          name: "setGroupIcon rewrite",
+          action: "setGroupIcon" as const,
+          target: "group:123",
+          media: "./icons/group.png",
+          expectedPath: path.join("icons", "group.png"),
+        },
+      ]) {
+        vi.mocked(loadWebMedia).mockClear();
+        await withSandbox(async (sandboxDir) => {
+          await runMessageAction({
+            cfg,
+            action: testCase.action,
+            params: {
+              channel: "bluebubbles",
+              target: testCase.target,
+              media: testCase.media,
+              ...(testCase.message ? { message: testCase.message } : {}),
+            },
+            sandboxRoot: sandboxDir,
+          });
+
+          const call = vi.mocked(loadWebMedia).mock.calls[0];
+          expect(call?.[0], testCase.name).toBe(path.join(sandboxDir, testCase.expectedPath));
+          expect(call?.[1], testCase.name).toEqual(
+            expect.objectContaining({
+              sandboxValidated: true,
+            }),
+          );
         });
+      }
 
-        const call = vi.mocked(loadWebMedia).mock.calls[0];
-        expect(call?.[0]).toBe(path.join(sandboxDir, "data", "pic.png"));
-        expect(call?.[1]).toEqual(
-          expect.objectContaining({
-            sandboxValidated: true,
-          }),
-        );
-      });
-    });
-
-    it("rewrites sandboxed media paths for setGroupIcon", async () => {
-      await withSandbox(async (sandboxDir) => {
-        await runMessageAction({
-          cfg,
-          action: "setGroupIcon",
-          params: {
-            channel: "bluebubbles",
-            target: "group:123",
-            media: "./icons/group.png",
-          },
-          sandboxRoot: sandboxDir,
-        });
-
-        const call = vi.mocked(loadWebMedia).mock.calls[0];
-        expect(call?.[0]).toBe(path.join(sandboxDir, "icons", "group.png"));
-        expect(call?.[1]).toEqual(
-          expect.objectContaining({
-            sandboxValidated: true,
-          }),
-        );
-      });
-    });
-
-    it("rejects local absolute path for sendAttachment when sandboxRoot is missing", async () => {
-      await expectRejectsLocalAbsolutePathWithoutSandbox({
-        action: "sendAttachment",
-        target: "+15551234567",
-        message: "caption",
-        tempPrefix: "msg-attachment-",
-      });
-    });
-
-    it("rejects local absolute path for setGroupIcon when sandboxRoot is missing", async () => {
-      await expectRejectsLocalAbsolutePathWithoutSandbox({
-        action: "setGroupIcon",
-        target: "group:123",
-        tempPrefix: "msg-group-icon-",
-      });
+      for (const testCase of [
+        {
+          action: "sendAttachment" as const,
+          target: "+15551234567",
+          message: "caption",
+          tempPrefix: "msg-attachment-",
+        },
+        {
+          action: "setGroupIcon" as const,
+          target: "group:123",
+          tempPrefix: "msg-group-icon-",
+        },
+      ]) {
+        await expectRejectsLocalAbsolutePathWithoutSandbox(testCase);
+      }
     });
   });
 
@@ -356,36 +351,35 @@ describe("runMessageAction media behavior", () => {
       ).rejects.toThrow(/data:/i);
     });
 
-    it("rewrites sandbox-relative media paths", async () => {
-      await withSandbox(async (sandboxDir) => {
-        await expectSandboxMediaRewrite({
-          sandboxDir,
+    it("rewrites in-sandbox media references before dry send", async () => {
+      for (const testCase of [
+        {
+          name: "relative media path",
           media: "./data/file.txt",
           message: "",
           expectedRelativePath: path.join("data", "file.txt"),
-        });
-      });
-    });
-
-    it("rewrites /workspace media paths to host sandbox root", async () => {
-      await withSandbox(async (sandboxDir) => {
-        await expectSandboxMediaRewrite({
-          sandboxDir,
+        },
+        {
+          name: "/workspace media path",
           media: "/workspace/data/file.txt",
           message: "",
           expectedRelativePath: path.join("data", "file.txt"),
-        });
-      });
-    });
-
-    it("rewrites MEDIA directives under sandbox", async () => {
-      await withSandbox(async (sandboxDir) => {
-        await expectSandboxMediaRewrite({
-          sandboxDir,
+        },
+        {
+          name: "MEDIA directive",
           message: "Hello\nMEDIA: ./data/note.ogg",
           expectedRelativePath: path.join("data", "note.ogg"),
+        },
+      ]) {
+        await withSandbox(async (sandboxDir) => {
+          await expectSandboxMediaRewrite({
+            sandboxDir,
+            media: testCase.media,
+            message: testCase.message,
+            expectedRelativePath: testCase.expectedRelativePath,
+          });
         });
-      });
+      }
     });
 
     it("allows media paths under preferred OpenClaw tmp root", async () => {

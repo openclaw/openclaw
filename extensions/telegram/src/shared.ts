@@ -10,7 +10,7 @@ import {
   TelegramConfigSchema,
   type ChannelPlugin,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/telegram";
+} from "openclaw/plugin-sdk/telegram-core";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,

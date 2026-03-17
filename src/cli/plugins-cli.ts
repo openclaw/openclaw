@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
@@ -19,7 +20,7 @@ import {
 import type { PluginRecord } from "../plugins/registry.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
-import { buildPluginStatusReport } from "../plugins/status.js";
+import { buildPluginInspectReport, buildPluginStatusReport } from "../plugins/status.js";
 import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
@@ -42,7 +43,7 @@ export type PluginsListOptions = {
   verbose?: boolean;
 };
 
-export type PluginInfoOptions = {
+export type PluginInspectOptions = {
   json?: boolean;
 };
 
@@ -131,6 +132,36 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
     parts.push(theme.error(`  error: ${plugin.error}`));
   }
   return parts.join("\n");
+}
+
+function formatInspectSection(title: string, lines: string[]): string[] {
+  if (lines.length === 0) {
+    return [];
+  }
+  return ["", `${theme.muted(`${title}:`)}`, ...lines];
+}
+
+function formatInstallLines(install: PluginInstallRecord | undefined): string[] {
+  if (!install) {
+    return [];
+  }
+  const lines = [`Source: ${install.source}`];
+  if (install.spec) {
+    lines.push(`Spec: ${install.spec}`);
+  }
+  if (install.sourcePath) {
+    lines.push(`Source path: ${shortenHomePath(install.sourcePath)}`);
+  }
+  if (install.installPath) {
+    lines.push(`Install path: ${shortenHomePath(install.installPath)}`);
+  }
+  if (install.version) {
+    lines.push(`Recorded version: ${install.version}`);
+  }
+  if (install.installedAt) {
+    lines.push(`Installed at: ${install.installedAt}`);
+  }
+  return lines;
 }
 
 function applySlotSelectionForPlugin(
@@ -542,88 +573,133 @@ export function registerPluginsCli(program: Command) {
     });
 
   plugins
-    .command("info")
-    .description("Show plugin details")
+    .command("inspect")
+    .alias("info")
+    .description("Inspect plugin details")
     .argument("<id>", "Plugin id")
     .option("--json", "Print JSON")
-    .action((id: string, opts: PluginInfoOptions) => {
-      const report = buildPluginStatusReport();
-      const plugin = report.plugins.find((p) => p.id === id || p.name === id);
-      if (!plugin) {
+    .action((id: string, opts: PluginInspectOptions) => {
+      const cfg = loadConfig();
+      const report = buildPluginStatusReport({ config: cfg });
+      const inspect = buildPluginInspectReport({
+        id,
+        config: cfg,
+        report,
+      });
+      if (!inspect) {
         defaultRuntime.error(`Plugin not found: ${id}`);
         process.exit(1);
       }
-      const cfg = loadConfig();
-      const install = cfg.plugins?.installs?.[plugin.id];
+      const install = cfg.plugins?.installs?.[inspect.plugin.id];
 
       if (opts.json) {
-        defaultRuntime.log(JSON.stringify(plugin, null, 2));
+        defaultRuntime.log(
+          JSON.stringify(
+            {
+              ...inspect,
+              install,
+            },
+            null,
+            2,
+          ),
+        );
         return;
       }
 
       const lines: string[] = [];
-      lines.push(theme.heading(plugin.name || plugin.id));
-      if (plugin.name && plugin.name !== plugin.id) {
-        lines.push(theme.muted(`id: ${plugin.id}`));
+      lines.push(theme.heading(inspect.plugin.name || inspect.plugin.id));
+      if (inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id) {
+        lines.push(theme.muted(`id: ${inspect.plugin.id}`));
       }
-      if (plugin.description) {
-        lines.push(plugin.description);
+      if (inspect.plugin.description) {
+        lines.push(inspect.plugin.description);
       }
       lines.push("");
-      lines.push(`${theme.muted("Status:")} ${plugin.status}`);
-      lines.push(`${theme.muted("Format:")} ${plugin.format ?? "openclaw"}`);
-      if (plugin.bundleFormat) {
-        lines.push(`${theme.muted("Bundle format:")} ${plugin.bundleFormat}`);
+      lines.push(`${theme.muted("Status:")} ${inspect.plugin.status}`);
+      lines.push(`${theme.muted("Format:")} ${inspect.plugin.format ?? "openclaw"}`);
+      if (inspect.plugin.bundleFormat) {
+        lines.push(`${theme.muted("Bundle format:")} ${inspect.plugin.bundleFormat}`);
       }
-      lines.push(`${theme.muted("Source:")} ${shortenHomeInString(plugin.source)}`);
-      lines.push(`${theme.muted("Origin:")} ${plugin.origin}`);
-      if (plugin.version) {
-        lines.push(`${theme.muted("Version:")} ${plugin.version}`);
+      lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
+      lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
+      if (inspect.plugin.version) {
+        lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
       }
-      if (plugin.toolNames.length > 0) {
-        lines.push(`${theme.muted("Tools:")} ${plugin.toolNames.join(", ")}`);
-      }
-      if (plugin.hookNames.length > 0) {
-        lines.push(`${theme.muted("Hooks:")} ${plugin.hookNames.join(", ")}`);
-      }
-      if (plugin.gatewayMethods.length > 0) {
-        lines.push(`${theme.muted("Gateway methods:")} ${plugin.gatewayMethods.join(", ")}`);
-      }
-      if (plugin.providerIds.length > 0) {
-        lines.push(`${theme.muted("Providers:")} ${plugin.providerIds.join(", ")}`);
-      }
-      if ((plugin.bundleCapabilities?.length ?? 0) > 0) {
+      lines.push(`${theme.muted("Shape:")} ${inspect.shape}`);
+      lines.push(`${theme.muted("Capability mode:")} ${inspect.capabilityMode}`);
+      lines.push(
+        `${theme.muted("Legacy before_agent_start:")} ${inspect.usesLegacyBeforeAgentStart ? "yes" : "no"}`,
+      );
+      if ((inspect.plugin.bundleCapabilities?.length ?? 0) > 0) {
         lines.push(
-          `${theme.muted("Bundle capabilities:")} ${plugin.bundleCapabilities?.join(", ")}`,
+          `${theme.muted("Bundle capabilities:")} ${inspect.plugin.bundleCapabilities?.join(", ")}`,
         );
       }
-      if (plugin.cliCommands.length > 0) {
-        lines.push(`${theme.muted("CLI commands:")} ${plugin.cliCommands.join(", ")}`);
+      lines.push(
+        ...formatInspectSection(
+          "Capabilities",
+          inspect.capabilities.map(
+            (entry) =>
+              `${entry.kind}: ${entry.ids.length > 0 ? entry.ids.join(", ") : "(registered)"}`,
+          ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Typed hooks",
+          inspect.typedHooks.map((entry) =>
+            entry.priority == null ? entry.name : `${entry.name} (priority ${entry.priority})`,
+          ),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Custom hooks",
+          inspect.customHooks.map((entry) => `${entry.name}: ${entry.events.join(", ")}`),
+        ),
+      );
+      lines.push(
+        ...formatInspectSection(
+          "Tools",
+          inspect.tools.map((entry) => {
+            const names = entry.names.length > 0 ? entry.names.join(", ") : "(anonymous)";
+            return entry.optional ? `${names} [optional]` : names;
+          }),
+        ),
+      );
+      lines.push(...formatInspectSection("Commands", inspect.commands));
+      lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
+      lines.push(...formatInspectSection("Services", inspect.services));
+      lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods));
+      if (inspect.httpRouteCount > 0) {
+        lines.push(...formatInspectSection("HTTP routes", [String(inspect.httpRouteCount)]));
       }
-      if (plugin.services.length > 0) {
-        lines.push(`${theme.muted("Services:")} ${plugin.services.join(", ")}`);
+      const policyLines: string[] = [];
+      if (typeof inspect.policy.allowPromptInjection === "boolean") {
+        policyLines.push(`allowPromptInjection: ${inspect.policy.allowPromptInjection}`);
       }
-      if (plugin.error) {
-        lines.push(`${theme.error("Error:")} ${plugin.error}`);
+      if (typeof inspect.policy.allowModelOverride === "boolean") {
+        policyLines.push(`allowModelOverride: ${inspect.policy.allowModelOverride}`);
       }
-      if (install) {
-        lines.push("");
-        lines.push(`${theme.muted("Install:")} ${install.source}`);
-        if (install.spec) {
-          lines.push(`${theme.muted("Spec:")} ${install.spec}`);
-        }
-        if (install.sourcePath) {
-          lines.push(`${theme.muted("Source path:")} ${shortenHomePath(install.sourcePath)}`);
-        }
-        if (install.installPath) {
-          lines.push(`${theme.muted("Install path:")} ${shortenHomePath(install.installPath)}`);
-        }
-        if (install.version) {
-          lines.push(`${theme.muted("Recorded version:")} ${install.version}`);
-        }
-        if (install.installedAt) {
-          lines.push(`${theme.muted("Installed at:")} ${install.installedAt}`);
-        }
+      if (inspect.policy.hasAllowedModelsConfig) {
+        policyLines.push(
+          `allowedModels: ${
+            inspect.policy.allowedModels.length > 0
+              ? inspect.policy.allowedModels.join(", ")
+              : "(configured but empty)"
+          }`,
+        );
+      }
+      lines.push(...formatInspectSection("Policy", policyLines));
+      lines.push(
+        ...formatInspectSection(
+          "Diagnostics",
+          inspect.diagnostics.map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
+        ),
+      );
+      lines.push(...formatInspectSection("Install", formatInstallLines(install)));
+      if (inspect.plugin.error) {
+        lines.push("", `${theme.error("Error:")} ${inspect.plugin.error}`);
       }
       defaultRuntime.log(lines.join("\n"));
     });
