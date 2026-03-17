@@ -6,6 +6,8 @@ import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { markdownToWhatsApp } from "../../markdown/whatsapp.js";
 import { sleep } from "../../utils.js";
+import path from "node:path";
+import { extensionForMime } from "../../media/mime.js";
 import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
@@ -138,8 +140,9 @@ export async function deliverWebReply(params: {
           "media:video",
         );
       } else {
-        const fileName = media.fileName ?? mediaUrl.split("/").pop() ?? "file";
         const mimetype = media.contentType ?? "application/octet-stream";
+        const rawName = media.fileName ?? mediaUrl.split("/").pop() ?? "file";
+        const fileName = path.extname(rawName) ? rawName : `${rawName}${extensionForMime(mimetype) ?? ""}`;
         await sendWithRetry(
           () =>
             msg.sendMedia({

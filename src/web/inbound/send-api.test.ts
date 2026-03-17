@@ -38,16 +38,30 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("falls back to default document filename when fileName is absent", async () => {
+  it("falls back to default document filename with extension when fileName is absent", async () => {
     const payload = Buffer.from("pdf");
     await api.sendMessage("+1555", "doc", payload, "application/pdf");
     expect(sendMessage).toHaveBeenCalledWith(
       "1555@s.whatsapp.net",
       expect.objectContaining({
         document: payload,
-        fileName: "file",
+        fileName: "file.pdf",
         caption: "doc",
         mimetype: "application/pdf",
+      }),
+    );
+  });
+
+  it("derives extension from MIME type dynamically (text/csv)", async () => {
+    const payload = Buffer.from("a,b,c");
+    await api.sendMessage("+1555", "csv data", payload, "text/csv");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "file.csv",
+        caption: "csv data",
+        mimetype: "text/csv",
       }),
     );
   });

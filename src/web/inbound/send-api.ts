@@ -1,6 +1,7 @@
 import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
+import { extensionForMime } from "../../media/mime.js";
 import { toWhatsappJid } from "../../utils.js";
 
 export function createWebSendApi(params: {
@@ -38,7 +39,7 @@ export function createWebSendApi(params: {
             ...(gifPlayback ? { gifPlayback: true } : {}),
           };
         } else {
-          const fileName = sendOptions?.fileName?.trim() || "file";
+          const fileName = sendOptions?.fileName?.trim() || `file${extensionForMime(mediaType) ?? ""}`;
           payload = {
             document: mediaBuffer,
             fileName,
