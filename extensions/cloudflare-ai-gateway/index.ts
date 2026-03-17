@@ -12,14 +12,15 @@ import {
 } from "../../src/commands/auth-choice.api-key.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "../../src/commands/auth-choice.apply-helpers.js";
 import { buildApiKeyCredential } from "../../src/commands/onboard-auth.credentials.js";
-import {
-  applyCloudflareAiGatewayConfig,
-  applyAuthProfileConfig,
-  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
-} from "../../src/commands/onboard-auth.js";
+import { applyAuthProfileConfig } from "../../src/commands/onboard-auth.js";
 import type { SecretInput } from "../../src/config/types.secrets.js";
 import { coerceSecretRef } from "../../src/config/types.secrets.js";
 import { normalizeOptionalSecretInput } from "../../src/utils/normalize-secret-input.js";
+import {
+  applyCloudflareAiGatewayConfig,
+  buildCloudflareAiGatewayConfigPatch,
+  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+} from "./onboard.js";
 
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
@@ -50,30 +51,6 @@ function resolveMetadataFromCredential(
   return {
     accountId: cred?.metadata?.accountId?.trim() || undefined,
     gatewayId: cred?.metadata?.gatewayId?.trim() || undefined,
-  };
-}
-
-function buildCloudflareConfigPatch(params: { accountId: string; gatewayId: string }) {
-  const baseUrl = resolveCloudflareAiGatewayBaseUrl(params);
-  return {
-    models: {
-      providers: {
-        [PROVIDER_ID]: {
-          baseUrl,
-          api: "anthropic-messages" as const,
-          models: [buildCloudflareAiGatewayModelDefinition()],
-        },
-      },
-    },
-    agents: {
-      defaults: {
-        models: {
-          [CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF]: {
-            alias: "Cloudflare AI Gateway",
-          },
-        },
-      },
-    },
   };
 }
 
@@ -180,7 +157,7 @@ const cloudflareAiGatewayPlugin = {
                   ),
                 },
               ],
-              configPatch: buildCloudflareConfigPatch(metadata),
+              configPatch: buildCloudflareAiGatewayConfigPatch(metadata),
               defaultModel: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
             };
           },
