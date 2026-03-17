@@ -7,7 +7,10 @@ import {
   resolveLineAccount,
 } from "../../../src/line/accounts.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import { createTestWizardPrompter, type WizardPrompter } from "../../../test/helpers/extensions/setup-wizard.js";
+import {
+  createTestWizardPrompter,
+  type WizardPrompter,
+} from "../../../test/helpers/extensions/setup-wizard.js";
 import { lineSetupAdapter, lineSetupWizard } from "./setup-surface.js";
 
 const lineConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
