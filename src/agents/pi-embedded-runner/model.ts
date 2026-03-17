@@ -90,9 +90,9 @@ function applyConfiguredProviderOverrides(params: {
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }
-  const configuredModel = providerConfig.models?.find((candidate) =>
-    modelIdMatchesDotDash(candidate.id, modelId),
-  );
+  const configuredModel =
+    providerConfig.models?.find((candidate) => candidate.id === modelId) ??
+    providerConfig.models?.find((candidate) => modelIdMatchesDotDash(candidate.id, modelId));
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
