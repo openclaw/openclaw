@@ -2,7 +2,7 @@ import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
-import { resolveModel } from "../agents/pi-embedded-runner/model.js";
+import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
@@ -20,13 +20,13 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(async () => null),
 }));
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: vi.fn((provider: string, modelId: string) => ({
+function createResolvedModel(provider: string, modelId: string, api = "openai-completions") {
+  return {
     model: {
       provider,
       id: modelId,
       name: modelId,
-      api: "openai-completions",
+      api,
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -35,7 +35,16 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
     },
     authStorage: { profiles: {} },
     modelRegistry: { find: vi.fn() },
-  })),
+  };
+}
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModel: vi.fn((provider: string, modelId: string) =>
+    createResolvedModel(provider, modelId),
+  ),
+  resolveModelAsync: vi.fn(async (provider: string, modelId: string) =>
+    createResolvedModel(provider, modelId),
+  ),
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -302,7 +311,7 @@ describe("tts", () => {
       expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
     });
 
-    it("accepts edge as provider override", () => {
+    it("accepts edge as a legacy microsoft provider override", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input = "Hello [[tts:provider=edge]] world";
       const result = parseTtsDirectives(input, policy);
@@ -411,25 +420,16 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      expect(resolveModel).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
+      expect(resolveModelAsync).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
     it("registers the Ollama api before direct summarization", async () => {
-      vi.mocked(resolveModel).mockReturnValue({
+      vi.mocked(resolveModelAsync).mockResolvedValue({
+        ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
         model: {
-          provider: "ollama",
-          id: "qwen3:8b",
-          name: "qwen3:8b",
-          api: "ollama",
+          ...createResolvedModel("ollama", "qwen3:8b", "ollama").model,
           baseUrl: "http://127.0.0.1:11434",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128000,
-          maxTokens: 8192,
         },
-        authStorage: { profiles: {} } as never,
-        modelRegistry: { find: vi.fn() } as never,
       } as never);
 
       await summarizeText({
@@ -524,8 +524,8 @@ describe("tts", () => {
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
           },
-          prefsPath: "/tmp/tts-prefs-edge.json",
-          expected: "edge",
+          prefsPath: "/tmp/tts-prefs-microsoft.json",
+          expected: "microsoft",
         },
       ] as const;
 
@@ -536,6 +536,25 @@ describe("tts", () => {
           expect(provider).toBe(testCase.expected);
         });
       }
+    });
+  });
+
+  describe("resolveTtsConfig provider normalization", () => {
+    it("normalizes legacy edge provider ids to microsoft", () => {
+      const config = resolveTtsConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            provider: "edge",
+            edge: {
+              enabled: true,
+            },
+          },
+        },
+      });
+
+      expect(config.provider).toBe("microsoft");
+      expect(getTtsProvider(config, "/tmp/tts-prefs-normalized.json")).toBe("microsoft");
     });
   });
 

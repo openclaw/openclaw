@@ -1,3 +1,4 @@
+import { resolveOutboundSendDep } from "../../infra/outbound/send-deps.js";
 import type { PluginRuntimeChannel } from "../../plugins/runtime/types-channel.js";
 import { escapeRegExp } from "../../utils.js";
 import { resolveWhatsAppOutboundTarget } from "../../whatsapp/resolve-outbound-target.js";
@@ -10,13 +11,13 @@ export function resolveWhatsAppGroupIntroHint(): string {
   return WHATSAPP_GROUP_INTRO_HINT;
 }
 
-export function resolveWhatsAppMentionStripPatterns(ctx: { To?: string | null }): string[] {
+export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }): RegExp[] {
   const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "");
   if (!selfE164) {
     return [];
   }
   const escaped = escapeRegExp(selfE164);
-  return [escaped, `@${escaped}`];
+  return [new RegExp(escaped, "g"), new RegExp(`@${escaped}`, "g")];
 }
 
 type WhatsAppChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
@@ -66,7 +67,8 @@ export function createWhatsAppOutboundBase({
       if (skipEmptyText && !normalizedText) {
         return { channel: "whatsapp", messageId: "" };
       }
-      const send = deps?.sendWhatsApp ?? sendMessageWhatsApp;
+      const send =
+        resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
       const result = await send(to, normalizedText, {
         verbose: false,
         cfg,
@@ -85,7 +87,8 @@ export function createWhatsAppOutboundBase({
       deps,
       gifPlayback,
     }) => {
-      const send = deps?.sendWhatsApp ?? sendMessageWhatsApp;
+      const send =
+        resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
       const result = await send(to, normalizeText(text), {
         verbose: false,
         cfg,

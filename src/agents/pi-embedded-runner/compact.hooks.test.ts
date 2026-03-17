@@ -14,6 +14,8 @@ const {
   resolveMemorySearchConfigMock,
   resolveSessionAgentIdMock,
   estimateTokensMock,
+  sessionAbortCompactionMock,
+  createOpenClawCodingToolsMock,
 } = vi.hoisted(() => {
   const contextEngineCompactMock = vi.fn(async () => ({
     ok: true as boolean,
@@ -35,12 +37,14 @@ const {
       info: { ownsCompaction: true },
       compact: contextEngineCompactMock,
     })),
-    resolveModelMock: vi.fn(() => ({
-      model: { provider: "openai", api: "responses", id: "fake", input: [] },
-      error: null,
-      authStorage: { setRuntimeApiKey: vi.fn() },
-      modelRegistry: {},
-    })),
+    resolveModelMock: vi.fn(
+      (_provider?: string, _modelId?: string, _agentDir?: string, _cfg?: unknown) => ({
+        model: { provider: "openai", api: "responses", id: "fake", input: [] },
+        error: null,
+        authStorage: { setRuntimeApiKey: vi.fn() },
+        modelRegistry: {},
+      }),
+    ),
     sessionCompactImpl: vi.fn(async () => ({
       summary: "summary",
       firstKeptEntryId: "entry-1",
@@ -65,6 +69,8 @@ const {
     })),
     resolveSessionAgentIdMock: vi.fn(() => "main"),
     estimateTokensMock: vi.fn((_message?: unknown) => 10),
+    sessionAbortCompactionMock: vi.fn(),
+    createOpenClawCodingToolsMock: vi.fn(() => []),
   };
 });
 
@@ -121,6 +127,7 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
           session.messages.splice(1);
           return await sessionCompactImpl();
         }),
+        abortCompaction: sessionAbortCompactionMock,
         dispose: vi.fn(),
       };
       return { session };
@@ -151,6 +158,7 @@ vi.mock("../models-config.js", () => ({
 }));
 
 vi.mock("../model-auth.js", () => ({
+  applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
   getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
   resolveModelAuthMode: vi.fn(() => "env"),
 }));
@@ -201,7 +209,7 @@ vi.mock("../channel-tools.js", () => ({
 }));
 
 vi.mock("../pi-tools.js", () => ({
-  createOpenClawCodingTools: vi.fn(() => []),
+  createOpenClawCodingTools: createOpenClawCodingToolsMock,
 }));
 
 vi.mock("./google.js", () => ({
@@ -303,6 +311,10 @@ vi.mock("./sandbox-info.js", () => ({
 vi.mock("./model.js", () => ({
   buildModelAliasLines: vi.fn(() => []),
   resolveModel: resolveModelMock,
+  resolveModelAsync: vi.fn(
+    async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
+      resolveModelMock(provider, modelId, agentDir, cfg),
+  ),
 }));
 
 vi.mock("./session-manager-cache.js", () => ({
@@ -420,6 +432,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     resolveSessionAgentIdMock.mockReturnValue("main");
     estimateTokensMock.mockReset();
     estimateTokensMock.mockReturnValue(10);
+    sessionAbortCompactionMock.mockReset();
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 
@@ -442,6 +455,26 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       config: undefined,
       workspaceDir: "/tmp/workspace",
     });
+  });
+
+  it("forwards gateway subagent binding opt-in during compaction bootstrap", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+      }),
+    );
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {
@@ -771,6 +804,24 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
 
     expect(result.ok).toBe(true);
+  });
+
+  it("aborts in-flight compaction when the caller abort signal fires", async () => {
+    const controller = new AbortController();
+    sessionCompactImpl.mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    const resultPromise = compactEmbeddedPiSessionDirect(
+      directCompactionArgs({
+        abortSignal: controller.signal,
+      }),
+    );
+
+    controller.abort(new Error("request timed out"));
+    const result = await resultPromise;
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("request timed out");
+    expect(sessionAbortCompactionMock).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -6,6 +6,13 @@ import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
+import {
+  buildChatModelOption,
+  createChatModelOverride,
+  formatChatModelDisplay,
+  normalizeChatModelOverrideValue,
+  resolveServerChatModelValue,
+} from "./chat-model-ref.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
@@ -173,7 +180,24 @@ export function renderChatControls(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const toolCallsIcon = html`
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path
+        d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
+      ></path>
+    </svg>
+  `;
   const refreshIcon = html`
     <svg
       width="18"
@@ -253,6 +277,23 @@ export function renderChatControls(state: AppViewState) {
         ${icons.brain}
       </button>
       <button
+        class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
+        ?disabled=${disableThinkingToggle}
+        @click=${() => {
+          if (disableThinkingToggle) {
+            return;
+          }
+          state.applySettings({
+            ...state.settings,
+            chatShowToolCalls: !state.settings.chatShowToolCalls,
+          });
+        }}
+        aria-pressed=${showToolCalls}
+        title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.toolCallsToggle")}
+      >
+        ${toolCallsIcon}
+      </button>
+      <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
         ?disabled=${disableFocusToggle}
         @click=${() => {
@@ -285,6 +326,163 @@ export function renderChatControls(state: AppViewState) {
       >
         ${renderCronFilterIcon(hiddenCronCount)}
       </button>
+    </div>
+  `;
+}
+
+/**
+ * Mobile-only gear toggle + dropdown for chat controls.
+ * Rendered in the topbar so it doesn't consume content-header space.
+ * Hidden on desktop via CSS.
+ */
+export function renderChatMobileToggle(state: AppViewState) {
+  const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const disableThinkingToggle = state.onboarding;
+  const disableFocusToggle = state.onboarding;
+  const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const toolCallsIcon = html`
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path
+        d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
+      ></path>
+    </svg>
+  `;
+  const focusIcon = html`
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="M4 7V4h3"></path>
+      <path d="M20 7V4h-3"></path>
+      <path d="M4 17v3h3"></path>
+      <path d="M20 17v3h-3"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+  `;
+
+  return html`
+    <div class="chat-mobile-controls-wrapper">
+      <button
+        class="btn btn--sm btn--icon chat-controls-mobile-toggle"
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          const btn = e.currentTarget as HTMLElement;
+          const dropdown = btn.nextElementSibling as HTMLElement;
+          if (dropdown) {
+            const isOpen = dropdown.classList.toggle("open");
+            if (isOpen) {
+              const close = () => {
+                dropdown.classList.remove("open");
+                document.removeEventListener("click", close);
+              };
+              setTimeout(() => document.addEventListener("click", close, { once: true }), 0);
+            }
+          }
+        }}
+        title="Chat settings"
+        aria-label="Chat settings"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+      <div class="chat-controls-dropdown" @click=${(e: Event) => {
+        e.stopPropagation();
+      }}>
+        <div class="chat-controls">
+          <label class="field chat-controls__session">
+            <select
+              .value=${state.sessionKey}
+              @change=${(e: Event) => {
+                const next = (e.target as HTMLSelectElement).value;
+                switchChatSession(state, next);
+              }}
+            >
+              ${sessionGroups.map(
+                (group) => html`
+                  <optgroup label=${group.label}>
+                    ${group.options.map(
+                      (opt) => html`
+                        <option value=${opt.key} title=${opt.title}>
+                          ${opt.label}
+                        </option>
+                      `,
+                    )}
+                  </optgroup>
+                `,
+              )}
+            </select>
+          </label>
+          <div class="chat-controls__thinking">
+            <button
+              class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (!disableThinkingToggle) {
+                  state.applySettings({
+                    ...state.settings,
+                    chatShowThinking: !state.settings.chatShowThinking,
+                  });
+                }
+              }}
+              aria-pressed=${showThinking}
+              title=${t("chat.thinkingToggle")}
+            >
+              ${icons.brain}
+            </button>
+            <button
+              class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (!disableThinkingToggle) {
+                  state.applySettings({
+                    ...state.settings,
+                    chatShowToolCalls: !state.settings.chatShowToolCalls,
+                  });
+                }
+              }}
+              aria-pressed=${showToolCalls}
+              title=${t("chat.toolCallsToggle")}
+            >
+              ${toolCallsIcon}
+            </button>
+            <button
+              class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
+              ?disabled=${disableFocusToggle}
+              @click=${() => {
+                if (!disableFocusToggle) {
+                  state.applySettings({
+                    ...state.settings,
+                    chatFocusMode: !state.settings.chatFocusMode,
+                  });
+                }
+              }}
+              aria-pressed=${focusActive}
+              title=${t("chat.focusToggle")}
+            >
+              ${focusIcon}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -330,24 +528,25 @@ function resolveActiveSessionRow(state: AppViewState) {
 function resolveModelOverrideValue(state: AppViewState): string {
   // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
   const cached = state.chatModelOverrides[state.sessionKey];
-  if (typeof cached === "string") {
-    return cached.trim();
+  if (cached) {
+    return normalizeChatModelOverrideValue(cached, state.chatModelCatalog ?? []);
   }
   // cached === null means explicitly cleared to default.
   if (cached === null) {
     return "";
   }
   // No local override recorded yet — fall back to server data.
+  // Include provider prefix so the value matches option keys (provider/model).
   const activeRow = resolveActiveSessionRow(state);
-  if (activeRow) {
-    return typeof activeRow.model === "string" ? activeRow.model.trim() : "";
+  if (activeRow && typeof activeRow.model === "string" && activeRow.model.trim()) {
+    return resolveServerChatModelValue(activeRow.model, activeRow.modelProvider);
   }
   return "";
 }
 
 function resolveDefaultModelValue(state: AppViewState): string {
-  const model = state.sessionsResult?.defaults?.model;
-  return typeof model === "string" ? model.trim() : "";
+  const defaults = state.sessionsResult?.defaults;
+  return resolveServerChatModelValue(defaults?.model, defaults?.modelProvider);
 }
 
 function buildChatModelOptions(
@@ -371,8 +570,8 @@ function buildChatModelOptions(
   };
 
   for (const entry of catalog) {
-    const provider = entry.provider?.trim();
-    addOption(entry.id, provider ? `${entry.id} · ${provider}` : entry.id);
+    const option = buildChatModelOption(entry);
+    addOption(option.value, option.label);
   }
 
   if (currentOverride) {
@@ -392,7 +591,8 @@ function renderChatModelSelect(state: AppViewState) {
     currentOverride,
     defaultModel,
   );
-  const defaultLabel = defaultModel ? `Default (${defaultModel})` : "Default model";
+  const defaultDisplay = formatChatModelDisplay(defaultModel);
+  const defaultLabel = defaultModel ? `Default (${defaultDisplay})` : "Default model";
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
@@ -436,7 +636,7 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
   // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
   state.chatModelOverrides = {
     ...state.chatModelOverrides,
-    [targetSessionKey]: nextModel || null,
+    [targetSessionKey]: createChatModelOverride(nextModel),
   };
   try {
     await state.client.request("sessions.patch", {
@@ -575,6 +775,7 @@ export function isCronSessionKey(key: string): boolean {
 type SessionOptionEntry = {
   key: string;
   label: string;
+  scopeLabel: string;
   title: string;
 };
 
@@ -625,10 +826,12 @@ export function resolveSessionOptionGroups(
           resolveAgentGroupLabel(state, parsed.agentId),
         )
       : ensureGroup("other", "Other Sessions");
+    const scopeLabel = parsed?.rest?.trim() || key;
     const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
     group.options.push({
       key,
       label,
+      scopeLabel,
       title: key,
     });
   };
@@ -643,6 +846,19 @@ export function resolveSessionOptionGroups(
     addOption(row.key);
   }
   addOption(sessionKey);
+
+  for (const group of groups.values()) {
+    const counts = new Map<string, number>();
+    for (const option of group.options) {
+      counts.set(option.label, (counts.get(option.label) ?? 0) + 1);
+    }
+    for (const option of group.options) {
+      if ((counts.get(option.label) ?? 0) > 1 && option.scopeLabel !== option.label) {
+        option.label = `${option.label} · ${option.scopeLabel}`;
+      }
+    }
+  }
+
   return Array.from(groups.values());
 }
 
@@ -673,18 +889,14 @@ function resolveSessionScopedOptionLabel(
   if (!row) {
     return base;
   }
-  const displayName =
-    typeof row.displayName === "string" && row.displayName.trim().length > 0
-      ? row.displayName.trim()
-      : null;
-  const label = typeof row.label === "string" ? row.label.trim() : "";
-  const showDisplayName = Boolean(
-    displayName && displayName !== key && displayName !== label && displayName !== base,
-  );
-  if (!showDisplayName) {
-    return base;
+
+  const label = row.label?.trim() || "";
+  const displayName = row.displayName?.trim() || "";
+  if ((label && label !== key) || (displayName && displayName !== key)) {
+    return resolveSessionDisplayName(key, row);
   }
-  return `${base} · ${displayName}`;
+
+  return base;
 }
 
 type ThemeOption = { id: ThemeName; label: string; icon: string };

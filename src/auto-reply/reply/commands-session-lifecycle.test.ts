@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 const hoisted = vi.hoisted(() => {
   const getThreadBindingManagerMock = vi.fn();
@@ -19,24 +22,34 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../discord/monitor/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../discord/monitor/thread-bindings.js")>();
+vi.mock("../../plugins/runtime/index.js", async () => {
+  const discordThreadBindings = await vi.importActual<
+    typeof import("../../../extensions/discord/src/monitor/thread-bindings.js")
+  >("../../../extensions/discord/src/monitor/thread-bindings.js");
   return {
-    ...actual,
-    getThreadBindingManager: hoisted.getThreadBindingManagerMock,
-    setThreadBindingIdleTimeoutBySessionKey: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
-    setThreadBindingMaxAgeBySessionKey: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
-  };
-});
-
-vi.mock("../../telegram/thread-bindings.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../telegram/thread-bindings.js")>();
-  return {
-    ...actual,
-    setTelegramThreadBindingIdleTimeoutBySessionKey:
-      hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
-    setTelegramThreadBindingMaxAgeBySessionKey:
-      hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock,
+    createPluginRuntime: () => ({
+      channel: {
+        discord: {
+          threadBindings: {
+            getManager: hoisted.getThreadBindingManagerMock,
+            resolveIdleTimeoutMs: discordThreadBindings.resolveThreadBindingIdleTimeoutMs,
+            resolveInactivityExpiresAt:
+              discordThreadBindings.resolveThreadBindingInactivityExpiresAt,
+            resolveMaxAgeMs: discordThreadBindings.resolveThreadBindingMaxAgeMs,
+            resolveMaxAgeExpiresAt: discordThreadBindings.resolveThreadBindingMaxAgeExpiresAt,
+            setIdleTimeoutBySessionKey: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
+            setMaxAgeBySessionKey: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
+            unbindBySessionKey: vi.fn(),
+          },
+        },
+        telegram: {
+          threadBindings: {
+            setIdleTimeoutBySessionKey: hoisted.setTelegramThreadBindingIdleTimeoutBySessionKeyMock,
+            setMaxAgeBySessionKey: hoisted.setTelegramThreadBindingMaxAgeBySessionKeyMock,
+          },
+        },
+      },
+    }),
   };
 });
 
@@ -164,6 +177,9 @@ function createFakeThreadBindingManager(binding: FakeBinding | null) {
 
 describe("/session idle and /session max-age", () => {
   beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
     hoisted.getThreadBindingManagerMock.mockReset();
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
     hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReset();

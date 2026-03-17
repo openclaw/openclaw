@@ -78,6 +78,50 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
+  changed-extensions:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    outputs:
+      has_changed_extensions: ${{ steps.changed.outputs.has_changed_extensions }}
+      changed_extensions_matrix: ${{ steps.changed.outputs.changed_extensions_matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          submodules: false
+
+      - name: Ensure changed-extensions base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+          use-sticky-disk: "false"
+
+      - name: Detect changed extensions
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
+
+          const extensionIds = listChangedExtensionIds({ base: process.env.BASE_SHA, head: "HEAD" });
+          const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
+
+          appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
+          appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
+          EOF
+
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   build-artifacts:
     needs: [docs-scope, changed-scope]
@@ -160,6 +204,12 @@ jobs:
             task: extensions
             command: pnpm test:extensions
           - runtime: node
+            task: channels
+            command: pnpm test:channels
+          - runtime: node
+            task: contracts
+            command: pnpm test:contracts
+          - runtime: node
             task: protocol
             command: pnpm protocol:check
           - runtime: bun
@@ -202,6 +252,29 @@ jobs:
         if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
         run: ${{ matrix.command }}
 
+  extension-fast:
+    name: "extension-fast (${{ matrix.extension }})"
+    needs: [docs-scope, changed-scope, changed-extensions]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && needs.changed-extensions.outputs.has_changed_extensions == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.changed-extensions.outputs.changed_extensions_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run changed extension tests
+        run: pnpm test:extension ${{ matrix.extension }}
+
   # Types, lint, and format check.
   check:
     name: "check"
@@ -228,6 +301,35 @@ jobs:
 
       - name: Enforce safe external URL opening policy
         run: pnpm lint:ui:no-raw-window-open
+
+  startup-memory:
+    name: "startup-memory"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Build dist
+        run: pnpm build
+
+      - name: Smoke test CLI launcher help
+        run: node openclaw.mjs --help
+
+      - name: Smoke test CLI launcher status json
+        run: node openclaw.mjs status --json --timeout 1
+
+      - name: Check CLI startup memory
+        run: pnpm test:startup:memory
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
@@ -359,11 +461,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "push" ]; then
-            BASE="${{ github.event.before }}"
-          else
-            BASE="${{ github.event.pull_request.base.sha }}"
-          fi
+          BASE="$(
+            python - <<'PY'
+            import json
+            import os
+
+            with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as fh:
+                event = json.load(fh)
+
+            if os.environ["GITHUB_EVENT_NAME"] == "push":
+                print(event["before"])
+            else:
+                print(event["pull_request"]["base"]["sha"])
+            PY
+          )"
 
           mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
           if [ "${#workflow_files[@]}" -eq 0 ]; then

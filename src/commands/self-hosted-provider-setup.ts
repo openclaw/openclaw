@@ -1,23 +1,26 @@
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import {
+  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+  SELF_HOSTED_DEFAULT_COST,
+  SELF_HOSTED_DEFAULT_MAX_TOKENS,
+} from "../agents/self-hosted-provider-defaults.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import type {
   ProviderDiscoveryContext,
   ProviderAuthResult,
   ProviderAuthMethodNonInteractiveContext,
   ProviderNonInteractiveApiKeyResult,
 } from "../plugins/types.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthProfileConfig } from "./onboard-auth.js";
 
-export const SELF_HOSTED_DEFAULT_CONTEXT_WINDOW = 128000;
-export const SELF_HOSTED_DEFAULT_MAX_TOKENS = 8192;
-export const SELF_HOSTED_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
+export {
+  SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+  SELF_HOSTED_DEFAULT_COST,
+  SELF_HOSTED_DEFAULT_MAX_TOKENS,
+} from "../agents/self-hosted-provider-defaults.js";
 
 export function applyProviderDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
   const existingModel = cfg.agents?.defaults?.model;
@@ -238,11 +241,10 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
   contextWindow?: number;
   maxTokens?: number;
 }): Promise<OpenClawConfig | null> {
-  const baseUrl = (params.ctx.opts.customBaseUrl?.trim() || params.defaultBaseUrl).replace(
-    /\/+$/,
-    "",
-  );
-  const modelId = params.ctx.opts.customModelId?.trim();
+  const baseUrl = (
+    normalizeOptionalSecretInput(params.ctx.opts.customBaseUrl) ?? params.defaultBaseUrl
+  ).replace(/\/+$/, "");
+  const modelId = normalizeOptionalSecretInput(params.ctx.opts.customModelId);
   if (!modelId) {
     params.ctx.runtime.error(
       buildMissingNonInteractiveModelIdMessage({
@@ -257,7 +259,7 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
 
   const resolved = await params.ctx.resolveApiKey({
     provider: params.providerId,
-    flagValue: params.ctx.opts.customApiKey,
+    flagValue: normalizeOptionalSecretInput(params.ctx.opts.customApiKey),
     flagName: "--custom-api-key",
     envVar: params.defaultApiKeyEnvVar,
     envVarName: params.defaultApiKeyEnvVar,

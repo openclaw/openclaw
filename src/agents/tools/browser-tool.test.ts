@@ -64,12 +64,7 @@ const browserConfigMocks = vi.hoisted(() => ({
     if (!profile) {
       return null;
     }
-    const driver =
-      profile.driver === "extension"
-        ? "extension"
-        : profile.driver === "existing-session"
-          ? "existing-session"
-          : "openclaw";
+    const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
     if (driver === "existing-session") {
       return {
         name,
@@ -287,29 +282,6 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts?.mode).toBeUndefined();
   });
 
-  it("defaults to host when using profile=chrome-relay (even in sandboxed sessions)", async () => {
-    setResolvedBrowserProfiles({
-      "chrome-relay": {
-        driver: "extension",
-        cdpUrl: "http://127.0.0.1:18792",
-        color: "#0066CC",
-      },
-    });
-    const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
-    await tool.execute?.("call-1", {
-      action: "snapshot",
-      profile: "chrome-relay",
-      snapshotFormat: "ai",
-    });
-
-    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
-      undefined,
-      expect.objectContaining({
-        profile: "chrome-relay",
-      }),
-    );
-  });
-
   it("defaults to host when using profile=user (even in sandboxed sessions)", async () => {
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
@@ -366,12 +338,12 @@ describe("browser tool snapshot maxChars", () => {
 
   it("lets the server choose snapshot format when the user does not request one", async () => {
     const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "snapshot", profile: "chrome-relay" });
+    await tool.execute?.("call-1", { action: "snapshot", profile: "user" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       undefined,
       expect.objectContaining({
-        profile: "chrome-relay",
+        profile: "user",
       }),
     );
     const opts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
@@ -438,21 +410,17 @@ describe("browser tool snapshot maxChars", () => {
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("keeps chrome-relay profile on host when node proxy is available", async () => {
+  it("keeps user profile on host when node proxy is available", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
-      "chrome-relay": {
-        driver: "extension",
-        cdpUrl: "http://127.0.0.1:18792",
-        color: "#0066CC",
-      },
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
     const tool = createBrowserTool();
-    await tool.execute?.("call-1", { action: "status", profile: "chrome-relay" });
+    await tool.execute?.("call-1", { action: "status", profile: "user" });
 
     expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
       undefined,
-      expect.objectContaining({ profile: "chrome-relay" }),
+      expect.objectContaining({ profile: "user" }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
@@ -745,7 +713,7 @@ describe("browser tool external content wrapping", () => {
 describe("browser tool act stale target recovery", () => {
   registerBrowserToolAfterEachReset();
 
-  it("retries safe chrome-relay act once without targetId when exactly one tab remains", async () => {
+  it("retries safe user-browser act once without targetId when exactly one tab remains", async () => {
     browserActionsMocks.browserAct
       .mockRejectedValueOnce(new Error("404: tab not found"))
       .mockResolvedValueOnce({ ok: true });
@@ -754,7 +722,7 @@ describe("browser tool act stale target recovery", () => {
     const tool = createBrowserTool();
     const result = await tool.execute?.("call-1", {
       action: "act",
-      profile: "chrome-relay",
+      profile: "user",
       request: {
         kind: "hover",
         targetId: "stale-tab",
@@ -767,18 +735,18 @@ describe("browser tool act stale target recovery", () => {
       1,
       undefined,
       expect.objectContaining({ targetId: "stale-tab", kind: "hover", ref: "btn-1" }),
-      expect.objectContaining({ profile: "chrome-relay" }),
+      expect.objectContaining({ profile: "user" }),
     );
     expect(browserActionsMocks.browserAct).toHaveBeenNthCalledWith(
       2,
       undefined,
       expect.not.objectContaining({ targetId: expect.anything() }),
-      expect.objectContaining({ profile: "chrome-relay" }),
+      expect.objectContaining({ profile: "user" }),
     );
     expect(result?.details).toMatchObject({ ok: true });
   });
 
-  it("does not retry mutating chrome-relay act requests without targetId", async () => {
+  it("does not retry mutating user-browser act requests without targetId", async () => {
     browserActionsMocks.browserAct.mockRejectedValueOnce(new Error("404: tab not found"));
     browserClientMocks.browserTabs.mockResolvedValueOnce([{ targetId: "only-tab" }]);
 
@@ -786,14 +754,14 @@ describe("browser tool act stale target recovery", () => {
     await expect(
       tool.execute?.("call-1", {
         action: "act",
-        profile: "chrome-relay",
+        profile: "user",
         request: {
           kind: "click",
           targetId: "stale-tab",
           ref: "btn-1",
         },
       }),
-    ).rejects.toThrow(/Run action=tabs profile="chrome-relay"/i);
+    ).rejects.toThrow(/Run action=tabs profile="user"/i);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
   });

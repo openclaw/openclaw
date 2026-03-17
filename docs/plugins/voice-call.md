@@ -204,7 +204,7 @@ Example with a stable public host:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+Voice Call uses the core `messages.tts` configuration for
 streaming speech on calls. You can override it under the plugin config with the
 **same shape** — it deep‑merges with `messages.tts`.
 
@@ -222,7 +222,7 @@ streaming speech on calls. You can override it under the plugin config with the
 
 Notes:
 
-- **Edge TTS is ignored for voice calls** (telephony audio needs PCM; Edge output is unreliable).
+- **Microsoft speech is ignored for voice calls** (telephony audio needs PCM; the current Microsoft transport does not expose telephony PCM output).
 - Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
 
 ### More examples
