@@ -5,14 +5,30 @@ import { STATE_DIR } from "../../../src/config/paths.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "../../../src/config/telegram-custom-commands.js";
 import type { TelegramAccountConfig } from "../../../src/config/types.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
+const skillCommandMocks = vi.hoisted(() => ({
+  listSkillCommandsForAgents: vi.fn(() => []),
+}));
+const deliveryMocks = vi.hoisted(() => ({
+  deliverReplies: vi.fn(async () => ({ delivered: true })),
+}));
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    listSkillCommandsForAgents: skillCommandMocks.listSkillCommandsForAgents,
+  };
+});
+
+vi.mock("./bot/delivery.js", () => ({
+  deliverReplies: deliveryMocks.deliverReplies,
+}));
+
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
   createPrivateCommandContext,
-  deliverReplies,
-  listSkillCommandsForAgents,
-  resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
 
@@ -29,7 +45,10 @@ vi.mock("../../../src/plugins/commands.js", () => ({
 
 describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
-    resetNativeCommandMenuMocks();
+    skillCommandMocks.listSkillCommandsForAgents.mockClear();
+    skillCommandMocks.listSkillCommandsForAgents.mockReturnValue([]);
+    deliveryMocks.deliverReplies.mockClear();
+    deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
     pluginCommandMocks.getPluginCommandSpecs.mockClear();
     pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([]);
     pluginCommandMocks.matchPluginCommand.mockClear();
@@ -53,7 +72,7 @@ describe("registerTelegramNativeCommands", () => {
 
     registerTelegramNativeCommands(createNativeCommandTestParams(cfg, { accountId: "bot-a" }));
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
+    expect(skillCommandMocks.listSkillCommandsForAgents).toHaveBeenCalledWith({
       cfg,
       agentIds: ["butler"],
     });
@@ -68,7 +87,7 @@ describe("registerTelegramNativeCommands", () => {
 
     registerTelegramNativeCommands(createNativeCommandTestParams(cfg, { accountId: "bot-a" }));
 
-    expect(listSkillCommandsForAgents).toHaveBeenCalledWith({
+    expect(skillCommandMocks.listSkillCommandsForAgents).toHaveBeenCalledWith({
       cfg,
       agentIds: ["main"],
     });
@@ -215,7 +234,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    expect(deliverReplies).toHaveBeenCalledWith(
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
       }),
@@ -263,7 +282,7 @@ describe("registerTelegramNativeCommands", () => {
     expect(handler).toBeTruthy();
     await handler?.(createPrivateCommandContext());
 
-    expect(deliverReplies).toHaveBeenCalledWith(
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         silent: true,
         replies: [expect.objectContaining({ isError: true })],

@@ -3,7 +3,6 @@ import {
   applyAccountNameToChannelSection,
   createPatchedAccountSetupAdapter,
   DEFAULT_ACCOUNT_ID,
-  formatDocsLink,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   noteChannelLookupFailure,
@@ -14,6 +13,7 @@ import {
   setSetupChannelEnabled,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import {
   createAllowlistSetupWizardProxy,
   type ChannelSetupAdapter,

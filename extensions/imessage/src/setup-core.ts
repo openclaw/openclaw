@@ -1,7 +1,6 @@
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
-  formatDocsLink,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   parseSetupEntriesAllowingWildcard,
@@ -11,6 +10,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import type {
   ChannelSetupAdapter,
   ChannelSetupDmPolicy,
