@@ -111,7 +111,7 @@ describe("isAnthropicBedrockModel", () => {
       expect(isAnthropicBedrockModel("some-id", "ClAuDe")).toBe(true);
     });
 
-    it("should not match 'claude' as substring in unrelated words", () => {
+    it("should match claude as a substring in any position within model names", () => {
       // These should still match because they contain 'claude' as a substring
       expect(isAnthropicBedrockModel("some-id", "unclaude")).toBe(true);
       expect(isAnthropicBedrockModel("some-id", "claudette")).toBe(true);
