@@ -369,6 +369,34 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
+  test("allows fallback session reads with synthetic write scope", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-session-read"));
+    const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
+      const auth = authorizeOperatorScopesForMethod("sessions.get", scopes);
+      if (!auth.allowed) {
+        opts.respond(false, undefined, { message: `missing scope: ${auth.missingScope}` });
+        return;
+      }
+      opts.respond(true, { messages: [{ id: "m-1" }] });
+    });
+
+    await expect(
+      runtime.getSessionMessages({
+        sessionKey: "s-read",
+      }),
+    ).resolves.toEqual({
+      messages: [{ id: "m-1" }],
+    });
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+  });
+
   test("keeps admin scope for fallback session deletion", async () => {
     const serverPlugins = await importServerPluginsModule();
     const runtime = await createSubagentRuntime(serverPlugins);
