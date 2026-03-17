@@ -564,6 +564,7 @@
     "test": "node scripts/test-parallel.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "vitest run --config vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
+    "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
     "test:channels": "vitest run --config vitest.channels.config.ts",
     "test:contracts": "pnpm test:contracts:channels && pnpm test:contracts:plugins",
     "test:contracts:channels": "OPENCLAW_TEST_PROFILE=low pnpm test -- src/channels/plugins/contracts",

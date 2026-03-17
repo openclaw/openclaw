@@ -171,6 +171,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "line/accounts": "src/line/accounts.ts",
     "line/send": "src/line/send.ts",
     "line/template-messages": "src/line/template-messages.ts",
+    "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
   };
