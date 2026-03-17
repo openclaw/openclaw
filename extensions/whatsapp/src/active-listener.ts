@@ -30,7 +30,16 @@ export type ActiveWebListener = {
 
 let _currentListener: ActiveWebListener | null = null;
 
-const listeners = new Map<string, ActiveWebListener>();
+// Use a global singleton to survive bundler code-splitting that may duplicate
+// this module across multiple chunks (each chunk would get its own Map).
+const GLOBAL_KEY = "__openclaw_active_web_listeners__";
+const listeners: Map<string, ActiveWebListener> =
+  ((globalThis as Record<string, unknown>)[GLOBAL_KEY] as Map<string, ActiveWebListener>) ??
+  (() => {
+    const m = new Map<string, ActiveWebListener>();
+    (globalThis as Record<string, unknown>)[GLOBAL_KEY] = m;
+    return m;
+  })();
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
