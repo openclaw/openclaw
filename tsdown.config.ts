@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig } from "tsdown";
+import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 const env = {
   NODE_ENV: "production",
@@ -58,53 +59,6 @@ function nodeBuildConfig(config: Record<string, unknown>) {
   };
 }
 
-const pluginSdkEntrypoints = [
-  "index",
-  "core",
-  "compat",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "whatsapp",
-  "line",
-  "msteams",
-  "acpx",
-  "bluebubbles",
-  "copilot-proxy",
-  "device-pair",
-  "diagnostics-otel",
-  "diffs",
-  "feishu",
-  "google-gemini-cli-auth",
-  "googlechat",
-  "irc",
-  "llm-task",
-  "lobster",
-  "matrix",
-  "mattermost",
-  "memory-core",
-  "memory-lancedb",
-  "minimax-portal-auth",
-  "nextcloud-talk",
-  "nostr",
-  "open-prose",
-  "phone-control",
-  "qwen-portal-auth",
-  "synology-chat",
-  "talk-voice",
-  "test-utils",
-  "thread-ownership",
-  "tlon",
-  "twitch",
-  "voice-call",
-  "zalo",
-  "zalouser",
-  "account-id",
-  "keyed-async-queue",
-] as const;
-
 function listBundledPluginBuildEntries(): Record<string, string> {
   const extensionsRoot = path.join(process.cwd(), "extensions");
   const entries: Record<string, string> = {};
@@ -125,13 +79,21 @@ function listBundledPluginBuildEntries(): Record<string, string> {
     if (fs.existsSync(packageJsonPath)) {
       try {
         const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-          openclaw?: { extensions?: unknown };
+          openclaw?: { extensions?: unknown; setupEntry?: unknown };
         };
         packageEntries = Array.isArray(packageJson.openclaw?.extensions)
           ? packageJson.openclaw.extensions.filter(
               (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
             )
           : [];
+        const setupEntry =
+          typeof packageJson.openclaw?.setupEntry === "string" &&
+          packageJson.openclaw.setupEntry.trim().length > 0
+            ? packageJson.openclaw.setupEntry
+            : undefined;
+        if (setupEntry) {
+          packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
+        }
       } catch {
         packageEntries = [];
       }
@@ -150,39 +112,39 @@ function listBundledPluginBuildEntries(): Record<string, string> {
 
 const bundledPluginBuildEntries = listBundledPluginBuildEntries();
 
+function buildCoreDistEntries(): Record<string, string> {
+  return {
+    index: "src/index.ts",
+    entry: "src/entry.ts",
+    // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
+    "cli/daemon-cli": "src/cli/daemon-cli.ts",
+    "infra/warning-filter": "src/infra/warning-filter.ts",
+    // Keep sync lazy-runtime channel modules as concrete dist files.
+    "channels/plugins/agent-tools/whatsapp-login":
+      "src/channels/plugins/agent-tools/whatsapp-login.ts",
+    "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
+    "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
+    "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
+    "telegram/audit": "extensions/telegram/src/audit.ts",
+    "telegram/token": "extensions/telegram/src/token.ts",
+    "line/accounts": "src/line/accounts.ts",
+    "line/send": "src/line/send.ts",
+    "line/template-messages": "src/line/template-messages.ts",
+  };
+}
+
+const coreDistEntries = buildCoreDistEntries();
+
 export default defineConfig([
   nodeBuildConfig({
-    entry: "src/index.ts",
-  }),
-  nodeBuildConfig({
-    entry: "src/entry.ts",
-  }),
-  nodeBuildConfig({
-    // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
-    entry: "src/cli/daemon-cli.ts",
-  }),
-  nodeBuildConfig({
-    entry: "src/infra/warning-filter.ts",
-  }),
-  nodeBuildConfig({
-    // Keep sync lazy-runtime channel modules as concrete dist files.
-    entry: {
-      "channels/plugins/agent-tools/whatsapp-login":
-        "src/channels/plugins/agent-tools/whatsapp-login.ts",
-      "channels/plugins/actions/discord": "src/channels/plugins/actions/discord.ts",
-      "channels/plugins/actions/signal": "src/channels/plugins/actions/signal.ts",
-      "channels/plugins/actions/telegram": "src/channels/plugins/actions/telegram.ts",
-      "telegram/audit": "extensions/telegram/src/audit.ts",
-      "telegram/token": "extensions/telegram/src/token.ts",
-      "line/accounts": "src/line/accounts.ts",
-      "line/send": "src/line/send.ts",
-      "line/template-messages": "src/line/template-messages.ts",
-    },
+    // Build the root dist entrypoints together so they can share hashed chunks
+    // instead of emitting near-identical copies across separate builds.
+    entry: coreDistEntries,
   }),
   nodeBuildConfig({
     // Bundle all plugin-sdk entries in a single build so the bundler can share
     // common chunks instead of duplicating them per entry (~712MB heap saved).
-    entry: Object.fromEntries(pluginSdkEntrypoints.map((e) => [e, `src/plugin-sdk/${e}.ts`])),
+    entry: buildPluginSdkEntrySources(),
     outDir: "dist/plugin-sdk",
   }),
   nodeBuildConfig({
@@ -190,9 +152,9 @@ export default defineConfig([
     // directly from dist/extensions instead of transpiling extensions/*.ts via Jiti.
     entry: bundledPluginBuildEntries,
     outDir: "dist",
-  }),
-  nodeBuildConfig({
-    entry: "src/extensionAPI.ts",
+    deps: {
+      neverBundle: ["@lancedb/lancedb"],
+    },
   }),
   nodeBuildConfig({
     entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],

@@ -33,7 +33,7 @@ For VPS/cloud hosts, avoid third-party "1-click" marketplace images when possibl
 
 <AccordionGroup>
   <Accordion title="Installer script" icon="rocket" defaultOpen>
-    Downloads the CLI, installs it globally via npm, and launches the onboarding wizard.
+    Downloads the CLI, installs it globally via npm, and launches the setup wizard.
 
     <Tabs>
       <Tab title="macOS / Linux / WSL2">

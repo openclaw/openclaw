@@ -13,6 +13,7 @@ import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import { applyAuthProfileConfig } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
+import type { OnboardOptions } from "./onboard-types.js";
 import {
   applyDefaultModel,
   mergeConfigPatch,
@@ -28,6 +29,38 @@ export type PluginProviderAuthChoiceOptions = {
   label: string;
 };
 
+function restoreConfiguredPrimaryModel(
+  nextConfig: ApplyAuthChoiceParams["config"],
+  originalConfig: ApplyAuthChoiceParams["config"],
+): ApplyAuthChoiceParams["config"] {
+  const originalModel = originalConfig.agents?.defaults?.model;
+  const nextAgents = nextConfig.agents;
+  const nextDefaults = nextAgents?.defaults;
+  if (!nextDefaults) {
+    return nextConfig;
+  }
+  if (originalModel !== undefined) {
+    return {
+      ...nextConfig,
+      agents: {
+        ...nextAgents,
+        defaults: {
+          ...nextDefaults,
+          model: originalModel,
+        },
+      },
+    };
+  }
+  const { model: _model, ...restDefaults } = nextDefaults;
+  return {
+    ...nextConfig,
+    agents: {
+      ...nextAgents,
+      defaults: restDefaults,
+    },
+  };
+}
+
 async function loadPluginProviderRuntime() {
   return import("./auth-choice.apply.plugin-provider.runtime.js");
 }
@@ -41,6 +74,9 @@ export async function runProviderPluginAuthMethod(params: {
   agentId?: string;
   workspaceDir?: string;
   emitNotes?: boolean;
+  secretInputMode?: OnboardOptions["secretInputMode"];
+  allowSecretRefPrompt?: boolean;
+  opts?: Partial<OnboardOptions>;
 }): Promise<{ config: ApplyAuthChoiceParams["config"]; defaultModel?: string }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const defaultAgentId = resolveDefaultAgentId(params.config);
@@ -61,6 +97,9 @@ export async function runProviderPluginAuthMethod(params: {
     workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,
+    opts: params.opts,
+    secretInputMode: params.secretInputMode,
+    allowSecretRefPrompt: params.allowSecretRefPrompt,
     isRemote,
     openUrl: async (url) => {
       await openUrl(url);
@@ -110,7 +149,12 @@ export async function applyAuthChoiceLoadedPluginProvider(
     resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const { resolvePluginProviders, resolveProviderPluginChoice, runProviderModelSelectedHook } =
     await loadPluginProviderRuntime();
-  const providers = resolvePluginProviders({ config: params.config, workspaceDir });
+  const providers = resolvePluginProviders({
+    config: params.config,
+    workspaceDir,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
   const resolved = resolveProviderPluginChoice({
     providers,
     choice: params.authChoice,
@@ -127,12 +171,16 @@ export async function applyAuthChoiceLoadedPluginProvider(
     agentDir: params.agentDir,
     agentId: params.agentId,
     workspaceDir,
+    secretInputMode: params.opts?.secretInputMode,
+    allowSecretRefPrompt: false,
+    opts: params.opts,
   });
 
+  let nextConfig = applied.config;
   let agentModelOverride: string | undefined;
   if (applied.defaultModel) {
     if (params.setDefaultModel) {
-      const nextConfig = applyDefaultModel(applied.config, applied.defaultModel);
+      nextConfig = applyDefaultModel(nextConfig, applied.defaultModel);
       await runProviderModelSelectedHook({
         config: nextConfig,
         model: applied.defaultModel,
@@ -146,10 +194,11 @@ export async function applyAuthChoiceLoadedPluginProvider(
       );
       return { config: nextConfig };
     }
+    nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
     agentModelOverride = applied.defaultModel;
   }
 
-  return { config: applied.config, agentModelOverride };
+  return { config: nextConfig, agentModelOverride };
 }
 
 export async function applyAuthChoicePluginProvider(
@@ -180,7 +229,12 @@ export async function applyAuthChoicePluginProvider(
 
   const { resolvePluginProviders, runProviderModelSelectedHook } =
     await loadPluginProviderRuntime();
-  const providers = resolvePluginProviders({ config: nextConfig, workspaceDir });
+  const providers = resolvePluginProviders({
+    config: nextConfig,
+    workspaceDir,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
     await params.prompter.note(
@@ -204,6 +258,9 @@ export async function applyAuthChoicePluginProvider(
     agentDir,
     agentId,
     workspaceDir,
+    secretInputMode: params.opts?.secretInputMode,
+    allowSecretRefPrompt: false,
+    opts: params.opts,
   });
   nextConfig = applied.config;
 
@@ -222,7 +279,10 @@ export async function applyAuthChoicePluginProvider(
         `Default model set to ${applied.defaultModel}`,
         "Model configured",
       );
-    } else if (params.agentId) {
+    } else {
+      nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
+    }
+    if (!params.setDefaultModel && params.agentId) {
       agentModelOverride = applied.defaultModel;
       await params.prompter.note(
         `Default model set to ${applied.defaultModel} for agent "${params.agentId}".`,

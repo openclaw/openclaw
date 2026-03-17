@@ -1,21 +1,21 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingConfigureContext,
-  ChannelOnboardingDmPolicy,
-  ChannelOnboardingStatus,
-  ChannelOnboardingStatusContext,
-} from "./onboarding-types.js";
-import { configureChannelAccessWithAllowlist } from "./onboarding/channel-access-configure.js";
-import type { ChannelAccessPolicy } from "./onboarding/channel-access.js";
+import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
+import type { ChannelAccessPolicy } from "./setup-group-access.js";
 import {
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
   runSingleChannelSecretStep,
-  splitOnboardingEntries,
-} from "./onboarding/helpers.js";
+  splitSetupEntries,
+} from "./setup-wizard-helpers.js";
+import type {
+  ChannelSetupWizardAdapter,
+  ChannelSetupConfigureContext,
+  ChannelSetupDmPolicy,
+  ChannelSetupStatus,
+  ChannelSetupStatusContext,
+} from "./setup-wizard-types.js";
 import type { ChannelSetupInput } from "./types.core.js";
 import type { ChannelPlugin } from "./types.js";
 
@@ -110,6 +110,7 @@ export type ChannelSetupWizardTextInput = {
   message: string;
   placeholder?: string;
   required?: boolean;
+  applyEmptyValue?: boolean;
   helpTitle?: string;
   helpLines?: string[];
   confirmCurrentValue?: boolean;
@@ -183,6 +184,7 @@ export type ChannelSetupWizardGroupAccess = {
   placeholder: string;
   helpTitle?: string;
   helpLines?: string[];
+  skipAllowlistEntries?: boolean;
   currentPolicy: (params: { cfg: OpenClawConfig; accountId: string }) => ChannelAccessPolicy;
   currentEntries: (params: { cfg: OpenClawConfig; accountId: string }) => string[];
   updatePrompt: (params: { cfg: OpenClawConfig; accountId: string }) => boolean;
@@ -191,14 +193,14 @@ export type ChannelSetupWizardGroupAccess = {
     accountId: string;
     policy: ChannelAccessPolicy;
   }) => OpenClawConfig;
-  resolveAllowlist: (params: {
+  resolveAllowlist?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
     credentialValues: ChannelSetupWizardCredentialValues;
     entries: string[];
     prompter: Pick<WizardPrompter, "note">;
   }) => Promise<unknown>;
-  applyAllowlist: (params: {
+  applyAllowlist?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
     resolved: unknown;
@@ -209,9 +211,28 @@ export type ChannelSetupWizardPrepare = (params: {
   cfg: OpenClawConfig;
   accountId: string;
   credentialValues: ChannelSetupWizardCredentialValues;
-  runtime: ChannelOnboardingConfigureContext["runtime"];
+  runtime: ChannelSetupConfigureContext["runtime"];
   prompter: WizardPrompter;
-  options?: ChannelOnboardingConfigureContext["options"];
+  options?: ChannelSetupConfigureContext["options"];
+}) =>
+  | {
+      cfg?: OpenClawConfig;
+      credentialValues?: ChannelSetupWizardCredentialValues;
+    }
+  | void
+  | Promise<{
+      cfg?: OpenClawConfig;
+      credentialValues?: ChannelSetupWizardCredentialValues;
+    } | void>;
+
+export type ChannelSetupWizardFinalize = (params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  credentialValues: ChannelSetupWizardCredentialValues;
+  runtime: ChannelSetupConfigureContext["runtime"];
+  prompter: WizardPrompter;
+  options?: ChannelSetupConfigureContext["options"];
+  forceAllowFrom: boolean;
 }) =>
   | {
       cfg?: OpenClawConfig;
@@ -228,16 +249,31 @@ export type ChannelSetupWizard = {
   status: ChannelSetupWizardStatus;
   introNote?: ChannelSetupWizardNote;
   envShortcut?: ChannelSetupWizardEnvShortcut;
+  resolveAccountIdForConfigure?: (params: {
+    cfg: OpenClawConfig;
+    prompter: WizardPrompter;
+    options?: ChannelSetupConfigureContext["options"];
+    accountOverride?: string;
+    shouldPromptAccountIds: boolean;
+    listAccountIds: ChannelSetupWizardPlugin["config"]["listAccountIds"];
+    defaultAccountId: string;
+  }) => string | Promise<string>;
+  resolveShouldPromptAccountIds?: (params: {
+    cfg: OpenClawConfig;
+    options?: ChannelSetupConfigureContext["options"];
+    shouldPromptAccountIds: boolean;
+  }) => boolean;
   prepare?: ChannelSetupWizardPrepare;
   stepOrder?: "credentials-first" | "text-first";
   credentials: ChannelSetupWizardCredential[];
   textInputs?: ChannelSetupWizardTextInput[];
+  finalize?: ChannelSetupWizardFinalize;
   completionNote?: ChannelSetupWizardNote;
-  dmPolicy?: ChannelOnboardingDmPolicy;
+  dmPolicy?: ChannelSetupDmPolicy;
   allowFrom?: ChannelSetupWizardAllowFrom;
   groupAccess?: ChannelSetupWizardGroupAccess;
   disable?: (cfg: OpenClawConfig) => OpenClawConfig;
-  onAccountRecorded?: ChannelOnboardingAdapter["onAccountRecorded"];
+  onAccountRecorded?: ChannelSetupWizardAdapter["onAccountRecorded"];
 };
 
 type ChannelSetupWizardPlugin = Pick<ChannelPlugin, "id" | "meta" | "config" | "setup">;
@@ -245,8 +281,8 @@ type ChannelSetupWizardPlugin = Pick<ChannelPlugin, "id" | "meta" | "config" | "
 async function buildStatus(
   plugin: ChannelSetupWizardPlugin,
   wizard: ChannelSetupWizard,
-  ctx: ChannelOnboardingStatusContext,
-): Promise<ChannelOnboardingStatus> {
+  ctx: ChannelSetupStatusContext,
+): Promise<ChannelSetupStatus> {
   const configured = await wizard.status.resolveConfigured({ cfg: ctx.cfg });
   const statusLines = (await wizard.status.resolveStatusLines?.({
     cfg: ctx.cfg,
@@ -363,10 +399,10 @@ async function applyWizardTextInputValue(params: {
       }).cfg;
 }
 
-export function buildChannelOnboardingAdapterFromSetupWizard(params: {
+export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
   plugin: ChannelSetupWizardPlugin;
   wizard: ChannelSetupWizard;
-}): ChannelOnboardingAdapter {
+}): ChannelSetupWizardAdapter {
   const { plugin, wizard } = params;
   return {
     channel: plugin.id,
@@ -384,15 +420,31 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
         plugin.config.defaultAccountId?.(cfg) ??
         plugin.config.listAccountIds(cfg)[0] ??
         DEFAULT_ACCOUNT_ID;
-      const accountId = await resolveAccountIdForConfigure({
-        cfg,
-        prompter,
-        label: plugin.meta.label,
-        accountOverride: accountOverrides[plugin.id],
-        shouldPromptAccountIds,
-        listAccountIds: plugin.config.listAccountIds,
-        defaultAccountId,
-      });
+      const resolvedShouldPromptAccountIds =
+        wizard.resolveShouldPromptAccountIds?.({
+          cfg,
+          options,
+          shouldPromptAccountIds,
+        }) ?? shouldPromptAccountIds;
+      const accountId = await (wizard.resolveAccountIdForConfigure
+        ? wizard.resolveAccountIdForConfigure({
+            cfg,
+            prompter,
+            options,
+            accountOverride: accountOverrides[plugin.id],
+            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
+            listAccountIds: plugin.config.listAccountIds,
+            defaultAccountId,
+          })
+        : resolveAccountIdForConfigure({
+            cfg,
+            prompter,
+            label: plugin.meta.label,
+            accountOverride: accountOverrides[plugin.id],
+            shouldPromptAccountIds: resolvedShouldPromptAccountIds,
+            listAccountIds: plugin.config.listAccountIds,
+            defaultAccountId,
+          }));
 
       let next = cfg;
       let credentialValues = collectCredentialValues({
@@ -650,6 +702,15 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           );
           const trimmedValue = rawValue.trim();
           if (!trimmedValue && textInput.required === false) {
+            if (textInput.applyEmptyValue) {
+              next = await applyWizardTextInputValue({
+                plugin,
+                input: textInput,
+                cfg: next,
+                accountId,
+                value: "",
+              });
+            }
             delete credentialValues[textInput.inputKey];
             continue;
           }
@@ -697,26 +758,31 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           currentEntries: access.currentEntries({ cfg: next, accountId }),
           placeholder: access.placeholder,
           updatePrompt: access.updatePrompt({ cfg: next, accountId }),
+          skipAllowlistEntries: access.skipAllowlistEntries,
           setPolicy: (currentCfg, policy) =>
             access.setPolicy({
               cfg: currentCfg,
               accountId,
               policy,
             }),
-          resolveAllowlist: async ({ cfg: currentCfg, entries }) =>
-            await access.resolveAllowlist({
-              cfg: currentCfg,
-              accountId,
-              credentialValues,
-              entries,
-              prompter,
-            }),
-          applyAllowlist: ({ cfg: currentCfg, resolved }) =>
-            access.applyAllowlist({
-              cfg: currentCfg,
-              accountId,
-              resolved,
-            }),
+          resolveAllowlist: access.resolveAllowlist
+            ? async ({ cfg: currentCfg, entries }) =>
+                await access.resolveAllowlist!({
+                  cfg: currentCfg,
+                  accountId,
+                  credentialValues,
+                  entries,
+                  prompter,
+                })
+            : undefined,
+          applyAllowlist: access.applyAllowlist
+            ? ({ cfg: currentCfg, resolved }) =>
+                access.applyAllowlist!({
+                  cfg: currentCfg,
+                  accountId,
+                  resolved,
+                })
+            : undefined,
         });
       }
 
@@ -743,7 +809,7 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           message: allowFrom.message,
           placeholder: allowFrom.placeholder,
           label: allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
-          parseInputs: allowFrom.parseInputs ?? splitOnboardingEntries,
+          parseInputs: allowFrom.parseInputs ?? splitSetupEntries,
           parseId: allowFrom.parseId,
           invalidWithoutTokenNote: allowFrom.invalidWithoutCredentialNote,
           resolveEntries: async ({ entries }) =>
@@ -759,6 +825,27 @@ export function buildChannelOnboardingAdapterFromSetupWizard(params: {
           accountId,
           allowFrom: unique,
         });
+      }
+
+      if (wizard.finalize) {
+        const finalized = await wizard.finalize({
+          cfg: next,
+          accountId,
+          credentialValues,
+          runtime,
+          prompter,
+          options,
+          forceAllowFrom,
+        });
+        if (finalized?.cfg) {
+          next = finalized.cfg;
+        }
+        if (finalized?.credentialValues) {
+          credentialValues = {
+            ...credentialValues,
+            ...finalized.credentialValues,
+          };
+        }
       }
 
       const shouldShowCompletionNote =

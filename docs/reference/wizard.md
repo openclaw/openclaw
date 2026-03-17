@@ -1,17 +1,17 @@
 ---
-summary: "Full reference for the CLI onboarding wizard: every step, flag, and config field"
+summary: "Full reference for the CLI setup wizard: every step, flag, and config field"
 read_when:
   - Looking up a specific wizard step or flag
   - Automating onboarding with non-interactive mode
   - Debugging wizard behavior
-title: "Onboarding Wizard Reference"
+title: "Setup Wizard Reference"
 sidebarTitle: "Wizard Reference"
 ---
 
-# Onboarding Wizard Reference
+# Setup Wizard Reference
 
 This is the full reference for the `openclaw onboard` CLI wizard.
-For a high-level overview, see [Onboarding Wizard](/start/wizard).
+For a high-level overview, see [Setup Wizard](/start/wizard).
 
 ## Flow details (local mode)
 
@@ -73,12 +73,12 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
   <Step title="Gateway">
     - Port, bind, auth mode, tailscale exposure.
     - Auth recommendation: keep **Token** even for loopback so local WS clients must authenticate.
-    - In token mode, interactive onboarding offers:
+    - In token mode, interactive setup offers:
       - **Generate/store plaintext token** (default)
       - **Use SecretRef** (opt-in)
       - Quickstart reuses existing `gateway.auth.token` SecretRefs across `env`, `file`, and `exec` providers for onboarding probe/dashboard bootstrap.
       - If that SecretRef is configured but cannot be resolved, onboarding fails early with a clear fix message instead of silently degrading runtime auth.
-    - In password mode, interactive onboarding also supports plaintext or SecretRef storage.
+    - In password mode, interactive setup also supports plaintext or SecretRef storage.
     - Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
       - Requires a non-empty env var in the onboarding process environment.
       - Cannot be combined with `--gateway-token`.
@@ -208,7 +208,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `tools.profile` (local onboarding defaults to `"coding"` when unset; existing explicit values are preserved)
 - `gateway.*` (mode, bind, auth, tailscale)
-- `session.dmScope` (behavior details: [CLI Onboarding Reference](/start/wizard-cli-reference#outputs-and-internals))
+- `session.dmScope` (behavior details: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals))
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack/Discord/Matrix/Microsoft Teams) when you opt in during the prompts (names resolve to IDs when possible).
 - `skills.install.nodeManager`
@@ -223,12 +223,12 @@ Typical fields in `~/.openclaw/openclaw.json`:
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
 
-Some channels are delivered as plugins. When you pick one during onboarding, the wizard
+Some channels are delivered as plugins. When you pick one during setup, the wizard
 will prompt to install it (npm or a local path) before it can be configured.
 
 ## Related docs
 
-- Wizard overview: [Onboarding Wizard](/start/wizard)
+- Wizard overview: [Setup Wizard](/start/wizard)
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Config reference: [Gateway configuration](/gateway/configuration)
 - Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [BlueBubbles](/channels/bluebubbles) (iMessage), [iMessage](/channels/imessage) (legacy)

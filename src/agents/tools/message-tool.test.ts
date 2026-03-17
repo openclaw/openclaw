@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -47,9 +48,10 @@ function createChannelPlugin(params: {
   blurb: string;
   actions?: ChannelMessageActionName[];
   listActions?: NonNullable<NonNullable<ChannelPlugin["actions"]>["listActions"]>;
-  supportsButtons?: boolean;
+  capabilities?: readonly ChannelMessageCapability[];
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {
+  const actionCapabilities = params.capabilities;
   return {
     id: params.id as ChannelPlugin["id"],
     meta: {
@@ -71,7 +73,9 @@ function createChannelPlugin(params: {
         (() => {
           return (params.actions ?? []) as never;
         }),
-      ...(params.supportsButtons ? { supportsButtons: () => true } : {}),
+      ...(actionCapabilities
+        ? { getCapabilities: (_params: { cfg: unknown }) => actionCapabilities }
+        : {}),
     },
   };
 }
@@ -145,7 +149,7 @@ describe("message tool schema scoping", () => {
     docsPath: "/channels/telegram",
     blurb: "Telegram test plugin.",
     actions: ["send", "react", "poll"],
-    supportsButtons: true,
+    capabilities: ["interactive", "buttons"],
   });
 
   const discordPlugin = createChannelPlugin({
@@ -154,6 +158,16 @@ describe("message tool schema scoping", () => {
     docsPath: "/channels/discord",
     blurb: "Discord test plugin.",
     actions: ["send", "poll", "poll-vote"],
+    capabilities: ["interactive", "components"],
+  });
+
+  const slackPlugin = createChannelPlugin({
+    id: "slack",
+    label: "Slack",
+    docsPath: "/channels/slack",
+    blurb: "Slack test plugin.",
+    actions: ["send", "react"],
+    capabilities: ["interactive", "blocks"],
   });
 
   afterEach(() => {
@@ -164,6 +178,7 @@ describe("message tool schema scoping", () => {
     {
       provider: "telegram",
       expectComponents: false,
+      expectBlocks: false,
       expectButtons: true,
       expectButtonStyle: true,
       expectTelegramPollExtras: true,
@@ -172,16 +187,27 @@ describe("message tool schema scoping", () => {
     {
       provider: "discord",
       expectComponents: true,
+      expectBlocks: false,
       expectButtons: false,
       expectButtonStyle: false,
       expectTelegramPollExtras: true,
       expectedActions: ["send", "poll", "poll-vote", "react"],
+    },
+    {
+      provider: "slack",
+      expectComponents: false,
+      expectBlocks: true,
+      expectButtons: false,
+      expectButtonStyle: false,
+      expectTelegramPollExtras: true,
+      expectedActions: ["send", "react", "poll", "poll-vote"],
     },
   ])(
     "scopes schema fields for $provider",
     ({
       provider,
       expectComponents,
+      expectBlocks,
       expectButtons,
       expectButtonStyle,
       expectTelegramPollExtras,
@@ -191,6 +217,7 @@ describe("message tool schema scoping", () => {
         createTestRegistry([
           { pluginId: "telegram", source: "test", plugin: telegramPlugin },
           { pluginId: "discord", source: "test", plugin: discordPlugin },
+          { pluginId: "slack", source: "test", plugin: slackPlugin },
         ]),
       );
 
@@ -205,6 +232,11 @@ describe("message tool schema scoping", () => {
         expect(properties.components).toBeDefined();
       } else {
         expect(properties.components).toBeUndefined();
+      }
+      if (expectBlocks) {
+        expect(properties.blocks).toBeDefined();
+      } else {
+        expect(properties.blocks).toBeUndefined();
       }
       if (expectButtons) {
         expect(properties.buttons).toBeDefined();
@@ -263,7 +295,7 @@ describe("message tool schema scoping", () => {
           .channels?.telegram;
         return telegramCfg?.actions?.poll === false ? ["send", "react"] : ["send", "react", "poll"];
       },
-      supportsButtons: true,
+      capabilities: ["interactive", "buttons"],
     });
 
     setActivePluginRegistry(

@@ -14,6 +14,7 @@ const optionNamesAdd = [
   "account",
   "name",
   "token",
+  "privateKey",
   "tokenFile",
   "botToken",
   "appToken",
@@ -39,6 +40,7 @@ const optionNamesAdd = [
   "initialSyncLimit",
   "ship",
   "url",
+  "relayUrls",
   "code",
   "groupChannels",
   "dmAllowlist",
@@ -164,6 +166,7 @@ export function registerChannelsCli(program: Command) {
     .option("--account <id>", "Account id (default when omitted)")
     .option("--name <name>", "Display name for this account")
     .option("--token <token>", "Bot token (Telegram/Discord)")
+    .option("--private-key <key>", "Nostr private key (nsec... or hex)")
     .option("--token-file <path>", "Bot token file (Telegram)")
     .option("--bot-token <token>", "Slack bot token (xoxb-...)")
     .option("--app-token <token>", "Slack app token (xapp-...)")
@@ -188,6 +191,7 @@ export function registerChannelsCli(program: Command) {
     .option("--initial-sync-limit <n>", "Matrix initial sync limit")
     .option("--ship <ship>", "Tlon ship name (~sampel-palnet)")
     .option("--url <url>", "Tlon ship URL")
+    .option("--relay-urls <list>", "Nostr relay URLs (comma-separated)")
     .option("--code <code>", "Tlon login code")
     .option("--group-channels <list>", "Tlon group channels (comma-separated)")
     .option("--dm-allowlist <list>", "Tlon DM allowlist (comma-separated ships)")

@@ -37,7 +37,7 @@ describe("tryRouteCli", () => {
     vi.resetModules();
     ({ tryRouteCli } = await import("./route.js"));
     findRoutedCommandMock.mockReturnValue({
-      loadPlugins: true,
+      loadPlugins: (argv: string[]) => !argv.includes("--json"),
       run: runRouteMock,
     });
   });
@@ -59,7 +59,7 @@ describe("tryRouteCli", () => {
         suppressDoctorStdout: true,
       }),
     );
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("does not pass suppressDoctorStdout for routed non-json commands", async () => {

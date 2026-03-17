@@ -5,8 +5,7 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
-import { parseDiscordTarget } from "../../extensions/discord/src/targets.js";
-import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
+import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import {
@@ -286,12 +285,15 @@ function resolveBindingConversationFromCommand(params: {
     if (!rawTarget) {
       return null;
     }
-    const target = parseTelegramTarget(rawTarget);
+    const target = parseExplicitTargetForChannel("telegram", rawTarget);
+    if (!target) {
+      return null;
+    }
     return {
       channel: "telegram",
       accountId,
-      conversationId: target.chatId,
-      threadId: params.messageThreadId ?? target.messageThreadId,
+      conversationId: target.to,
+      threadId: params.messageThreadId ?? target.threadId,
     };
   }
   if (params.channel === "discord") {
@@ -304,14 +306,14 @@ function resolveBindingConversationFromCommand(params: {
     if (!rawTarget || rawTarget.startsWith("slash:")) {
       return null;
     }
-    const target = parseDiscordTarget(rawTarget, { defaultKind: "channel" });
+    const target = parseExplicitTargetForChannel("discord", rawTarget);
     if (!target) {
       return null;
     }
     return {
       channel: "discord",
       accountId,
-      conversationId: `${target.kind}:${target.id}`,
+      conversationId: `${target.chatType === "direct" ? "user" : "channel"}:${target.to}`,
     };
   }
   return null;
