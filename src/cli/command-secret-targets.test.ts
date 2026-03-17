@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getAgentRuntimeCommandSecretTargetIds,
   getMemoryCommandSecretTargetIds,
+  getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
@@ -30,5 +31,43 @@ describe("command secret target ids", () => {
     expect(ids.has("gateway.auth.password")).toBe(true);
     expect(ids.has("gateway.remote.token")).toBe(true);
     expect(ids.has("gateway.remote.password")).toBe(true);
+  });
+
+  it("scopes channel targets to the requested channel", () => {
+    const scoped = getScopedChannelsCommandSecretTargets({
+      config: {} as never,
+      channel: "discord",
+    });
+
+    expect(scoped.targetIds.size).toBeGreaterThan(0);
+    expect([...scoped.targetIds].every((id) => id.startsWith("channels.discord."))).toBe(true);
+    expect([...scoped.targetIds].some((id) => id.startsWith("channels.telegram."))).toBe(false);
+  });
+
+  it("scopes allowed paths to channel globals + selected account", () => {
+    const scoped = getScopedChannelsCommandSecretTargets({
+      config: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_DEFAULT" },
+            accounts: {
+              ops: {
+                token: { source: "env", provider: "default", id: "DISCORD_OPS" },
+              },
+              chat: {
+                token: { source: "env", provider: "default", id: "DISCORD_CHAT" },
+              },
+            },
+          },
+        },
+      } as never,
+      channel: "discord",
+      accountId: "ops",
+    });
+
+    expect(scoped.allowedPaths).toBeDefined();
+    expect(scoped.allowedPaths?.has("channels.discord.token")).toBe(true);
+    expect(scoped.allowedPaths?.has("channels.discord.accounts.ops.token")).toBe(true);
+    expect(scoped.allowedPaths?.has("channels.discord.accounts.chat.token")).toBe(false);
   });
 });
