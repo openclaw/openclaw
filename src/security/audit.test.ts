@@ -171,6 +171,22 @@ function expectNoFinding(res: SecurityAuditReport, checkId: string): void {
   expect(hasFinding(res, checkId)).toBe(false);
 }
 
+async function expectSeverityByExposureCases(params: {
+  checkId: string;
+  cases: Array<{
+    name: string;
+    cfg: OpenClawConfig;
+    expectedSeverity: "warn" | "critical";
+  }>;
+}) {
+  await Promise.all(
+    params.cases.map(async (testCase) => {
+      const res = await audit(testCase.cfg);
+      expect(hasFinding(res, params.checkId, testCase.expectedSeverity), testCase.name).toBe(true);
+    }),
+  );
+}
+
 async function runChannelSecurityAudit(
   cfg: OpenClawConfig,
   plugins: ChannelPlugin[],
@@ -1712,15 +1728,10 @@ description: test skill
       },
     ];
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        expect(
-          hasFinding(res, "gateway.real_ip_fallback_enabled", testCase.expectedSeverity),
-          testCase.name,
-        ).toBe(true);
-      }),
-    );
+    await expectSeverityByExposureCases({
+      checkId: "gateway.real_ip_fallback_enabled",
+      cases,
+    });
   });
 
   it("scores mDNS full mode risk by gateway bind mode", async () => {
@@ -1763,15 +1774,10 @@ description: test skill
       },
     ];
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        expect(
-          hasFinding(res, "discovery.mdns_full_mode", testCase.expectedSeverity),
-          testCase.name,
-        ).toBe(true);
-      }),
-    );
+    await expectSeverityByExposureCases({
+      checkId: "discovery.mdns_full_mode",
+      cases,
+    });
   });
 
   it("evaluates trusted-proxy auth guardrails", async () => {
