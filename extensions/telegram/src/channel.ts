@@ -12,6 +12,7 @@ import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/infra-
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram";
 import {
+  buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
@@ -20,6 +21,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
+  TelegramConfigSchema,
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
   type ChannelPlugin,
@@ -296,6 +298,7 @@ function readTelegramAllowlistConfig(account: ResolvedTelegramAccount) {
 
 export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   ...createTelegramPluginBase({
+    configSchema: buildChannelConfigSchema(TelegramConfigSchema),
     setupWizard: telegramSetupWizard,
     setup: telegramSetupAdapter,
   }),
@@ -330,11 +333,15 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       }),
     }),
   },
-  acpBindings: {
-    normalizeConfiguredBindingTarget: ({ conversationId }) =>
+  bindings: {
+    compileConfiguredBinding: ({ conversationId }) =>
       normalizeTelegramAcpConversationId(conversationId),
-    matchConfiguredBinding: ({ bindingConversationId, conversationId, parentConversationId }) =>
-      matchTelegramAcpConversation({ bindingConversationId, conversationId, parentConversationId }),
+    matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+      matchTelegramAcpConversation({
+        bindingConversationId: compiledBinding.conversationId,
+        conversationId,
+        parentConversationId,
+      }),
   },
   security: {
     resolveDmPolicy: resolveTelegramDmPolicy,

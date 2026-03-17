@@ -11,6 +11,9 @@ import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
+const primeConfiguredBindingRegistry = vi.hoisted(() =>
+  vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
+);
 type HandleGatewayRequestOptions = GatewayRequestOptions & {
   extraHandlers?: Record<string, unknown>;
 };
@@ -20,6 +23,10 @@ const handleGatewayRequest = vi.hoisted(() =>
 
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins,
+}));
+
+vi.mock("../channels/plugins/binding-registry.js", () => ({
+  primeConfiguredBindingRegistry,
 }));
 
 vi.mock("./server-methods.js", () => ({
@@ -56,6 +63,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
+  conversationBindingResolvedHandlers: [],
   diagnostics,
 });
 
@@ -133,6 +141,7 @@ async function createSubagentRuntime(
 
 beforeEach(async () => {
   loadOpenClawPlugins.mockReset();
+  primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
   const runtimeModule = await import("../plugins/runtime/index.js");
   runtimeModule.clearGatewaySubagentRuntime();
@@ -463,6 +472,29 @@ describe("loadGatewayPlugins", () => {
         preferSetupRuntimeForChannelPlugins: true,
       }),
     );
+  });
+
+  test("primes configured bindings during gateway startup", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    const cfg = {};
+    loadGatewayPlugins({
+      cfg,
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg });
   });
 
   test("can suppress duplicate diagnostics when reloading full runtime plugins", async () => {

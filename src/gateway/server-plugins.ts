@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
+import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -485,6 +486,7 @@ export function loadGatewayPlugins(params: {
   setSharedPluginRuntimeOptions({
     subagent: gatewaySubagentRuntime,
   });
+  primeConfiguredBindingRegistry({ cfg: params.cfg });
   let pluginRegistry;
   try {
     pluginRegistry = loadOpenClawPlugins({

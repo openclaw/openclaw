@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { runNodeMain } from "../../scripts/run-node.mjs";
 
 async function withTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-run-node-"));
@@ -75,7 +76,6 @@ describe("run-node script", () => {
           };
         };
 
-        const { runNodeMain } = await import("../../scripts/run-node.mjs");
         const exitCode = await runNodeMain({
           cwd: tmp,
           args: ["--version"],
@@ -135,7 +135,6 @@ describe("run-node script", () => {
         return createExitedProcess(0);
       };
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -211,7 +210,6 @@ describe("run-node script", () => {
         return { status: 1, stdout: "" };
       };
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -239,7 +237,6 @@ describe("run-node script", () => {
         return createExitedProcess(0);
       };
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -288,7 +285,6 @@ describe("run-node script", () => {
       };
       const spawnSync = () => ({ status: 1, stdout: "" });
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -360,7 +356,6 @@ describe("run-node script", () => {
       };
       const spawnSync = () => ({ status: 1, stdout: "" });
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -425,7 +420,6 @@ describe("run-node script", () => {
         return { status: 1, stdout: "" };
       };
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -496,7 +490,6 @@ describe("run-node script", () => {
         return { status: 1, stdout: "" };
       };
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -565,7 +558,6 @@ describe("run-node script", () => {
         return { status: 1, stdout: "" };
       };
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -640,7 +632,6 @@ describe("run-node script", () => {
         return { status: 1, stdout: "" };
       };
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -700,7 +691,6 @@ describe("run-node script", () => {
       };
       const spawnSync = () => ({ status: 1, stdout: "" });
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
@@ -762,7 +752,6 @@ describe("run-node script", () => {
         return { status: 1, stdout: "" };
       };
 
-      const { runNodeMain } = await import("../../scripts/run-node.mjs");
       const exitCode = await runNodeMain({
         cwd: tmp,
         args: ["status"],
