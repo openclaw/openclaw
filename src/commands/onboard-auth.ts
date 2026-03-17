@@ -58,7 +58,6 @@ export {
   applyOpencodeGoProviderConfig,
 } from "./onboard-auth.config-opencode-go.js";
 export {
-  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setOpenaiApiKey,
@@ -87,9 +86,9 @@ export {
   setXaiApiKey,
   setModelStudioApiKey,
   writeOAuthCredentials,
-  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
+export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../../extensions/cloudflare-ai-gateway/onboard.js";
 export { HUGGINGFACE_DEFAULT_MODEL_REF } from "../../extensions/huggingface/onboard.js";
 export { KILOCODE_DEFAULT_MODEL_REF } from "../../extensions/kilocode/onboard.js";
 export { MISTRAL_DEFAULT_MODEL_REF } from "../../extensions/mistral/onboard.js";
@@ -97,6 +96,7 @@ export { MODELSTUDIO_DEFAULT_MODEL_REF } from "../../extensions/modelstudio/onbo
 export { SYNTHETIC_DEFAULT_MODEL_REF } from "../../extensions/synthetic/onboard.js";
 export { TOGETHER_DEFAULT_MODEL_REF } from "../../extensions/together/onboard.js";
 export { VENICE_DEFAULT_MODEL_REF } from "../../extensions/venice/onboard.js";
+export { VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "../../extensions/vercel-ai-gateway/onboard.js";
 export { XAI_DEFAULT_MODEL_REF } from "../../extensions/xai/onboard.js";
 export { ZAI_DEFAULT_MODEL_REF } from "../../extensions/zai/onboard.js";
 export {
