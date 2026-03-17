@@ -1,7 +1,7 @@
 import { EnvHttpProxyAgent, type Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
-import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { hasProxyEnvConfigured, resolveEnvHttpProxyUrl } from "./proxy-env.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
@@ -196,7 +196,12 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       if (canUseTrustedEnvProxy) {
-        dispatcher = new EnvHttpProxyAgent();
+        const httpProxy = resolveEnvHttpProxyUrl("http");
+        const httpsProxy = resolveEnvHttpProxyUrl("https");
+        dispatcher = new EnvHttpProxyAgent({
+          ...(httpProxy ? { httpProxy } : {}),
+          ...(httpsProxy ? { httpsProxy } : {}),
+        });
       } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy);
       }
