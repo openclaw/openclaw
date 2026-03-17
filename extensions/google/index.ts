@@ -1,4 +1,5 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { buildGoogleImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
@@ -51,6 +52,7 @@ const googlePlugin = {
       isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     });
     registerGoogleGeminiCliProvider(api);
+    api.registerImageGenerationProvider(buildGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(googleMediaUnderstandingProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({

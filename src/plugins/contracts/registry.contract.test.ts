@@ -165,6 +165,7 @@ describe("plugin contract registry", () => {
   });
 
   it("keeps bundled image-generation ownership explicit", () => {
+    expect(findImageGenerationProviderIdsForPlugin("google")).toEqual(["google"]);
     expect(findImageGenerationProviderIdsForPlugin("openai")).toEqual(["openai"]);
   });
 
@@ -180,6 +181,13 @@ describe("plugin contract registry", () => {
   });
 
   it("tracks speech registrations on bundled provider plugins", () => {
+    expect(findRegistrationForPlugin("google")).toMatchObject({
+      providerIds: ["google", "google-gemini-cli"],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: ["google"],
+      imageGenerationProviderIds: ["google"],
+      webSearchProviderIds: ["gemini"],
+    });
     expect(findRegistrationForPlugin("openai")).toMatchObject({
       providerIds: ["openai", "openai-codex"],
       speechProviderIds: ["openai"],
@@ -245,6 +253,9 @@ describe("plugin contract registry", () => {
   });
 
   it("keeps bundled image-generation support explicit", () => {
+    expect(findImageGenerationProviderForPlugin("google").generateImage).toEqual(
+      expect.any(Function),
+    );
     expect(findImageGenerationProviderForPlugin("openai").generateImage).toEqual(
       expect.any(Function),
     );
