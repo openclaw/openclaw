@@ -190,4 +190,21 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
+
+  it("recovers start when a service provides start support after becoming not loaded", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.start.mockResolvedValue({ outcome: "completed" });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    expect(service.start).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    const payload = readJsonLog<{ result?: string }>();
+    expect(payload.result).toBe("started");
+  });
 });

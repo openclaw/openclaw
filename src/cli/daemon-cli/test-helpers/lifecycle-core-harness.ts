@@ -13,6 +13,7 @@ type LifecycleRuntimeHarness = RuntimeEnv & {
 type LifecycleServiceHarness = GatewayService & {
   install: MockFn<GatewayService["install"]>;
   uninstall: MockFn<GatewayService["uninstall"]>;
+  start: MockFn<NonNullable<GatewayService["start"]>>;
   stop: MockFn<GatewayService["stop"]>;
   isLoaded: MockFn<GatewayService["isLoaded"]>;
   readCommand: MockFn<GatewayService["readCommand"]>;
@@ -36,6 +37,7 @@ export const service: LifecycleServiceHarness = {
   notLoadedText: "not loaded",
   install: vi.fn(),
   uninstall: vi.fn(),
+  start: vi.fn(),
   stop: vi.fn(),
   isLoaded: vi.fn(),
   readCommand: vi.fn(),
@@ -50,9 +52,11 @@ export function resetLifecycleRuntimeLogs() {
 export function resetLifecycleServiceMocks() {
   service.isLoaded.mockClear();
   service.readCommand.mockClear();
+  service.start.mockClear();
   service.restart.mockClear();
   service.isLoaded.mockResolvedValue(true);
   service.readCommand.mockResolvedValue({ programArguments: [], environment: {} });
+  service.start.mockResolvedValue({ outcome: "completed" });
   service.restart.mockResolvedValue({ outcome: "completed" });
 }
 

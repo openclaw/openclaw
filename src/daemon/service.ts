@@ -59,6 +59,7 @@ export type GatewayService = {
   notLoadedText: string;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
+  start?: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
@@ -100,6 +101,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     notLoadedText: "not loaded",
     install: ignoreInstallResult(installLaunchAgent),
     uninstall: uninstallLaunchAgent,
+    start: restartLaunchAgent,
     stop: stopLaunchAgent,
     restart: restartLaunchAgent,
     isLoaded: isLaunchAgentLoaded,

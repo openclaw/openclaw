@@ -203,6 +203,45 @@ export async function runServiceStart(params: {
     return;
   }
   if (!loaded) {
+    if (params.service.start) {
+      try {
+        const command = await params.service.readCommand(process.env);
+        if (command) {
+          const startResult = await params.service.start({ env: process.env, stdout });
+          const startStatus = describeGatewayServiceRestart(params.serviceNoun, startResult);
+          if (startStatus.scheduled) {
+            emit({
+              ok: true,
+              result: startStatus.daemonActionResult,
+              message: startStatus.message,
+              service: buildDaemonServiceSnapshot(params.service, true),
+            });
+            if (!json) {
+              defaultRuntime.log(startStatus.message);
+            }
+            return;
+          }
+
+          let started = true;
+          try {
+            started = await params.service.isLoaded({ env: process.env });
+          } catch {
+            started = true;
+          }
+          emit({
+            ok: true,
+            result: "started",
+            service: buildDaemonServiceSnapshot(params.service, started),
+          });
+          return;
+        }
+      } catch (err) {
+        const hints = params.renderStartHints();
+        fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
+        return;
+      }
+    }
+
     await handleServiceNotLoaded({
       serviceNoun: params.serviceNoun,
       service: params.service,
