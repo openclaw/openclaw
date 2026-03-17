@@ -144,7 +144,7 @@ if LINEAR_FAKE_EMPTY_BRANCH=1 bash "$SCRIPT" issue get-branch PLA-822 >/dev/null
   echo "expected empty branch get-branch to fail" >&2
   exit 1
 fi
-rg -F 'issue missing branchName/gitBranchName: PLA-822' "$TMP/branch-empty.err" >/dev/null
+rg -F 'issue missing branchName/gitBranchName: PLA-822 (check Linear schema compatibility)' "$TMP/branch-empty.err" >/dev/null
 
 issue_json="$(
   bash "$SCRIPT" issue get PLA-822
