@@ -540,84 +540,93 @@ describe("handleDiscordMessageAction", () => {
 });
 
 describe("telegramMessageActions", () => {
-  it("lists poll when telegram is configured", () => {
-    const actions = telegramMessageActions.listActions?.({ cfg: telegramCfg() }) ?? [];
-
-    expect(actions).toContain("poll");
-  });
-
-  it("lists topic-edit when telegram topic edits are enabled", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok",
-          actions: { editForumTopic: true },
-        },
+  it("computes poll/topic action availability from telegram config gates", () => {
+    for (const testCase of [
+      {
+        name: "configured telegram enables poll",
+        cfg: telegramCfg(),
+        expectPoll: true,
+        expectTopicEdit: true,
       },
-    } as OpenClawConfig;
-
-    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
-
-    expect(actions).toContain("topic-edit");
-  });
-
-  it("omits poll when sendMessage is disabled", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok",
-          actions: { sendMessage: false },
-        },
-      },
-    } as OpenClawConfig;
-
-    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
-
-    expect(actions).not.toContain("poll");
-  });
-
-  it("omits poll when poll actions are disabled", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok",
-          actions: { poll: false },
-        },
-      },
-    } as OpenClawConfig;
-
-    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
-
-    expect(actions).not.toContain("poll");
-  });
-
-  it("omits poll when sendMessage and poll are split across accounts", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            senderOnly: {
-              botToken: "tok-send",
-              actions: {
-                sendMessage: true,
-                poll: false,
-              },
+      {
+        name: "topic edit gate enables topic-edit",
+        cfg: {
+          channels: {
+            telegram: {
+              botToken: "tok",
+              actions: { editForumTopic: true },
             },
-            pollOnly: {
-              botToken: "tok-poll",
-              actions: {
-                sendMessage: false,
-                poll: true,
+          },
+        } as OpenClawConfig,
+        expectPoll: true,
+        expectTopicEdit: true,
+      },
+      {
+        name: "sendMessage disabled hides poll",
+        cfg: {
+          channels: {
+            telegram: {
+              botToken: "tok",
+              actions: { sendMessage: false },
+            },
+          },
+        } as OpenClawConfig,
+        expectPoll: false,
+        expectTopicEdit: true,
+      },
+      {
+        name: "poll gate disabled hides poll",
+        cfg: {
+          channels: {
+            telegram: {
+              botToken: "tok",
+              actions: { poll: false },
+            },
+          },
+        } as OpenClawConfig,
+        expectPoll: false,
+        expectTopicEdit: true,
+      },
+      {
+        name: "split account gates do not expose poll",
+        cfg: {
+          channels: {
+            telegram: {
+              accounts: {
+                senderOnly: {
+                  botToken: "tok-send",
+                  actions: {
+                    sendMessage: true,
+                    poll: false,
+                  },
+                },
+                pollOnly: {
+                  botToken: "tok-poll",
+                  actions: {
+                    sendMessage: false,
+                    poll: true,
+                  },
+                },
               },
             },
           },
-        },
+        } as OpenClawConfig,
+        expectPoll: false,
+        expectTopicEdit: true,
       },
-    } as OpenClawConfig;
-
-    const actions = telegramMessageActions.listActions?.({ cfg }) ?? [];
-
-    expect(actions).not.toContain("poll");
+    ]) {
+      const actions = telegramMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [];
+      if (testCase.expectPoll) {
+        expect(actions, testCase.name).toContain("poll");
+      } else {
+        expect(actions, testCase.name).not.toContain("poll");
+      }
+      if (testCase.expectTopicEdit) {
+        expect(actions, testCase.name).toContain("topic-edit");
+      } else {
+        expect(actions, testCase.name).not.toContain("topic-edit");
+      }
+    }
   });
 
   it("lists sticker actions only when enabled by config", () => {
@@ -910,82 +919,62 @@ describe("telegramMessageActions", () => {
     expect(actions).not.toContain("react");
   });
 
-  it("accepts numeric messageId and channelId for reactions", async () => {
+  it("normalizes telegram reaction message identifiers before dispatch", async () => {
     const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "react",
-      params: {
-        channelId: 123,
-        messageId: 456,
-        emoji: "ok",
+    for (const testCase of [
+      {
+        name: "numeric channelId/messageId",
+        params: {
+          channelId: 123,
+          messageId: 456,
+          emoji: "ok",
+        },
+        toolContext: undefined,
+        expectedChatId: "123",
+        expectedMessageId: "456",
       },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
-    const call = handleTelegramAction.mock.calls[0]?.[0];
-    if (!call) {
-      throw new Error("missing telegram action call");
-    }
-    const callPayload = call as Record<string, unknown>;
-    expect(callPayload.action).toBe("react");
-    expect(String(callPayload.chatId)).toBe("123");
-    expect(String(callPayload.messageId)).toBe("456");
-    expect(callPayload.emoji).toBe("ok");
-  });
-
-  it("accepts snake_case message_id for reactions", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "react",
-      params: {
-        channelId: 123,
-        message_id: "456",
-        emoji: "ok",
+      {
+        name: "snake_case message_id",
+        params: {
+          channelId: 123,
+          message_id: "456",
+          emoji: "ok",
+        },
+        toolContext: undefined,
+        expectedChatId: "123",
+        expectedMessageId: "456",
       },
-      cfg,
-      accountId: undefined,
-    });
-
-    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
-    const call = handleTelegramAction.mock.calls[0]?.[0];
-    if (!call) {
-      throw new Error("missing telegram action call");
-    }
-    const callPayload = call as Record<string, unknown>;
-    expect(callPayload.action).toBe("react");
-    expect(String(callPayload.chatId)).toBe("123");
-    expect(String(callPayload.messageId)).toBe("456");
-  });
-
-  it("falls back to toolContext.currentMessageId for reactions when messageId is omitted", async () => {
-    const cfg = telegramCfg();
-
-    await telegramMessageActions.handleAction?.({
-      channel: "telegram",
-      action: "react",
-      params: {
-        chatId: "123",
-        emoji: "ok",
+      {
+        name: "toolContext fallback",
+        params: {
+          chatId: "123",
+          emoji: "ok",
+        },
+        toolContext: { currentMessageId: "9001" },
+        expectedChatId: "123",
+        expectedMessageId: "9001",
       },
-      cfg,
-      accountId: undefined,
-      toolContext: { currentMessageId: "9001" },
-    });
+    ] as const) {
+      handleTelegramAction.mockClear();
+      await telegramMessageActions.handleAction?.({
+        channel: "telegram",
+        action: "react",
+        params: testCase.params,
+        cfg,
+        accountId: undefined,
+        toolContext: testCase.toolContext,
+      });
 
-    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
-    const call = handleTelegramAction.mock.calls[0]?.[0];
-    if (!call) {
-      throw new Error("missing telegram action call");
+      expect(handleTelegramAction, testCase.name).toHaveBeenCalledTimes(1);
+      const call = handleTelegramAction.mock.calls[0]?.[0];
+      if (!call) {
+        throw new Error("missing telegram action call");
+      }
+      const callPayload = call as Record<string, unknown>;
+      expect(callPayload.action, testCase.name).toBe("react");
+      expect(String(callPayload.chatId), testCase.name).toBe(testCase.expectedChatId);
+      expect(String(callPayload.messageId), testCase.name).toBe(testCase.expectedMessageId);
     }
-    const callPayload = call as Record<string, unknown>;
-    expect(callPayload.action).toBe("react");
-    expect(String(callPayload.messageId)).toBe("9001");
   });
 
   it("forwards missing reaction messageId to telegram-actions for soft-fail handling", async () => {
