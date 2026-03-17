@@ -18,7 +18,7 @@ A **delegate** is an OpenClaw agent that:
 - Has its **own identity** (email address, display name, calendar).
 - Acts **on behalf of** one or more humans — never pretends to be them.
 - Operates under **explicit permissions** granted by the organization's identity provider.
-- Follows **standing orders** — rules defined in the agent's `AGENTS.md` that specify what it may do autonomously vs. what requires human approval (see [Cron Jobs](/automation/cron-jobs) for scheduled execution).
+- Follows **[standing orders](/automation/standing-orders)** — rules defined in the agent's `AGENTS.md` that specify what it may do autonomously vs. what requires human approval (see [Cron Jobs](/automation/cron-jobs) for scheduled execution).
 
 The delegate model maps directly to how executive assistants work: they have their own credentials, send mail "on behalf of" their principal, and follow a defined scope of authority.
 
@@ -70,7 +70,7 @@ The delegate operates **autonomously** on a schedule, executing standing orders 
 - Automated social media publishing via approved content queues.
 - Inbox triage with auto-categorization and flagging.
 
-This tier combines Tier 2 permissions with [Cron Jobs](/automation/cron-jobs) and standing orders.
+This tier combines Tier 2 permissions with [Cron Jobs](/automation/cron-jobs) and [Standing Orders](/automation/standing-orders).
 
 > **Security warning**: Tier 3 requires careful configuration of hard blocks — actions the agent must never take regardless of instruction. Complete the prerequisites below before granting any identity provider permissions.
 
@@ -289,7 +289,7 @@ The delegate model works for any small organization:
 1. **Create one delegate agent** per organization.
 2. **Harden first** — tool restrictions, sandbox, hard blocks, audit trail.
 3. **Grant scoped permissions** via the identity provider (least privilege).
-4. **Define standing orders** for autonomous operations.
+4. **Define [standing orders](/automation/standing-orders)** for autonomous operations.
 5. **Schedule cron jobs** for recurring tasks.
 6. **Review and adjust** the capability tier as trust builds.
 
