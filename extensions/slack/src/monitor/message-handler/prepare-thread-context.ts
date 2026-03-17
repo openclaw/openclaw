@@ -1,8 +1,9 @@
+import { buildImageAnnotation } from "../../../../../src/auto-reply/annotate-thread-images.js";
 import { formatInboundEnvelope } from "../../../../../src/auto-reply/envelope.js";
 import { readSessionUpdatedAt } from "../../../../../src/config/sessions.js";
 import { logVerbose } from "../../../../../src/globals.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
-import type { SlackMessageEvent } from "../../types.js";
+import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import type { SlackMonitorContext } from "../context.js";
 import {
   resolveSlackMedia,
@@ -10,6 +11,18 @@ import {
   type SlackMediaResult,
   type SlackThreadStarter,
 } from "../media.js";
+
+/** Image MIME type prefixes that indicate a visual image file. */
+const IMAGE_MIME_PREFIX = "image/";
+
+/** Check whether a Slack file looks like an image based on its MIME type or name. */
+function isImageFile(file: SlackFile): boolean {
+  if (file.mimetype?.toLowerCase().startsWith(IMAGE_MIME_PREFIX)) {
+    return true;
+  }
+  const name = file.name?.toLowerCase() ?? "";
+  return /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|svg)$/.test(name);
+}
 
 export type SlackThreadContextData = {
   threadStarterBody: string | undefined;
@@ -71,6 +84,7 @@ export async function resolveSlackThreadContextData(params: {
   }
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
+  const annotateImages = params.account.config?.thread?.annotateImages ?? true;
   threadSessionPreviousTimestamp = readSessionUpdatedAt({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
@@ -101,14 +115,34 @@ export async function resolveSlackThreadContextData(params: {
         }),
       );
 
+      const totalMessages = threadHistory.length;
       const historyParts: string[] = [];
-      for (const historyMsg of threadHistory) {
+      for (const [msgIndex, historyMsg] of threadHistory.entries()) {
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
         const msgSenderName =
           msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown");
         const isBot = Boolean(historyMsg.botId);
         const role = isBot ? "assistant" : "user";
-        const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
+
+        // Build image annotation lines for messages with image file attachments.
+        let imageAnnotation = "";
+        if (annotateImages && historyMsg.files && historyMsg.files.length > 0) {
+          const imageFiles = historyMsg.files.filter(isImageFile);
+          if (imageFiles.length > 0) {
+            const annotations = imageFiles.map(() =>
+              buildImageAnnotation({
+                totalMessages,
+                messageIndex: msgIndex + 1,
+                timestamp: historyMsg.ts,
+                author: `${msgSenderName} (${role})`,
+                timezone: params.envelopeOptions?.timezone ?? "UTC",
+              }),
+            );
+            imageAnnotation = "\n" + annotations.join("\n");
+          }
+        }
+
+        const msgWithId = `${historyMsg.text}${imageAnnotation}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
         historyParts.push(
           formatInboundEnvelope({
             channel: "Slack",

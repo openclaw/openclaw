@@ -82,6 +82,8 @@ export type SlackThreadConfig = {
   inheritParent?: boolean;
   /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
   initialHistoryLimit?: number;
+  /** When true (default), inject timestamp + position metadata annotations before image references in thread history. Helps the model reason about image age relative to the current message. */
+  annotateImages?: boolean;
 };
 
 export type SlackAccountConfig = {
