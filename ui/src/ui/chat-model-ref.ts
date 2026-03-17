@@ -99,27 +99,31 @@ export function buildChatModelOption(entry: ModelCatalogEntry): { value: string;
  */
 const LOCAL_PROXY_PROVIDERS = new Set(["ollama", "vllm", "sglang", "local"]);
 
+function isLocalProxy(provider: string): boolean {
+  return LOCAL_PROXY_PROVIDERS.has(provider.trim().toLowerCase());
+}
+
 /**
- * Resolve the best provider for a model ID when it appears in multiple providers.
- * Prefers real providers over local proxies.
+ * For a given model ID, return entries that should be deduplicated.
+ * Only deduplicates when there's a mix of local proxies and real providers
+ * (keep real, drop proxies). When all providers are real, returns all of them.
  */
-export function resolveBestProvider(
+export function getDeduplicatedProviders(
   entries: ModelCatalogEntry[],
   modelId: string,
-): ModelCatalogEntry | undefined {
+): ModelCatalogEntry[] {
+  const normalizedId = modelId.trim().toLowerCase();
   const matches = entries.filter(
-    (e) => e.id.trim().toLowerCase() === modelId.trim().toLowerCase(),
+    (e) => e.id.trim().toLowerCase() === normalizedId,
   );
-  if (matches.length === 0) return undefined;
-  if (matches.length === 1) return matches[0];
+  if (matches.length <= 1) return matches;
 
-  // Prefer non-proxy providers
-  const nonProxy = matches.filter(
-    (e) => !LOCAL_PROXY_PROVIDERS.has((e.provider ?? "").trim().toLowerCase()),
-  );
-  if (nonProxy.length === 1) return nonProxy[0];
-  if (nonProxy.length > 1) return nonProxy[0];
+  const nonProxy = matches.filter((e) => !isLocalProxy(e.provider ?? ""));
+  const proxies = matches.filter((e) => isLocalProxy(e.provider ?? ""));
 
-  // All are proxies — just return the first
-  return matches[0];
+  // If there's at least one real provider, drop all proxies
+  if (nonProxy.length >= 1) return nonProxy;
+
+  // All are proxies — keep them all (edge case, but let user choose)
+  return matches;
 }

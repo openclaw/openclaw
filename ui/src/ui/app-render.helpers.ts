@@ -10,8 +10,8 @@ import {
   buildChatModelOption,
   createChatModelOverride,
   formatChatModelDisplay,
+  getDeduplicatedProviders,
   normalizeChatModelOverrideValue,
-  resolveBestProvider,
   resolveServerChatModelValue,
 } from "./chat-model-ref.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
@@ -558,24 +558,22 @@ function buildChatModelOptions(
   const seenModelIds = new Set<string>();
   const options: Array<{ value: string; label: string }> = [];
 
-  // Process catalog entries, keeping only the best provider for each model ID.
-  // This prevents duplicate models with different providers (e.g., ollama/claude vs anthropic/claude)
-  // from confusing the picker when the proxy provider appears first.
+  // Process catalog entries, deduplicating only when a model appears under
+  // both local proxy (ollama, vllm) and real cloud providers.
+  // When multiple real providers offer the same model (e.g., openai + openrouter),
+  // keep all variants so users can choose their preferred provider.
   for (const entry of catalog) {
     const modelId = entry.id.trim().toLowerCase();
     if (seenModelIds.has(modelId)) {
       continue;
     }
-    // Check if a better provider exists for this model ID
-    const best = resolveBestProvider(catalog, entry.id);
-    if (best && best !== entry) {
-      // A better provider was found but will be processed when we encounter it in the loop.
-      // Skip this entry to avoid duplicates.
-      continue;
-    }
     seenModelIds.add(modelId);
-    const option = buildChatModelOption(best ?? entry);
-    options.push({ value: option.value, label: option.label });
+
+    const deduped = getDeduplicatedProviders(catalog, entry.id);
+    for (const e of deduped) {
+      const option = buildChatModelOption(e);
+      options.push({ value: option.value, label: option.label });
+    }
   }
 
   // Helper to add options for override/default without dedup conflicts
