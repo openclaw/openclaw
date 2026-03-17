@@ -501,7 +501,14 @@ export function applyJobResult(
     } else if (result.status === "error" && job.enabled) {
       const retryConfig = resolveRetryConfig(state.deps.cronConfig);
       const transient = isTransientCronError(result.error, retryConfig.retryOn);
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1, retryConfig.backoffMs);
+      // Use full backoff ladder for recurring jobs when not explicitly set (retry-storm protection).
+      // resolveRetryConfig defaults to slice(0,3); one-shot path uses that; recurring keeps full ladder.
+      const recurringBackoffMs =
+        Array.isArray(state.deps.cronConfig?.retry?.backoffMs) &&
+        state.deps.cronConfig.retry.backoffMs.length > 0
+          ? state.deps.cronConfig.retry.backoffMs
+          : DEFAULT_BACKOFF_SCHEDULE_MS;
+      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1, recurringBackoffMs);
       let normalNext: number | undefined;
       try {
         normalNext =
