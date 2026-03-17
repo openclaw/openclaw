@@ -256,7 +256,7 @@ Enable with `tools.loopDetection.enabled: true` (default is `false`).
 
 ### `web_search`
 
-Search the web using Brave, Firecrawl, Gemini, Grok, Kimi, or Perplexity.
+Search the web using Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily.
 
 Core parameters:
 
