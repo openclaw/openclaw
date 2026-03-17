@@ -1,4 +1,3 @@
-import type { Message } from "@grammyjs/types";
 import type { Bot, Context } from "grammy";
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/channel-runtime";
@@ -80,6 +79,9 @@ import { buildInlineKeyboard } from "./send.js";
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
 type TelegramNativeCommandContext = Context & { match?: string };
+type TelegramNativeCommandMessage = NonNullable<
+  TelegramNativeCommandContext["message"] | TelegramNativeCommandContext["channelPost"]
+>;
 
 type TelegramCommandAuthResult = {
   chatId: number;
@@ -154,7 +156,7 @@ function isChannelPostContext(ctx: TelegramNativeCommandContext) {
 }
 
 async function resolveTelegramCommandAuth(params: {
-  msg: Message;
+  msg: TelegramNativeCommandMessage;
   bot: Bot;
   cfg: OpenClawConfig;
   accountId: string;
@@ -482,7 +484,7 @@ export const registerTelegramNativeCommands = ({
   });
 
   const resolveCommandRuntimeContext = async (params: {
-    msg: Message;
+    msg: TelegramNativeCommandMessage;
     isGroup: boolean;
     isForum: boolean;
     resolvedThreadId?: number;
