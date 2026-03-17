@@ -1385,6 +1385,7 @@ export type PluginHookName =
   | "subagent_delivery_target"
   | "subagent_spawned"
   | "subagent_ended"
+  | "agent_to_agent_turn"
   | "gateway_start"
   | "gateway_stop";
 
@@ -1412,6 +1413,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_delivery_target",
   "subagent_spawned",
   "subagent_ended",
+  "agent_to_agent_turn",
   "gateway_start",
   "gateway_stop",
 ] as const satisfies readonly PluginHookName[];
@@ -1844,6 +1846,40 @@ export type PluginHookSubagentEndedEvent = {
   error?: string;
 };
 
+// agent_to_agent_turn hook
+export type PluginHookA2ATurnContext = {
+  requesterSessionKey?: string;
+  targetSessionKey?: string;
+};
+
+export type PluginHookA2ATurnEvent = {
+  /** Stable identifier for this A2A exchange, to distinguish overlapping exchanges between the same agent pair. */
+  flowId: string;
+  /** 0 = initial target reply before ping-pong; 1+ = ping-pong turn index. */
+  turn: number;
+  /** Maximum number of ping-pong turns configured. */
+  maxTurns: number;
+  /** Session key of the agent that just produced the reply. */
+  speakerSessionKey: string;
+  /** Session key of the agent that will receive the reply next. */
+  listenerSessionKey: string;
+  /** Role of the speaking agent in this exchange. */
+  speakerRole: "requester" | "target";
+  /** The reply text produced during this turn. */
+  reply: string;
+  /** Channel identifier for the requester agent (if any). */
+  requesterChannel?: string;
+  /** Channel identifier for the target agent (if any). */
+  targetChannel?: string;
+  /** Resolved delivery target for message routing (if available). */
+  deliveryTarget?: {
+    to: string;
+    accountId?: string;
+    channel?: string;
+    threadId?: string | number;
+  };
+};
+
 // Gateway context
 export type PluginHookGatewayContext = {
   port?: number;
@@ -1952,6 +1988,10 @@ export type PluginHookHandlerMap = {
   subagent_ended: (
     event: PluginHookSubagentEndedEvent,
     ctx: PluginHookSubagentContext,
+  ) => Promise<void> | void;
+  agent_to_agent_turn: (
+    event: PluginHookA2ATurnEvent,
+    ctx: PluginHookA2ATurnContext,
   ) => Promise<void> | void;
   gateway_start: (
     event: PluginHookGatewayStartEvent,

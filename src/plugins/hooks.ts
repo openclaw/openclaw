@@ -47,6 +47,8 @@ import type {
   PluginHookSubagentSpawningResult,
   PluginHookSubagentEndedEvent,
   PluginHookSubagentSpawnedEvent,
+  PluginHookA2ATurnContext,
+  PluginHookA2ATurnEvent,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
@@ -97,6 +99,8 @@ export type {
   PluginHookSubagentSpawningResult,
   PluginHookSubagentSpawnedEvent,
   PluginHookSubagentEndedEvent,
+  PluginHookA2ATurnContext,
+  PluginHookA2ATurnEvent,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -875,6 +879,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Agent-to-Agent Hooks
+  // =========================================================================
+
+  /**
+   * Run agent_to_agent_turn hook.
+   * Fires after each completed turn of an A2A ping-pong exchange.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runAgentToAgentTurn(
+    event: PluginHookA2ATurnEvent,
+    ctx: PluginHookA2ATurnContext,
+  ): Promise<void> {
+    return runVoidHook("agent_to_agent_turn", event, ctx);
+  }
+
+  // =========================================================================
   // Gateway Hooks
   // =========================================================================
 
@@ -949,6 +969,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runSubagentDeliveryTarget,
     runSubagentSpawned,
     runSubagentEnded,
+    // Agent-to-Agent hooks
+    runAgentToAgentTurn,
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
