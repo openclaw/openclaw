@@ -8,10 +8,22 @@ import type {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
+import * as providerRuntime from "../plugins/provider-runtime.js";
 import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+
+// Bundled plugin hooks (supportsXHighThinking) require a full dist-runtime build
+// which is not present in the test environment.  Stub the runtime hook for the
+// well-known openai/gpt-5.4 model so thinking-level tests see the expected list.
+vi.spyOn(providerRuntime, "resolveProviderXHighThinking").mockImplementation((params) => {
+  const modelId = params.context.modelId?.toLowerCase() ?? "";
+  if (params.provider === "openai" && (modelId === "gpt-5.4" || modelId === "gpt-5.4-pro")) {
+    return true;
+  }
+  return undefined;
+});
 
 function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   return {
