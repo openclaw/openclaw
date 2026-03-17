@@ -8,6 +8,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
 import type {
+  ProviderAuthOptionBag,
   ProviderNonInteractiveApiKeyCredentialParams,
   ProviderResolveNonInteractiveApiKeyParams,
 } from "../../../plugins/types.js";
@@ -130,7 +131,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     authChoice: params.authChoice,
     config: enableResult.config,
     baseConfig: params.baseConfig,
-    opts: params.opts,
+    opts: params.opts as ProviderAuthOptionBag,
     runtime: params.runtime,
     agentDir,
     workspaceDir,

@@ -13,6 +13,7 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderNonInteractiveApiKeyResult,
 } from "../plugins/types.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 export {
@@ -240,11 +241,10 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
   contextWindow?: number;
   maxTokens?: number;
 }): Promise<OpenClawConfig | null> {
-  const baseUrl = (params.ctx.opts.customBaseUrl?.trim() || params.defaultBaseUrl).replace(
-    /\/+$/,
-    "",
-  );
-  const modelId = params.ctx.opts.customModelId?.trim();
+  const baseUrl = (
+    normalizeOptionalSecretInput(params.ctx.opts.customBaseUrl) ?? params.defaultBaseUrl
+  ).replace(/\/+$/, "");
+  const modelId = normalizeOptionalSecretInput(params.ctx.opts.customModelId);
   if (!modelId) {
     params.ctx.runtime.error(
       buildMissingNonInteractiveModelIdMessage({
@@ -259,7 +259,7 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
 
   const resolved = await params.ctx.resolveApiKey({
     provider: params.providerId,
-    flagValue: params.ctx.opts.customApiKey,
+    flagValue: normalizeOptionalSecretInput(params.ctx.opts.customApiKey),
     flagName: "--custom-api-key",
     envVar: params.defaultApiKeyEnvVar,
     envVarName: params.defaultApiKeyEnvVar,

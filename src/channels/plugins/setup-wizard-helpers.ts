@@ -1,10 +1,10 @@
-import {
-  promptSecretRefForSetup,
-  resolveSecretInputModeForEnvSelection,
-} from "../../commands/auth-choice.apply-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import type { SecretInput } from "../../config/types.secrets.js";
+import {
+  promptSecretRefForSetup,
+  resolveSecretInputModeForEnvSelection,
+} from "../../plugins/provider-auth-input.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {

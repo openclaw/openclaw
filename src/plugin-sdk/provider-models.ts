@@ -14,10 +14,10 @@ export { normalizeProviderId } from "../agents/provider-id.js";
 export {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
-} from "../commands/google-gemini-model-default.js";
-export { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "../commands/openai-model-default.js";
-export { OPENCODE_GO_DEFAULT_MODEL_REF } from "../commands/opencode-go-model-default.js";
-export { OPENCODE_ZEN_DEFAULT_MODEL } from "../commands/opencode-zen-model-default.js";
+} from "../plugins/provider-model-defaults.js";
+export { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "../plugins/provider-model-defaults.js";
+export { OPENCODE_GO_DEFAULT_MODEL_REF } from "../plugins/provider-model-defaults.js";
+export { OPENCODE_ZEN_DEFAULT_MODEL } from "../plugins/provider-model-defaults.js";
 export { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
 
 export * from "../plugins/provider-model-definitions.js";
