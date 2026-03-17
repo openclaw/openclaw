@@ -1099,40 +1099,31 @@ extension MenuSessionsInjector {
     // MARK: - Width + placement
 
     private func findInsertIndex(in menu: NSMenu) -> Int? {
-        self.findAnchoredInsertIndex(in: menu)
+        self.findDynamicSectionInsertIndex(in: menu)
     }
 
     private func findNodesInsertIndex(in menu: NSMenu) -> Int? {
-        self.findAnchoredInsertIndex(in: menu)
+        self.findDynamicSectionInsertIndex(in: menu)
     }
 
-    /// Returns the index at which sessions and nodes should be injected.
-    ///
-    /// Anchors before the separator above "Settings…" so that injected rows
-    /// appear after the toggles and action buttons. Controls remain immediately
-    /// visible on menu open regardless of how many active sessions are present.
-    /// Falls back to before "Send Heartbeats" if "Settings…" is not found.
-    private func findAnchoredInsertIndex(in menu: NSMenu) -> Int? {
-        if let settingsIdx = menu.items.firstIndex(where: { $0.title.hasPrefix("Settings") }) {
-            if let sepIdx = menu.items[..<settingsIdx].lastIndex(where: { $0.isSeparatorItem }) {
-                return sepIdx
-            }
-            return settingsIdx
+    private func findDynamicSectionInsertIndex(in menu: NSMenu) -> Int? {
+        // Keep controls and action buttons visible by inserting dynamic rows at the
+        // built-in footer boundary, not by matching localized menu item titles.
+        if let footerSeparatorIndex = menu.items.lastIndex(where: { item in
+            item.isSeparatorItem && !self.isInjectedItem(item)
+        }) {
+            return footerSeparatorIndex
         }
 
-        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
-            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
-                return sepIdx
-            }
-            return idx
+        if let firstBaseItemIndex = menu.items.firstIndex(where: { !self.isInjectedItem($0) }) {
+            return min(firstBaseItemIndex + 1, menu.items.count)
         }
 
-        if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
-            return sepIdx
-        }
-
-        if menu.items.count >= 1 { return 1 }
         return menu.items.count
+    }
+
+    private func isInjectedItem(_ item: NSMenuItem) -> Bool {
+        item.tag == self.tag || item.tag == self.nodesTag
     }
 
     private func initialWidth(for menu: NSMenu) -> CGFloat {
@@ -1239,6 +1230,14 @@ extension MenuSessionsInjector {
 
     func injectForTesting(into menu: NSMenu) {
         self.inject(into: menu)
+    }
+
+    func testingFindInsertIndex(in menu: NSMenu) -> Int? {
+        self.findInsertIndex(in: menu)
+    }
+
+    func testingFindNodesInsertIndex(in menu: NSMenu) -> Int? {
+        self.findNodesInsertIndex(in: menu)
     }
 }
 #endif
