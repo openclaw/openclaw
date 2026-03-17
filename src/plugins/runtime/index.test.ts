@@ -55,6 +55,14 @@ describe("plugin runtime command execution", () => {
     expect(runtime.events.onSessionTranscriptUpdate).toBe(onSessionTranscriptUpdate);
   });
 
+  it("exposes runtime.mediaUnderstanding helpers and keeps stt as an alias", () => {
+    const runtime = createPluginRuntime();
+    expect(typeof runtime.mediaUnderstanding.runFile).toBe("function");
+    expect(typeof runtime.mediaUnderstanding.describeImageFile).toBe("function");
+    expect(typeof runtime.mediaUnderstanding.describeVideoFile).toBe("function");
+    expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(runtime.stt.transcribeAudioFile);
+  });
+
   it("exposes runtime.system.requestHeartbeatNow", () => {
     const runtime = createPluginRuntime();
     expect(runtime.system.requestHeartbeatNow).toBe(requestHeartbeatNow);

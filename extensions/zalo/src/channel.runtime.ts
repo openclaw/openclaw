@@ -41,7 +41,9 @@ export async function probeZaloAccount(params: {
 
 export async function startZaloGatewayAccount(
   ctx: Parameters<
-    NonNullable<import("openclaw/plugin-sdk/zalo").ChannelPlugin["gateway"]>["startAccount"]
+    NonNullable<
+      NonNullable<import("openclaw/plugin-sdk/zalo").ChannelPlugin["gateway"]>["startAccount"]
+    >
   >[0],
 ) {
   const account = ctx.account;
