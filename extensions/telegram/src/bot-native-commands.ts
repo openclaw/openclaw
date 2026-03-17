@@ -348,14 +348,13 @@ async function resolveTelegramCommandAuth(params: {
           ? [{ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed }]
           : []),
       ];
-  const commandAuthorized =
-    !isChannelPost && commandsAllowFromConfigured
-      ? Boolean(commandsAllowFromAccess?.isAuthorizedSender)
-      : resolveCommandAuthorizedFromAuthorizers({
-          useAccessGroups,
-          authorizers: commandAuthorizers,
-          modeWhenAccessGroupsOff: "configured",
-        });
+  const commandAuthorized = commandsAllowFromConfigured
+    ? Boolean(commandsAllowFromAccess?.isAuthorizedSender)
+    : resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups,
+        authorizers: commandAuthorizers,
+        modeWhenAccessGroupsOff: "configured",
+      });
   if (requireAuth && !commandAuthorized) {
     return await rejectNotAuthorized();
   }
