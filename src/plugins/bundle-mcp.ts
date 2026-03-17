@@ -237,10 +237,13 @@ function loadBundleMcpConfig(params: {
   bundleFormat: PluginBundleFormat;
 }): { config: BundleMcpConfig; diagnostics: string[] } {
   // Normalize to the real path so that absolutized cwd/args are canonical on
-  // all platforms (on Windows, fs.mkdtemp can return 8.3 short-path forms).
+  // all platforms. On Windows, fs.mkdtemp (via os.tmpdir()) can return 8.3
+  // short-path forms (e.g. RUNNER~1). fs.realpathSync.native uses the OS
+  // GetFinalPathNameByHandle API which resolves 8.3 short paths to their
+  // long-path equivalents, matching what fs.realpath (async) returns.
   let rootDir = params.rootDir;
   try {
-    rootDir = fs.realpathSync(rootDir);
+    rootDir = fs.realpathSync.native(rootDir);
   } catch {
     // keep original if the directory doesn't exist yet
   }
