@@ -15,6 +15,11 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
   if (!trimmedModel) {
     return "";
   }
+  // If the model ID is already provider-qualified (e.g. "llamacpp/qwen3-14b.gguf"),
+  // return it as-is to avoid double-prefixing (e.g. "openrouter/llamacpp/qwen3-14b.gguf").
+  if (trimmedModel.includes("/")) {
+    return trimmedModel;
+  }
   const trimmedProvider = provider?.trim();
   return trimmedProvider ? `${trimmedProvider}/${trimmedModel}` : trimmedModel;
 }
