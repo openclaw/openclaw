@@ -265,6 +265,57 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
   });
 
+  it("keeps Codex runtime skill copies aligned with the declared skill roots", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-codex-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "codex-demo");
+    fs.mkdirSync(path.join(distPluginDir, ".codex-plugin"), { recursive: true });
+    writeJson(path.join(distPluginDir, "package.json"), {
+      name: "@openclaw/codex-demo",
+    });
+    writeJson(path.join(distPluginDir, ".codex-plugin", "plugin.json"), {
+      name: "Codex Demo",
+      skills: ["bundle-skills"],
+    });
+    writeSkill(
+      path.join(distPluginDir, "bundle-skills", "custom-skill", "SKILL.md"),
+      "custom-skill",
+      "Custom declared skill",
+    );
+    writeSkill(
+      path.join(distPluginDir, "skills", "default-skill", "SKILL.md"),
+      "default-skill",
+      "Default fallback skill",
+    );
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const runtimeDeclaredSkillPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "codex-demo",
+      "bundle-skills",
+      "custom-skill",
+      "SKILL.md",
+    );
+    const runtimeDefaultSkillPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "codex-demo",
+      "skills",
+      "default-skill",
+      "SKILL.md",
+    );
+
+    expect(fs.lstatSync(runtimeDeclaredSkillPath).isSymbolicLink()).toBe(false);
+    expect(fs.realpathSync(runtimeDeclaredSkillPath)).toBe(runtimeDeclaredSkillPath);
+    expect(fs.lstatSync(runtimeDefaultSkillPath).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(runtimeDefaultSkillPath)).toBe(
+      path.join(distPluginDir, "skills", "default-skill", "SKILL.md"),
+    );
+  });
+
   it("preserves package metadata needed for bundled plugin discovery from dist-runtime", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-discovery-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "demo");

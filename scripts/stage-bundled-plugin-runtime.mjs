@@ -3,9 +3,48 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
-const CODEX_BUNDLE_MANIFEST = ".codex-plugin/plugin.json";
-const CLAUDE_BUNDLE_MANIFEST = ".claude-plugin/plugin.json";
-const CURSOR_BUNDLE_MANIFEST = ".cursor-plugin/plugin.json";
+const RUNTIME_COPY_MANIFESTS = [
+  {
+    manifestRelativePath: "openclaw.plugin.json",
+    resolvePaths(manifest) {
+      return normalizePathList(manifest.skills);
+    },
+  },
+  {
+    manifestRelativePath: ".codex-plugin/plugin.json",
+    resolvePaths(manifest, sourceDir) {
+      const declaredSkills = normalizePathList(manifest.skills);
+      return declaredSkills.length > 0
+        ? declaredSkills
+        : defaultExistingPaths(sourceDir, ["skills"]);
+    },
+  },
+  {
+    manifestRelativePath: ".claude-plugin/plugin.json",
+    resolvePaths(manifest, sourceDir) {
+      return mergePathLists(
+        normalizePathList(manifest.skills),
+        normalizePathList(manifest.commands),
+        defaultExistingPaths(sourceDir, ["skills", "commands"]),
+      );
+    },
+  },
+  {
+    manifestRelativePath: ".cursor-plugin/plugin.json",
+    resolvePaths(manifest, sourceDir) {
+      return mergePathLists(
+        defaultExistingPaths(sourceDir, ["skills", ".cursor/commands"]),
+        normalizePathList(manifest.skills),
+        normalizePathList(manifest.commands),
+      );
+    },
+  },
+];
+
+const RUNTIME_METADATA_COPY_PATHS = [
+  "package.json",
+  ...RUNTIME_COPY_MANIFESTS.map((entry) => entry.manifestRelativePath),
+];
 
 function symlinkType() {
   return process.platform === "win32" ? "junction" : "dir";
@@ -91,41 +130,12 @@ function resolveDeclaredRuntimeCopyPaths(sourceDir) {
     }
   };
 
-  const pluginManifest = readJsonFileIfExists(path.join(sourceDir, "openclaw.plugin.json"));
-  if (pluginManifest && typeof pluginManifest === "object") {
-    addPaths(normalizePathList(pluginManifest.skills));
-  }
-
-  const codexManifest = readJsonFileIfExists(path.join(sourceDir, CODEX_BUNDLE_MANIFEST));
-  if (codexManifest && typeof codexManifest === "object") {
-    addPaths(
-      mergePathLists(
-        normalizePathList(codexManifest.skills),
-        defaultExistingPaths(sourceDir, ["skills"]),
-      ),
-    );
-  }
-
-  const claudeManifest = readJsonFileIfExists(path.join(sourceDir, CLAUDE_BUNDLE_MANIFEST));
-  if (claudeManifest && typeof claudeManifest === "object") {
-    addPaths(
-      mergePathLists(
-        normalizePathList(claudeManifest.skills),
-        normalizePathList(claudeManifest.commands),
-        defaultExistingPaths(sourceDir, ["skills", "commands"]),
-      ),
-    );
-  }
-
-  const cursorManifest = readJsonFileIfExists(path.join(sourceDir, CURSOR_BUNDLE_MANIFEST));
-  if (cursorManifest && typeof cursorManifest === "object") {
-    addPaths(
-      mergePathLists(
-        defaultExistingPaths(sourceDir, ["skills", ".cursor/commands"]),
-        normalizePathList(cursorManifest.skills),
-        normalizePathList(cursorManifest.commands),
-      ),
-    );
+  for (const entry of RUNTIME_COPY_MANIFESTS) {
+    const manifest = readJsonFileIfExists(path.join(sourceDir, entry.manifestRelativePath));
+    if (!manifest || typeof manifest !== "object") {
+      continue;
+    }
+    addPaths(entry.resolvePaths(manifest, sourceDir));
   }
 
   return new Set(resolved);
@@ -148,14 +158,14 @@ function shouldWrapRuntimeJsFile(sourcePath) {
   return path.extname(sourcePath) === ".js";
 }
 
+function hasRuntimeMetadataCopySuffix(sourcePath, relativePath) {
+  const normalizedSourcePath = sourcePath.replace(/\\/g, "/");
+  return normalizedSourcePath === relativePath || normalizedSourcePath.endsWith(`/${relativePath}`);
+}
+
 function shouldCopyRuntimeFile(sourcePath) {
-  const relativePath = sourcePath.replace(/\\/g, "/");
-  return (
-    relativePath.endsWith("/package.json") ||
-    relativePath.endsWith("/openclaw.plugin.json") ||
-    relativePath.endsWith("/.codex-plugin/plugin.json") ||
-    relativePath.endsWith("/.claude-plugin/plugin.json") ||
-    relativePath.endsWith("/.cursor-plugin/plugin.json")
+  return RUNTIME_METADATA_COPY_PATHS.some((relativePath) =>
+    hasRuntimeMetadataCopySuffix(sourcePath, relativePath),
   );
 }
 
