@@ -373,11 +373,11 @@ describe("heartbeat-wake", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(handler).not.toHaveBeenCalled();
 
-    // After 5-minute cooldown, breaker half-opens and allows one probe.
-    handler.mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    // After 5-minute cooldown, breaker half-opens and the retained wake
+    // fires as a half-open probe (pendingWakes are NOT cleared when the
+    // breaker drops an entire batch).
+    handler.mockResolvedValue({ status: "ran", durationMs: 1 });
     await vi.advanceTimersByTimeAsync(5 * 60_000);
-    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
-    await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
@@ -393,7 +393,8 @@ describe("heartbeat-wake", () => {
       await vi.advanceTimersByTimeAsync(120_000);
     }
 
-    // Breaker is tripped. Clear mock and send a new wake — it should be dropped.
+    // Breaker is tripped. Clear mock and send a new wake — it should be
+    // dropped by the breaker filter, but retained in pendingWakes.
     handler.mockClear();
     handler.mockResolvedValue({ status: "ran" as const, durationMs: 1 });
     requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
@@ -401,11 +402,10 @@ describe("heartbeat-wake", () => {
     expect(handler).not.toHaveBeenCalled();
 
     // Advance past the 5-minute cooldown. The re-scheduled timer from
-    // the "all wakes dropped" path should fire and the half-open probe
-    // should invoke the handler.
+    // the "all wakes dropped" path should fire and the retained wake
+    // should be processed as a half-open probe — no extra
+    // requestHeartbeatNow needed.
     await vi.advanceTimersByTimeAsync(5 * 60_000);
-    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
-    await vi.advanceTimersByTimeAsync(1);
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });

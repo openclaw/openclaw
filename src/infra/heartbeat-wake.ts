@@ -215,17 +215,18 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       }
       pendingBatch.push(wake);
     }
-    pendingWakes.clear();
     if (pendingBatch.length === 0) {
-      // All wakes were dropped by the breaker. Re-schedule so interval
-      // polling resumes after the earliest breaker cooldown (half-open
-      // probe). Without this, dropping all wakes permanently stalls
-      // heartbeats until an external wake source arrives.
+      // All wakes were dropped by the breaker. Keep pendingWakes intact so
+      // the half-open probe timer fires with a non-empty batch; clearing
+      // them here would leave the re-scheduled timer with nothing to
+      // process, permanently stalling heartbeats in interval-only
+      // deployments.
       if (Number.isFinite(minBreakerRemainingMs)) {
         schedule(minBreakerRemainingMs, "normal");
       }
       return;
     }
+    pendingWakes.clear();
     running = true;
     try {
       for (const pendingWake of pendingBatch) {
