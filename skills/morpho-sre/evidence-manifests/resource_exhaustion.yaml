@@ -3,6 +3,7 @@ critical:
   - pod_issues
   - prom_critical
 optional:
+  - log_signals
   - argocd_sync
   - changes_in_window
   - image_revision

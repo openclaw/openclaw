@@ -9,6 +9,7 @@ optional:
   - incident_memory
   - changes_in_window
   - config_lineage
+  - file_truncation_signature
   - replica_lag
   - pg_activity
   - pg_statements
