@@ -3,7 +3,6 @@ import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/chan
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
-import { whatsappPlugin } from "./channel.js";
 
 const loginWebMock = vi.hoisted(() => vi.fn(async () => {}));
 const pathExistsMock = vi.hoisted(() => vi.fn(async () => false));
@@ -15,13 +14,14 @@ const resolveWhatsAppAuthDirMock = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../../../src/channel-web.js", () => ({
+vi.mock("./login.js", () => ({
   loginWeb: loginWebMock,
 }));
 
-vi.mock("../../../src/utils.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../../src/utils.js")>("../../../src/utils.js");
+vi.mock("openclaw/plugin-sdk/setup", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/setup")>(
+    "openclaw/plugin-sdk/setup",
+  );
   return {
     ...actual,
     pathExists: pathExistsMock,
@@ -83,10 +83,7 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
-const whatsappConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: whatsappPlugin,
-  wizard: whatsappPlugin.setupWizard!,
-});
+let whatsappConfigureAdapter: ReturnType<typeof buildChannelSetupWizardAdapterFromSetupWizard>;
 
 async function runConfigureWithHarness(params: {
   harness: ReturnType<typeof createPrompterHarness>;
@@ -129,8 +126,14 @@ async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues
 }
 
 describe("whatsapp setup wizard", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    const { whatsappPlugin } = await import("./channel.js");
+    whatsappConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
+      plugin: whatsappPlugin,
+      wizard: whatsappPlugin.setupWizard!,
+    });
     pathExistsMock.mockResolvedValue(false);
     listWhatsAppAccountIdsMock.mockReturnValue([]);
     resolveDefaultWhatsAppAccountIdMock.mockReturnValue(DEFAULT_ACCOUNT_ID);
