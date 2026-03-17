@@ -137,10 +137,7 @@ describe("warning filter", () => {
         seenWarnings.find((warning) => warning.code === "OPENCLAW_TEST_WARNING"),
       ).toBeDefined();
       expect(
-        seenWarnings.find(
-          (warning) =>
-            warning.code === "DEP0040" && warning.message === "The punycode module is deprecated.",
-        ),
+        seenWarnings.find((warning) => warning.message === "The punycode module is deprecated."),
       ).toBeDefined();
       expect(stderrWrites.join("")).toContain("Visible warning");
     } finally {

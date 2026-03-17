@@ -34,9 +34,9 @@ Related:
 - Use fallbacks for cost/latency-sensitive tasks and lower-stakes chat.
 - For tool-enabled agents or untrusted inputs, avoid older/weaker model tiers.
 
-## Setup wizard (recommended)
+## Onboarding (recommended)
 
-If you don’t want to hand-edit config, run the setup wizard:
+If you don’t want to hand-edit config, run onboarding:
 
 ```bash
 openclaw onboard
