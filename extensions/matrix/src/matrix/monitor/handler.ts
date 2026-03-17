@@ -765,6 +765,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         CommandSource: "text" as const,
         OriginatingChannel: "matrix" as const,
         OriginatingTo: `room:${roomId}`,
+        WorkspaceOverride: route.workspaceOverride,
       });
 
       await core.channel.session.recordInboundSession({

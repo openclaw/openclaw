@@ -448,6 +448,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           CommandAuthorized: false,
           OriginatingChannel: "mattermost" as const,
           OriginatingTo: to,
+          WorkspaceOverride: route.workspaceOverride,
         });
 
         const textLimit = core.channel.text.resolveTextChunkLimit(
@@ -637,6 +638,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       CommandSource: "native" as const,
       OriginatingChannel: "mattermost" as const,
       OriginatingTo: to,
+      WorkspaceOverride: params.route.workspaceOverride,
     });
 
     const tableMode = core.channel.text.resolveMarkdownTableMode({
@@ -1340,6 +1342,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "mattermost" as const,
       OriginatingTo: to,
+      WorkspaceOverride: route.workspaceOverride,
       ...mediaPayload,
     });
 

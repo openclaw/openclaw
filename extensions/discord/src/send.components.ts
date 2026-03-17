@@ -49,6 +49,7 @@ type DiscordComponentSendOpts = {
   replyTo?: string;
   sessionKey?: string;
   agentId?: string;
+  workspaceOverride?: string;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   filename?: string;
@@ -76,6 +77,7 @@ export async function sendDiscordComponentMessage(
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
     accountId: accountInfo.accountId,
+    workspaceOverride: opts.workspaceOverride,
   });
   const flags = buildDiscordComponentMessageFlags(buildResult.components);
   const finalFlags = opts.silent

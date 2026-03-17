@@ -290,6 +290,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "bindings[].match.peer": "Binding Peer Match",
   "bindings[].match.peer.kind": "Binding Peer Kind",
   "bindings[].match.peer.id": "Binding Peer ID",
+  "bindings[].workspace": "Binding Workspace Override",
   "bindings[].match.guildId": "Binding Guild ID",
   "bindings[].match.teamId": "Binding Team ID",
   "bindings[].match.roles": "Binding Roles",

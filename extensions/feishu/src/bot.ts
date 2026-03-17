@@ -922,6 +922,7 @@ export async function handleFeishuMessage(params: {
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
+        WorkspaceOverride: route.workspaceOverride,
         GroupSystemPrompt: isGroup ? groupConfig?.systemPrompt?.trim() || undefined : undefined,
         ...mediaPayload,
       });

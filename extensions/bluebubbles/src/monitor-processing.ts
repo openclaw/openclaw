@@ -1192,6 +1192,7 @@ export async function processMessage(
     Timestamp: message.timestamp,
     OriginatingChannel: "bluebubbles",
     OriginatingTo: `bluebubbles:${outboundTarget}`,
+    WorkspaceOverride: route.workspaceOverride,
     WasMentioned: effectiveWasMentioned,
     CommandAuthorized: commandAuthorized,
   });
