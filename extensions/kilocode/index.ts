@@ -1,23 +1,20 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildKilocodeProviderWithDiscovery } from "../../src/agents/models-config.providers.discovery.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import {
   createKilocodeWrapper,
   isProxyReasoningUnsupported,
-} from "../../src/agents/pi-embedded-runner/proxy-stream-wrappers.js";
-import {
-  applyKilocodeConfig,
-  KILOCODE_DEFAULT_MODEL_REF,
-} from "../../src/commands/onboard-auth.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+} from "openclaw/plugin-sdk/provider-stream";
+import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildKilocodeProviderWithDiscovery } from "./provider-catalog.js";
 
 const PROVIDER_ID = "kilocode";
 
-const kilocodePlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Kilo Gateway Provider",
   description: "Bundled Kilo Gateway provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Kilo Gateway",
@@ -47,18 +44,12 @@ const kilocodePlugin = {
       ],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...(await buildKilocodeProviderWithDiscovery()),
-              apiKey,
-            },
-          };
-        },
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildKilocodeProviderWithDiscovery,
+          }),
       },
       capabilities: {
         geminiThoughtSignatureSanitization: true,
@@ -74,6 +65,4 @@ const kilocodePlugin = {
       isCacheTtlEligible: (ctx) => ctx.modelId.startsWith("anthropic/"),
     });
   },
-};
-
-export default kilocodePlugin;
+});
