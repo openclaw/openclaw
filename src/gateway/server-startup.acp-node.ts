@@ -37,7 +37,9 @@ export async function startAcpNodeProjectionRecovery(params: {
         createAcpDispatchDeliveryCoordinator({
           cfg: params.cfg,
           target,
-          inboundAudio: false,
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
           shouldRouteToOriginating: false,
           restartMode,
         });

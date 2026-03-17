@@ -1,11 +1,76 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpGatewayStore } from "../acp/store/store.js";
 import { createProjectionRestartHarness } from "../acp/test-harness/restart-harness.js";
 import { createAcpTestConfig } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
 import { startAcpNodeProjectionRecovery } from "./server-startup.acp-node.js";
+
+const routeMocks = vi.hoisted(() => ({
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+}));
+
+const ttsMocks = vi.hoisted(() => ({
+  maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
+    const params = paramsUnknown as { payload: unknown };
+    return params.payload;
+  }),
+}));
+
+vi.mock("../auto-reply/reply/route-reply.js", () => ({
+  routeReply: (params: unknown) => routeMocks.routeReply(params),
+}));
+
+vi.mock("../tts/tts.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+
+const zodMocks = vi.hoisted(() => {
+  const createSchema = (): unknown =>
+    new Proxy(
+      {},
+      {
+        get: (_target, prop) => {
+          if (prop === "parse") {
+            return (value: unknown) => value;
+          }
+          if (prop === "safeParse") {
+            return (value: unknown) => ({ success: true, data: value });
+          }
+          if (prop === "spa") {
+            return async (value: unknown) => ({ success: true, data: value });
+          }
+          return (..._args: unknown[]) => createSchema();
+        },
+      },
+    );
+  const z = new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "coerce") {
+          return new Proxy(
+            {},
+            {
+              get:
+                () =>
+                (..._args: unknown[]) =>
+                  createSchema(),
+            },
+          );
+        }
+        if (prop === "ZodIssueCode") {
+          return {};
+        }
+        return (..._args: unknown[]) => createSchema();
+      },
+    },
+  );
+  return { z };
+});
+
+vi.mock("zod", () => zodMocks);
 
 const tempRoots: string[] = [];
 
@@ -20,7 +85,14 @@ async function createStore() {
   };
 }
 
-async function seedTerminalRun(store: AcpGatewayStore) {
+async function seedTerminalRun(
+  store: AcpGatewayStore,
+  tts?: {
+    inboundAudio?: boolean;
+    sessionTtsAuto?: "always" | "off" | "inbound" | "tagged";
+    ttsChannel?: string;
+  },
+) {
   const lease = await store.acquireLease({
     sessionKey: "agent:main:acp:test-session",
     nodeId: "node-1",
@@ -40,6 +112,9 @@ async function seedTerminalRun(store: AcpGatewayStore) {
     channel: "telegram",
     to: "telegram:a",
     routeMode: "originating",
+    ...(typeof tts?.inboundAudio === "boolean" ? { inboundAudio: tts.inboundAudio } : {}),
+    ...(tts?.sessionTtsAuto ? { sessionTtsAuto: tts.sessionTtsAuto } : {}),
+    ...(tts?.ttsChannel ? { ttsChannel: tts.ttsChannel } : {}),
     now: 12,
   });
   await store.appendWorkerEvent({
@@ -72,6 +147,9 @@ async function seedTerminalRun(store: AcpGatewayStore) {
 }
 
 afterEach(async () => {
+  routeMocks.routeReply.mockReset();
+  routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+  ttsMocks.maybeApplyTtsToPayload.mockClear();
   await Promise.all(
     tempRoots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
   );
@@ -133,5 +211,68 @@ describe("startAcpNodeProjectionRecovery", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(secondHarness.createdInstanceIds[0]).not.toBe(firstHarness.createdInstanceIds[0]);
     expect(secondHarness.deliveries).toHaveLength(0);
+  });
+
+  it("reconstructs persisted TTS delivery context for startup replay instead of silently downgrading to text-only", async () => {
+    const { store } = await createStore();
+    await seedTerminalRun(store, {
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        kind: string;
+        payload: { text?: string };
+        ttsAuto?: string;
+        channel?: string;
+      };
+      if (params.kind === "final" && params.payload.text === "startup replay") {
+        return {
+          mediaUrl: "https://example.com/startup-final-tts.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+
+    const result = await startAcpNodeProjectionRecovery({
+      cfg: createAcpTestConfig(),
+      store,
+    });
+
+    expect(result.started).toContain("run-1:primary");
+    await vi.waitFor(() => {
+      expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    });
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:a",
+        payload: expect.objectContaining({ text: "startup replay" }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:a",
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/startup-final-tts.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        channel: "telegram",
+        ttsAuto: "always",
+        inboundAudio: false,
+        payload: expect.objectContaining({
+          text: "startup replay",
+        }),
+      }),
+    );
   });
 });

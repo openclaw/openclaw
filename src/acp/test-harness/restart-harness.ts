@@ -43,6 +43,8 @@ export function createProjectionRestartHarness() {
         },
         getBlockCount: () => 0,
         getAccumulatedBlockText: () => "",
+        resolveSyntheticFinalPayload: async () => null,
+        markSyntheticFinalDelivered: () => {},
         getRoutedCounts: () => ({ tool: 0, block: 0, final: 0 }),
         applyRoutedCounts: () => {},
       };

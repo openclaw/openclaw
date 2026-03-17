@@ -309,6 +309,9 @@ export class AcpGatewayStore {
     threadId?: string | number;
     routeMode: "originating" | "session";
     toolReplayPolicy?: "append_only_after_restart";
+    inboundAudio?: boolean;
+    sessionTtsAuto?: "always" | "off" | "inbound" | "tagged";
+    ttsChannel?: string;
     isGroup?: boolean;
     groupId?: string;
     now?: number;
@@ -344,6 +347,9 @@ export class AcpGatewayStore {
         ...(params.threadId != null ? { threadId: params.threadId } : {}),
         routeMode: params.routeMode,
         toolReplayPolicy: params.toolReplayPolicy ?? "append_only_after_restart",
+        ...(typeof params.inboundAudio === "boolean" ? { inboundAudio: params.inboundAudio } : {}),
+        ...(params.sessionTtsAuto ? { sessionTtsAuto: params.sessionTtsAuto } : {}),
+        ...(params.ttsChannel ? { ttsChannel: params.ttsChannel } : {}),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
         ...(typeof params.isGroup === "boolean" ? { isGroup: params.isGroup } : {}),

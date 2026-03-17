@@ -22,7 +22,6 @@ import {
   normalizeAttachments,
 } from "../../media-understanding/attachments.normalize.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { maybeApplyTtsToPayload, resolveTtsConfig } from "../../tts/tts.js";
 import {
   isCommandEnabled,
   maybeResolveTextAlias,
@@ -263,6 +262,9 @@ export async function tryDispatchAcpReply(params: {
         sessionKey,
         runId: requestId,
         ctx: params.ctx,
+        inboundAudio: params.inboundAudio,
+        sessionTtsAuto: params.sessionTtsAuto,
+        ttsChannel: params.ttsChannel,
         shouldRouteToOriginating: params.shouldRouteToOriginating,
         originatingChannel: params.originatingChannel,
         originatingTo: params.originatingTo,
@@ -340,6 +342,11 @@ export async function tryDispatchAcpReply(params: {
         ...(durableTarget.threadId != null ? { threadId: durableTarget.threadId } : {}),
         routeMode: durableTarget.routeMode,
         toolReplayPolicy: durableTarget.toolReplayPolicy,
+        ...(typeof durableTarget.inboundAudio === "boolean"
+          ? { inboundAudio: durableTarget.inboundAudio }
+          : {}),
+        ...(durableTarget.sessionTtsAuto ? { sessionTtsAuto: durableTarget.sessionTtsAuto } : {}),
+        ...(durableTarget.ttsChannel ? { ttsChannel: durableTarget.ttsChannel } : {}),
         ...(typeof durableTarget.isGroup === "boolean" ? { isGroup: durableTarget.isGroup } : {}),
         ...(durableTarget.groupId ? { groupId: durableTarget.groupId } : {}),
       });
@@ -404,30 +411,19 @@ export async function tryDispatchAcpReply(params: {
 
       await projector.flush(true);
     }
-    const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
-    const accumulatedBlockText = delivery.getAccumulatedBlockText();
-    if (ttsMode === "final" && delivery.getBlockCount() > 0 && accumulatedBlockText.trim()) {
-      try {
-        const ttsSyntheticReply = await maybeApplyTtsToPayload({
-          payload: { text: accumulatedBlockText },
-          cfg: params.cfg,
-          channel: params.ttsChannel,
-          kind: "final",
-          inboundAudio: params.inboundAudio,
-          ttsAuto: params.sessionTtsAuto,
-        });
-        if (ttsSyntheticReply.mediaUrl) {
-          const delivered = await delivery.deliver("final", {
-            mediaUrl: ttsSyntheticReply.mediaUrl,
-            audioAsVoice: ttsSyntheticReply.audioAsVoice,
-          });
-          queuedFinal = queuedFinal || delivered;
+    try {
+      const ttsSyntheticReply = await delivery.resolveSyntheticFinalPayload();
+      if (ttsSyntheticReply) {
+        const delivered = await delivery.deliver("final", ttsSyntheticReply);
+        if (delivered) {
+          delivery.markSyntheticFinalDelivered();
         }
-      } catch (err) {
-        logVerbose(
-          `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        queuedFinal = queuedFinal || delivered;
       }
+    } catch (err) {
+      logVerbose(
+        `dispatch-acp: accumulated ACP block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     if (shouldEmitResolvedIdentityNotice) {
@@ -452,6 +448,7 @@ export async function tryDispatchAcpReply(params: {
 
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
+    queuedFinal = queuedFinal || counts.final > 0;
     const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
     logVerbose(
       `acp-dispatch: session=${sessionKey} outcome=ok latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
@@ -473,6 +470,7 @@ export async function tryDispatchAcpReply(params: {
     queuedFinal = queuedFinal || delivered;
     const counts = params.dispatcher.getQueuedCounts();
     delivery.applyRoutedCounts(counts);
+    queuedFinal = queuedFinal || counts.final > 0;
     const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
     logVerbose(
       `acp-dispatch: session=${sessionKey} outcome=error code=${acpError.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,

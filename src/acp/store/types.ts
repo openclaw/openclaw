@@ -1,3 +1,4 @@
+import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { AcpRuntimeEvent } from "../runtime/types.js";
 
 export type AcpGatewaySessionState = "idle" | "running" | "recovering";
@@ -122,6 +123,9 @@ export type AcpGatewayRunDeliveryTargetRecord = {
   threadId?: string | number;
   routeMode: "originating" | "session";
   toolReplayPolicy: "append_only_after_restart";
+  inboundAudio?: boolean;
+  sessionTtsAuto?: TtsAutoMode;
+  ttsChannel?: string;
   createdAt: number;
   updatedAt: number;
   isGroup?: boolean;

@@ -243,6 +243,9 @@ async function runDispatch(params: {
   shouldRouteToOriginating?: boolean;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
+  inboundAudio?: boolean;
+  sessionTtsAuto?: "always" | "off" | "inbound" | "tagged";
+  ttsChannel?: string;
 }) {
   return tryDispatchAcpReply({
     ctx: buildTestCtx({
@@ -255,7 +258,9 @@ async function runDispatch(params: {
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     sessionKey,
-    inboundAudio: false,
+    inboundAudio: params.inboundAudio ?? false,
+    ...(params.sessionTtsAuto ? { sessionTtsAuto: params.sessionTtsAuto } : {}),
+    ...(params.ttsChannel ? { ttsChannel: params.ttsChannel } : {}),
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
       ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
@@ -472,6 +477,8 @@ describe("tryDispatchAcpReply", () => {
 
     await runDispatch({
       bodyForAgent: "reply from durable path",
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
       shouldRouteToOriginating: true,
       ctxOverrides: {
         OriginatingChannel: "telegram",
@@ -489,6 +496,8 @@ describe("tryDispatchAcpReply", () => {
         channel: "telegram",
         to: "telegram:thread-1",
         routeMode: "originating",
+        sessionTtsAuto: "always",
+        ttsChannel: "telegram",
       }),
     );
     expect(projectionServiceMocks.ensureProjection).toHaveBeenCalledTimes(1);

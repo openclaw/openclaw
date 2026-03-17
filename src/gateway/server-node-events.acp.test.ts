@@ -45,12 +45,22 @@ vi.mock("../infra/push-apns.js", () => ({
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
-vi.mock("../routing/session-key.js", () => ({
-  normalizeMainKey: vi.fn((value: string) => value),
-  scopedHeartbeatWakeOptions: vi.fn(() => undefined),
-}));
+vi.mock("../routing/session-key.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../routing/session-key.js")>();
+  return {
+    ...actual,
+    normalizeMainKey: vi.fn((value: string) => value),
+    scopedHeartbeatWakeOptions: vi.fn(() => undefined),
+  };
+});
 vi.mock("../runtime.js", () => ({
   defaultRuntime: {},
+}));
+vi.mock("../tts/tts.js", () => ({
+  maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
+    const params = paramsUnknown as { payload: unknown };
+    return params.payload;
+  }),
 }));
 vi.mock("./chat-attachments.js", () => ({
   parseMessageWithAttachments: vi.fn(async () => ({ message: "", images: [] })),
@@ -65,6 +75,52 @@ vi.mock("./session-utils.js", () => ({
 vi.mock("./ws-log.js", () => ({
   formatForLog: vi.fn((value: unknown) => String(value)),
 }));
+
+const zodMocks = vi.hoisted(() => {
+  const createSchema = (): unknown =>
+    new Proxy(
+      {},
+      {
+        get: (_target, prop) => {
+          if (prop === "parse") {
+            return (value: unknown) => value;
+          }
+          if (prop === "safeParse") {
+            return (value: unknown) => ({ success: true, data: value });
+          }
+          if (prop === "spa") {
+            return async (value: unknown) => ({ success: true, data: value });
+          }
+          return (..._args: unknown[]) => createSchema();
+        },
+      },
+    );
+  const z = new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "coerce") {
+          return new Proxy(
+            {},
+            {
+              get:
+                () =>
+                (..._args: unknown[]) =>
+                  createSchema(),
+            },
+          );
+        }
+        if (prop === "ZodIssueCode") {
+          return {};
+        }
+        return (..._args: unknown[]) => createSchema();
+      },
+    },
+  );
+  return { z };
+});
+
+vi.mock("zod", () => zodMocks);
 
 const { AcpGatewayNodeRuntime, __testing: acpGatewayTesting } =
   await import("../acp/store/gateway-events.js");

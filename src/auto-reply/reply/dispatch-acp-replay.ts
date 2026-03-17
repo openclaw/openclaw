@@ -182,6 +182,18 @@ class AcpDurableProjectionRunner {
             ...(state.run.terminal.stopReason ? { stopReason: state.run.terminal.stopReason } : {}),
           });
         }
+        await this.deliverSyntheticFinalTts({
+          coordinator,
+          deliveredEffectCountRef: () => deliveredEffectCount,
+          incrementDeliveredEffectCount: () => {
+            deliveredEffectCount += 1;
+          },
+          skipRemainingRef: () => skipRemaining,
+          decrementSkipRemaining: () => {
+            skipRemaining -= 1;
+          },
+          cursorSeq: currentCursorSeq,
+        });
         terminalProjected = true;
         lastKnownTerminalId = state.run.terminal.terminalEventId;
       }
@@ -235,6 +247,38 @@ class AcpDurableProjectionRunner {
       sessionKey: params.target.sessionKey,
       runId: params.target.runId,
       targetId: params.target.targetId,
+      cursorSeq: params.cursorSeq,
+      deliveredEffectCount: params.deliveredEffectCountRef(),
+    });
+  }
+
+  private async deliverSyntheticFinalTts(params: {
+    coordinator: AcpDispatchDeliveryCoordinator;
+    deliveredEffectCountRef: () => number;
+    incrementDeliveredEffectCount: () => void;
+    skipRemainingRef: () => number;
+    decrementSkipRemaining: () => void;
+    cursorSeq: number;
+  }): Promise<void> {
+    const syntheticFinalPayload = await params.coordinator.resolveSyntheticFinalPayload();
+    if (!syntheticFinalPayload) {
+      return;
+    }
+    params.incrementDeliveredEffectCount();
+    if (params.skipRemainingRef() > 0) {
+      params.coordinator.markSyntheticFinalDelivered();
+      params.decrementSkipRemaining();
+      return;
+    }
+    const delivered = await params.coordinator.deliver("final", syntheticFinalPayload);
+    if (!delivered) {
+      throw new Error("ACP durable final-TTS delivery failed.");
+    }
+    params.coordinator.markSyntheticFinalDelivered();
+    await this.params.store.recordProjectorCheckpoint({
+      sessionKey: this.params.target.sessionKey,
+      runId: this.params.target.runId,
+      targetId: this.params.target.targetId,
       cursorSeq: params.cursorSeq,
       deliveredEffectCount: params.deliveredEffectCountRef(),
     });

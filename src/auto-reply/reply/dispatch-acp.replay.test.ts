@@ -94,6 +94,9 @@ async function seedTerminalRun(params: {
   text: string;
   now: number;
   terminalKind?: "completed" | "failed";
+  inboundAudio?: boolean;
+  sessionTtsAuto?: "always" | "off" | "inbound" | "tagged";
+  ttsChannel?: string;
 }) {
   const lease = await params.store.acquireLease({
     sessionKey: params.sessionKey,
@@ -114,6 +117,9 @@ async function seedTerminalRun(params: {
     channel: params.channel,
     to: params.to,
     routeMode: params.routeMode ?? "originating",
+    ...(typeof params.inboundAudio === "boolean" ? { inboundAudio: params.inboundAudio } : {}),
+    ...(params.sessionTtsAuto ? { sessionTtsAuto: params.sessionTtsAuto } : {}),
+    ...(params.ttsChannel ? { ttsChannel: params.ttsChannel } : {}),
     now: params.now + 2,
   });
   await params.store.appendWorkerEvent({
@@ -413,6 +419,101 @@ describe("AcpDurableProjectionService", () => {
       runId: "run-session-replay",
       cursorSeq: 1,
       deliveredEffectCount: 1,
+    });
+  });
+
+  it("preserves final-mode TTS parity across restart when the durable target carries replay context", async () => {
+    const store = await createStore();
+    await seedTerminalRun({
+      store,
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-final-tts",
+      channel: "telegram",
+      to: "telegram:thread-tts",
+      text: "restart replay should synthesize final audio",
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+      now: 10,
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        kind: string;
+        payload: { text?: string };
+        ttsAuto?: string;
+        channel?: string;
+      };
+      if (
+        params.kind === "final" &&
+        params.payload.text === "restart replay should synthesize final audio"
+      ) {
+        return {
+          mediaUrl: "https://example.com/restart-final-tts.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+
+    const cfg = createAcpTestConfig();
+    const service = new AcpDurableProjectionService({
+      store,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    await service.ensureProjection({
+      cfg,
+      target: (await store.getRunDeliveryTarget("run-final-tts", "primary"))!,
+      shouldSendToolSummaries: true,
+      restartMode: true,
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-tts",
+        payload: expect.objectContaining({
+          text: "restart replay should synthesize final audio",
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-tts",
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/restart-final-tts.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        channel: "telegram",
+        ttsAuto: "always",
+        inboundAudio: false,
+        payload: expect.objectContaining({
+          text: "restart replay should synthesize final audio",
+        }),
+      }),
+    );
+    expect(await store.getCheckpoint("projector:run-final-tts:primary")).toMatchObject({
+      runId: "run-final-tts",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
     });
   });
 });
