@@ -3,12 +3,12 @@ import {
   createScopedAccountConfigAccessors,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
   getChatChannelMeta,
   normalizeAccountId,
   TelegramConfigSchema,
-  type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/telegram";
 import { inspectTelegramAccount } from "./account-inspect.js";

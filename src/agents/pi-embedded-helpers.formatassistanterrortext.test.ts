@@ -35,6 +35,12 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
+  it("returns context overflow for Ollama 'prompt too long' errors (#34005)", () => {
+    const msg = makeAssistantError(
+      'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}',
+    );
+    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
   it("returns a reasoning-required message for mandatory reasoning endpoint errors", () => {
     const msg = makeAssistantError(
       "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
