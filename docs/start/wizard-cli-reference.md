@@ -10,7 +10,7 @@ sidebarTitle: "CLI reference"
 # CLI Setup Reference
 
 This page is the full reference for `openclaw onboard`.
-For the short guide, see [Setup Wizard (CLI)](/start/wizard).
+For the short guide, see [Onboarding (CLI)](/start/wizard).
 
 ## What the wizard does
 
@@ -294,6 +294,6 @@ Signal setup behavior:
 
 ## Related docs
 
-- Onboarding hub: [Setup Wizard (CLI)](/start/wizard)
+- Onboarding hub: [Onboarding (CLI)](/start/wizard)
 - Automation and scripts: [CLI Automation](/start/wizard-cli-automation)
 - Command reference: [`openclaw onboard`](/cli/onboard)

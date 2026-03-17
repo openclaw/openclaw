@@ -396,7 +396,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/unset/file/validate). Run without subcommand for the setup wizard.",
+      "Non-interactive config helpers (get/set/unset/file/validate). Run without subcommand for guided setup.",
     )
     .addHelpText(
       "after",
@@ -405,7 +405,7 @@ export function registerConfigCli(program: Command) {
     )
     .option(
       "--section <section>",
-      "Configure wizard sections (repeatable). Use with no subcommand.",
+      "Configuration sections for guided setup (repeatable). Use with no subcommand.",
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )

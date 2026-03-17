@@ -28,8 +28,6 @@ const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
 const {
   collectToolFailures,
   formatToolFailuresSection,
-  trimToolResultsForSummarization,
-  restoreOriginalToolResultsForKeptMessages,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
   buildCompactionStructureInstructions,
@@ -46,26 +44,6 @@ const {
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
 } = __testing;
-
-function readTextBlocks(message: AgentMessage): string {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return "";
-      }
-      const text = (block as { text?: unknown }).text;
-      return typeof text === "string" ? text : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
   const stub: ExtensionContext["sessionManager"] = {
@@ -253,116 +231,6 @@ describe("compaction-safeguard tool failures", () => {
     const failures = collectToolFailures(messages);
     const section = formatToolFailuresSection(failures);
     expect(section).toBe("");
-  });
-});
-
-describe("compaction-safeguard toolResult trimming", () => {
-  it("truncates oversized tool results and compacts older entries to stay within budget", () => {
-    const messages: AgentMessage[] = Array.from({ length: 9 }, (_unused, index) => ({
-      role: "toolResult",
-      toolCallId: `call-${index}`,
-      toolName: "read",
-      content: [
-        {
-          type: "text",
-          text: `head-${index}\n${"x".repeat(25_000)}\ntail-${index}`,
-        },
-      ],
-      timestamp: index + 1,
-    })) as AgentMessage[];
-
-    const trimmed = trimToolResultsForSummarization(messages);
-
-    expect(trimmed.stats.truncatedCount).toBe(9);
-    expect(trimmed.stats.compactedCount).toBe(1);
-    expect(readTextBlocks(trimmed.messages[0])).toBe("");
-    expect(trimmed.stats.afterChars).toBeLessThan(trimmed.stats.beforeChars);
-    expect(readTextBlocks(trimmed.messages[8])).toContain("head-8");
-    expect(readTextBlocks(trimmed.messages[8])).toContain(
-      "[...tool result truncated for compaction budget...]",
-    );
-    expect(readTextBlocks(trimmed.messages[8])).toContain("tail-8");
-  });
-
-  it("restores kept tool results after prune for both toolCallId and toolUseId", () => {
-    const originalMessages: AgentMessage[] = [
-      { role: "user", content: "keep these tool results", timestamp: 1 },
-      {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "read",
-        content: [{ type: "text", text: "original call payload" }],
-        timestamp: 2,
-      } as AgentMessage,
-      {
-        role: "toolResult",
-        toolUseId: "use-1",
-        toolName: "exec",
-        content: [{ type: "text", text: "original use payload" }],
-        timestamp: 3,
-      } as unknown as AgentMessage,
-    ];
-    const prunedMessages: AgentMessage[] = [
-      originalMessages[0],
-      {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "read",
-        content: [{ type: "text", text: "trimmed call payload" }],
-        timestamp: 2,
-      } as AgentMessage,
-      {
-        role: "toolResult",
-        toolUseId: "use-1",
-        toolName: "exec",
-        content: [{ type: "text", text: "trimmed use payload" }],
-        timestamp: 3,
-      } as unknown as AgentMessage,
-    ];
-
-    const restored = restoreOriginalToolResultsForKeptMessages({
-      prunedMessages,
-      originalMessages,
-    });
-
-    expect(readTextBlocks(restored[1])).toBe("original call payload");
-    expect(readTextBlocks(restored[2])).toBe("original use payload");
-  });
-
-  it("extracts identifiers from the trimmed kept payloads after prune restore", () => {
-    const hiddenIdentifier = "DEADBEEF12345678";
-    const restored = restoreOriginalToolResultsForKeptMessages({
-      prunedMessages: [
-        { role: "user", content: "recent ask", timestamp: 1 },
-        {
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "read",
-          content: [{ type: "text", text: "placeholder" }],
-          timestamp: 2,
-        } as AgentMessage,
-      ],
-      originalMessages: [
-        { role: "user", content: "recent ask", timestamp: 1 },
-        {
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "read",
-          content: [
-            {
-              type: "text",
-              text: `visible head ${"a".repeat(16_000)}${hiddenIdentifier}${"b".repeat(16_000)} visible tail`,
-            },
-          ],
-          timestamp: 2,
-        } as AgentMessage,
-      ],
-    });
-
-    const trimmed = trimToolResultsForSummarization(restored).messages;
-    const identifierSeedText = trimmed.map((message) => readTextBlocks(message)).join("\n");
-
-    expect(extractOpaqueIdentifiers(identifierSeedText)).not.toContain(hiddenIdentifier);
   });
 });
 

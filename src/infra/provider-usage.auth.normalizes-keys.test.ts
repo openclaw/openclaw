@@ -50,6 +50,13 @@ describe("resolveProviderAuths key normalization", () => {
 
     process.env.HOME = base;
     process.env.USERPROFILE = base;
+    if (process.platform === "win32") {
+      const match = base.match(/^([A-Za-z]:)(.*)$/);
+      if (match) {
+        process.env.HOMEDRIVE = match[1];
+        process.env.HOMEPATH = match[2] || "\\";
+      }
+    }
     delete process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_STATE_DIR = path.join(base, ".openclaw");
     for (const [key, value] of Object.entries(env)) {

@@ -324,22 +324,22 @@ openclaw [--dev] [--profile <name>] <command>
 选项：
 
 - `--workspace <dir>`：智能体工作区路径（默认 `~/.openclaw/workspace`）。
-- `--wizard`：运行设置向导。
-- `--non-interactive`：无提示运行向导。
-- `--mode <local|remote>`：向导模式。
+- `--wizard`：运行新手引导。
+- `--non-interactive`：无提示运行新手引导。
+- `--mode <local|remote>`：新手引导模式。
 - `--remote-url <url>`：远程 Gateway 网关 URL。
 - `--remote-token <token>`：远程 Gateway 网关 token。
 
-只要存在任意向导标志（`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`），就会自动运行向导。
+只要存在任意新手引导标志（`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`），就会自动运行新手引导。
 
 ### `onboard`
 
-用于设置 gateway、工作区和 Skills 的交互式向导。
+用于设置 gateway、工作区和 Skills 的交互式新手引导。
 
 选项：
 
 - `--workspace <dir>`
-- `--reset`（在运行向导前重置配置 + 凭据 + 会话）
+- `--reset`（在运行新手引导前重置配置 + 凭据 + 会话）
 - `--reset-scope <config|config+creds+sessions|full>`（默认 `config+creds+sessions`；使用 `full` 还会删除工作区）
 - `--non-interactive`
 - `--mode <local|remote>`
