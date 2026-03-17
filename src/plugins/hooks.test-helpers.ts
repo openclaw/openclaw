@@ -14,13 +14,18 @@ export function createMockPluginRegistry(
       source: "test",
     })),
     tools: [],
+    channels: [],
+    channelSetups: [],
+    providers: [],
+    speechProviders: [],
+    mediaUnderstandingProviders: [],
+    webSearchProviders: [],
     httpRoutes: [],
-    channelRegistrations: [],
     gatewayHandlers: {},
     cliRegistrars: [],
     services: [],
-    providers: [],
     commands: [],
+    diagnostics: [],
   } as unknown as PluginRegistry;
 }
 

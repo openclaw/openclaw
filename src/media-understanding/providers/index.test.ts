@@ -67,4 +67,27 @@ describe("media-understanding provider registry", () => {
     expect([...registry.keys()]).toEqual([]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
+
+  it("merges plugin-registered media providers into the active registry", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "Google Plugin",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image", "audio", "video"],
+        describeImage: async () => ({ text: "plugin image" }),
+        transcribeAudio: async () => ({ text: "plugin audio" }),
+        describeVideo: async () => ({ text: "plugin video" }),
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = getMediaUnderstandingProvider("gemini", registry);
+
+    expect(provider?.id).toBe("google");
+    expect(await provider?.describeVideo?.({} as never)).toEqual({ text: "plugin video" });
+  });
 });
