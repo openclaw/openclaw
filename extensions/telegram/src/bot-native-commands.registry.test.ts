@@ -17,6 +17,38 @@ import {
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
 
+function registerPairPluginCommand(params?: {
+  nativeNames?: { telegram?: string; discord?: string };
+}) {
+  expect(
+    registerPluginCommand("demo-plugin", {
+      name: "pair",
+      ...(params?.nativeNames ? { nativeNames: params.nativeNames } : {}),
+      description: "Pair device",
+      acceptsArgs: true,
+      requireAuth: false,
+      handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
+    }),
+  ).toEqual({ ok: true });
+}
+
+async function registerPairMenu(params: {
+  bot: ReturnType<typeof createCommandBot>["bot"];
+  setMyCommands: ReturnType<typeof createCommandBot>["setMyCommands"];
+  nativeNames?: { telegram?: string; discord?: string };
+}) {
+  registerPairPluginCommand({
+    ...(params.nativeNames ? { nativeNames: params.nativeNames } : {}),
+  });
+
+  registerTelegramNativeCommands({
+    ...createNativeCommandTestParams({}),
+    bot: params.bot,
+  });
+
+  return await waitForRegisteredCommands(params.setMyCommands);
+}
+
 describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeEach(() => {
     clearPluginCommands();
@@ -31,22 +63,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   it("registers and executes plugin commands through the real plugin registry", async () => {
     const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
 
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "pair",
-        description: "Pair device",
-        acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}),
-      bot,
-    });
-
-    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    const registeredCommands = await registerPairMenu({ bot, setMyCommands });
     expect(registeredCommands).toEqual(
       expect.arrayContaining([{ command: "pair", description: "Pair device" }]),
     );
@@ -67,26 +84,14 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   it("round-trips Telegram native aliases through the real plugin registry", async () => {
     const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
 
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "pair",
-        nativeNames: {
-          telegram: "pair_device",
-          discord: "pairdiscord",
-        },
-        description: "Pair device",
-        acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}),
+    const registeredCommands = await registerPairMenu({
       bot,
+      setMyCommands,
+      nativeNames: {
+        telegram: "pair_device",
+        discord: "pairdiscord",
+      },
     });
-
-    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toEqual(
       expect.arrayContaining([{ command: "pair_device", description: "Pair device" }]),
     );
@@ -107,15 +112,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   it("keeps real plugin command handlers available when native menu registration is disabled", () => {
     const { bot, commandHandlers, setMyCommands } = createCommandBot();
 
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "pair",
-        description: "Pair device",
-        acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
+    registerPairPluginCommand();
 
     registerTelegramNativeCommands({
       ...createNativeCommandTestParams({}, { accountId: "default" }),
@@ -130,15 +127,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   it("allows requireAuth:false plugin commands for unauthorized senders through the real registry", async () => {
     const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
 
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "pair",
-        description: "Pair device",
-        acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
+    registerPairPluginCommand();
 
     registerTelegramNativeCommands({
       ...createNativeCommandTestParams({
