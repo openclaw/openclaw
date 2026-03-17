@@ -33,6 +33,7 @@ import {
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
+import { READ_SCOPE } from "../../method-scopes.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -506,9 +507,12 @@ export function attachGatewayWsMessageHandler(params: {
           });
           close(1008, truncateCloseReason(authMessage));
         };
-        const clearUnboundScopes = () => {
-          if (scopes.length > 0) {
-            scopes = [];
+        const clearUnboundScopes = (grantDefaultForTokenAuth = false) => {
+          if (scopes.length > 0 || grantDefaultForTokenAuth) {
+            // When shared token/password auth succeeds for device-less operator, grant
+            // operator.read instead of zero scopes so CLI/Dashboard can run read RPCs
+            // (devices list, status, probe, etc.). Fixes #48167, #46117, #46716, #17095.
+            scopes = grantDefaultForTokenAuth ? [READ_SCOPE] : [];
             connectParams.scopes = scopes;
           }
         };
@@ -531,11 +535,19 @@ export function attachGatewayWsMessageHandler(params: {
             hasSharedAuth,
             isLocalClient,
           });
-          // Shared token/password auth can bypass pairing for trusted operators.
-          // Device-less clients only keep self-declared scopes on the explicit
-          // allow path, including trusted token-authenticated backend operators.
-          if (!device && decision.kind !== "allow") {
-            clearUnboundScopes();
+          // Shared token/password auth can bypass pairing for trusted operators, but
+          // device-less backend clients must not self-declare scopes. Control UI
+          // keeps its explicitly allowed device-less scopes on the allow path.
+          // When allowing device-less token auth, grant operator.read so read RPCs work.
+          // Restrict read-scope fallback to token/password auth only; trusted-proxy
+          // sessions must not gain read scope without a bound device identity.
+          const grantReadForTokenAuth =
+            decision.kind === "allow" &&
+            sharedAuthOk &&
+            (authMethod === "token" || authMethod === "password");
+          if (!device && (!isControlUi || decision.kind !== "allow" || trustedProxyAuthOk)) {
+            clearUnboundScopes(grantReadForTokenAuth);
+          }
           }
           if (decision.kind === "allow") {
             return true;

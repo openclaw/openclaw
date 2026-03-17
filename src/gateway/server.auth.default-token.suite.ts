@@ -178,13 +178,14 @@ export function registerDefaultAuthTokenSuite(): void {
         expectConnectError?: string;
         expectStatusOk?: boolean;
         expectStatusError?: string;
+        expectAdminRestricted?: boolean;
       }> = [
         {
-          name: "operator + valid shared token => connected with cleared scopes",
+          name: "operator + valid shared token => connected with operator.read (fixes #48167)",
           opts: { role: "operator", token, device: null },
           expectConnectOk: true,
-          expectStatusOk: false,
-          expectStatusError: "missing scope",
+          expectStatusOk: true,
+          expectAdminRestricted: true,
         },
         {
           name: "node + valid shared token => rejected without device",
@@ -219,6 +220,13 @@ export function registerDefaultAuthTokenSuite(): void {
                 scenario.expectStatusError,
               );
             }
+          }
+          if (scenario.expectAdminRestricted) {
+            const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
+            expect(adminRes.ok, scenario.name).toBe(false);
+            expect(adminRes.error?.message ?? "", scenario.name).toContain(
+              "missing scope: operator.admin",
+            );
           }
         } finally {
           ws.close();
