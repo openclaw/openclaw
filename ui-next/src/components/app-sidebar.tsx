@@ -24,6 +24,7 @@ import {
   TrendingUp,
   Zap,
   Terminal,
+  Wand2,
 } from "lucide-react";
 import * as React from "react";
 import { NavMain } from "@/components/nav-main";
@@ -40,6 +41,14 @@ import {
 } from "@/components/ui/sidebar";
 
 const navData = {
+  setup: [
+    {
+      title: "Setup Wizard",
+      url: "/onboarding",
+      icon: Wand2,
+      subtitle: "Initial setup and configuration",
+    },
+  ],
   chat: [
     {
       title: "Chat",
@@ -285,6 +294,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
+        <NavMain label="Setup" items={navData.setup} />
         <NavMain label="Chat" items={navData.chat} />
         <NavMain label="Control" items={navData.control} defaultOpen />
         <NavMain label="Agent" items={navData.agent} />

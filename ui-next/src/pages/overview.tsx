@@ -13,6 +13,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { ConnectionStatus } from "@/components/ui/custom/status/connection-status";
 import { StatCard } from "@/components/ui/custom/status/stat-card";
 import { useGateway } from "@/hooks/use-gateway";
@@ -156,6 +157,25 @@ export function OverviewPage() {
 
   const isConnected = connectionStatus === "connected";
   const features = hello?.features;
+  const navigate = useNavigate();
+
+  // Auto-redirect to onboarding wizard on fresh installs
+  useEffect(() => {
+    if (!isConnected) {
+      return;
+    }
+    const checkOnboarding = async () => {
+      try {
+        const result = await sendRpc<{ status: string }>("onboarding.status");
+        if (result.status === "pending") {
+          void navigate("/onboarding", { replace: true });
+        }
+      } catch {
+        // Gateway doesn't support onboarding — skip redirect
+      }
+    };
+    void checkOnboarding();
+  }, [isConnected, sendRpc, navigate]);
 
   // --- Gateway Access form state ---
   const [settings, setSettings] = useState(() => loadSettings());

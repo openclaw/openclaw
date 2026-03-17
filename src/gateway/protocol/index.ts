@@ -277,6 +277,14 @@ import {
   StateSettingsSetParamsSchema,
   StateAuditParamsSchema,
   StateExportParamsSchema,
+  OnboardingStatusParamsSchema,
+  type OnboardingUpdateParams,
+  OnboardingUpdateParamsSchema,
+  OnboardingCompleteParamsSchema,
+  OnboardingSkipParamsSchema,
+  OnboardingResetParamsSchema,
+  type OnboardingValidatePathParams,
+  OnboardingValidatePathParamsSchema,
 } from "./schema.js";
 
 const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
@@ -517,6 +525,24 @@ export const validateStateAuditParams =
   ajv.compile<Static<typeof StateAuditParamsSchema>>(StateAuditParamsSchema);
 export const validateStateExportParams =
   ajv.compile<Static<typeof StateExportParamsSchema>>(StateExportParamsSchema);
+export const validateOnboardingStatusParams = ajv.compile<
+  Static<typeof OnboardingStatusParamsSchema>
+>(OnboardingStatusParamsSchema);
+export const validateOnboardingUpdateParams = ajv.compile<OnboardingUpdateParams>(
+  OnboardingUpdateParamsSchema,
+);
+export const validateOnboardingCompleteParams = ajv.compile<
+  Static<typeof OnboardingCompleteParamsSchema>
+>(OnboardingCompleteParamsSchema);
+export const validateOnboardingSkipParams = ajv.compile<Static<typeof OnboardingSkipParamsSchema>>(
+  OnboardingSkipParamsSchema,
+);
+export const validateOnboardingResetParams = ajv.compile<
+  Static<typeof OnboardingResetParamsSchema>
+>(OnboardingResetParamsSchema);
+export const validateOnboardingValidatePathParams = ajv.compile<OnboardingValidatePathParams>(
+  OnboardingValidatePathParamsSchema,
+);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {
@@ -658,6 +684,12 @@ export {
   PROTOCOL_VERSION,
   ErrorCodes,
   errorShape,
+  OnboardingStatusParamsSchema,
+  OnboardingUpdateParamsSchema,
+  OnboardingCompleteParamsSchema,
+  OnboardingSkipParamsSchema,
+  OnboardingResetParamsSchema,
+  OnboardingValidatePathParamsSchema,
 };
 
 export type {
@@ -766,4 +798,6 @@ export type {
   PollParams,
   UpdateRunParams,
   ChatInjectParams,
+  OnboardingUpdateParams,
+  OnboardingValidatePathParams,
 };

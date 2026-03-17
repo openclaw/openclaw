@@ -209,6 +209,13 @@ const BASE_METHODS = [
   "personas.search",
   "personas.expand",
   "personas.apply",
+  // Onboarding wizard
+  "onboarding.status",
+  "onboarding.update",
+  "onboarding.complete",
+  "onboarding.skip",
+  "onboarding.reset",
+  "onboarding.validatePath",
   // State DB introspection
   "state.info",
   "state.tables",

@@ -26,6 +26,7 @@ import { memoryDashboardHandlers } from "./server-methods/memory-dashboard.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
+import { onboardingHandlers } from "./server-methods/onboarding.js";
 import { personasHandlers } from "./server-methods/personas.js";
 import { projectsHandlers } from "./server-methods/projects.js";
 import { pushHandlers } from "./server-methods/push.js";
@@ -117,6 +118,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...commandsHandlers,
   ...stateHandlers,
   ...personasHandlers,
+  ...onboardingHandlers,
 };
 
 export async function handleGatewayRequest(
