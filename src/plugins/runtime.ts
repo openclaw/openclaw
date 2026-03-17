@@ -4,6 +4,8 @@ const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type RegistryState = {
   registry: PluginRegistry | null;
+  channelRegistry: PluginRegistry | null;
+  channelRegistryPinned: boolean;
   httpRouteRegistry: PluginRegistry | null;
   httpRouteRegistryPinned: boolean;
   key: string | null;
@@ -17,6 +19,8 @@ const state: RegistryState = (() => {
   if (!globalState[REGISTRY_STATE]) {
     globalState[REGISTRY_STATE] = {
       registry: createEmptyPluginRegistry(),
+      channelRegistry: null,
+      channelRegistryPinned: false,
       httpRouteRegistry: null,
       httpRouteRegistryPinned: false,
       key: null,
@@ -28,6 +32,9 @@ const state: RegistryState = (() => {
 
 export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
   state.registry = registry;
+  if (!state.channelRegistryPinned) {
+    state.channelRegistry = registry;
+  }
   if (!state.httpRouteRegistryPinned) {
     state.httpRouteRegistry = registry;
   }
@@ -42,12 +49,42 @@ export function getActivePluginRegistry(): PluginRegistry | null {
 export function requireActivePluginRegistry(): PluginRegistry {
   if (!state.registry) {
     state.registry = createEmptyPluginRegistry();
+    if (!state.channelRegistryPinned) {
+      state.channelRegistry = state.registry;
+    }
     if (!state.httpRouteRegistryPinned) {
       state.httpRouteRegistry = state.registry;
     }
     state.version += 1;
   }
   return state.registry;
+}
+
+export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
+  state.channelRegistry = registry;
+  state.channelRegistryPinned = true;
+}
+
+export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
+  if (registry && state.channelRegistry !== registry) {
+    return;
+  }
+  state.channelRegistryPinned = false;
+  state.channelRegistry = state.registry;
+}
+
+export function getActivePluginChannelRegistry(): PluginRegistry | null {
+  return state.channelRegistry ?? state.registry;
+}
+
+export function requireActivePluginChannelRegistry(): PluginRegistry {
+  const existing = getActivePluginChannelRegistry();
+  if (existing) {
+    return existing;
+  }
+  const created = requireActivePluginRegistry();
+  state.channelRegistry = created;
+  return created;
 }
 
 export function pinActivePluginHttpRouteRegistry(registry: PluginRegistry) {

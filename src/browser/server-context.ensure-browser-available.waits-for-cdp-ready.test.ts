@@ -26,6 +26,7 @@ function makeBrowserState(): BrowserServerState {
       extraArgs: [],
       color: "#FF4500",
       headless: true,
+      gpuEnabled: false,
       noSandbox: false,
       attachOnly: false,
       ssrfPolicy: { allowPrivateNetwork: true },

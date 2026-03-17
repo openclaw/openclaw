@@ -39,6 +39,7 @@ function makeState(): BrowserServerState {
       remoteCdpHandshakeTimeoutMs: 3000,
       color: "#FF4500",
       headless: false,
+      gpuEnabled: false,
       noSandbox: false,
       attachOnly: false,
       defaultProfile: "chrome-live",

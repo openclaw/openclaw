@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
+  getActivePluginChannelRegistry,
+  pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resolveActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
@@ -9,6 +12,7 @@ import {
 
 describe("plugin runtime route registry", () => {
   afterEach(() => {
+    releasePinnedPluginChannelRegistry();
     releasePinnedPluginHttpRouteRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
@@ -66,5 +70,36 @@ describe("plugin runtime route registry", () => {
     pinActivePluginHttpRouteRegistry(startupRegistry);
 
     expect(resolveActivePluginHttpRouteRegistry(explicitRegistry)).toBe(startupRegistry);
+  });
+});
+
+describe("plugin runtime channel registry", () => {
+  afterEach(() => {
+    releasePinnedPluginChannelRegistry();
+    releasePinnedPluginHttpRouteRegistry();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("keeps the pinned channel registry when the active plugin registry changes", () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    const laterRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
+  });
+
+  it("falls back to the active registry after releasing the pin", () => {
+    const startupRegistry = createEmptyPluginRegistry();
+    const laterRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginChannelRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+    releasePinnedPluginChannelRegistry(startupRegistry);
+
+    expect(getActivePluginChannelRegistry()).toBe(laterRegistry);
   });
 });
