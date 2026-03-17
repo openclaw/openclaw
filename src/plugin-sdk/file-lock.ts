@@ -215,6 +215,22 @@ export async function acquireFileLock(
         // Retry open(O_EXCL) regardless: either we removed the stale lock or
         // a concurrent waiter already handled it; either way, the path is now
         // either free or holds a fresh lock that isStaleLock will reject.
+        //
+        // Guard: the for-loop's `attempt += 1` runs after every `continue`,
+        // consuming a retry slot.  If we are already on the last slot
+        // (attempt === attempts - 1), that increment exits the loop and we
+        // throw timeout without ever re-trying open(O_EXCL) on the now-clear
+        // path.  This is the crash-recovery bug: an empty/partial .lock file
+        // (crash between open("wx") and writeFile) that becomes reclaimable
+        // on the last iteration causes the record to be silently dropped.
+        //
+        // Fix: when on the last slot, step attempt back by one so the
+        // upcoming += 1 nets to zero, guaranteeing at least one post-reclaim
+        // open(O_EXCL) attempt.  No extra sleep budget is consumed — we only
+        // charge a retry for backoff sleeps, not reclaim-only work.
+        if (attempt >= attempts - 1) {
+          attempt -= 1;
+        }
         continue;
       }
 

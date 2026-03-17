@@ -187,6 +187,30 @@ describe("withFileLock", () => {
     },
   );
 
+  it("reclaims a stale empty lock file even when detected on the very last retry (retries=0)", async () => {
+    // Regression: when retries=0 (attempts=1), a stale lock detected on
+    // attempt 0 caused `continue` to increment attempt to 1, exiting the loop
+    // and throwing timeout without ever calling open(O_EXCL) on the now-clear
+    // path.  This reproduces the token-usage.json.lock crash-recovery bug where
+    // an empty .lock file left by a crash is reclaimable only on the last slot.
+    const lockPath = `${targetFile}.lock`;
+    await fs.mkdir(path.dirname(targetFile), { recursive: true });
+    await fs.writeFile(lockPath, ""); // empty — crash between open("wx") and writeFile
+    await ageFile(lockPath, LOCK_OPTIONS.stale + 1_000); // age past stale threshold
+
+    let ran = false;
+    await expect(
+      withFileLock(
+        targetFile,
+        { ...LOCK_OPTIONS, retries: { ...LOCK_OPTIONS.retries, retries: 0 } },
+        async () => {
+          ran = true;
+        },
+      ),
+    ).resolves.toBeUndefined();
+    expect(ran).toBe(true);
+  });
+
   it("two concurrent waiters on a stale lock never overlap inside fn()", async () => {
     // Plant a stale lock (dead PID, old timestamp) so both waiters will
     // simultaneously enter the stale-reclaim branch.  The inode guard must
