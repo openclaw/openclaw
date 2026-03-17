@@ -854,6 +854,7 @@ export function listSessionsFromStore(params: {
 
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
+  const includeArchived = opts.includeArchived === true;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
@@ -889,6 +890,9 @@ export function listSessionsFromStore(params: {
       return true;
     })
     .filter(([key, entry]) => {
+      if (!includeArchived && typeof entry?.archivedAt === "number") {
+        return false;
+      }
       if (!spawnedBy) {
         return true;
       }
@@ -971,6 +975,7 @@ export function listSessionsFromStore(params: {
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
         lastTo: deliveryFields.lastTo ?? entry?.lastTo,
         lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+        archivedAt: entry?.archivedAt ?? null,
       };
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));

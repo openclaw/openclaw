@@ -75,6 +75,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       opts: {
         includeGlobal: p.includeGlobal === true,
         includeUnknown: p.includeUnknown === true,
+        includeArchived: true,
         spawnedBy: p.spawnedBy,
         agentId: p.agentId,
         search: sessionId,
@@ -119,6 +120,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     opts: {
       includeGlobal: p.includeGlobal === true,
       includeUnknown: p.includeUnknown === true,
+      includeArchived: true,
       label: parsedLabel.label,
       agentId: p.agentId,
       spawnedBy: p.spawnedBy,

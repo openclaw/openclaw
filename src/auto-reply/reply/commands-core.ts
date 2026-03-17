@@ -35,6 +35,7 @@ import {
   handleUsageCommand,
 } from "./commands-session.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
+import { handleSetTopicNameCommand } from "./commands-topic-name.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type {
   CommandHandler,
@@ -184,6 +185,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleSessionCommand,
       handleRestartCommand,
       handleTtsCommands,
+      handleSetTopicNameCommand,
       handleHelpCommand,
       handleCommandsListCommand,
       handleStatusCommand,

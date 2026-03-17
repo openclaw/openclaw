@@ -1422,7 +1422,7 @@ Then enable it in config:
 Plugins can register hooks at runtime. This lets a plugin bundle event-driven
 automation without a separate hook pack install.
 
-### Example
+### Hook example
 
 ```ts
 export default function register(api) {

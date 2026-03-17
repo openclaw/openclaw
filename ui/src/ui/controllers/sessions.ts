@@ -12,6 +12,7 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsIncludeArchived: boolean;
 };
 
 export async function loadSessions(
@@ -21,6 +22,7 @@ export async function loadSessions(
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
+    includeArchived?: boolean;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -34,12 +36,16 @@ export async function loadSessions(
   try {
     const includeGlobal = overrides?.includeGlobal ?? state.sessionsIncludeGlobal;
     const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
+    const includeArchived = overrides?.includeArchived ?? state.sessionsIncludeArchived;
     const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
     };
+    if (includeArchived) {
+      params.includeArchived = true;
+    }
     if (activeMinutes > 0) {
       params.activeMinutes = activeMinutes;
     }
@@ -66,6 +72,7 @@ export async function patchSession(
     fastMode?: boolean | null;
     verboseLevel?: string | null;
     reasoningLevel?: string | null;
+    archivedAt?: number | null;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -86,6 +93,9 @@ export async function patchSession(
   }
   if ("reasoningLevel" in patch) {
     params.reasoningLevel = patch.reasoningLevel;
+  }
+  if ("archivedAt" in patch) {
+    params.archivedAt = patch.archivedAt;
   }
   try {
     await state.client.request("sessions.patch", params);

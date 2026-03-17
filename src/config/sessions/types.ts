@@ -157,6 +157,7 @@ export type SessionEntry = {
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
+  archivedAt?: number;
   channel?: string;
   groupId?: string;
   subject?: string;

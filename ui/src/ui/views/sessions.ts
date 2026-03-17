@@ -13,6 +13,7 @@ export type SessionsProps = {
   limit: string;
   includeGlobal: boolean;
   includeUnknown: boolean;
+  includeArchived: boolean;
   basePath: string;
   searchQuery: string;
   sortColumn: "key" | "kind" | "updated" | "tokens";
@@ -25,6 +26,7 @@ export type SessionsProps = {
     limit: string;
     includeGlobal: boolean;
     includeUnknown: boolean;
+    includeArchived: boolean;
   }) => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
@@ -40,6 +42,7 @@ export type SessionsProps = {
       fastMode?: boolean | null;
       verboseLevel?: string | null;
       reasoningLevel?: string | null;
+      archivedAt?: number | null;
     },
   ) => void;
   onDelete: (key: string) => void;
@@ -179,7 +182,12 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const filtered = filterRows(rawRows, props.searchQuery);
+  // Client-side guard: hides archived rows immediately on toggle while the
+  // server request (triggered by onFiltersChange) is in-flight.
+  const visibleRows = props.includeArchived
+    ? rawRows
+    : rawRows.filter((row) => typeof row.archivedAt !== "number");
+  const filtered = filterRows(visibleRows, props.searchQuery);
   const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
@@ -237,6 +245,7 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: props.includeUnknown,
+                includeArchived: props.includeArchived,
               })}
           />
         </label>
@@ -251,6 +260,7 @@ export function renderSessions(props: SessionsProps) {
                 limit: (e.target as HTMLInputElement).value,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: props.includeUnknown,
+                includeArchived: props.includeArchived,
               })}
           />
         </label>
@@ -264,6 +274,7 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: (e.target as HTMLInputElement).checked,
                 includeUnknown: props.includeUnknown,
+                includeArchived: props.includeArchived,
               })}
           />
           <span>Global</span>
@@ -278,9 +289,25 @@ export function renderSessions(props: SessionsProps) {
                 limit: props.limit,
                 includeGlobal: props.includeGlobal,
                 includeUnknown: (e.target as HTMLInputElement).checked,
+                includeArchived: props.includeArchived,
               })}
           />
           <span>Unknown</span>
+        </label>
+        <label class="field-inline checkbox">
+          <input
+            type="checkbox"
+            .checked=${props.includeArchived}
+            @change=${(e: Event) =>
+              props.onFiltersChange({
+                activeMinutes: props.activeMinutes,
+                limit: props.limit,
+                includeGlobal: props.includeGlobal,
+                includeUnknown: props.includeUnknown,
+                includeArchived: (e.target as HTMLInputElement).checked,
+              })}
+          />
+          <span>Archived</span>
         </label>
       </div>
 
@@ -425,6 +452,7 @@ function renderRow(
         : row.kind === "global"
           ? "data-table-badge--global"
           : "data-table-badge--unknown";
+  const isArchived = typeof row.archivedAt === "number";
 
   return html`
     <tr>
@@ -434,6 +462,13 @@ function renderRow(
           ${
             showDisplayName
               ? html`<span class="muted session-key-display-name">${displayName}</span>`
+              : nothing
+          }
+          ${
+            isArchived
+              ? html`
+                  <span class="data-table-badge" style="margin-left: 6px">Archived</span>
+                `
               : nothing
           }
         </div>
@@ -555,6 +590,15 @@ function renderRow(
                           `
                         : nothing
                     }
+                    <button
+                      type="button"
+                      @click=${() => {
+                        onActionsOpenChange(null);
+                        onPatch(row.key, { archivedAt: isArchived ? null : Date.now() });
+                      }}
+                    >
+                      ${isArchived ? "Unarchive" : "Archive"}
+                    </button>
                     <button
                       type="button"
                       class="danger"
