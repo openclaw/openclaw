@@ -1,6 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
 import { buildVeniceProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "venice";
@@ -46,18 +47,12 @@ const venicePlugin = {
       ],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...(await buildVeniceProvider()),
-              apiKey,
-            },
-          };
-        },
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildVeniceProvider,
+          }),
       },
     });
   },
