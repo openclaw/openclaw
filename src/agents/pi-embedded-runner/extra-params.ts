@@ -264,7 +264,7 @@ function createParallelToolCallsWrapper(
 
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
- * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
+ * Also applies verified provider-specific request wrappers, such as OpenRouter attribution.
  *
  * @internal Exported for testing
  */

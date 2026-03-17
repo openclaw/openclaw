@@ -1,0 +1,68 @@
+import type { RuntimeVersionEnv } from "../version.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
+import { normalizeProviderId } from "./model-selection.js";
+
+export type ProviderAttributionVerification =
+  | "vendor-documented"
+  | "vendor-sdk-hook-only"
+  | "internal-runtime";
+
+export type ProviderAttributionPolicy = {
+  provider: string;
+  enabledByDefault: boolean;
+  verification: ProviderAttributionVerification;
+  docsUrl?: string;
+  product: string;
+  version: string;
+  headers: Record<string, string>;
+};
+
+export type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
+
+const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
+
+export function resolveProviderAttributionIdentity(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionIdentity {
+  return {
+    product: OPENCLAW_ATTRIBUTION_PRODUCT,
+    version: resolveRuntimeServiceVersion(env),
+  };
+}
+
+function buildOpenRouterAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "openrouter",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    docsUrl: "https://openrouter.ai/docs/app-attribution",
+    ...identity,
+    headers: {
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-Title": identity.product,
+    },
+  };
+}
+
+export function resolveProviderAttributionPolicy(
+  provider?: string | null,
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy | undefined {
+  const normalized = normalizeProviderId(provider ?? "");
+  switch (normalized) {
+    case "openrouter":
+      return buildOpenRouterAttributionPolicy(env);
+    default:
+      return undefined;
+  }
+}
+
+export function resolveProviderAttributionHeaders(
+  provider?: string | null,
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): Record<string, string> | undefined {
+  return resolveProviderAttributionPolicy(provider, env)?.headers;
+}
