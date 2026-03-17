@@ -41,7 +41,7 @@ Use this skill when the user asks something like:
 
 - If a skill is already installed and working — use it directly
 - For skills that don't exist anywhere — offer to create one instead
-- For updating or publishing skills — use the clawhub skill instead
+- For updating or publishing skills — use the `clawhub` skill instead
 
 ---
 
@@ -49,107 +49,68 @@ Use this skill when the user asks something like:
 
 Always start here. ClawHub is the official OpenClaw skill registry.
 
-```bash
-clawhub search "postgres"
-clawhub search "linear"
-clawhub search "jira"
-clawhub search "docker"
-clawhub search "gmail"
-```
+Run `clawhub search` with the keyword the user asked about:
 
-Output includes: skill name, description, version, author.
+    clawhub search "KEYWORD"
+
+Output includes: skill name, description, version, author. If a match is found, go to Step 3.
 
 ---
 
 ## Step 2 — Search GitHub for community skills
 
-If ClawHub has no results, fall back to GitHub.
+If ClawHub has no results, search GitHub as a fallback.
 
-Note: set GITHUB_TOKEN in your environment for reliable results.
+Set `GITHUB_TOKEN` in your environment before running these commands.
 Unauthenticated requests are capped at 60/hour per IP.
 
-```bash
-GITHUB_AUTH=""
-if [ -n "$GITHUB_TOKEN" ]; then
-  GITHUB_AUTH="-H Authorization:Bearer $GITHUB_TOKEN"
-fi
+Search for skill repos:
 
-curl -s $GITHUB_AUTH \
-  "https://api.github.com/search/repositories?q=openclaw+skill+KEYWORD&sort=stars&per_page=5" \
-  | jq -r '.items[] | "\(.full_name) | \(.description) | \(.html_url)"'
+    curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+      "https://api.github.com/search/repositories?q=openclaw+skill+KEYWORD&sort=stars&per_page=5" \
+      | jq -r ".items[].full_name"
 
-curl -s $GITHUB_AUTH \
-  "https://api.github.com/search/code?q=openclaw+KEYWORD+filename:SKILL.md&per_page=5" \
-  | jq -r '.items[] | "\(.repository.full_name) | \(.path) | \(.html_url)"'
-```
+Search for SKILL.md files:
 
-Replace KEYWORD with the tool or topic the user asked about.
+    curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+      "https://api.github.com/search/code?q=openclaw+KEYWORD+filename:SKILL.md&per_page=5" \
+      | jq -r ".items[].html_url"
+
+If results are found, use the owner/repo path in Step 4.
 
 ---
 
 ## Step 3 — Install from ClawHub
 
-Once you find a skill on ClawHub:
+    clawhub install SKILL-NAME
 
-```bash
-clawhub install SKILL-NAME
-clawhub install SKILL-NAME --version 1.2.3
-clawhub list
-```
+Verify with `clawhub list`. The skill is available immediately — no restart needed.
 
 ---
 
 ## Step 4 — Install from GitHub (community)
 
-If a skill is on GitHub but not on ClawHub:
+If a skill is on GitHub but not on ClawHub, clone and copy it:
 
-```bash
-REPO="owner/repo"
-SKILL_PATH="skills/skill-name"
-DEST="$(pwd)/skills/skill-name"
-
-git clone --depth=1 --filter=blob:none --sparse \
-  "https://github.com/$REPO.git" /tmp/skill-clone
-cd /tmp/skill-clone
-git sparse-checkout set "$SKILL_PATH"
-cp -r "$SKILL_PATH" "$DEST"
-cd /
-rm -rf /tmp/skill-clone
-echo "Installed to $DEST"
-```
-
----
-
-## Full Discovery Workflow
-
-```bash
-# 1. Search ClawHub first
-clawhub search "KEYWORD"
-
-# 2. If found on ClawHub, install directly
-clawhub install SKILL-NAME
-
-# 3. If NOT on ClawHub, search GitHub
-GITHUB_AUTH=""
-if [ -n "$GITHUB_TOKEN" ]; then
-  GITHUB_AUTH="-H Authorization:Bearer $GITHUB_TOKEN"
-fi
-
-curl -s $GITHUB_AUTH \
-  "https://api.github.com/search/repositories?q=openclaw+skill+KEYWORD&per_page=5" \
-  | jq -r '.items[] | "\(.full_name) | \(.description)"'
-
-# 4. If found on GitHub, use the Step 4 clone flow above
-```
+    REPO="owner/repo"
+    SKILL_PATH="skills/skill-name"
+    DEST="$(pwd)/skills/skill-name"
+    git clone --depth=1 --filter=blob:none --sparse "https://github.com/$REPO.git" /tmp/skill-clone
+    cd /tmp/skill-clone
+    git sparse-checkout set "$SKILL_PATH"
+    cp -r "$SKILL_PATH" "$DEST"
+    cd /
+    rm -rf /tmp/skill-clone
 
 ---
 
 ## Suggest Creating a New Skill
 
-If nothing exists anywhere, tell the user:
+If nothing is found anywhere, tell the user:
 
-"I could not find a skill for X on ClawHub or GitHub. I can write one for you.
-It is just a SKILL.md file with usage docs. Want me to create it?"
+    I could not find a skill for X on ClawHub or GitHub.
+    I can write one for you — it is just a SKILL.md file with usage docs.
+    Want me to create it?
 
 ---
 
@@ -157,7 +118,6 @@ It is just a SKILL.md file with usage docs. Want me to create it?"
 
 - ClawHub registry: https://clawhub.com
 - Default install dir: ./skills/ inside your OpenClaw workspace
-- Override install dir: --workdir /path or CLAWHUB_WORKDIR env var
-- Custom registry: --registry https://my-registry.com or CLAWHUB_REGISTRY
-- Set GITHUB_TOKEN env var for reliable GitHub API search (avoids 60 req/hour rate limit)
-- After installing a skill, OpenClaw picks it up automatically — no restart needed
+- Override with --workdir /path or CLAWHUB_WORKDIR env var
+- Set GITHUB_TOKEN for reliable GitHub API search (avoids 60 req/hour rate limit)
+- After installing, OpenClaw picks up the skill automatically — no restart needed
