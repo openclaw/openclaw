@@ -3,18 +3,15 @@ import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
   hasConfiguredSecretInput,
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  SlackConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/slack";
+import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
+import { getChatChannelMeta } from "../../../src/channels/registry.js";
+import { SlackConfigSchema } from "../../../src/config/zod-schema.providers-core.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,

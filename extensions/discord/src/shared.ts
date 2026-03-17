@@ -3,12 +3,10 @@ import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  buildChannelConfigSchema,
-  DiscordConfigSchema,
-  getChatChannelMeta,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/discord";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
+import { getChatChannelMeta } from "../../../src/channels/registry.js";
+import { DiscordConfigSchema } from "../../../src/config/zod-schema.providers-core.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,

@@ -1,8 +1,7 @@
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import {
   createEnvPatchedAccountSetupAdapter,
   DEFAULT_ACCOUNT_ID,
-  formatCliCommand,
-  formatDocsLink,
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   splitSetupEntries,
@@ -10,6 +9,7 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { fetchTelegramChatId } from "./api-fetch.js";
 

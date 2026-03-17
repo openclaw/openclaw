@@ -1,19 +1,21 @@
 import {
+  formatTrimmedAllowFromEntries,
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import {
-  buildChannelConfigSchema,
-  DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  formatTrimmedAllowFromEntries,
-  getChatChannelMeta,
-  IMessageConfigSchema,
-  resolveIMessageConfigAllowFrom,
-  resolveIMessageConfigDefaultTo,
   setAccountEnabledInConfigSection,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/imessage";
+} from "../../../src/channels/plugins/config-helpers.js";
+import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
+import { getChatChannelMeta } from "../../../src/channels/registry.js";
+import { IMessageConfigSchema } from "../../../src/config/zod-schema.providers-core.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,

@@ -3,16 +3,15 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { DEFAULT_ACCOUNT_ID, normalizeE164 } from "openclaw/plugin-sdk/setup";
 import {
-  buildChannelConfigSchema,
-  DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
-  getChatChannelMeta,
-  normalizeE164,
   setAccountEnabledInConfigSection,
-  SignalConfigSchema,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal";
+} from "../../../src/channels/plugins/config-helpers.js";
+import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
+import { getChatChannelMeta } from "../../../src/channels/registry.js";
+import { SignalConfigSchema } from "../../../src/config/zod-schema.providers-core.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,

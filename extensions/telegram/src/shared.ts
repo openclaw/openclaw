@@ -3,14 +3,11 @@ import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  normalizeAccountId,
-  TelegramConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/telegram";
+import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { normalizeAccountId } from "openclaw/plugin-sdk/setup";
+import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
+import { getChatChannelMeta } from "../../../src/channels/registry.js";
+import { TelegramConfigSchema } from "../../../src/config/zod-schema.providers-core.js";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
