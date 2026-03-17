@@ -30,7 +30,17 @@ export type ActiveWebListener = {
 
 let _currentListener: ActiveWebListener | null = null;
 
-const listeners = new Map<string, ActiveWebListener>();
+// Use globalThis singleton to share the Map across bundled chunks.
+// Without this, tsdown emits this module into multiple chunks, each with
+// its own independent Map. The chunk that initializes the WhatsApp connection
+// registers the listener in its Map, but the chunk that handles outbound
+// sends reads from a different (empty) Map — causing "No active WhatsApp
+// Web listener" errors for proactive sends while auto-replies still work.
+// See: https://github.com/openclaw/openclaw/issues/45994
+const WA_LISTENERS_KEY = Symbol.for("openclaw.whatsapp.active-listeners");
+const listeners: Map<string, ActiveWebListener> =
+  ((globalThis as Record<symbol, unknown>)[WA_LISTENERS_KEY] as Map<string, ActiveWebListener>) ??
+  ((globalThis as Record<symbol, unknown>)[WA_LISTENERS_KEY] = new Map<string, ActiveWebListener>());
 
 export function resolveWebAccountId(accountId?: string | null): string {
   return (accountId ?? "").trim() || DEFAULT_ACCOUNT_ID;
