@@ -173,7 +173,11 @@ Recommended API shape:
 ```ts
 type FakeWorkerScenarioStep =
   | { kind: "invokeResult"; command: string; payload: unknown }
-  | { kind: "workerEvent"; event: "acp.worker.event" | "acp.worker.terminal" | "acp.worker.heartbeat"; payload: unknown }
+  | {
+      kind: "workerEvent";
+      event: "acp.worker.event" | "acp.worker.terminal" | "acp.worker.heartbeat";
+      payload: unknown;
+    }
   | { kind: "disconnect" }
   | { kind: "reconnect" }
   | { kind: "delay"; ms: number };

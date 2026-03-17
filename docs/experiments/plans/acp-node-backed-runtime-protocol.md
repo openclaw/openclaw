@@ -9,6 +9,8 @@ read_when:
 title: "ACP Node-Backed Runtime Protocol"
 ---
 
+<!-- markdownlint-disable MD024 -->
+
 # ACP Node-Backed Runtime Protocol
 
 ## Purpose
