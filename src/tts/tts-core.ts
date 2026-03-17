@@ -156,10 +156,13 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
-              overrides.provider = rawValue;
-            } else {
-              warnings.push(`unsupported provider "${rawValue}"`);
+            {
+              const providerId = rawValue.trim().toLowerCase();
+              if (providerId) {
+                overrides.provider = providerId;
+              } else {
+                warnings.push("invalid provider id");
+              }
             }
             break;
           case "voice":
