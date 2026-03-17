@@ -3,6 +3,7 @@ node_modules
 .env
 .env.local
 .env.bots
+.telegram-lane.env
 docker-compose.override.yml
 docker-compose.extra.yml
 dist

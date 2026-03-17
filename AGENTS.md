@@ -202,12 +202,15 @@
 ## Agent-Specific Notes
 
 - Pre-Live Telegram Check (REQUIRED before any live Telegram validation):
+  - You MUST run `bash scripts/telegram-e2e/lane-up.sh` before live Telegram E2E.
   - You MUST confirm the current git branch is named and NOT `HEAD`.
   - You MUST confirm gateway runtime is owned by the current worktree path.
   - If runtime path mismatches, you MUST restart gateway from the current worktree and re-check runtime ownership before testing.
   - If `.env.local` is missing, you MUST run `bash scripts/assign-bot.sh` before starting gateway.
   - You MUST NOT print raw token values.
   - You MUST emit proof lines in logs/output: `branch=<...>` and `runtime_worktree=<...>`.
+  - You MUST NOT use the shared default gateway/profile for parallel Telegram tests.
+  - One lane = one token slot = one profile = one port.
 
 - Known Failure Pattern (Telegram live checks):
   - Code/tests can be correct while live results are false if Telegram is handled by the wrong runtime process (not the current worktree). Always verify runtime ownership first.
@@ -218,6 +221,7 @@
   - For every new worktree, run:
     - `cp /Users/user/Programming_Projects/openclaw/.env.bots ./.env.bots`
     - `bash scripts/assign-bot.sh` (creates `.env.local` with this worktree's bot token)
+    - `bash scripts/telegram-e2e/lane-up.sh` (creates the isolated lane profile/port metadata and starts the lane gateway)
   - If Telegram userbot E2E is needed, copy local-only files (do not commit):
     - `mkdir -p scripts/telegram-e2e/tmp`
     - `cp /Users/user/Programming_Projects/openclaw/scripts/telegram-e2e/.env scripts/telegram-e2e/.env` (if present)

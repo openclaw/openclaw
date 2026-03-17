@@ -9,6 +9,25 @@ This validates:
 3. Existing threads stay unchanged.
 4. `/models` catalog is lean allowlisted and disallowed models are rejected.
 
+## Quickstart
+
+Run these in every worktree before live Telegram E2E:
+
+```bash
+bash scripts/bootstrap-worktree-telegram.sh
+bash scripts/telegram-e2e/lane-up.sh
+# then run the E2E script you need
+```
+
+Lane rules:
+
+- One lane = one token slot = one profile = one port.
+- Token slot comes from the assigned `BOT_TOKEN` position in `.env.bots`.
+- Profile is derived as `tg-lane-<slot>`.
+- Port is derived as `19789 + (slot - 1) * 20` unless overridden.
+- Lane metadata is written to `.telegram-lane.env` and is local-only.
+- Do not use the shared default gateway/profile for parallel Telegram tests.
+
 ## One-time setup
 
 ### 1) Build `tg` (bot-side poll/inspect)
@@ -81,6 +100,7 @@ Use one source of truth in your main checkout, then copy into each worktree.
 2. Never commit or print raw secrets (`TELEGRAM_API_HASH`, `TG_BOT_TOKEN`, session contents).
 3. For every new worktree, run:
    - `bash scripts/bootstrap-worktree-telegram.sh`
+   - `bash scripts/telegram-e2e/lane-up.sh`
 4. Smoke check from that worktree:
    - `scripts/telegram-e2e/userbot-send-live.sh --chat "<chat-id-or-username>" --text "handoff smoke"`
 
@@ -118,13 +138,13 @@ Default remains `openai-codex/gpt-5.3-codex`.
 
 ## Critical runtime rule (prevents false negatives)
 
-Run the gateway from the same branch/worktree you are validating:
+Always bring up the lane first:
 
 ```bash
-node dist/index.js gateway run --bind loopback --port 18789 --force
+bash scripts/telegram-e2e/lane-up.sh
 ```
 
-If another checkout/global runtime is serving Telegram, your E2E result is invalid for this branch.
+This binds live E2E to the current worktree's token slot, profile, and port. If another checkout or the shared default gateway is serving Telegram, your result is invalid for this branch.
 
 ## Deterministic gateway recovery (main runtime)
 

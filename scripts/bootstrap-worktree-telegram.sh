@@ -24,10 +24,28 @@ copy_if_exists() {
 # Bot token pool for worktree assignment.
 copy_if_exists "$MAIN_REPO/.env.bots" "./.env.bots"
 
+has_token_claim() {
+  if [[ ! -f "./.env.local" ]]; then
+    return 1
+  fi
+  grep -Eq '^[[:space:]]*TELEGRAM_BOT_TOKEN[[:space:]]*=[[:space:]]*[^[:space:]#]+' "./.env.local"
+}
+
 if [[ -f "./.env.bots" ]]; then
-  bash scripts/assign-bot.sh
+  if has_token_claim; then
+    echo "skip: existing TELEGRAM_BOT_TOKEN claim found in .env.local"
+  else
+    bash scripts/assign-bot.sh
+  fi
 else
   echo "skip: .env.bots missing in main repo"
+fi
+
+# Prepare deterministic lane metadata for live Telegram E2E.
+if [[ -x "./scripts/telegram-e2e/lane-up.sh" ]]; then
+  if ! bash ./scripts/telegram-e2e/lane-up.sh --prepare-only >/dev/null; then
+    echo "skip: lane metadata preparation failed"
+  fi
 fi
 
 # Optional userbot E2E files for true inbound Telegram verification.

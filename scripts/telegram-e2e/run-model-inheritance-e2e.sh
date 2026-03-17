@@ -7,6 +7,7 @@ set -euo pipefail
 # 3) Poll bot updates through tg (Bot API) and assert thread B reports expected model.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # shellcheck source=scripts/telegram-e2e/userbot-common.sh
 source "${SCRIPT_DIR}/userbot-common.sh"
 
@@ -88,6 +89,21 @@ fi
 
 load_userbot_env_if_present
 
+load_lane_env_if_present() {
+  if [[ -f "${ROOT_DIR}/.telegram-lane.env" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${ROOT_DIR}/.telegram-lane.env"
+    set +a
+  fi
+  if [[ -f "${ROOT_DIR}/.env.local" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${ROOT_DIR}/.env.local"
+    set +a
+  fi
+}
+
 if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" || -z "${TG_BIN:-}" ]]; then
   echo "Missing required env vars (TELEGRAM_API_ID, TELEGRAM_API_HASH, TG_BIN)." >&2
   usage
@@ -99,8 +115,12 @@ if [[ ! -x "${TG_BIN}" ]]; then
   exit 1
 fi
 
-# Hard gate: ensure this worktree owns Telegram runtime before live assertions.
+# Hard gate: ensure lane profile/port/runtime ownership before live assertions.
 "${ROOT_DIR}/scripts/telegram-live-preflight.sh"
+load_lane_env_if_present
+if [[ -z "${TG_BOT_TOKEN:-}" && -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+  TG_BOT_TOKEN="${TELEGRAM_BOT_TOKEN}"
+fi
 
 EXPECT_MODEL="${EXPECT_MODEL:-${SET_MODEL}}"
 USERBOT_PYTHON="$(ensure_userbot_python)"
