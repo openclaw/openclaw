@@ -2,6 +2,7 @@ import type {
   ConfiguredAcpBindingChannel,
   ResolvedConfiguredAcpBinding,
 } from "../../acp/persistent-bindings.types.js";
+import { toResolvedConfiguredAcpBinding } from "../../acp/persistent-bindings.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
@@ -32,7 +33,9 @@ export function resolveConfiguredAcpRoute(
 } {
   const resolved = resolveConfiguredBindingRoute(params);
   return {
-    configuredBinding: resolved.bindingResolution?.configuredBinding ?? null,
+    configuredBinding: resolved.bindingResolution
+      ? toResolvedConfiguredAcpBinding(resolved.bindingResolution.record)
+      : null,
     route: resolved.route,
     ...(resolved.boundSessionKey ? { boundSessionKey: resolved.boundSessionKey } : {}),
     ...(resolved.boundAgentId ? { boundAgentId: resolved.boundAgentId } : {}),

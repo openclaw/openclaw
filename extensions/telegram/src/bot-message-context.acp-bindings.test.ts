@@ -53,7 +53,61 @@ function createConfiguredTelegramRoute() {
   const configuredBinding = createConfiguredTelegramBinding();
   return {
     bindingResolution: {
-      configuredBinding,
+      conversation: {
+        channel: "telegram",
+        accountId: "work",
+        conversationId: "-1001234567890:topic:42",
+        parentConversationId: "-1001234567890",
+      },
+      compiledBinding: {
+        channel: "telegram",
+        accountPattern: "work",
+        binding: {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "telegram",
+            accountId: "work",
+            peer: {
+              kind: "group",
+              id: "-1001234567890:topic:42",
+            },
+          },
+        },
+        bindingConversationId: "-1001234567890:topic:42",
+        target: {
+          conversationId: "-1001234567890:topic:42",
+          parentConversationId: "-1001234567890",
+        },
+        agentId: "codex",
+        provider: {
+          compileConfiguredBinding: () => ({
+            conversationId: "-1001234567890:topic:42",
+            parentConversationId: "-1001234567890",
+          }),
+          matchInboundConversation: () => ({
+            conversationId: "-1001234567890:topic:42",
+            parentConversationId: "-1001234567890",
+          }),
+        },
+        targetFactory: {
+          driverId: "acp",
+          materialize: () => ({
+            record: configuredBinding.record,
+            statefulTarget: {
+              kind: "stateful",
+              driverId: "acp",
+              sessionKey: configuredBinding.record.targetSessionKey,
+              agentId: configuredBinding.spec.agentId,
+            },
+          }),
+        },
+      },
+      match: {
+        conversationId: "-1001234567890:topic:42",
+        parentConversationId: "-1001234567890",
+      },
+      record: configuredBinding.record,
       statefulTarget: {
         kind: "stateful",
         driverId: "acp",

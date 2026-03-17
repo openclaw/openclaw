@@ -1,6 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { ConfiguredBindingRule } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AgentAcpBinding } from "../../config/types.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
@@ -552,11 +552,11 @@ export type ChannelConfiguredBindingMatch = ChannelConfiguredBindingConversation
 
 export type ChannelConfiguredBindingProvider = {
   compileConfiguredBinding?: (params: {
-    binding: AgentAcpBinding;
+    binding: ConfiguredBindingRule;
     conversationId: string;
   }) => ChannelConfiguredBindingConversationRef | null;
   matchInboundConversation?: (params: {
-    binding: AgentAcpBinding;
+    binding: ConfiguredBindingRule;
     compiledBinding: ChannelConfiguredBindingConversationRef;
     conversationId: string;
     parentConversationId?: string;
@@ -564,11 +564,11 @@ export type ChannelConfiguredBindingProvider = {
   // Compatibility bridge for third-party plugins that still implement the
   // earlier ACP-specific adapter shape.
   normalizeConfiguredBindingTarget?: (params: {
-    binding: AgentAcpBinding;
+    binding: ConfiguredBindingRule;
     conversationId: string;
   }) => ChannelConfiguredBindingConversationRef | null;
   matchConfiguredBinding?: (params: {
-    binding: AgentAcpBinding;
+    binding: ConfiguredBindingRule;
     bindingConversationId: string;
     conversationId: string;
     parentConversationId?: string;

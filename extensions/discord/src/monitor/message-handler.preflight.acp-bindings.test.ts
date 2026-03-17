@@ -62,7 +62,52 @@ function createConfiguredDiscordRoute() {
   const configuredBinding = createConfiguredDiscordBinding();
   return {
     bindingResolution: {
-      configuredBinding,
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: CHANNEL_ID,
+      },
+      compiledBinding: {
+        channel: "discord",
+        accountPattern: "default",
+        binding: {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: {
+              kind: "channel",
+              id: CHANNEL_ID,
+            },
+          },
+        },
+        bindingConversationId: CHANNEL_ID,
+        target: {
+          conversationId: CHANNEL_ID,
+        },
+        agentId: "codex",
+        provider: {
+          compileConfiguredBinding: () => ({ conversationId: CHANNEL_ID }),
+          matchInboundConversation: () => ({ conversationId: CHANNEL_ID }),
+        },
+        targetFactory: {
+          driverId: "acp",
+          materialize: () => ({
+            record: configuredBinding.record,
+            statefulTarget: {
+              kind: "stateful",
+              driverId: "acp",
+              sessionKey: configuredBinding.record.targetSessionKey,
+              agentId: configuredBinding.spec.agentId,
+            },
+          }),
+        },
+      },
+      match: {
+        conversationId: CHANNEL_ID,
+      },
+      record: configuredBinding.record,
       statefulTarget: {
         kind: "stateful",
         driverId: "acp",

@@ -2,6 +2,6 @@ export {
   primeConfiguredBindingRegistry,
   resolveConfiguredBinding,
   resolveConfiguredBindingRecord,
+  resolveConfiguredBindingRecordBySessionKey,
   resolveConfiguredBindingRecordForConversation,
-  resolveConfiguredBindingSpecBySessionKey,
-} from "./acp-binding-registry.js";
+} from "./configured-binding-registry.js";

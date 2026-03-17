@@ -1642,7 +1642,7 @@ async function dispatchDiscordCommandInteraction(params: {
     });
     if (!ensured.ok) {
       logVerbose(
-        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.configuredBinding.spec.conversationId}: ${ensured.error}`,
+        `discord native command: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
       );
       await respond("Configured ACP binding is unavailable right now. Please try again.");
       return;

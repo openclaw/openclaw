@@ -39,7 +39,6 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
         conversationId: "123",
       },
       agentId: "codex",
-      mode: "persistent",
       provider: {
         compileConfiguredBinding: () => ({
           conversationId: "123",
@@ -48,36 +47,44 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
           conversationId: "123",
         }),
       },
-      statefulTarget: {
-        kind: "stateful",
+      targetFactory: {
         driverId,
-        sessionKey: `agent:codex:${driverId}`,
-        agentId: "codex",
+        materialize: () => ({
+          record: {
+            bindingId: "binding:123",
+            targetSessionKey: `agent:codex:${driverId}`,
+            targetKind: "session",
+            conversation: {
+              channel: "discord",
+              accountId: "default",
+              conversationId: "123",
+            },
+            status: "active",
+            boundAt: 0,
+          },
+          statefulTarget: {
+            kind: "stateful",
+            driverId,
+            sessionKey: `agent:codex:${driverId}`,
+            agentId: "codex",
+          },
+        }),
       },
     },
     match: {
       conversationId: "123",
     },
-    configuredBinding: {
-      spec: {
+    record: {
+      bindingId: "binding:123",
+      targetSessionKey: `agent:codex:${driverId}`,
+      targetKind: "session",
+      conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "123",
-        agentId: "codex",
-        mode: "persistent",
       },
-      record: {
-        bindingId: "binding:123",
-        targetSessionKey: `agent:codex:${driverId}`,
-        targetKind: "session",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "123",
-        },
-        status: "active",
-        boundAt: 0,
-      },
+      status: "active",
+      boundAt: 0,
     },
     statefulTarget: {
       kind: "stateful",

@@ -1,16 +1,18 @@
+import type { AgentBinding } from "../../config/types.js";
 import type {
-  ConfiguredAcpBindingChannel,
-  ResolvedConfiguredAcpBinding,
-} from "../../acp/persistent-bindings.types.js";
-import type { AgentAcpBinding } from "../../config/types.js";
-import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
+  ConversationRef,
+  SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
 import type {
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
+import type { ChannelId } from "./types.js";
 
 export type ConfiguredBindingConversation = ConversationRef;
+export type ConfiguredBindingChannel = ChannelId;
+export type ConfiguredBindingRuleConfig = AgentBinding;
 
 export type StatefulBindingTargetDescriptor = {
   kind: "stateful";
@@ -20,28 +22,34 @@ export type StatefulBindingTargetDescriptor = {
   label?: string;
 };
 
-export type CompiledConfiguredBinding = {
-  channel: ConfiguredAcpBindingChannel;
-  accountPattern?: string;
-  binding: AgentAcpBinding;
-  bindingConversationId: string;
-  target: ChannelConfiguredBindingConversationRef;
-  agentId: string;
-  acpAgentId?: string;
-  mode: ResolvedConfiguredAcpBinding["spec"]["mode"];
-  cwd?: string;
-  backend?: string;
-  label?: string;
-  provider: ChannelConfiguredBindingProvider;
+export type ConfiguredBindingRecordResolution = {
+  record: SessionBindingRecord;
   statefulTarget: StatefulBindingTargetDescriptor;
 };
 
-export type ConfiguredBindingResolution = {
+export type ConfiguredBindingTargetFactory = {
+  driverId: string;
+  materialize: (params: {
+    accountId: string;
+    conversation: ChannelConfiguredBindingConversationRef;
+  }) => ConfiguredBindingRecordResolution;
+};
+
+export type CompiledConfiguredBinding = {
+  channel: ConfiguredBindingChannel;
+  accountPattern?: string;
+  binding: ConfiguredBindingRuleConfig;
+  bindingConversationId: string;
+  target: ChannelConfiguredBindingConversationRef;
+  agentId: string;
+  provider: ChannelConfiguredBindingProvider;
+  targetFactory: ConfiguredBindingTargetFactory;
+};
+
+export type ConfiguredBindingResolution = ConfiguredBindingRecordResolution & {
   conversation: ConfiguredBindingConversation;
   compiledBinding: CompiledConfiguredBinding;
   match: ChannelConfiguredBindingMatch;
-  configuredBinding: ResolvedConfiguredAcpBinding;
-  statefulTarget: StatefulBindingTargetDescriptor;
 };
 
 /** @deprecated Use ConfiguredBindingConversation. */

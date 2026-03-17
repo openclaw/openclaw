@@ -207,18 +207,18 @@ export const buildTelegramMessageContext = async ({
     });
     if (ensured.ok) {
       logVerbose(
-        `telegram: using configured ACP binding for ${configuredBinding.configuredBinding.spec.conversationId} -> ${configuredBindingSessionKey}`,
+        `telegram: using configured ACP binding for ${configuredBinding.record.conversation.conversationId} -> ${configuredBindingSessionKey}`,
       );
       return true;
     }
     logVerbose(
-      `telegram: configured ACP binding unavailable for ${configuredBinding.configuredBinding.spec.conversationId}: ${ensured.error}`,
+      `telegram: configured ACP binding unavailable for ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
     );
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
       reason: "configured ACP binding unavailable",
-      target: configuredBinding.configuredBinding.spec.conversationId,
+      target: configuredBinding.record.conversation.conversationId,
     });
     return false;
   };

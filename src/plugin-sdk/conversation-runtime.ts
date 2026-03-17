@@ -9,8 +9,8 @@ export {
   primeConfiguredBindingRegistry,
   resolveConfiguredBinding,
   resolveConfiguredBindingRecord,
+  resolveConfiguredBindingRecordBySessionKey,
   resolveConfiguredBindingRecordForConversation,
-  resolveConfiguredBindingSpecBySessionKey,
 } from "../channels/plugins/binding-registry.js";
 export {
   ensureConfiguredBindingTargetReady,

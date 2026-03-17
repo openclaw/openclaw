@@ -4,6 +4,7 @@ import {
   resetAcpSessionInPlace,
 } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
+import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   ConfiguredBindingResolution,
@@ -37,9 +38,21 @@ async function ensureAcpTargetReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
 }): Promise<StatefulBindingTargetReadyResult> {
+  const configuredBinding = resolveConfiguredAcpBindingSpecFromRecord(
+    params.bindingResolution.record,
+  );
+  if (!configuredBinding) {
+    return {
+      ok: false,
+      error: "Configured ACP binding unavailable",
+    };
+  }
   return await ensureConfiguredAcpBindingReady({
     cfg: params.cfg,
-    configuredBinding: params.bindingResolution.configuredBinding,
+    configuredBinding: {
+      spec: configuredBinding,
+      record: params.bindingResolution.record,
+    },
   });
 }
 
@@ -47,9 +60,17 @@ async function ensureAcpTargetSession(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
 }): Promise<StatefulBindingTargetSessionResult> {
+  const spec = resolveConfiguredAcpBindingSpecFromRecord(params.bindingResolution.record);
+  if (!spec) {
+    return {
+      ok: false,
+      sessionKey: params.bindingResolution.statefulTarget.sessionKey,
+      error: "Configured ACP binding unavailable",
+    };
+  }
   return await ensureConfiguredAcpBindingSession({
     cfg: params.cfg,
-    spec: params.bindingResolution.configuredBinding.spec,
+    spec,
   });
 }
 

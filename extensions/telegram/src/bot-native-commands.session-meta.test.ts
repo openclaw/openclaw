@@ -307,7 +307,6 @@ function createConfiguredBindingRoute(
                 : {}),
             },
             agentId: binding.spec.agentId,
-            mode: binding.spec.mode,
             provider: {
               compileConfiguredBinding: () => ({
                 conversationId: binding.spec.conversationId,
@@ -322,11 +321,17 @@ function createConfiguredBindingRoute(
                   : {}),
               }),
             },
-            statefulTarget: {
-              kind: "stateful" as const,
+            targetFactory: {
               driverId: "acp" as const,
-              sessionKey: binding.record.targetSessionKey,
-              agentId: binding.spec.agentId,
+              materialize: () => ({
+                record: binding.record,
+                statefulTarget: {
+                  kind: "stateful" as const,
+                  driverId: "acp" as const,
+                  sessionKey: binding.record.targetSessionKey,
+                  agentId: binding.spec.agentId,
+                },
+              }),
             },
           },
           match: {
@@ -335,7 +340,7 @@ function createConfiguredBindingRoute(
               ? { parentConversationId: binding.spec.parentConversationId }
               : {}),
           },
-          configuredBinding: binding,
+          record: binding.record,
           statefulTarget: {
             kind: "stateful" as const,
             driverId: "acp" as const,

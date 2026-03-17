@@ -496,7 +496,7 @@ export const registerTelegramNativeCommands = ({
       });
       if (!ensured.ok) {
         logVerbose(
-          `telegram native command: configured ACP binding unavailable for topic ${configuredBinding.configuredBinding.spec.conversationId}: ${ensured.error}`,
+          `telegram native command: configured ACP binding unavailable for topic ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
         );
         await withTelegramApiErrorLogging({
           operation: "sendMessage",

@@ -219,7 +219,6 @@ function createConfiguredBindingResolution(params: {
           : {}),
       },
       agentId: "codex",
-      mode: "persistent" as const,
       provider: {
         compileConfiguredBinding: () => ({
           conversationId: params.conversation.conversationId,
@@ -234,11 +233,17 @@ function createConfiguredBindingResolution(params: {
             : {}),
         }),
       },
-      statefulTarget: {
-        kind: "stateful" as const,
-        driverId: "acp",
-        sessionKey: params.boundSessionKey,
-        agentId: "codex",
+      targetFactory: {
+        driverId: "acp" as const,
+        materialize: () => ({
+          record: configuredBinding.record,
+          statefulTarget: {
+            kind: "stateful" as const,
+            driverId: "acp",
+            sessionKey: params.boundSessionKey,
+            agentId: "codex",
+          },
+        }),
       },
     },
     match: {
@@ -247,7 +252,7 @@ function createConfiguredBindingResolution(params: {
         ? { parentConversationId: params.conversation.parentConversationId }
         : {}),
     },
-    configuredBinding,
+    record: configuredBinding.record,
     statefulTarget: {
       kind: "stateful" as const,
       driverId: "acp",

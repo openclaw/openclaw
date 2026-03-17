@@ -471,7 +471,7 @@ export async function preflightDiscordMessage(
       : null;
   const configuredBinding = configuredRoute?.bindingResolution ?? null;
   if (!threadBinding && configuredBinding) {
-    threadBinding = configuredBinding.configuredBinding.record;
+    threadBinding = configuredBinding.record;
   }
   if (
     shouldIgnoreBoundThreadWebhookMessage({
@@ -872,7 +872,7 @@ export async function preflightDiscordMessage(
     });
     if (!ensured.ok) {
       logVerbose(
-        `discord: configured ACP binding unavailable for channel ${configuredBinding.configuredBinding.spec.conversationId}: ${ensured.error}`,
+        `discord: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
       );
       return null;
     }
