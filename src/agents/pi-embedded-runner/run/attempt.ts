@@ -1414,6 +1414,26 @@ export function buildAgentEndFinalLlmOutcome(params: {
   aborted: boolean;
   timedOut: boolean;
 }): PluginHookAgentEndFinalLlmOutcome | undefined {
+  const runnerFailure =
+    params.promptErrorSource === "compaction" ||
+    params.aborted ||
+    params.timedOut ||
+    isRunnerAbortError(params.promptError) ||
+    isTimeoutError(params.promptError);
+
+  if (params.promptError && runnerFailure) {
+    return {
+      ok: false,
+      source: "runner",
+      provider: params.provider,
+      model: params.modelId,
+      stopReason: params.lastAssistant?.stopReason === "aborted" ? "aborted" : undefined,
+      errorMessage: sanitizeAgentEndOutcomeErrorMessage({
+        raw: describeUnknownError(params.promptError),
+      }),
+    };
+  }
+
   if (params.lastAssistant) {
     const provider = params.lastAssistant.provider || params.provider;
     const model = params.lastAssistant.model || params.modelId;
@@ -1446,16 +1466,7 @@ export function buildAgentEndFinalLlmOutcome(params: {
   }
 
   if (params.promptError) {
-    const source =
-      params.promptErrorSource === "compaction" ||
-      params.aborted ||
-      params.timedOut ||
-      isRunnerAbortError(params.promptError) ||
-      isTimeoutError(params.promptError)
-        ? "runner"
-        : params.providerCallStarted
-          ? "provider"
-          : "prompt";
+    const source = params.providerCallStarted ? "provider" : "prompt";
     const outcome: PluginHookAgentEndFinalLlmOutcome = {
       ok: false,
       source,
@@ -1463,7 +1474,7 @@ export function buildAgentEndFinalLlmOutcome(params: {
         raw: describeUnknownError(params.promptError),
       }),
     };
-    if (source !== "prompt" || params.providerCallStarted) {
+    if (source !== "prompt") {
       outcome.provider = params.provider;
       outcome.model = params.modelId;
     }
@@ -1499,6 +1510,19 @@ export function buildAgentEndFinalLlmOutcome(params: {
   }
 
   return undefined;
+}
+
+export function findAttemptAssistantMessage(params: {
+  messages: AgentMessage[];
+  promptStartedAt: number;
+}): AssistantMessage | undefined {
+  return params.messages
+    .slice()
+    .toReversed()
+    .find(
+      (message): message is AssistantMessage =>
+        isAssistantRunMessage(message) && message.timestamp >= params.promptStartedAt,
+    );
 }
 
 export function buildAgentEndHookEvent(params: {
@@ -2576,10 +2600,9 @@ export async function runEmbeddedAttempt(
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
       let providerCallStarted = false;
+      const promptStartedAt = Date.now();
       const prePromptMessageCount = activeSession.messages.length;
       try {
-        const promptStartedAt = Date.now();
-
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
         let effectivePrompt = prependBootstrapPromptWarning(
@@ -2959,10 +2982,10 @@ export async function runEmbeddedAttempt(
               : undefined,
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
-        lastAssistant = messagesSnapshot
-          .slice()
-          .toReversed()
-          .find((message): message is AssistantMessage => isAssistantRunMessage(message));
+        lastAssistant = findAttemptAssistantMessage({
+          messages: messagesSnapshot,
+          promptStartedAt,
+        });
 
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await

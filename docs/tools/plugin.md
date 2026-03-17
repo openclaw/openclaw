@@ -1686,6 +1686,7 @@ Notes:
 - `finalLlmOutcome` is optional and additive for backward compatibility.
 - `statusCode` is only set when OpenClaw has structured HTTP status data for the terminal failure.
 - `errorMessage` is sanitized and does not include raw secrets, auth tokens, headers, or payload dumps.
+- `finalLlmOutcome.ok` is not a drop-in replacement for the legacy top-level `success` field. For example, provider failures that surface as terminal assistant error turns can report `ok: false` while `success` remains `true`.
 
 Core-enforced hook policy:
 

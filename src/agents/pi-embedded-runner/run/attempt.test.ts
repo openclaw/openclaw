@@ -9,6 +9,7 @@ import {
   buildAgentEndHookEvent,
   composeSystemPromptWithHookContext,
   decodeHtmlEntitiesInObject,
+  findAttemptAssistantMessage,
   isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
@@ -374,6 +375,28 @@ describe("buildAgentEndFinalLlmOutcome", () => {
     });
   });
 
+  it("prefers runner failure when compaction abort happens after a successful provider reply", () => {
+    expect(
+      buildAgentEndFinalLlmOutcome({
+        provider: "openai",
+        modelId: "gpt-4.1",
+        lastAssistant: createAssistantMessage(),
+        promptError: new Error("compaction wait aborted"),
+        promptErrorSource: "compaction",
+        providerCallStarted: true,
+        aborted: false,
+        timedOut: false,
+      }),
+    ).toEqual({
+      ok: false,
+      source: "runner",
+      provider: "openai",
+      model: "gpt-4.1",
+      stopReason: undefined,
+      errorMessage: "compaction wait aborted",
+    });
+  });
+
   it("marks terminal assistant provider failures even when promptError is null", () => {
     const outcome = buildAgentEndFinalLlmOutcome({
       provider: "openai",
@@ -399,6 +422,38 @@ describe("buildAgentEndFinalLlmOutcome", () => {
     });
     expect(outcome?.errorMessage).toContain("Unauthorized");
     expect(outcome?.errorMessage).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
+  });
+});
+
+describe("findAttemptAssistantMessage", () => {
+  it("returns the assistant message emitted during the current attempt", () => {
+    const olderAssistant = createAssistantMessage({ timestamp: 100 });
+    const currentAssistant = createAssistantMessage({ timestamp: 250, model: "gpt-4.1-mini" });
+
+    expect(
+      findAttemptAssistantMessage({
+        messages: [
+          olderAssistant,
+          { role: "user", content: "retry", timestamp: 150 } as never,
+          currentAssistant,
+        ] as never,
+        promptStartedAt: 200,
+      }),
+    ).toBe(currentAssistant);
+  });
+
+  it("ignores historical assistant turns when the current attempt failed before emitting one", () => {
+    const olderAssistant = createAssistantMessage({ timestamp: 100 });
+
+    expect(
+      findAttemptAssistantMessage({
+        messages: [
+          olderAssistant,
+          { role: "user", content: "retry", timestamp: 150 } as never,
+        ] as never,
+        promptStartedAt: 200,
+      }),
+    ).toBeUndefined();
   });
 });
 
