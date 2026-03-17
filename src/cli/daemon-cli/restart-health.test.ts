@@ -219,6 +219,20 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.healthy).toBe(true);
   });
 
+  it.each([
+    "connect failed",
+    "device required",
+    "pairing required",
+    "",
+  ])("treats policy-close %j as healthy gateway reachability", async (reason) => {
+    const snapshot = await inspectAmbiguousOwnershipWithProbe({
+      ok: false,
+      close: { code: 1008, reason },
+    });
+
+    expect(snapshot.healthy).toBe(true);
+  });
+
   it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {
     const service = {
       readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
