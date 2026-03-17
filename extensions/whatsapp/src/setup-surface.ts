@@ -1,7 +1,6 @@
 import path from "node:path";
 import {
   DEFAULT_ACCOUNT_ID,
-  type DmPolicy,
   formatCliCommand,
   formatDocsLink,
   normalizeAccountId,
@@ -21,7 +20,7 @@ const channel = "whatsapp" as const;
 
 function mergeWhatsAppConfig(
   cfg: OpenClawConfig,
-  patch: Partial<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>,
+  patch: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>>,
   options?: { unsetOnUndefined?: string[] },
 ): OpenClawConfig {
   const base = { ...(cfg.channels?.whatsapp ?? {}) } as Record<string, unknown>;

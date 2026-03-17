@@ -170,9 +170,7 @@ describe("stageBundledPluginRuntime", () => {
         false,
       );
 
-      const runtimeModule = await import(
-        `${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`,
-      );
+      const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
       const commandsModule = (await import(
         `${pathToFileURL(canonicalCommandsPath).href}?t=${Date.now()}`
       )) as {
@@ -182,9 +180,7 @@ describe("stageBundledPluginRuntime", () => {
           description: string;
           acceptsArgs: boolean;
         }>;
-        matchPluginCommand: (
-          commandBody: string,
-        ) => {
+        matchPluginCommand: (commandBody: string) => {
           command: { handler: ({ args }: { args?: string }) => Promise<{ text: string }> };
           args?: string;
         } | null;

@@ -31,6 +31,7 @@ import type {
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
+  MediaUnderstandingProviderPlugin,
   ProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -46,6 +47,7 @@ import type {
   PluginHookName,
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
+  SpeechProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
 
@@ -110,6 +112,22 @@ export type PluginWebSearchProviderRegistration = {
   rootDir?: string;
 };
 
+export type PluginSpeechProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: SpeechProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginMediaUnderstandingProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: MediaUnderstandingProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginHookRegistration = {
   pluginId: string;
   entry: HookEntry;
@@ -154,6 +172,8 @@ export type PluginRecord = {
   hookNames: string[];
   channelIds: string[];
   providerIds: string[];
+  speechProviderIds: string[];
+  mediaUnderstandingProviderIds: string[];
   webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
@@ -174,6 +194,8 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  speechProviders: PluginSpeechProviderRegistration[];
+  mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -219,6 +241,8 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channels: [],
     channelSetups: [],
     providers: [],
+    speechProviders: [],
+    mediaUnderstandingProviders: [],
     webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
@@ -550,6 +574,71 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
+    const id = provider.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "speech provider registration missing id",
+      });
+      return;
+    }
+    const existing = registry.speechProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `speech provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.speechProviderIds.push(id);
+    registry.speechProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerMediaUnderstandingProvider = (
+    record: PluginRecord,
+    provider: MediaUnderstandingProviderPlugin,
+  ) => {
+    const id = provider.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "media provider registration missing id",
+      });
+      return;
+    }
+    const existing = registry.mediaUnderstandingProviders.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `media provider already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.mediaUnderstandingProviderIds.push(id);
+    registry.mediaUnderstandingProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
     const id = provider.id.trim();
     if (!id) {
@@ -789,6 +878,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerChannel: (registration) => registerChannel(record, registration, registrationMode),
       registerProvider:
         registrationMode === "full" ? (provider) => registerProvider(record, provider) : () => {},
+      registerSpeechProvider:
+        registrationMode === "full"
+          ? (provider) => registerSpeechProvider(record, provider)
+          : () => {},
+      registerMediaUnderstandingProvider:
+        registrationMode === "full"
+          ? (provider) => registerMediaUnderstandingProvider(record, provider)
+          : () => {},
       registerWebSearchProvider:
         registrationMode === "full"
           ? (provider) => registerWebSearchProvider(record, provider)
@@ -862,6 +959,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerTool,
     registerChannel,
     registerProvider,
+    registerSpeechProvider,
+    registerMediaUnderstandingProvider,
     registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,
