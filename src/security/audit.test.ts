@@ -348,92 +348,98 @@ description: test skill
     expect(summary?.detail).toContain("trust model: personal assistant");
   });
 
-  it("flags non-loopback bind without auth as critical", async () => {
-    // Clear env tokens so resolveGatewayAuth defaults to mode=none
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    const prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-
-    try {
-      const cfg: OpenClawConfig = {
-        gateway: {
-          bind: "lan",
-          auth: {},
-        },
-      };
-
-      const res = await audit(cfg);
-
-      expect(hasFinding(res, "gateway.bind_no_auth", "critical")).toBe(true);
-    } finally {
-      // Restore env
-      if (prevToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-      }
-      if (prevPassword === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
-      }
-    }
-  });
-
-  it("does not flag non-loopback bind without auth when gateway password uses SecretRef", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: {
-          password: {
-            source: "env",
-            provider: "default",
-            id: "OPENCLAW_GATEWAY_PASSWORD",
-          },
+  it("evaluates non-loopback gateway auth presence", async () => {
+    const cases = [
+      {
+        name: "flags non-loopback bind without auth as critical",
+        run: async () =>
+          withEnvAsync(
+            {
+              OPENCLAW_GATEWAY_TOKEN: undefined,
+              OPENCLAW_GATEWAY_PASSWORD: undefined,
+            },
+            async () =>
+              audit({
+                gateway: {
+                  bind: "lan",
+                  auth: {},
+                },
+              }),
+          ),
+        assert: (res: SecurityAuditReport) => {
+          expect(hasFinding(res, "gateway.bind_no_auth", "critical")).toBe(true);
         },
       },
-    };
-
-    const res = await audit(cfg, { env: {} });
-    expectNoFinding(res, "gateway.bind_no_auth");
-  });
-
-  it("does not flag missing gateway auth when read-only scrubbed config omits unavailable auth SecretRefs", async () => {
-    const sourceConfig: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: {
-          token: {
-            source: "env",
-            provider: "default",
-            id: "OPENCLAW_GATEWAY_TOKEN",
-          },
+      {
+        name: "does not flag non-loopback bind without auth when gateway password uses SecretRef",
+        run: async () =>
+          audit(
+            {
+              gateway: {
+                bind: "lan",
+                auth: {
+                  password: {
+                    source: "env",
+                    provider: "default",
+                    id: "OPENCLAW_GATEWAY_PASSWORD",
+                  },
+                },
+              },
+            },
+            { env: {} },
+          ),
+        assert: (res: SecurityAuditReport) => {
+          expectNoFinding(res, "gateway.bind_no_auth");
         },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
+      {
+        name: "does not flag missing gateway auth when read-only scrubbed config omits unavailable auth SecretRefs",
+        run: async () => {
+          const sourceConfig: OpenClawConfig = {
+            gateway: {
+              bind: "lan",
+              auth: {
+                token: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_GATEWAY_TOKEN",
+                },
+              },
+            },
+            secrets: {
+              providers: {
+                default: { source: "env" },
+              },
+            },
+          };
+          const resolvedConfig: OpenClawConfig = {
+            gateway: {
+              bind: "lan",
+              auth: {},
+            },
+            secrets: sourceConfig.secrets,
+          };
+
+          return runSecurityAudit({
+            config: resolvedConfig,
+            sourceConfig,
+            env: {},
+            includeFilesystem: false,
+            includeChannelSecurity: false,
+          });
+        },
+        assert: (res: SecurityAuditReport) => {
+          expectNoFinding(res, "gateway.bind_no_auth");
         },
       },
-    };
-    const resolvedConfig: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: {},
-      },
-      secrets: sourceConfig.secrets,
-    };
+    ] as const;
 
-    const res = await runSecurityAudit({
-      config: resolvedConfig,
-      sourceConfig,
-      env: {},
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expectNoFinding(res, "gateway.bind_no_auth");
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await testCase.run();
+        testCase.assert(res);
+      }),
+    );
   });
 
   it("evaluates gateway auth rate-limit warning based on configuration", async () => {
