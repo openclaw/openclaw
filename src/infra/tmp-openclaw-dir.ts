@@ -152,6 +152,14 @@ export function resolvePreferredOpenClawTmpDir(
   }
 
   try {
+    // Allow overriding the temporary directory via environment variable
+    if (process.env.OPENCLAW_TMP_DIR) {
+      const overridePath = process.env.OPENCLAW_TMP_DIR;
+      mkdirSync(overridePath, { recursive: true, mode: 0o700 });
+      chmodSync(overridePath, 0o700);
+      return overridePath;
+    }
+
     accessSync("/tmp", TMP_DIR_ACCESS_MODE);
     // Create with a safe default; subsequent callers expect it exists.
     mkdirSync(POSIX_OPENCLAW_TMP_DIR, { recursive: true, mode: 0o700 });
