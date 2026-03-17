@@ -322,6 +322,38 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedParams()).not.toHaveProperty("provider");
   });
 
+  test("rejects trusted fallback overrides when the configured allowlist normalizes to empty", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic"],
+            },
+          },
+        },
+      },
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-invalid-allowlist"));
+    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+
+    await expect(
+      gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        runtime.run({
+          sessionKey: "s-invalid-allowlist",
+          message: "use trusted override",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          deliver: false,
+        }),
+      ),
+    ).rejects.toThrow(
+      'plugin "voice-call" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.',
+    );
+  });
+
   test("uses least-privilege synthetic fallback scopes without admin", async () => {
     const serverPlugins = await importServerPluginsModule();
     const runtime = await createSubagentRuntime(serverPlugins);

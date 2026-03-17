@@ -91,11 +91,30 @@ describe("normalizePluginsConfig", () => {
     });
     expect(result.entries["voice-call"]?.subagent).toEqual({
       allowModelOverride: true,
+      hasAllowedModelsConfig: true,
       allowedModels: ["anthropic/claude-haiku-4-5", "openai/gpt-4.1-mini"],
     });
   });
 
-  it("drops invalid plugin subagent override policy values", () => {
+  it("preserves explicit subagent allowlist intent even when all entries are invalid", () => {
+    const result = normalizePluginsConfig({
+      entries: {
+        "voice-call": {
+          subagent: {
+            allowModelOverride: true,
+            allowedModels: [42, null, "anthropic"],
+          } as unknown as { allowModelOverride: boolean; allowedModels: string[] },
+        },
+      },
+    });
+    expect(result.entries["voice-call"]?.subagent).toEqual({
+      allowModelOverride: true,
+      hasAllowedModelsConfig: true,
+      allowedModels: ["anthropic"],
+    });
+  });
+
+  it("keeps explicit invalid subagent allowlist config visible to callers", () => {
     const result = normalizePluginsConfig({
       entries: {
         "voice-call": {
@@ -106,7 +125,9 @@ describe("normalizePluginsConfig", () => {
         },
       },
     });
-    expect(result.entries["voice-call"]?.subagent).toBeUndefined();
+    expect(result.entries["voice-call"]?.subagent).toEqual({
+      hasAllowedModelsConfig: true,
+    });
   });
 
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {

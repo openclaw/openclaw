@@ -21,6 +21,7 @@ export type NormalizedPluginsConfig = {
       subagent?: {
         allowModelOverride?: boolean;
         allowedModels?: string[];
+        hasAllowedModelsConfig?: boolean;
       };
       config?: unknown;
     }
@@ -133,6 +134,9 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
         ? {
             allowModelOverride: (subagentRaw as { allowModelOverride?: unknown })
               .allowModelOverride,
+            hasAllowedModelsConfig: Array.isArray(
+              (subagentRaw as { allowedModels?: unknown }).allowedModels,
+            ),
             allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
               ? ((subagentRaw as { allowedModels?: unknown }).allowedModels as unknown[])
                   .map((model) => (typeof model === "string" ? model.trim() : ""))
@@ -143,11 +147,13 @@ const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entr
     const normalizedSubagent =
       subagent &&
       (typeof subagent.allowModelOverride === "boolean" ||
+        subagent.hasAllowedModelsConfig ||
         (Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0))
         ? {
             ...(typeof subagent.allowModelOverride === "boolean"
               ? { allowModelOverride: subagent.allowModelOverride }
               : {}),
+            ...(subagent.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
             ...(Array.isArray(subagent.allowedModels) && subagent.allowedModels.length > 0
               ? { allowedModels: subagent.allowedModels }
               : {}),

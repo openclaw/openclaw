@@ -52,6 +52,7 @@ export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
 type PluginSubagentOverridePolicy = {
   allowModelOverride: boolean;
   allowAnyModel: boolean;
+  hasConfiguredAllowlist: boolean;
   allowedModels: Set<string>;
 };
 
@@ -104,6 +105,7 @@ function setPluginSubagentOverridePolicies(cfg: ReturnType<typeof loadConfig>): 
   const policies: PluginSubagentPolicyState["policies"] = {};
   for (const [pluginId, entry] of Object.entries(normalized.entries)) {
     const allowModelOverride = entry.subagent?.allowModelOverride === true;
+    const hasConfiguredAllowlist = entry.subagent?.hasAllowedModelsConfig === true;
     const configuredAllowedModels = entry.subagent?.allowedModels ?? [];
     const allowedModels = new Set<string>();
     let allowAnyModel = false;
@@ -118,12 +120,18 @@ function setPluginSubagentOverridePolicies(cfg: ReturnType<typeof loadConfig>): 
       }
       allowedModels.add(normalizedModelRef);
     }
-    if (!allowModelOverride && allowedModels.size === 0 && !allowAnyModel) {
+    if (
+      !allowModelOverride &&
+      !hasConfiguredAllowlist &&
+      allowedModels.size === 0 &&
+      !allowAnyModel
+    ) {
       continue;
     }
     policies[pluginId] = {
       allowModelOverride,
       allowAnyModel,
+      hasConfiguredAllowlist,
       allowedModels,
     };
   }
@@ -149,7 +157,16 @@ function authorizeFallbackModelOverride(params: {
       reason: `plugin "${pluginId}" is not trusted for fallback provider/model override requests.`,
     };
   }
-  if (policy.allowAnyModel || policy.allowedModels.size === 0) {
+  if (policy.allowAnyModel) {
+    return { allowed: true };
+  }
+  if (policy.hasConfiguredAllowlist && policy.allowedModels.size === 0) {
+    return {
+      allowed: false,
+      reason: `plugin "${pluginId}" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.`,
+    };
+  }
+  if (policy.allowedModels.size === 0) {
     return { allowed: true };
   }
   const requestedModelRef = resolveRequestedFallbackModelRef(params);
