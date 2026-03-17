@@ -1,3 +1,4 @@
+import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
 import anthropicPlugin from "../../../extensions/anthropic/index.js";
 import bravePlugin from "../../../extensions/brave/index.js";
 import byteplusPlugin from "../../../extensions/byteplus/index.js";
@@ -72,6 +73,7 @@ type PluginRegistrationContractEntry = {
 };
 
 const bundledProviderPlugins: RegistrablePlugin[] = [
+  amazonBedrockPlugin,
   anthropicPlugin,
   byteplusPlugin,
   cloudflareAiGatewayPlugin,
