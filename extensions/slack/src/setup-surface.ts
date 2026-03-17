@@ -130,27 +130,19 @@ async function resolveSlackGroupAllowlist(params: {
   return keys;
 }
 
-export const slackSetupWizard: ChannelSetupWizard = createSlackSetupWizardBase(async () => ({
-  slackSetupWizard: {
-    dmPolicy: {
-      promptAllowFrom: promptSlackAllowFrom,
-    },
-    allowFrom: {
-      resolveEntries: async ({ credentialValues, entries }) =>
-        await resolveSlackAllowFromEntries({
-          token: credentialValues.botToken,
-          entries,
-        }),
-    },
-    groupAccess: {
-      resolveAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) =>
-        await resolveSlackGroupAllowlist({
-          cfg,
-          accountId,
-          credentialValues,
-          entries,
-          prompter,
-        }),
-    },
-  } as ChannelSetupWizard,
-}));
+export const slackSetupWizard: ChannelSetupWizard = createSlackSetupWizardBase({
+  promptAllowFrom: promptSlackAllowFrom,
+  resolveAllowFromEntries: async ({ credentialValues, entries }) =>
+    await resolveSlackAllowFromEntries({
+      token: credentialValues.botToken,
+      entries,
+    }),
+  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) =>
+    await resolveSlackGroupAllowlist({
+      cfg,
+      accountId,
+      credentialValues,
+      entries,
+      prompter,
+    }),
+});
