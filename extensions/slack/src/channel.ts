@@ -11,6 +11,7 @@ import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey, normalizeOutboundThreadId } from "openclaw/plugin-sdk/core";
 import { resolveThreadSessionKeys, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
+  buildChannelConfigSchema,
   buildComputedAccountStatusSnapshot,
   DEFAULT_ACCOUNT_ID,
   listSlackDirectoryGroupsFromConfig,
@@ -22,6 +23,7 @@ import {
   resolveConfiguredFromRequiredCredentialStatuses,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
+  SlackConfigSchema,
   createSlackActions,
   type ChannelPlugin,
   type OpenClawConfig,
@@ -307,6 +309,7 @@ async function resolveSlackAllowlistNames(params: {
 
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   ...createSlackPluginBase({
+    configSchema: buildChannelConfigSchema(SlackConfigSchema),
     setupWizard: slackSetupWizard,
     setup: slackSetupAdapter,
   }),

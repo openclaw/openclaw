@@ -482,7 +482,7 @@ describe("update-cli", () => {
       expectedTag: undefined as string | undefined,
     },
     {
-      name: "uses explicit beta channel and persists it",
+      name: "switches git installs to package mode for explicit beta and persists it",
       mode: "git" as const,
       options: { channel: "beta" },
       prepare: async () => {},
@@ -505,21 +505,21 @@ describe("update-cli", () => {
         if (expectedTag !== undefined) {
           expect(call?.tag).toBe(expectedTag);
         }
-        if (expectedPersistedChannel !== undefined) {
-          expect(writeConfigFile).toHaveBeenCalled();
-          const writeCall = vi.mocked(writeConfigFile).mock.calls[0]?.[0] as {
-            update?: { channel?: string };
-          };
-          expect(writeCall?.update?.channel).toBe(expectedPersistedChannel);
-        }
-        return;
+      } else {
+        expect(runGatewayUpdate).not.toHaveBeenCalled();
+        expect(runCommandWithTimeout).toHaveBeenCalledWith(
+          ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+          expect.any(Object),
+        );
       }
 
-      expect(runGatewayUpdate).not.toHaveBeenCalled();
-      expect(runCommandWithTimeout).toHaveBeenCalledWith(
-        ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
-        expect.any(Object),
-      );
+      if (expectedPersistedChannel !== undefined) {
+        expect(writeConfigFile).toHaveBeenCalled();
+        const writeCall = vi.mocked(writeConfigFile).mock.calls[0]?.[0] as {
+          update?: { channel?: string };
+        };
+        expect(writeCall?.update?.channel).toBe(expectedPersistedChannel);
+      }
     },
   );
 
@@ -873,8 +873,11 @@ describe("update-cli", () => {
     },
   ])("$name", async (testCase) => {
     const setup = testCase.customSetup ? undefined : setupUpdatedRootRefresh();
-    const context = await testCase.invoke();
-    const root = setup?.root ?? runCommandWithTimeout.mock.calls[0]?.[1]?.cwd;
+    const context = (await testCase.invoke()) as { originalCwd: string } | undefined;
+    const runCommandWithTimeoutMock = vi.mocked(runCommandWithTimeout) as unknown as {
+      mock: { calls: Array<[unknown, { cwd?: string }?]> };
+    };
+    const root = setup?.root ?? runCommandWithTimeoutMock.mock.calls[0]?.[1]?.cwd;
     const entryPath = setup?.entryPath ?? path.join(String(root), "dist", "entry.js");
 
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
