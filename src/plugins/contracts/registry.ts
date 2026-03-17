@@ -47,26 +47,20 @@ type RegistrablePlugin = {
   register: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
 };
 
-type ProviderContractEntry = {
+type CapabilityContractEntry<T> = {
   pluginId: string;
-  provider: ProviderPlugin;
+  provider: T;
 };
 
-type WebSearchProviderContractEntry = {
-  pluginId: string;
-  provider: WebSearchProviderPlugin;
+type ProviderContractEntry = CapabilityContractEntry<ProviderPlugin>;
+
+type WebSearchProviderContractEntry = CapabilityContractEntry<WebSearchProviderPlugin> & {
   credentialValue: unknown;
 };
 
-type SpeechProviderContractEntry = {
-  pluginId: string;
-  provider: SpeechProviderPlugin;
-};
-
-type MediaUnderstandingProviderContractEntry = {
-  pluginId: string;
-  provider: MediaUnderstandingProviderPlugin;
-};
+type SpeechProviderContractEntry = CapabilityContractEntry<SpeechProviderPlugin>;
+type MediaUnderstandingProviderContractEntry =
+  CapabilityContractEntry<MediaUnderstandingProviderPlugin>;
 
 type PluginRegistrationContractEntry = {
   pluginId: string;
@@ -138,15 +132,23 @@ function captureRegistrations(plugin: RegistrablePlugin) {
   return captured;
 }
 
-export const providerContractRegistry: ProviderContractEntry[] = bundledProviderPlugins.flatMap(
-  (plugin) => {
+function buildCapabilityContractRegistry<T>(params: {
+  plugins: RegistrablePlugin[];
+  select: (captured: ReturnType<typeof createCapturedPluginRegistration>) => T[];
+}): CapabilityContractEntry<T>[] {
+  return params.plugins.flatMap((plugin) => {
     const captured = captureRegistrations(plugin);
-    return captured.providers.map((provider) => ({
+    return params.select(captured).map((provider) => ({
       pluginId: plugin.id,
       provider,
     }));
-  },
-);
+  });
+}
+
+export const providerContractRegistry: ProviderContractEntry[] = buildCapabilityContractRegistry({
+  plugins: bundledProviderPlugins,
+  select: (captured) => captured.providers,
+});
 
 export const webSearchProviderContractRegistry: WebSearchProviderContractEntry[] =
   bundledWebSearchPlugins.flatMap((plugin) => {
@@ -159,21 +161,15 @@ export const webSearchProviderContractRegistry: WebSearchProviderContractEntry[]
   });
 
 export const speechProviderContractRegistry: SpeechProviderContractEntry[] =
-  bundledSpeechPlugins.flatMap((plugin) => {
-    const captured = captureRegistrations(plugin);
-    return captured.speechProviders.map((provider) => ({
-      pluginId: plugin.id,
-      provider,
-    }));
+  buildCapabilityContractRegistry({
+    plugins: bundledSpeechPlugins,
+    select: (captured) => captured.speechProviders,
   });
 
 export const mediaUnderstandingProviderContractRegistry: MediaUnderstandingProviderContractEntry[] =
-  bundledMediaUnderstandingPlugins.flatMap((plugin) => {
-    const captured = captureRegistrations(plugin);
-    return captured.mediaUnderstandingProviders.map((provider) => ({
-      pluginId: plugin.id,
-      provider,
-    }));
+  buildCapabilityContractRegistry({
+    plugins: bundledMediaUnderstandingPlugins,
+    select: (captured) => captured.mediaUnderstandingProviders,
   });
 
 const bundledPluginRegistrationList = [
