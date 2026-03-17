@@ -23,30 +23,28 @@ vi.mock("./providers.js", () => ({
     resolveOwningPluginIdsForProviderMock(params as never),
 }));
 
-import {
-  augmentModelCatalogWithProviderPlugins,
-  buildProviderAuthDoctorHintWithPlugin,
-  buildProviderMissingAuthMessageWithPlugin,
-  formatProviderAuthProfileApiKeyWithPlugin,
-  prepareProviderExtraParams,
-  resolveProviderCacheTtlEligibility,
-  resolveProviderBinaryThinking,
-  resolveProviderBuiltInModelSuppression,
-  resolveProviderDefaultThinkingLevel,
-  resolveProviderModernModelRef,
-  resolveProviderUsageSnapshotWithPlugin,
-  resolveProviderCapabilitiesWithPlugin,
-  resolveProviderUsageAuthWithPlugin,
-  resolveProviderXHighThinking,
-  normalizeProviderResolvedModelWithPlugin,
-  prepareProviderDynamicModel,
-  prepareProviderRuntimeAuth,
-  resetProviderRuntimeHookCacheForTest,
-  refreshProviderOAuthCredentialWithPlugin,
-  resolveProviderRuntimePlugin,
-  runProviderDynamicModel,
-  wrapProviderStreamFn,
-} from "./provider-runtime.js";
+let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
+let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
+let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
+let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
+let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
+let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
+let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolveProviderBinaryThinking;
+let resolveProviderBuiltInModelSuppression: typeof import("./provider-runtime.js").resolveProviderBuiltInModelSuppression;
+let resolveProviderDefaultThinkingLevel: typeof import("./provider-runtime.js").resolveProviderDefaultThinkingLevel;
+let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
+let resolveProviderUsageSnapshotWithPlugin: typeof import("./provider-runtime.js").resolveProviderUsageSnapshotWithPlugin;
+let resolveProviderCapabilitiesWithPlugin: typeof import("./provider-runtime.js").resolveProviderCapabilitiesWithPlugin;
+let resolveProviderUsageAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderUsageAuthWithPlugin;
+let resolveProviderXHighThinking: typeof import("./provider-runtime.js").resolveProviderXHighThinking;
+let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.js").normalizeProviderResolvedModelWithPlugin;
+let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
+let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
+let resetProviderRuntimeHookCacheForTest: typeof import("./provider-runtime.js").resetProviderRuntimeHookCacheForTest;
+let refreshProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").refreshProviderOAuthCredentialWithPlugin;
+let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolveProviderRuntimePlugin;
+let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
+let wrapProviderStreamFn: typeof import("./provider-runtime.js").wrapProviderStreamFn;
 
 const MODEL: ProviderRuntimeModel = {
   id: "demo-model",
@@ -62,7 +60,32 @@ const MODEL: ProviderRuntimeModel = {
 };
 
 describe("provider-runtime", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      augmentModelCatalogWithProviderPlugins,
+      buildProviderAuthDoctorHintWithPlugin,
+      buildProviderMissingAuthMessageWithPlugin,
+      formatProviderAuthProfileApiKeyWithPlugin,
+      prepareProviderExtraParams,
+      resolveProviderCacheTtlEligibility,
+      resolveProviderBinaryThinking,
+      resolveProviderBuiltInModelSuppression,
+      resolveProviderDefaultThinkingLevel,
+      resolveProviderModernModelRef,
+      resolveProviderUsageSnapshotWithPlugin,
+      resolveProviderCapabilitiesWithPlugin,
+      resolveProviderUsageAuthWithPlugin,
+      resolveProviderXHighThinking,
+      normalizeProviderResolvedModelWithPlugin,
+      prepareProviderDynamicModel,
+      prepareProviderRuntimeAuth,
+      resetProviderRuntimeHookCacheForTest,
+      refreshProviderOAuthCredentialWithPlugin,
+      resolveProviderRuntimePlugin,
+      runProviderDynamicModel,
+      wrapProviderStreamFn,
+    } = await import("./provider-runtime.js"));
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
