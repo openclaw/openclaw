@@ -877,6 +877,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       },
       imageGenerationModel: {
         primary: "openai/gpt-image-1",
+        fallbacks: ["google/gemini-3.1-flash-image-preview"],
       },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",

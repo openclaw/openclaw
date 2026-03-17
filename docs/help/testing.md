@@ -360,6 +360,15 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Enable: `BYTEPLUS_API_KEY=... BYTEPLUS_LIVE_TEST=1 pnpm test:live src/agents/byteplus.live.test.ts`
 - Optional model override: `BYTEPLUS_CODING_MODEL=ark-code-latest`
 
+## Google image generation live
+
+- Test: `src/image-generation/providers/google.live.test.ts`
+- Enable: `GOOGLE_LIVE_TEST=1 pnpm test:live src/image-generation/providers/google.live.test.ts`
+- Key source: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+- Optional overrides:
+  - `GOOGLE_IMAGE_GENERATION_MODEL=gemini-3.1-flash-image-preview`
+  - `GOOGLE_IMAGE_BASE_URL=https://generativelanguage.googleapis.com/v1beta`
+
 ## Docker runners (optional “works in Linux” checks)
 
 These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount CLI auth homes like `~/.codex`, `~/.claude`, `~/.qwen`, and `~/.minimax` when present, then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
