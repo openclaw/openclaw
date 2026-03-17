@@ -4,7 +4,9 @@ import {
   __testing,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
+  forceClearActiveEmbeddedRun,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedPiRunActive,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
@@ -138,6 +140,70 @@ describe("pi-embedded runner run registry", () => {
       runsA.__testing.resetActiveEmbeddedRuns();
       runsB.__testing.resetActiveEmbeddedRuns();
     }
+  });
+
+  it("force-clears an active run regardless of handle identity", () => {
+    const handle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+
+    setActiveEmbeddedRun("session-force", handle);
+    expect(isEmbeddedPiRunActive("session-force")).toBe(true);
+
+    // Force-clear does not require the original handle
+    forceClearActiveEmbeddedRun("session-force");
+    expect(isEmbeddedPiRunActive("session-force")).toBe(false);
+  });
+
+  it("force-clear on idle session is a no-op", () => {
+    // Should not throw or have side-effects when session is not active
+    expect(isEmbeddedPiRunActive("session-idle")).toBe(false);
+    forceClearActiveEmbeddedRun("session-idle");
+    expect(isEmbeddedPiRunActive("session-idle")).toBe(false);
+  });
+
+  it("clearActiveEmbeddedRun with old handle is a no-op after force-clear", () => {
+    const handle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+
+    setActiveEmbeddedRun("session-double", handle);
+    expect(isEmbeddedPiRunActive("session-double")).toBe(true);
+
+    // Force-clear removes the run
+    forceClearActiveEmbeddedRun("session-double");
+    expect(isEmbeddedPiRunActive("session-double")).toBe(false);
+
+    // Subsequent clearActiveEmbeddedRun with the old handle should be a no-op
+    // (no error, no double-notify)
+    clearActiveEmbeddedRun("session-double", handle);
+    expect(isEmbeddedPiRunActive("session-double")).toBe(false);
+  });
+
+  it("force-clear also clears transcript snapshots", () => {
+    const handle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+
+    setActiveEmbeddedRun("session-snap-force", handle);
+    updateActiveEmbeddedRunSnapshot("session-snap-force", {
+      transcriptLeafId: "assistant-1",
+      messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
+      inFlightPrompt: "keep going",
+    });
+    expect(getActiveEmbeddedRunSnapshot("session-snap-force")).toBeDefined();
+
+    forceClearActiveEmbeddedRun("session-snap-force");
+    expect(getActiveEmbeddedRunSnapshot("session-snap-force")).toBeUndefined();
   });
 
   it("tracks and clears per-session transcript snapshots for active runs", () => {
