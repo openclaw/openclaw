@@ -10,22 +10,22 @@ import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { upsertAuthProfile } from "../../src/agents/auth-profiles.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../src/agents/defaults.js";
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
-import { createZaiToolStreamWrapper } from "../../src/agents/pi-embedded-runner/zai-stream-wrappers.js";
+import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/infra-runtime";
 import {
+  applyAuthProfileConfig,
+  buildApiKeyCredential,
+  ensureApiKeyFromOptionEnvOrPrompt,
   normalizeApiKeyInput,
+  normalizeOptionalSecretInput,
+  type SecretInput,
+  upsertAuthProfile,
   validateApiKeyInput,
-} from "../../src/commands/auth-choice.api-key.js";
-import { ensureApiKeyFromOptionEnvOrPrompt } from "../../src/commands/auth-choice.apply-helpers.js";
-import { buildApiKeyCredential } from "../../src/commands/onboard-auth.credentials.js";
-import { applyAuthProfileConfig } from "../../src/commands/onboard-auth.js";
-import type { SecretInput } from "../../src/config/types.secrets.js";
-import { resolveRequiredHomeDir } from "../../src/infra/home-dir.js";
-import { fetchZaiUsage } from "../../src/infra/provider-usage.fetch.js";
-import { normalizeOptionalSecretInput } from "../../src/utils/normalize-secret-input.js";
+} from "openclaw/plugin-sdk/provider-auth";
+import { DEFAULT_CONTEXT_TOKENS, normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
+import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
+import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "zai";
@@ -334,6 +334,7 @@ const zaiPlugin = {
       fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
       isCacheTtlEligible: () => true,
     });
+    api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },
 };
 
