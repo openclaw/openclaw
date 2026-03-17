@@ -1,15 +1,8 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { applyExtraParamsToAgent } from "./extra-params.js";
-
-type CapturedCall = {
-  headers?: Record<string, string>;
-  payload?: Record<string, unknown>;
-};
+import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 const TEST_CFG = {
   plugins: {
@@ -26,30 +19,19 @@ function applyAndCapture(params: {
   modelId: string;
   callerHeaders?: Record<string, string>;
   cfg?: OpenClawConfig;
-}): CapturedCall {
-  const captured: CapturedCall = {};
-
-  const baseStreamFn: StreamFn = (model, _context, options) => {
-    captured.headers = options?.headers;
-    options?.onPayload?.({}, model);
-    return createAssistantMessageEventStream();
-  };
-  const agent = { streamFn: baseStreamFn };
-
-  applyExtraParamsToAgent(agent, params.cfg ?? TEST_CFG, params.provider, params.modelId);
-
-  const model = {
-    api: "openai-completions",
-    provider: params.provider,
-    id: params.modelId,
-  } as Model<"openai-completions">;
-  const context: Context = { messages: [] };
-
-  void agent.streamFn?.(model, context, {
-    headers: params.callerHeaders,
+}) {
+  return runExtraParamsCase({
+    applyModelId: params.modelId,
+    applyProvider: params.provider,
+    callerHeaders: params.callerHeaders,
+    cfg: params.cfg ?? TEST_CFG,
+    model: {
+      api: "openai-completions",
+      provider: params.provider,
+      id: params.modelId,
+    } as Model<"openai-completions">,
+    payload: {},
   });
-
-  return captured;
 }
 
 function applyAndCaptureReasoning(params: {
@@ -58,35 +40,18 @@ function applyAndCaptureReasoning(params: {
   initialPayload?: Record<string, unknown>;
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
 }) {
-  let capturedPayload: Record<string, unknown> | undefined;
-
-  const baseStreamFn: StreamFn = (model, _context, options) => {
-    const payload: Record<string, unknown> = { ...params.initialPayload };
-    options?.onPayload?.(payload, model);
-    capturedPayload = payload;
-    return createAssistantMessageEventStream();
-  };
-  const agent = { streamFn: baseStreamFn };
-
-  applyExtraParamsToAgent(
-    agent,
-    params.cfg ?? TEST_CFG,
-    "kilocode",
-    params.modelId,
-    undefined,
-    params.thinkingLevel ?? "high",
-  );
-
-  const model = {
-    api: "openai-completions",
-    provider: "kilocode",
-    id: params.modelId,
-  } as Model<"openai-completions">;
-  const context: Context = { messages: [] };
-
-  void agent.streamFn?.(model, context, {});
-
-  return capturedPayload;
+  return runExtraParamsCase({
+    applyModelId: params.modelId,
+    applyProvider: "kilocode",
+    cfg: params.cfg ?? TEST_CFG,
+    model: {
+      api: "openai-completions",
+      provider: "kilocode",
+      id: params.modelId,
+    } as Model<"openai-completions">,
+    payload: { ...params.initialPayload },
+    thinkingLevel: params.thinkingLevel ?? "high",
+  }).payload;
 }
 
 describe("extra-params: Kilocode wrapper", () => {
@@ -191,26 +156,18 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
   });
 
   it("does not inject reasoning.effort for x-ai models", () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      const payload: Record<string, unknown> = { reasoning_effort: "high" };
-      options?.onPayload?.(payload, model);
-      capturedPayload = payload;
-      return createAssistantMessageEventStream();
-    };
-    const agent = { streamFn: baseStreamFn };
-
-    applyExtraParamsToAgent(agent, TEST_CFG, "kilocode", "x-ai/grok-3", undefined, "high");
-
-    const model = {
-      api: "openai-completions",
-      provider: "kilocode",
-      id: "x-ai/grok-3",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
+    const capturedPayload = runExtraParamsCase({
+      applyModelId: "x-ai/grok-3",
+      applyProvider: "kilocode",
+      cfg: TEST_CFG,
+      model: {
+        api: "openai-completions",
+        provider: "kilocode",
+        id: "x-ai/grok-3",
+      } as Model<"openai-completions">,
+      payload: { reasoning_effort: "high" },
+      thinkingLevel: "high",
+    }).payload;
 
     // x-ai models reject reasoning.effort — should be skipped
     expect(capturedPayload?.reasoning).toBeUndefined();
