@@ -1,13 +1,13 @@
+import * as execRuntime from "openclaw/plugin-sdk/process-runtime";
+import * as setupSdk from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as onboardHelpers from "../../../src/commands/onboard-helpers.js";
-import * as execModule from "../../../src/process/exec.js";
 import * as clientModule from "./client.js";
 import { probeIMessage } from "./probe.js";
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  vi.spyOn(onboardHelpers, "detectBinary").mockResolvedValue(true);
-  vi.spyOn(execModule, "runCommandWithTimeout").mockResolvedValue({
+  vi.spyOn(setupSdk, "detectBinary").mockResolvedValue(true);
+  vi.spyOn(execRuntime, "runCommandWithTimeout").mockResolvedValue({
     stdout: "",
     stderr: 'unknown command "rpc" for "imsg"',
     code: 1,
