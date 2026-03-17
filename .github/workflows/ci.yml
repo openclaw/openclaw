@@ -274,8 +274,8 @@ jobs:
 
       - name: Run changed extension tests
         env:
-          EXTENSION_ID: ${{ matrix.extension }}
-        run: pnpm test:extension "$EXTENSION_ID"
+          OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
+        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check.
   check:
