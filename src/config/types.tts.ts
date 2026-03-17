@@ -66,6 +66,18 @@ export type TtsConfig = {
     /** System-level instructions for the TTS model (gpt-4o-mini-tts only). */
     instructions?: string;
   };
+  /** MiniMax T2A configuration. */
+  minimax?: {
+    apiKey?: SecretInput;
+    baseUrl?: string;
+    model?: string;
+    voiceId?: string;
+    speed?: number;
+    vol?: number;
+    pitch?: number;
+    emotion?: string;
+    languageBoost?: string;
+  };
   /** Legacy alias for Microsoft speech configuration. */
   edge?: {
     /** Explicitly allow Microsoft speech usage (no API key required). */

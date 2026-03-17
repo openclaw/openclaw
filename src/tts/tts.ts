@@ -32,10 +32,15 @@ import {
 } from "./provider-registry.js";
 import type { SpeechVoiceOption } from "./provider-types.js";
 import {
+  DEFAULT_MINIMAX_BASE_URL,
   DEFAULT_OPENAI_BASE_URL,
+  isValidMinimaxModel,
   isValidOpenAIModel,
   isValidOpenAIVoice,
   isValidVoiceId,
+  MINIMAX_TTS_MODELS,
+  MINIMAX_TTS_VOICES,
+  minimaxTTS,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   resolveOpenAITtsInstructions,
@@ -44,6 +49,7 @@ import {
   summarizeText,
 } from "./tts-core.js";
 export { OPENAI_TTS_MODELS, OPENAI_TTS_VOICES } from "./tts-core.js";
+export { minimaxTTS, MINIMAX_TTS_MODELS, MINIMAX_TTS_VOICES } from "./tts-core.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -66,6 +72,12 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   useSpeakerBoost: true,
   speed: 1.0,
 };
+
+const DEFAULT_MINIMAX_MODEL = "speech-2.8-hd";
+const DEFAULT_MINIMAX_VOICE_ID = "English_expressive_narrator";
+const DEFAULT_MINIMAX_SPEED = 1.0;
+const DEFAULT_MINIMAX_VOL = 1.0;
+const DEFAULT_MINIMAX_PITCH = 0;
 
 const TELEGRAM_OUTPUT = {
   openai: "opus" as const,
@@ -115,6 +127,17 @@ export type ResolvedTtsConfig = {
     voice: string;
     speed?: number;
     instructions?: string;
+  };
+  minimax?: {
+    apiKey?: string;
+    baseUrl: string;
+    model: string;
+    voiceId: string;
+    speed: number;
+    vol: number;
+    pitch: number;
+    emotion?: string;
+    languageBoost?: string;
   };
   edge: {
     enabled: boolean;
@@ -169,6 +192,15 @@ export type TtsDirectiveOverrides = {
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  minimax?: {
+    voiceId?: string;
+    model?: string;
+    speed?: number;
+    vol?: number;
+    pitch?: number;
+    emotion?: string;
+    languageBoost?: string;
   };
 };
 
@@ -305,6 +337,20 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
       speed: raw.openai?.speed,
       instructions: raw.openai?.instructions?.trim() || undefined,
+    },
+    minimax: {
+      apiKey: normalizeResolvedSecretInputString({
+        value: raw.minimax?.apiKey,
+        path: "messages.tts.minimax.apiKey",
+      }),
+      baseUrl: raw.minimax?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL,
+      model: raw.minimax?.model ?? DEFAULT_MINIMAX_MODEL,
+      voiceId: raw.minimax?.voiceId ?? DEFAULT_MINIMAX_VOICE_ID,
+      speed: raw.minimax?.speed ?? DEFAULT_MINIMAX_SPEED,
+      vol: raw.minimax?.vol ?? DEFAULT_MINIMAX_VOL,
+      pitch: raw.minimax?.pitch ?? DEFAULT_MINIMAX_PITCH,
+      emotion: raw.minimax?.emotion,
+      languageBoost: raw.minimax?.languageBoost,
     },
     edge: {
       enabled: rawMicrosoft.enabled ?? true,
@@ -458,6 +504,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "minimax")) {
+    return "minimax";
+  }
   return "microsoft";
 }
 
@@ -526,10 +575,13 @@ export function resolveTtsApiKey(
   if (normalizedProvider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (normalizedProvider === "minimax") {
+    return config.minimax?.apiKey || process.env.MINIMAX_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "microsoft"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "minimax", "microsoft"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider, cfg?: OpenClawConfig): TtsProvider[] {
   const normalizedPrimary = normalizeSpeechProviderId(primary) ?? primary;
@@ -924,8 +976,11 @@ export const _test = {
   isValidVoiceId,
   isValidOpenAIVoice,
   isValidOpenAIModel,
+  isValidMinimaxModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  MINIMAX_TTS_MODELS,
+  MINIMAX_TTS_VOICES,
   resolveOpenAITtsInstructions,
   parseTtsDirectives,
   resolveModelOverridePolicy,

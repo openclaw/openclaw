@@ -66,8 +66,11 @@ const {
   isValidVoiceId,
   isValidOpenAIVoice,
   isValidOpenAIModel,
+  isValidMinimaxModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  MINIMAX_TTS_MODELS,
+  MINIMAX_TTS_VOICES,
   parseTtsDirectives,
   resolveOpenAITtsInstructions,
   resolveModelOverridePolicy,
@@ -794,6 +797,252 @@ describe("tts", () => {
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
       });
+    });
+  });
+
+  describe("isValidMinimaxModel", () => {
+    it("accepts known MiniMax models", () => {
+      expect(isValidMinimaxModel("speech-2.8-hd")).toBe(true);
+      expect(isValidMinimaxModel("speech-2.8-turbo")).toBe(true);
+      expect(isValidMinimaxModel("speech-2.6-hd")).toBe(true);
+      expect(isValidMinimaxModel("speech-2.6-turbo")).toBe(true);
+      expect(isValidMinimaxModel("speech-02-hd")).toBe(true);
+      expect(isValidMinimaxModel("speech-02-turbo")).toBe(true);
+    });
+
+    it("rejects invalid models", () => {
+      expect(isValidMinimaxModel("invalid")).toBe(false);
+      expect(isValidMinimaxModel("")).toBe(false);
+      expect(isValidMinimaxModel("gpt-4o-mini-tts")).toBe(false);
+      expect(isValidMinimaxModel("tts-1")).toBe(false);
+    });
+  });
+
+  describe("MINIMAX_TTS constants", () => {
+    it("exposes known models", () => {
+      expect(MINIMAX_TTS_MODELS.length).toBeGreaterThan(0);
+      expect(MINIMAX_TTS_MODELS).toContain("speech-2.8-hd");
+    });
+
+    it("exposes known voices", () => {
+      expect(MINIMAX_TTS_VOICES.length).toBeGreaterThan(0);
+      expect(MINIMAX_TTS_VOICES).toContain("English_expressive_narrator");
+    });
+  });
+
+  describe("parseTtsDirectives (MiniMax)", () => {
+    const allAllowed = resolveModelOverridePolicy({
+      enabled: true,
+      allowText: true,
+      allowProvider: true,
+      allowVoice: true,
+      allowModelId: true,
+      allowVoiceSettings: true,
+      allowNormalization: true,
+      allowSeed: true,
+    });
+
+    it("parses minimax_voice directive", () => {
+      const result = parseTtsDirectives(
+        "hello [[tts:minimax_voice=English_radiant_girl]]",
+        allAllowed,
+      );
+      expect(result.overrides.minimax?.voiceId).toBe("English_radiant_girl");
+    });
+
+    it("parses minimax_model directive and validates", () => {
+      const result = parseTtsDirectives("hello [[tts:minimax_model=speech-2.8-hd]]", allAllowed);
+      expect(result.overrides.minimax?.model).toBe("speech-2.8-hd");
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it("rejects invalid minimax_model", () => {
+      const result = parseTtsDirectives("hello [[tts:minimax_model=invalid]]", allAllowed);
+      expect(result.overrides.minimax?.model).toBeUndefined();
+      expect(result.warnings).toContain('invalid MiniMax model "invalid"');
+    });
+
+    it("parses emotion directive", () => {
+      const result = parseTtsDirectives("hello [[tts:emotion=happy]]", allAllowed);
+      expect(result.overrides.minimax?.emotion).toBe("happy");
+    });
+
+    it("rejects invalid emotion", () => {
+      const result = parseTtsDirectives("hello [[tts:emotion=bored]]", allAllowed);
+      expect(result.overrides.minimax?.emotion).toBeUndefined();
+      expect(result.warnings).toContain('invalid emotion "bored"');
+    });
+
+    it("parses vol directive", () => {
+      const result = parseTtsDirectives("hello [[tts:vol=5]]", allAllowed);
+      expect(result.overrides.minimax?.vol).toBe(5);
+    });
+
+    it("allows vol=0", () => {
+      const result = parseTtsDirectives("hello [[tts:vol=0]]", allAllowed);
+      expect(result.overrides.minimax?.vol).toBe(0);
+    });
+
+    it("parses pitch directive as integer", () => {
+      const result = parseTtsDirectives("hello [[tts:pitch=3]]", allAllowed);
+      expect(result.overrides.minimax?.pitch).toBe(3);
+    });
+
+    it("rejects non-integer pitch", () => {
+      const result = parseTtsDirectives("hello [[tts:pitch=3.5]]", allAllowed);
+      expect(result.overrides.minimax?.pitch).toBeUndefined();
+      expect(result.warnings).toContain("pitch must be an integer");
+    });
+
+    it("parses language_boost directive under allowNormalization", () => {
+      const result = parseTtsDirectives("hello [[tts:language_boost=English]]", allAllowed);
+      expect(result.overrides.minimax?.languageBoost).toBe("English");
+    });
+
+    it("blocks language_boost when allowNormalization is false", () => {
+      const restricted = resolveModelOverridePolicy({
+        enabled: true,
+        allowNormalization: false,
+      });
+      const result = parseTtsDirectives("hello [[tts:language_boost=English]]", restricted);
+      expect(result.overrides.minimax?.languageBoost).toBeUndefined();
+    });
+
+    it("speed directive sets both elevenlabs and minimax speed", () => {
+      const result = parseTtsDirectives("hello [[tts:speed=1.5]]", allAllowed);
+      expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.5);
+      expect(result.overrides.minimax?.speed).toBe(1.5);
+    });
+
+    it("generic model routes to minimax when model is a known minimax model", () => {
+      const result = parseTtsDirectives("hello [[tts:model=speech-2.8-hd]]", allAllowed);
+      expect(result.overrides.minimax?.model).toBe("speech-2.8-hd");
+      expect(result.overrides.openai?.model).toBeUndefined();
+    });
+
+    it("provider=minimax is accepted", () => {
+      const result = parseTtsDirectives("hello [[tts:provider=minimax]]", allAllowed);
+      expect(result.overrides.provider).toBe("minimax");
+    });
+
+    it("rejects invalid OpenAI model when provider=openai on default endpoint", () => {
+      const result = parseTtsDirectives(
+        "hello [[tts:provider=openai model=speech-2.8-hd]]",
+        allAllowed,
+      );
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBeUndefined();
+      expect(result.overrides.minimax?.model).toBeUndefined();
+      expect(result.warnings).toContain('invalid OpenAI model "speech-2.8-hd"');
+    });
+
+    it("accepts any model for provider=openai on custom endpoint", () => {
+      const result = parseTtsDirectives(
+        "hello [[tts:provider=openai model=speech-2.8-hd]]",
+        allAllowed,
+        "http://localhost:8880/v1",
+      );
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBe("speech-2.8-hd");
+      expect(result.warnings).toHaveLength(0);
+    });
+
+    it("honors explicit provider=minimax for generic model", () => {
+      const result = parseTtsDirectives(
+        "hello [[tts:provider=minimax model=speech-2.8-hd]]",
+        allAllowed,
+      );
+      expect(result.overrides.provider).toBe("minimax");
+      expect(result.overrides.minimax?.model).toBe("speech-2.8-hd");
+      expect(result.overrides.openai?.model).toBeUndefined();
+    });
+
+    it("honors explicit provider=elevenlabs for generic model", () => {
+      const result = parseTtsDirectives(
+        "hello [[tts:provider=elevenlabs model=eleven_turbo_v2_5]]",
+        allAllowed,
+      );
+      expect(result.overrides.provider).toBe("elevenlabs");
+      expect(result.overrides.elevenlabs?.modelId).toBe("eleven_turbo_v2_5");
+      expect(result.overrides.openai?.model).toBeUndefined();
+    });
+  });
+
+  describe("resolveTtsConfig (MiniMax)", () => {
+    it("resolves minimax defaults when no config is set", () => {
+      const config = resolveTtsConfig({ messages: {} } as OpenClawConfig);
+      const minimax = config.minimax!;
+      expect(minimax.baseUrl).toBe("https://api.minimax.io");
+      expect(minimax.model).toBe("speech-2.8-hd");
+      expect(minimax.voiceId).toBe("English_expressive_narrator");
+      expect(minimax.speed).toBe(1.0);
+      expect(minimax.vol).toBe(1.0);
+      expect(minimax.pitch).toBe(0);
+    });
+
+    it("resolves minimax config from messages.tts.minimax", () => {
+      const config = resolveTtsConfig({
+        messages: {
+          tts: {
+            minimax: {
+              apiKey: "test-key",
+              model: "speech-2.8-turbo",
+              voiceId: "English_radiant_girl",
+              speed: 1.5,
+              vol: 5,
+              pitch: 3,
+              emotion: "happy",
+              languageBoost: "English",
+            },
+          },
+        },
+      } as OpenClawConfig);
+      const minimax = config.minimax!;
+      expect(minimax.apiKey).toBe("test-key");
+      expect(minimax.model).toBe("speech-2.8-turbo");
+      expect(minimax.voiceId).toBe("English_radiant_girl");
+      expect(minimax.speed).toBe(1.5);
+      expect(minimax.vol).toBe(5);
+      expect(minimax.pitch).toBe(3);
+      expect(minimax.emotion).toBe("happy");
+      expect(minimax.languageBoost).toBe("English");
+    });
+  });
+
+  describe("resolveTtsApiKey (MiniMax)", () => {
+    it("returns minimax apiKey from config", () => {
+      const config = resolveTtsConfig({
+        messages: { tts: { minimax: { apiKey: "cfg-key" } } },
+      } as OpenClawConfig);
+      expect(tts.resolveTtsApiKey(config, "minimax")).toBe("cfg-key");
+    });
+
+    it("falls back to MINIMAX_API_KEY env var", () => {
+      const config = resolveTtsConfig({ messages: {} } as OpenClawConfig);
+      withEnv({ MINIMAX_API_KEY: "env-key" }, () => {
+        expect(tts.resolveTtsApiKey(config, "minimax")).toBe("env-key");
+      });
+    });
+
+    it("returns undefined when no minimax key is configured", () => {
+      const config = resolveTtsConfig({ messages: {} } as OpenClawConfig);
+      expect(tts.resolveTtsApiKey(config, "minimax")).toBeUndefined();
+    });
+  });
+
+  describe("getTtsProvider (MiniMax auto-detect)", () => {
+    it("auto-detects minimax when only MINIMAX_API_KEY is set", () => {
+      const config = resolveTtsConfig({ messages: {} } as OpenClawConfig);
+      const prefsPath = "/tmp/nonexistent-tts-prefs.json";
+      withEnv({ MINIMAX_API_KEY: "test-key", OPENAI_API_KEY: "", ELEVENLABS_API_KEY: "" }, () => {
+        expect(getTtsProvider(config, prefsPath)).toBe("minimax");
+      });
+    });
+  });
+
+  describe("TTS_PROVIDERS includes minimax", () => {
+    it("includes minimax in the provider order", () => {
+      expect(tts.TTS_PROVIDERS).toContain("minimax");
     });
   });
 });

@@ -57,7 +57,8 @@ function ttsUsage(): ReplyPayload {
       `**Providers:**\n` +
       `• microsoft — Microsoft Edge-backed speech (default fallback)\n` +
       `• openai — High quality (requires API key)\n` +
-      `• elevenlabs — Premium voices (requires API key)\n\n` +
+      `• elevenlabs — Premium voices (requires API key)\n` +
+      `• minimax — MiniMax T2A v2 (requires API key)\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
       `When text exceeds the limit:\n` +
       `• Summary ON: AI summarizes, then generates audio\n` +
@@ -162,6 +163,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     if (!args.trim()) {
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
+      const hasMiniMax = Boolean(resolveTtsApiKey(config, "minimax"));
       const hasMicrosoft = isTtsProviderConfigured(config, "microsoft", params.cfg);
       return {
         shouldContinue: false,
@@ -171,8 +173,9 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
             `Primary: ${currentProvider}\n` +
             `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
             `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
+            `MiniMax key: ${hasMiniMax ? "✅" : "❌"}\n` +
             `Microsoft enabled: ${hasMicrosoft ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | microsoft`,
+            `Usage: /tts provider openai | elevenlabs | minimax | microsoft`,
         },
       };
     }

@@ -30,6 +30,7 @@ Scope intent:
 - `talk.apiKey`
 - `talk.providers.*.apiKey`
 - `messages.tts.elevenlabs.apiKey`
+- `messages.tts.minimax.apiKey`
 - `messages.tts.openai.apiKey`
 - `tools.web.fetch.firecrawl.apiKey`
 - `tools.web.search.apiKey`
@@ -57,10 +58,12 @@ Scope intent:
 - `channels.discord.token`
 - `channels.discord.pluralkit.token`
 - `channels.discord.voice.tts.elevenlabs.apiKey`
+- `channels.discord.voice.tts.minimax.apiKey`
 - `channels.discord.voice.tts.openai.apiKey`
 - `channels.discord.accounts.*.token`
 - `channels.discord.accounts.*.pluralkit.token`
 - `channels.discord.accounts.*.voice.tts.elevenlabs.apiKey`
+- `channels.discord.accounts.*.voice.tts.minimax.apiKey`
 - `channels.discord.accounts.*.voice.tts.openai.apiKey`
 - `channels.irc.password`
 - `channels.irc.nickserv.password`

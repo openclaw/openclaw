@@ -5,11 +5,13 @@ import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type { SpeechProviderId } from "./provider-types.js";
 import { buildElevenLabsSpeechProvider } from "./providers/elevenlabs.js";
 import { buildMicrosoftSpeechProvider } from "./providers/microsoft.js";
+import { buildMinimaxSpeechProvider } from "./providers/minimax.js";
 import { buildOpenAISpeechProvider } from "./providers/openai.js";
 
 const BUILTIN_SPEECH_PROVIDER_BUILDERS = [
   buildOpenAISpeechProvider,
   buildElevenLabsSpeechProvider,
+  buildMinimaxSpeechProvider,
   buildMicrosoftSpeechProvider,
 ] as const satisfies readonly (() => SpeechProviderPlugin)[];
 

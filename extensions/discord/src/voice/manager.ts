@@ -101,6 +101,10 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
       ...base.openai,
       ...override.openai,
     },
+    minimax: {
+      ...base.minimax,
+      ...override.minimax,
+    },
     edge: {
       ...base.edge,
       ...override.edge,

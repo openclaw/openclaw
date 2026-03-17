@@ -424,6 +424,32 @@ export const TtsConfigSchema = z
       })
       .strict()
       .optional(),
+    minimax: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+        voiceId: z.string().optional(),
+        speed: z.number().min(0.5).max(2).optional(),
+        vol: z.number().min(0).max(10).optional(),
+        pitch: z.number().int().min(-12).max(12).optional(),
+        emotion: z
+          .enum([
+            "happy",
+            "sad",
+            "angry",
+            "fearful",
+            "disgusted",
+            "surprised",
+            "calm",
+            "fluent",
+            "whisper",
+          ])
+          .optional(),
+        languageBoost: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     edge: TtsMicrosoftConfigSchema,
     microsoft: TtsMicrosoftConfigSchema,
     prefsPath: z.string().optional(),
