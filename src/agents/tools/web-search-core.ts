@@ -1366,7 +1366,9 @@ async function runGrokSearch(params: {
     // max_turns controls how many tool-use rounds Grok may take. Higher values
     // improve accuracy and coverage (more searches); lower values reduce latency
     // at the cost of shallower results. Omitted when unset, letting xAI decide.
-    ...(params.maxTurns !== undefined && params.maxTurns >= 1 ? { max_turns: params.maxTurns } : {}),
+    ...(params.maxTurns !== undefined && params.maxTurns >= 1
+      ? { max_turns: params.maxTurns }
+      : {}),
     ...(!params.inlineCitations ? { include: ["no_inline_citations"] } : {}),
   };
 
@@ -2322,7 +2324,10 @@ export function createXSearchTool(options?: { config?: OpenClawConfig }): AnyAge
       const model = resolveXSearchModel(xSearch);
       const inlineCitations = resolveXSearchInlineCitations(xSearch);
       const maxTurns = resolveXSearchMaxTurns(xSearch);
-      const timeoutSeconds = resolveTimeoutSeconds(xSearch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
+      const timeoutSeconds = resolveTimeoutSeconds(
+        xSearch?.timeoutSeconds,
+        DEFAULT_TIMEOUT_SECONDS,
+      );
       const cacheTtlMs = resolveCacheTtlMs(xSearch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
 
       const X_SEARCH_CACHE = getSharedXSearchCache();
