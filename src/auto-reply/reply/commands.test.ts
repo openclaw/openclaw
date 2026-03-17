@@ -729,32 +729,45 @@ describe("extractMessageText", () => {
 });
 
 describe("handleCommands /config owner gating", () => {
-  it("blocks /config show from authorized non-owner senders", async () => {
+  it("enforces /config show owner gating", async () => {
     const cfg = {
       commands: { config: true, text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
-    const params = buildParams("/config show", cfg);
-    params.command.senderIsOwner = false;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply).toBeUndefined();
-  });
+    const cases = [
+      {
+        name: "blocks authorized non-owner senders",
+        text: "/config show",
+        senderIsOwner: false,
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply).toBeUndefined();
+        },
+      },
+      {
+        name: "keeps /config show working for owners",
+        text: "/config show messages.ackReaction",
+        senderIsOwner: true,
+        beforeRun: () => {
+          readConfigFileSnapshotMock.mockResolvedValueOnce({
+            valid: true,
+            parsed: { messages: { ackReaction: ":)" } },
+          });
+        },
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply?.text).toContain("Config messages.ackReaction");
+        },
+      },
+    ] as const;
 
-  it("keeps /config show working for owners", async () => {
-    const cfg = {
-      commands: { config: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      valid: true,
-      parsed: { messages: { ackReaction: ":)" } },
-    });
-    const params = buildParams("/config show messages.ackReaction", cfg);
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Config messages.ackReaction");
+    for (const testCase of cases) {
+      testCase.beforeRun?.();
+      const params = buildParams(testCase.text, cfg);
+      params.command.senderIsOwner = testCase.senderIsOwner;
+      const result = await handleCommands(params);
+      testCase.assert(result);
+    }
   });
 });
 
@@ -932,28 +945,34 @@ describe("handleCommands /config configWrites gating", () => {
 });
 
 describe("handleCommands /debug owner gating", () => {
-  it("blocks /debug show from authorized non-owner senders", async () => {
+  it("enforces /debug show owner gating", async () => {
     const cfg = {
       commands: { debug: true, text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
-    const params = buildParams("/debug show", cfg);
-    params.command.senderIsOwner = false;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply).toBeUndefined();
-  });
+    const cases = [
+      {
+        senderIsOwner: false,
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply).toBeUndefined();
+        },
+      },
+      {
+        senderIsOwner: true,
+        assert: (result: Awaited<ReturnType<typeof handleCommands>>) => {
+          expect(result.shouldContinue).toBe(false);
+          expect(result.reply?.text).toContain("Debug overrides");
+        },
+      },
+    ] as const;
 
-  it("keeps /debug show working for owners", async () => {
-    const cfg = {
-      commands: { debug: true, text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig;
-    const params = buildParams("/debug show", cfg);
-    params.command.senderIsOwner = true;
-    const result = await handleCommands(params);
-    expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Debug overrides");
+    for (const testCase of cases) {
+      const params = buildParams("/debug show", cfg);
+      params.command.senderIsOwner = testCase.senderIsOwner;
+      const result = await handleCommands(params);
+      testCase.assert(result);
+    }
   });
 });
 
