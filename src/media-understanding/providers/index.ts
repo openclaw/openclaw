@@ -1,13 +1,3 @@
-import { anthropicMediaUnderstandingProvider } from "../../../extensions/anthropic/media-understanding-provider.js";
-import { googleMediaUnderstandingProvider } from "../../../extensions/google/media-understanding-provider.js";
-import {
-  minimaxMediaUnderstandingProvider,
-  minimaxPortalMediaUnderstandingProvider,
-} from "../../../extensions/minimax/media-understanding-provider.js";
-import { mistralMediaUnderstandingProvider } from "../../../extensions/mistral/media-understanding-provider.js";
-import { moonshotMediaUnderstandingProvider } from "../../../extensions/moonshot/media-understanding-provider.js";
-import { openaiMediaUnderstandingProvider } from "../../../extensions/openai/media-understanding-provider.js";
-import { zaiMediaUnderstandingProvider } from "../../../extensions/zai/media-understanding-provider.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
@@ -16,18 +6,7 @@ import type { MediaUnderstandingProvider } from "../types.js";
 import { deepgramProvider } from "./deepgram/index.js";
 import { groqProvider } from "./groq/index.js";
 
-const PROVIDERS: MediaUnderstandingProvider[] = [
-  groqProvider,
-  deepgramProvider,
-  anthropicMediaUnderstandingProvider,
-  googleMediaUnderstandingProvider,
-  minimaxMediaUnderstandingProvider,
-  minimaxPortalMediaUnderstandingProvider,
-  mistralMediaUnderstandingProvider,
-  moonshotMediaUnderstandingProvider,
-  openaiMediaUnderstandingProvider,
-  zaiMediaUnderstandingProvider,
-];
+const PROVIDERS: MediaUnderstandingProvider[] = [groqProvider, deepgramProvider];
 
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
@@ -63,7 +42,7 @@ export function buildMediaUnderstandingRegistry(
   }
   const active = getActivePluginRegistry();
   const pluginRegistry =
-    (active?.mediaUnderstandingProviders?.length ?? 0) > 0 || !cfg
+    (active?.mediaUnderstandingProviders?.length ?? 0) > 0
       ? active
       : loadOpenClawPlugins({ config: cfg });
   for (const entry of pluginRegistry?.mediaUnderstandingProviders ?? []) {
