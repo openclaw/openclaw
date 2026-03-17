@@ -22,11 +22,11 @@ import {
   resolveConfiguredFromRequiredCredentialStatuses,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
+  createSlackActions,
   type ChannelPlugin,
   type OpenClawConfig,
+  type SlackActionContext,
 } from "openclaw/plugin-sdk/slack";
-import type { SlackActionContext } from "../../../src/agents/tools/slack-actions.js";
-import { createSlackActions } from "../../../src/channels/plugins/slack.actions.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listEnabledSlackAccounts,
