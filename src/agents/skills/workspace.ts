@@ -313,6 +313,11 @@ function loadSkillEntries(
       candidatePath: baseDir,
     });
     if (!baseDirRealPath) {
+      skillsLogger.debug("Skills directory not accessible or does not exist", {
+        dir: params.dir,
+        source: params.source,
+        reason: "path resolution failed",
+      });
       return [];
     }
 
@@ -418,14 +423,25 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
-      loadedSkills.push(
-        ...filterLoadedSkillsInsideRoot({
-          skills: unwrapLoadedSkills(loaded),
+      const unwrapped = unwrapLoadedSkills(loaded);
+      const filtered = filterLoadedSkillsInsideRoot({
+        skills: unwrapped,
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+      });
+
+      // Log parsing failures
+      if (unwrapped.length === 0 && fs.existsSync(skillMd)) {
+        skillsLogger.warn("Failed to parse SKILL.md - file exists but no skills loaded", {
+          skill: name,
+          filePath: skillMd,
           source: params.source,
-          rootDir,
-          rootRealPath: baseDirRealPath,
-        }),
-      );
+          hint: "Check SKILL.md format - must use markdown with ## Description, ## Usage sections",
+        });
+      }
+
+      loadedSkills.push(...filtered);
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;
@@ -433,11 +449,27 @@ function loadSkillEntries(
     }
 
     if (loadedSkills.length > limits.maxSkillsLoadedPerSource) {
-      return loadedSkills
+      const truncated = loadedSkills
         .slice()
         .sort((a, b) => a.name.localeCompare(b.name))
         .slice(0, limits.maxSkillsLoadedPerSource);
+      skillsLogger.info("Skills discovery completed (truncated to limit)", {
+        dir: params.dir,
+        source: params.source,
+        totalCandidates: childDirs.length,
+        loaded: truncated.length,
+        skipped: childDirs.length - truncated.length,
+      });
+      return truncated;
     }
+
+    skillsLogger.info("Skills discovery completed", {
+      dir: params.dir,
+      source: params.source,
+      totalCandidates: childDirs.length,
+      loaded: loadedSkills.length,
+      skipped: childDirs.length - loadedSkills.length,
+    });
 
     return loadedSkills;
   };
@@ -513,8 +545,12 @@ function loadSkillEntries(
     try {
       const raw = fs.readFileSync(skill.filePath, "utf-8");
       frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed skills
+    } catch (error) {
+      skillsLogger.error("Failed to load skill frontmatter", {
+        skill: skill.name,
+        filePath: skill.filePath,
+        error: String(error),
+      });
     }
     return {
       skill,
@@ -523,6 +559,31 @@ function loadSkillEntries(
       invocation: resolveSkillInvocationPolicy(frontmatter),
     };
   });
+
+  // Log overall skills loading summary
+  const sources = {
+    bundled: bundledSkills.length,
+    extra: extraSkills.length,
+    managed: managedSkills.length,
+    personalAgents: personalAgentsSkills.length,
+    projectAgents: projectAgentsSkills.length,
+    workspace: workspaceSkills.length,
+  };
+  skillsLogger.info("Skills loading completed", {
+    workspaceDir,
+    totalSkills: skillEntries.length,
+    sources,
+    uniqueSkills: merged.size,
+    duplicatesRemoved:
+      sources.bundled +
+      sources.extra +
+      sources.managed +
+      sources.personalAgents +
+      sources.projectAgents +
+      sources.workspace -
+      merged.size,
+  });
+
   return skillEntries;
 }
 
