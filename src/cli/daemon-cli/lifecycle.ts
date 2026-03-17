@@ -177,6 +177,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let restartSentinelWritable = false;
   let restartSentinelMarkedInProgress = false;
   let restartSentinelMarkedError = false;
+  let restartSentinelEnv: NodeJS.ProcessEnv | undefined;
   const markRestartSentinelInProgress = async () => {
     if (!restartSentinelWritable || restartSentinelMarkedInProgress) {
       return;
@@ -198,6 +199,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     try {
       await transitionRestartSentinelStatus("error", {
         allowedCurrentStatuses: ["in-progress"],
+        env: restartSentinelEnv,
       });
     } catch {
       // best-effort
@@ -231,15 +233,16 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         deliveryContext,
         threadId,
         message: note,
-        doctorHint: formatDoctorNonInteractiveHint(),
+        doctorHint: formatDoctorNonInteractiveHint(mergedEnv),
         stats: {
           mode: "gateway.restart",
           reason: note ?? "cli --notify",
         },
       };
       try {
-        await writeRestartSentinel(payload);
+        await writeRestartSentinel(payload, mergedEnv);
         restartSentinelWritable = true;
+        restartSentinelEnv = mergedEnv;
       } catch {
         // best-effort
       }
@@ -259,6 +262,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         restartScheduled = true;
       },
       onBeforeRestartAction: markRestartSentinelInProgress,
+      onRestartFailure: markRestartSentinelError,
       onNotLoaded: async (ctx) => {
         const handled = await restartGatewayWithoutServiceManager(
           restartPort,
@@ -374,6 +378,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     try {
       await transitionRestartSentinelStatus("ok", {
         allowedCurrentStatuses: ["in-progress"],
+        env: restartSentinelEnv,
       });
     } catch {
       // best-effort

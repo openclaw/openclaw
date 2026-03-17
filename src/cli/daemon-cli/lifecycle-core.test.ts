@@ -190,4 +190,25 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
+
+  it("invokes onRestartFailure when restart throws after pre-restart action", async () => {
+    const onBeforeRestartAction = vi.fn();
+    const onRestartFailure = vi.fn();
+    service.restart.mockRejectedValue(new Error("boom"));
+
+    await expect(
+      runServiceRestart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: () => [],
+        opts: { json: true },
+        onBeforeRestartAction,
+        onRestartFailure,
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(onBeforeRestartAction).toHaveBeenCalledTimes(1);
+    expect(onRestartFailure).toHaveBeenCalledTimes(1);
+    expect(onRestartFailure).toHaveBeenCalledWith(expect.any(Error));
+  });
 });

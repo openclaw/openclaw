@@ -281,6 +281,7 @@ describe("runDaemonRestart health checks", () => {
         status: "pending",
         message: "hello",
       }),
+      expect.any(Object),
     );
     expect(transitionRestartSentinelStatus).toHaveBeenNthCalledWith(
       1,
@@ -338,6 +339,10 @@ describe("runDaemonRestart health checks", () => {
       cfg: daemonCfg,
       env: expect.objectContaining({ OPENCLAW_STATE_DIR: "/tmp/daemon-state" }),
     });
+    expect(writeRestartSentinel).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ OPENCLAW_STATE_DIR: "/tmp/daemon-state" }),
+    );
   });
 
   it("does not finalize restart sentinel when restart action never begins", async () => {

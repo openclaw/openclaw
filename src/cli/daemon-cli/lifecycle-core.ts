@@ -481,6 +481,7 @@ export async function runServiceRestart(params: {
     }
     return true;
   } catch (err) {
+    await params.onRestartFailure?.(err);
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} restart failed: ${String(err)}`, hints);
     return false;
