@@ -43,6 +43,16 @@ describe("createPluginApprovalHandlers", () => {
     vi.restoreAllMocks();
   });
 
+  it("returns handlers for all three plugin approval methods", () => {
+    const handlers = createPluginApprovalHandlers(manager);
+    expect(handlers).toHaveProperty("plugin.approval.request");
+    expect(handlers).toHaveProperty("plugin.approval.waitDecision");
+    expect(handlers).toHaveProperty("plugin.approval.resolve");
+    expect(typeof handlers["plugin.approval.request"]).toBe("function");
+    expect(typeof handlers["plugin.approval.waitDecision"]).toBe("function");
+    expect(typeof handlers["plugin.approval.resolve"]).toBe("function");
+  });
+
   describe("plugin.approval.request", () => {
     it("rejects invalid params", async () => {
       const handlers = createPluginApprovalHandlers(manager);
