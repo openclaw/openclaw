@@ -485,11 +485,8 @@ export class GatewayBrowserClient {
     if (this.connectTimer !== null) {
       window.clearTimeout(this.connectTimer);
     }
-    // Fallback only: challenge handler is the primary trigger for sendConnect().
-    // If the server never sends connect.challenge within a short window, we proceed
-    // with an empty nonce and let the server reject/retry as appropriate.
     this.connectTimer = window.setTimeout(() => {
       void this.sendConnect();
-    }, 50);
+    }, 750);
   }
 }
