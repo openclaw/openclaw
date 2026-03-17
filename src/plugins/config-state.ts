@@ -193,6 +193,7 @@ export function resolveEnableState(
   id: string,
   origin: PluginRecord["origin"],
   config: NormalizedPluginsConfig,
+  enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } {
   if (!config.enabled) {
     return { enabled: false, reason: "plugins disabled" };
@@ -213,7 +214,7 @@ export function resolveEnableState(
   if (entry?.enabled === true) {
     return { enabled: true };
   }
-  if (origin === "bundled" && BUNDLED_ENABLED_BY_DEFAULT.has(id)) {
+  if (origin === "bundled" && (enabledByDefault ?? BUNDLED_ENABLED_BY_DEFAULT.has(id))) {
     return { enabled: true };
   }
   if (origin === "bundled") {
@@ -246,8 +247,9 @@ export function resolveEffectiveEnableState(params: {
   origin: PluginRecord["origin"];
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
+  enabledByDefault?: boolean;
 }): { enabled: boolean; reason?: string } {
-  const base = resolveEnableState(params.id, params.origin, params.config);
+  const base = resolveEnableState(params.id, params.origin, params.config, params.enabledByDefault);
   if (
     !base.enabled &&
     base.reason === "bundled (disabled by default)" &&
