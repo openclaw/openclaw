@@ -156,8 +156,8 @@ The proxy:
 ## Links
 
 - **npm:** [https://www.npmjs.com/package/claude-max-api-proxy](https://www.npmjs.com/package/claude-max-api-proxy)
-- **GitHub:** [https://github.com/atalovesyou/claude-max-api-proxy](https://github.com/atalovesyou/claude-max-api-proxy)
-- **Issues:** [https://github.com/atalovesyou/claude-max-api-proxy/issues](https://github.com/atalovesyou/claude-max-api-proxy/issues)
+- **GitHub:** [https://github.com/wende/claude-max-api-proxy](https://github.com/wende/claude-max-api-proxy)
+- **Issues:** [https://github.com/wende/claude-max-api-proxy/issues](https://github.com/wende/claude-max-api-proxy/issues)
 
 ## Notes
 
