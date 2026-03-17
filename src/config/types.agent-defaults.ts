@@ -134,6 +134,8 @@ export type AgentDefaultsConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
+  /** Remote sync configuration for workspace bootstrap files. */
+  workspaceSync?: WorkspaceSyncConfig;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
@@ -358,4 +360,30 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+};
+
+export type WorkspaceSyncWebhookConfig = {
+  /** Enable webhook endpoint for receiving remote push notifications. */
+  enabled?: boolean;
+  /** Webhook secret token. Falls back to hooks.token when unset. */
+  token?: string;
+};
+
+export type WorkspaceSyncConfig = {
+  /** Enable remote sync for workspace bootstrap files. */
+  enabled?: boolean;
+  /** Remote workspace endpoint URL (serves a JSON manifest of all .md files). */
+  url?: string;
+  /** Bearer token for authenticating with the remote endpoint. */
+  token?: string;
+  /** Allow plaintext HTTP (default: false). Needed for LAN/NAS. */
+  allowInsecure?: boolean;
+  /** Pull from remote on gateway startup (default: true when sync is enabled). */
+  pullOnStartup?: boolean;
+  /** Webhook config for receiving push notifications from remote. */
+  webhook?: WorkspaceSyncWebhookConfig;
+  /** Remote endpoint URL for pushing local files to (PUT). */
+  pushUrl?: string;
+  /** Bearer token for push requests (falls back to `token` when unset). */
+  pushToken?: string;
 };

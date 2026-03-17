@@ -72,6 +72,7 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import { handleWorkspaceSyncWebhook } from "./workspace-sync-webhook.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -803,6 +804,15 @@ export function createGatewayHttpServer(opts: {
         {
           name: "slack",
           run: () => handleSlackHttpRequest(req, res),
+        },
+        {
+          name: "workspace-sync",
+          run: async () => {
+            if (req.method !== "POST" || requestPath !== "/hooks/workspace-sync") {
+              return false;
+            }
+            return handleWorkspaceSyncWebhook(req, res, trustedProxies);
+          },
         },
       ];
       if (openResponsesEnabled) {

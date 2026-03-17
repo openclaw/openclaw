@@ -9,6 +9,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { pullAndApplyWorkspaceSync } from "../agents/workspace-sync.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -105,6 +106,25 @@ export async function startGatewaySidecars(params: {
           `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
         );
       }
+    }
+  }
+
+  // Sync workspace bootstrap files from remote if enabled.
+  const syncCfg = params.cfg.agents?.defaults?.workspaceSync;
+  if (syncCfg?.enabled && syncCfg.pullOnStartup !== false) {
+    try {
+      const result = await pullAndApplyWorkspaceSync(syncCfg, params.defaultWorkspaceDir);
+      if (result.ok) {
+        if (result.filesUpdated.length > 0) {
+          params.logHooks.info(
+            `workspace sync pulled ${result.filesUpdated.length} file${result.filesUpdated.length > 1 ? "s" : ""}`,
+          );
+        }
+      } else {
+        params.logHooks.warn(`workspace sync failed: ${result.error}`);
+      }
+    } catch (err) {
+      params.logHooks.warn(`workspace sync failed: ${String(err)}`);
     }
   }
 

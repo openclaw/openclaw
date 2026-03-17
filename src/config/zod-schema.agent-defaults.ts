@@ -37,6 +37,25 @@ export const AgentDefaultsSchema = z
       )
       .optional(),
     workspace: z.string().optional(),
+    workspaceSync: z
+      .object({
+        enabled: z.boolean().optional(),
+        url: z.string().optional(),
+        token: z.string().optional(),
+        allowInsecure: z.boolean().optional(),
+        pullOnStartup: z.boolean().optional(),
+        webhook: z
+          .object({
+            enabled: z.boolean().optional(),
+            token: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+        pushUrl: z.string().optional(),
+        pushToken: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),

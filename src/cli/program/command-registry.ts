@@ -229,6 +229,19 @@ const coreEntries: CoreCliEntry[] = [
       mod.registerBrowserCli(program);
     },
   },
+  {
+    commands: [
+      {
+        name: "workspace",
+        description: "Manage local agent bootstrap files (context assets)",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.workspace.js");
+      mod.registerWorkspaceCommands(program);
+    },
+  },
 ];
 
 export function getCoreCliCommandNames(): string[] {
