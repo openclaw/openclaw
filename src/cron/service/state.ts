@@ -14,7 +14,13 @@ import type {
 
 export type CronEvent = {
   jobId: string;
-  action: "added" | "updated" | "removed" | "started" | "finished";
+  action:
+    | "added"
+    | "updated"
+    | "removed"
+    | "started"
+    | "finished"
+    | "auto-disabled-delivery-failure";
   runAtMs?: number;
   durationMs?: number;
   status?: CronRunStatus;

@@ -2,6 +2,7 @@ import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { shouldAutoDisableOnDeliveryFailure } from "../delivery-failure-guard.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
@@ -333,6 +334,29 @@ export function applyJobResult(
   job.state.lastDeliveryError =
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
   job.updatedAtMs = result.endedAt;
+
+  // Check if job should be auto-disabled due to delivery failures.
+  // This is checked before the execution error tracking so delivery failures
+  // are tracked independently.
+  if (shouldAutoDisableOnDeliveryFailure(job)) {
+    job.enabled = false;
+    job.state.nextRunAtMs = undefined;
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        consecutiveErrors: job.state.consecutiveErrors,
+        lastDeliveryError: job.state.lastDeliveryError,
+      },
+      "cron: auto-disabling job after repeated delivery failures",
+    );
+    // Emit event for notification/alerting
+    emit(state, {
+      jobId: job.id,
+      action: "auto-disabled-delivery-failure",
+      nextRunAtMs: undefined,
+    });
+  }
 
   // Track consecutive errors for backoff / auto-disable.
   if (result.status === "error") {
