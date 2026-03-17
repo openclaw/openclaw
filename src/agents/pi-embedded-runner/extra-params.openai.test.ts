@@ -1,41 +1,26 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
-import { applyExtraParamsToAgent } from "./extra-params.js";
-
-type CapturedCall = {
-  headers?: Record<string, string>;
-};
+import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 function applyAndCapture(params: {
   provider: string;
   modelId: string;
   baseUrl?: string;
   callerHeaders?: Record<string, string>;
-}): CapturedCall {
-  const captured: CapturedCall = {};
-  const baseStreamFn: StreamFn = (model, _context, options) => {
-    captured.headers = options?.headers;
-    options?.onPayload?.({}, model);
-    return createAssistantMessageEventStream();
-  };
-  const agent = { streamFn: baseStreamFn };
-
-  applyExtraParamsToAgent(agent, undefined, params.provider, params.modelId);
-
-  const model = {
-    api: "openai-responses",
-    provider: params.provider,
-    id: params.modelId,
-    baseUrl: params.baseUrl,
-  } as Model<"openai-responses">;
-  const context: Context = { messages: [] };
-
-  void agent.streamFn?.(model, context, { headers: params.callerHeaders });
-
-  return captured;
+}) {
+  return runExtraParamsCase({
+    applyModelId: params.modelId,
+    applyProvider: params.provider,
+    callerHeaders: params.callerHeaders,
+    model: {
+      api: "openai-responses",
+      provider: params.provider,
+      id: params.modelId,
+      baseUrl: params.baseUrl,
+    } as Model<"openai-responses">,
+    payload: {},
+  });
 }
 
 describe("extra-params: OpenAI attribution", () => {
