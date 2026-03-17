@@ -256,13 +256,22 @@ export async function uploadMattermostFile(
   form.append("files", blob, fileName);
   form.append("channel_id", params.channelId);
 
-  const res = await fetch(`${client.apiBaseUrl}/files`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${client.token}`,
-    },
-    body: form,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${client.apiBaseUrl}/files`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${client.token}`,
+      },
+      body: form,
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    throw new Error(
+      `Mattermost file upload failed: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
 
   if (!res.ok) {
     const detail = await readMattermostError(res);
