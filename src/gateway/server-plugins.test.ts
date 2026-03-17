@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { PluginRegistry } from "../plugins/registry.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
+const primeConfiguredBindingRegistry = vi.hoisted(() =>
+  vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
+);
 type HandleGatewayRequestOptions = GatewayRequestOptions & {
   extraHandlers?: Record<string, unknown>;
 };
@@ -16,8 +20,25 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins,
 }));
 
+vi.mock("../channels/plugins/binding-registry.js", () => ({
+  primeConfiguredBindingRegistry,
+}));
+
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
+}));
+
+vi.mock("../channels/registry.js", () => ({
+  CHAT_CHANNEL_ORDER: [],
+  CHANNEL_IDS: [],
+  listChatChannels: () => [],
+  listChatChannelAliases: () => [],
+  getChatChannelMeta: () => null,
+  normalizeChatChannelId: () => null,
+  normalizeChannelId: () => null,
+  normalizeAnyChannelId: () => null,
+  formatChannelPrimerLine: () => "",
+  formatChannelSelectionLine: () => "",
 }));
 
 const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
@@ -26,12 +47,18 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   hooks: [],
   typedHooks: [],
   channels: [],
+  channelSetups: [],
   commands: [],
   providers: [],
+  speechProviders: [],
+  mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
+  webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
+  conversationBindingResolvedHandlers: [],
   diagnostics,
 });
 
@@ -46,11 +73,25 @@ function getLastDispatchedContext(): GatewayRequestContext | undefined {
   return call?.context;
 }
 
+function getLastDispatchedParams(): Record<string, unknown> | undefined {
+  const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
+  return call?.req?.params as Record<string, unknown> | undefined;
+}
+
+function getLastDispatchedClientScopes(): string[] {
+  const call = handleGatewayRequest.mock.calls.at(-1)?.[0];
+  const scopes = call?.client?.connect?.scopes;
+  return Array.isArray(scopes) ? scopes : [];
+}
+
 async function importServerPluginsModule(): Promise<ServerPluginsModule> {
   return import("./server-plugins.js");
 }
 
-function createSubagentRuntime(serverPlugins: ServerPluginsModule): PluginRuntime["subagent"] {
+async function createSubagentRuntime(
+  serverPlugins: ServerPluginsModule,
+  cfg: Record<string, unknown> = {},
+): Promise<PluginRuntime["subagent"]> {
   const log = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -59,24 +100,28 @@ function createSubagentRuntime(serverPlugins: ServerPluginsModule): PluginRuntim
   };
   loadOpenClawPlugins.mockReturnValue(createRegistry([]));
   serverPlugins.loadGatewayPlugins({
-    cfg: {},
+    cfg,
     workspaceDir: "/tmp",
     log,
     coreGatewayHandlers: {},
     baseMethods: [],
   });
   const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
-    | { runtimeOptions?: { subagent?: PluginRuntime["subagent"] } }
+    | { runtimeOptions?: { allowGatewaySubagentBinding?: boolean } }
     | undefined;
-  if (!call?.runtimeOptions?.subagent) {
-    throw new Error("Expected loadGatewayPlugins to provide subagent runtime");
+  if (call?.runtimeOptions?.allowGatewaySubagentBinding !== true) {
+    throw new Error("Expected loadGatewayPlugins to opt into gateway subagent binding");
   }
-  return call.runtimeOptions.subagent;
+  const runtimeModule = await import("../plugins/runtime/index.js");
+  return runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true }).subagent;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   loadOpenClawPlugins.mockReset();
+  primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
+  const runtimeModule = await import("../plugins/runtime/index.js");
+  runtimeModule.clearGatewaySubagentRuntime();
   handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
     switch (opts.req.method) {
       case "agent":
@@ -97,7 +142,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const runtimeModule = await import("../plugins/runtime/index.js");
+  runtimeModule.clearGatewaySubagentRuntime();
   vi.resetModules();
 });
 
@@ -154,15 +201,311 @@ describe("loadGatewayPlugins", () => {
       baseMethods: [],
     });
 
-    const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0];
-    const subagent = call?.runtimeOptions?.subagent;
+    const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
+      | { runtimeOptions?: { allowGatewaySubagentBinding?: boolean } }
+      | undefined;
+    expect(call?.runtimeOptions?.allowGatewaySubagentBinding).toBe(true);
+    const runtimeModule = await import("../plugins/runtime/index.js");
+    const subagent = runtimeModule.createPluginRuntime({
+      allowGatewaySubagentBinding: true,
+    }).subagent;
     expect(typeof subagent?.getSessionMessages).toBe("function");
     expect(typeof subagent?.getSession).toBe("function");
   });
 
+  test("forwards provider and model overrides when the request scope is authorized", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+    const scope = {
+      context: createTestContext("request-scope-forward-overrides"),
+      client: {
+        connect: {
+          scopes: ["operator.admin"],
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.run({
+        sessionKey: "s-override",
+        message: "use the override",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        deliver: false,
+      }),
+    );
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-override",
+      message: "use the override",
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      deliver: false,
+    });
+  });
+
+  test("rejects provider/model overrides for fallback runs without explicit authorization", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-deny-overrides"));
+
+    await expect(
+      runtime.run({
+        sessionKey: "s-fallback-override",
+        message: "use the override",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        deliver: false,
+      }),
+    ).rejects.toThrow(
+      "provider/model override requires plugin identity in fallback subagent runs.",
+    );
+  });
+
+  test("allows trusted fallback provider/model overrides when plugin config is explicit", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-trusted-overrides"));
+    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+
+    await gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      runtime.run({
+        sessionKey: "s-trusted-override",
+        message: "use trusted override",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        deliver: false,
+      }),
+    );
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-trusted-override",
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+    });
+  });
+
+  test("allows trusted fallback model-only overrides when the model ref is canonical", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-model-only-override"));
+    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+
+    await gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      runtime.run({
+        sessionKey: "s-model-only-override",
+        message: "use trusted model-only override",
+        model: "anthropic/claude-haiku-4-5",
+        deliver: false,
+      }),
+    );
+
+    expect(getLastDispatchedParams()).toMatchObject({
+      sessionKey: "s-model-only-override",
+      model: "anthropic/claude-haiku-4-5",
+    });
+    expect(getLastDispatchedParams()).not.toHaveProperty("provider");
+  });
+
+  test("rejects trusted fallback overrides when the configured allowlist normalizes to empty", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins, {
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic"],
+            },
+          },
+        },
+      },
+    });
+    serverPlugins.setFallbackGatewayContext(createTestContext("fallback-invalid-allowlist"));
+    const gatewayScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
+
+    await expect(
+      gatewayScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+        runtime.run({
+          sessionKey: "s-invalid-allowlist",
+          message: "use trusted override",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          deliver: false,
+        }),
+      ),
+    ).rejects.toThrow(
+      'plugin "voice-call" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.',
+    );
+  });
+
+  test("uses least-privilege synthetic fallback scopes without admin", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-least-privilege"));
+
+    await runtime.run({
+      sessionKey: "s-synthetic",
+      message: "run synthetic",
+      deliver: false,
+    });
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+  });
+
+  test("allows fallback session reads with synthetic write scope", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-session-read"));
+    const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
+
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
+      const auth = authorizeOperatorScopesForMethod("sessions.get", scopes);
+      if (!auth.allowed) {
+        opts.respond(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: `missing scope: ${auth.missingScope}`,
+        });
+        return;
+      }
+      opts.respond(true, { messages: [{ id: "m-1" }] });
+    });
+
+    await expect(
+      runtime.getSessionMessages({
+        sessionKey: "s-read",
+      }),
+    ).resolves.toEqual({
+      messages: [{ id: "m-1" }],
+    });
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
+  });
+
+  test("keeps admin scope for fallback session deletion", async () => {
+    const serverPlugins = await importServerPluginsModule();
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-delete-session"));
+
+    await runtime.deleteSession({
+      sessionKey: "s-delete",
+      deleteTranscript: true,
+    });
+
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
+  });
+
+  test("can prefer setup-runtime channel plugins during startup loads", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      preferSetupRuntimeForChannelPlugins: true,
+    });
+
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferSetupRuntimeForChannelPlugins: true,
+      }),
+    );
+  });
+
+  test("primes configured bindings during gateway startup", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    const cfg = {};
+    loadGatewayPlugins({
+      cfg,
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg });
+  });
+
+  test("can suppress duplicate diagnostics when reloading full runtime plugins", async () => {
+    const { loadGatewayPlugins } = await importServerPluginsModule();
+    const diagnostics: PluginDiagnostic[] = [
+      {
+        level: "error",
+        pluginId: "telegram",
+        source: "/tmp/telegram/index.ts",
+        message: "failed to load plugin: boom",
+      },
+    ];
+    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      logDiagnostics: false,
+    });
+
+    expect(log.error).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+  });
   test("shares fallback context across module reloads for existing runtimes", async () => {
     const first = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(first);
+    const runtime = await createSubagentRuntime(first);
 
     const staleContext = createTestContext("stale");
     first.setFallbackGatewayContext(staleContext);
@@ -180,7 +523,7 @@ describe("loadGatewayPlugins", () => {
 
   test("uses updated fallback context after context replacement", async () => {
     const serverPlugins = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(serverPlugins);
+    const runtime = await createSubagentRuntime(serverPlugins);
     const firstContext = createTestContext("before-restart");
     const secondContext = createTestContext("after-restart");
 
@@ -195,7 +538,7 @@ describe("loadGatewayPlugins", () => {
 
   test("reflects fallback context object mutation at dispatch time", async () => {
     const serverPlugins = await importServerPluginsModule();
-    const runtime = createSubagentRuntime(serverPlugins);
+    const runtime = await createSubagentRuntime(serverPlugins);
     const context = { marker: "before-mutation" } as GatewayRequestContext & {
       marker: string;
     };

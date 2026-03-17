@@ -91,14 +91,18 @@ function formatTokenHint(token: string, opts: { showSecrets: boolean }): string 
   return `${head}…${tail} · len ${t.length}`;
 }
 
-function inspectChannelAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
+async function inspectChannelAccount(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+  accountId: string,
+) {
   return (
     plugin.config.inspectAccount?.(cfg, accountId) ??
-    inspectReadOnlyChannelAccount({
+    (await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    })
+    }))
   );
 }
 
@@ -106,8 +110,8 @@ async function resolveChannelAccountRow(
   params: ResolvedChannelAccountRowParams,
 ): Promise<ChannelAccountRow> {
   const { plugin, cfg, sourceConfig, accountId } = params;
-  const sourceInspectedAccount = inspectChannelAccount(plugin, sourceConfig, accountId);
-  const resolvedInspectedAccount = inspectChannelAccount(plugin, cfg, accountId);
+  const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
+  const resolvedInspectedAccount = await inspectChannelAccount(plugin, cfg, accountId);
   const resolvedInspection = resolvedInspectedAccount as {
     enabled?: boolean;
     configured?: boolean;

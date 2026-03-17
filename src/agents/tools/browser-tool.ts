@@ -290,7 +290,7 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
     return false;
   }
   const capabilities = getBrowserProfileCapabilities(profile);
-  return capabilities.requiresRelay || capabilities.usesChromeMcp;
+  return capabilities.usesChromeMcp;
 }
 
 export function createBrowserTool(opts?: {
@@ -307,7 +307,7 @@ export function createBrowserTool(opts?: {
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       "Browser choice: omit profile by default for the isolated OpenClaw-managed browser (`openclaw`).",
-      'For the logged-in user browser on the local host, use profile="user". Chrome (v146+) must be running. Use only when existing logins/cookies matter and the user is present.',
+      'For the logged-in user browser on the local host, use profile="user". A supported Chromium-based browser (v144+) must be running. Use only when existing logins/cookies matter and the user is present.',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
@@ -326,7 +326,7 @@ export function createBrowserTool(opts?: {
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
       }
-      // User-browser profiles (existing-session, extension relay) are host-only.
+      // User-browser profiles (existing-session) are host-only.
       const isUserBrowserProfile = shouldPreferHostForProfile(profile);
       if (isUserBrowserProfile) {
         if (requestedNode || target === "node") {

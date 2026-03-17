@@ -1,7 +1,7 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { applyExtraParamsToAgent } from "./extra-params.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 // Mock streamSimple for testing
 vi.mock("@mariozechner/pi-ai", () => ({
@@ -15,24 +15,19 @@ type ToolStreamCase = {
   applyProvider: string;
   applyModelId: string;
   model: Model<"openai-completions">;
-  cfg?: Parameters<typeof applyExtraParamsToAgent>[1];
+  cfg?: OpenClawConfig;
   options?: SimpleStreamOptions;
 };
 
 function runToolStreamCase(params: ToolStreamCase) {
-  const payload: Record<string, unknown> = { model: params.model.id, messages: [] };
-  const baseStreamFn: StreamFn = (model, _context, options) => {
-    options?.onPayload?.(payload, model);
-    return {} as ReturnType<StreamFn>;
-  };
-  const agent = { streamFn: baseStreamFn };
-
-  applyExtraParamsToAgent(agent, params.cfg, params.applyProvider, params.applyModelId);
-
-  const context: Context = { messages: [] };
-  void agent.streamFn?.(params.model, context, params.options ?? {});
-
-  return payload;
+  return runExtraParamsCase({
+    applyModelId: params.applyModelId,
+    applyProvider: params.applyProvider,
+    cfg: params.cfg,
+    model: params.model,
+    options: params.options,
+    payload: { model: params.model.id, messages: [] },
+  }).payload as Record<string, unknown>;
 }
 
 describe("extra-params: Z.AI tool_stream support", () => {

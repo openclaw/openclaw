@@ -132,6 +132,9 @@ function resolveForwardedClientIp(params: {
   // Walk right-to-left and return the first untrusted hop.
   for (let index = forwardedChain.length - 1; index >= 0; index -= 1) {
     const hop = forwardedChain[index];
+    if (isLoopbackAddress(hop)) {
+      continue;
+    }
     if (!isTrustedProxyAddress(hop, trustedProxies)) {
       return hop;
     }

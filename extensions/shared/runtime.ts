@@ -1,4 +1,4 @@
-import { createLoggerBackedRuntime } from "openclaw/plugin-sdk";
+import { createLoggerBackedRuntime } from "openclaw/plugin-sdk/runtime";
 
 export function resolveLoggerBackedRuntime<TRuntime>(
   runtime: TRuntime | undefined,
