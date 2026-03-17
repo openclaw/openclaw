@@ -1,5 +1,7 @@
-import { describeImageWithModel } from "../../src/media-understanding/providers/image.js";
-import type { MediaUnderstandingProvider } from "../../src/media-understanding/types.js";
+import {
+  describeImageWithModel,
+  type MediaUnderstandingProvider,
+} from "openclaw/plugin-sdk/media-understanding";
 
 export const anthropicMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "anthropic",
