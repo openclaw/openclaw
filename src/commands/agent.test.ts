@@ -745,6 +745,61 @@ describe("agentCommand", () => {
     });
   });
 
+  it("preserves user-pinned auth profile source when persisting final rotated auth profile", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:main": {
+          sessionId: "sess-user-pinned-profile",
+          updatedAt: Date.now(),
+          authProfileOverride: "openai-codex:default",
+          authProfileOverrideSource: "user",
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+        },
+      });
+      mockConfig(home, store, {
+        model: { primary: "openai-codex/gpt-5.4" },
+        auth: {
+          profiles: {
+            "openai-codex:default": { provider: "openai-codex", type: "oauth", access: "a" },
+            "openai-codex:account2": { provider: "openai-codex", type: "oauth", access: "b" },
+          },
+          order: {
+            "openai-codex": ["openai-codex:default", "openai-codex:account2"],
+          },
+        },
+      });
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        finalAuthProfileId: "openai-codex:account2",
+        meta: {
+          durationMs: 10,
+          aborted: false,
+          agentMeta: {
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            sessionId: "sess-user-pinned-profile",
+          },
+        },
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        successfulCronAdds: 0,
+      } as unknown as EmbeddedPiRunResult);
+
+      await runAgentWithSessionKey("agent:main:main");
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<string, unknown>;
+      const entry = saved["agent:main:main"];
+      expect(entry?.authProfileOverride).toBe("openai-codex:account2");
+      expect(entry?.authProfileOverrideSource).toBe("user");
+      expect(entry?.authProfileOverrideCompactionCount).toBeUndefined();
+    });
+  });
+
   it("keeps explicit sessionKey even when sessionId exists elsewhere", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

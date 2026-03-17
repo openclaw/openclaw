@@ -341,10 +341,17 @@ async function runAgentAttempt(params: {
   agentDir: string;
   onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
   primaryProvider: string;
+  originalAuthProfileOverrideSource?: SessionEntry["authProfileOverrideSource"];
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
 }): Promise<Awaited<ReturnType<typeof runEmbeddedPiAgent>>> {
+  const initialAuthProfileOverrideSource =
+    params.originalAuthProfileOverrideSource ??
+    params.sessionEntry?.authProfileOverrideSource ??
+    (params.sessionKey
+      ? params.sessionStore?.[params.sessionKey]?.authProfileOverrideSource
+      : undefined);
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
@@ -441,8 +448,11 @@ async function runAgentAttempt(params: {
                   const winningProfileId =
                     result.finalAuthProfileId?.trim() || authStore.lastGood?.[providerKey]?.trim();
                   if (winningProfileId) {
+                    const preserveUserPin =
+                      initialAuthProfileOverrideSource === "user" ||
+                      updatedEntry.authProfileOverrideSource === "user";
                     updatedEntry.authProfileOverride = winningProfileId;
-                    updatedEntry.authProfileOverrideSource = "auto";
+                    updatedEntry.authProfileOverrideSource = preserveUserPin ? "user" : "auto";
                     delete updatedEntry.authProfileOverrideCompactionCount;
                     const winningProfile = authStore.profiles[winningProfileId];
                     if (winningProfile) {
@@ -533,8 +543,11 @@ async function runAgentAttempt(params: {
       const entry = params.sessionStore[params.sessionKey];
       if (entry) {
         const updatedEntry = { ...entry };
+        const preserveUserPin =
+          initialAuthProfileOverrideSource === "user" ||
+          updatedEntry.authProfileOverrideSource === "user";
         updatedEntry.authProfileOverride = finalAuthProfileId;
-        updatedEntry.authProfileOverrideSource = "auto";
+        updatedEntry.authProfileOverrideSource = preserveUserPin ? "user" : "auto";
         delete updatedEntry.authProfileOverrideCompactionCount;
         updatedEntry.updatedAt = Date.now();
         await persistSessionEntry({
@@ -754,6 +767,7 @@ async function agentCommandInternal(
     acpResolution,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
+  const originalAuthProfileOverrideSource = sessionEntry?.authProfileOverrideSource;
 
   try {
     if (opts.deliver === true) {
@@ -1181,6 +1195,7 @@ async function agentCommandInternal(
             resolvedVerboseLevel,
             agentDir,
             primaryProvider: provider,
+            originalAuthProfileOverrideSource,
             sessionStore,
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
