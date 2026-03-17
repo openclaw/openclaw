@@ -1,7 +1,9 @@
-import { setSetupChannelEnabled } from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { detectBinary } from "../../../src/commands/onboard-helpers.js";
-import { installSignalCli } from "../../../src/commands/signal-install.js";
+import {
+  detectBinary,
+  installSignalCli,
+  setSetupChannelEnabled,
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
 import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
 import {
   createSignalCliPathTextInput,

@@ -173,7 +173,7 @@ bundledChannelRuntimeSetters.setLineRuntime({
 
 setMatrixRuntime({
   state: {
-    resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
+    resolveStateDir: (_env: unknown, homeDir?: () => string) => (homeDir ?? (() => "/tmp"))(),
   },
 } as never);
 

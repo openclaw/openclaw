@@ -1,6 +1,7 @@
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   parseSetupEntriesAllowingWildcard,
@@ -16,7 +17,6 @@ import type {
   ChannelSetupWizard,
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "../../../src/terminal/links.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
