@@ -161,6 +161,61 @@ describe("image tool implicit imageModel config", () => {
     );
   });
 
+  it("allows /tmp paths in sandboxed mode", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-sandbox-"));
+    const agentDir = path.join(stateDir, "agent");
+    const sandboxRoot = path.join(stateDir, "sandbox");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(sandboxRoot, { recursive: true });
+
+    // Create a temp file outside the sandbox
+    const tmpFile = path.join(os.tmpdir(), `openclaw-image-tmp-${Date.now()}.png`);
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(tmpFile, Buffer.from(pngB64, "base64"));
+
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers(),
+      json: async () => ({
+        content: "a red square",
+        base_resp: { status_code: 0, status_msg: "" },
+      }),
+    });
+    // @ts-expect-error partial global
+    global.fetch = fetch;
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "minimax/MiniMax-M2.1" },
+          imageModel: { primary: "minimax/MiniMax-VL-01" },
+        },
+      },
+    };
+    const tool = createImageTool({ config: cfg, agentDir, sandboxRoot });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image tool");
+    }
+
+    // /tmp paths should be allowed even in sandboxed mode
+    const res = await tool.execute("t1", {
+      prompt: "Describe the image.",
+      image: tmpFile,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const text = res.content?.find((b) => b.type === "text")?.text ?? "";
+    expect(text).toBe("a red square");
+
+    // Cleanup
+    await fs.unlink(tmpFile).catch(() => {});
+  });
+
   it("rewrites inbound absolute paths into sandbox media/inbound", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-sandbox-"));
     const agentDir = path.join(stateDir, "agent");

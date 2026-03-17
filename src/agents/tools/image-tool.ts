@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
@@ -180,12 +181,32 @@ function buildImageContext(prompt: string, base64: string, mimeType: string): Co
   };
 }
 
+function isInAllowedMediaRoot(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  const tmpDir = os.tmpdir();
+  // Allow paths in system temp directories (/tmp, /var/tmp, etc.)
+  if (resolved.startsWith(tmpDir + path.sep) || resolved === tmpDir) {
+    return true;
+  }
+  // Also allow /tmp explicitly (on some systems os.tmpdir() may differ)
+  if (resolved.startsWith("/tmp/") || resolved === "/tmp") {
+    return true;
+  }
+  return false;
+}
+
 async function resolveSandboxedImagePath(params: {
   sandboxRoot: string;
   imagePath: string;
 }): Promise<{ resolved: string; rewrittenFrom?: string }> {
   const normalize = (p: string) => (p.startsWith("file://") ? p.slice("file://".length) : p);
   const filePath = normalize(params.imagePath);
+
+  // Allow paths in system temp directories (e.g., /tmp) without sandbox restrictions
+  if (isInAllowedMediaRoot(filePath)) {
+    return { resolved: path.resolve(filePath) };
+  }
+
   try {
     const out = await assertSandboxPath({
       filePath,
