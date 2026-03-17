@@ -30,6 +30,10 @@ function runOxfmt(files) {
     },
   );
 
+  if (result.error) {
+    throw new Error(`failed to launch oxfmt: ${result.error.message}`);
+  }
+
   if (result.status !== 0) {
     const stderr = result.stderr.trim();
     throw new Error(`oxfmt failed${stderr ? `:\n${stderr}` : ""}`);
