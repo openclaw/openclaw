@@ -153,4 +153,39 @@ describe("resolvePluginTools optional tools", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["other_tool"]);
     expect(registry.diagnostics).toHaveLength(0);
   });
+
+  it("forwards an explicit env to plugin loading", () => {
+    setOptionalDemoRegistry();
+    const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
+
+    resolvePluginTools({
+      context: createContext() as never,
+      env,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env,
+      }),
+    );
+  });
+
+  it("forwards gateway subagent binding to plugin runtime options", () => {
+    setOptionalDemoRegistry();
+
+    resolvePluginTools({
+      context: createContext() as never,
+      allowGatewaySubagentBinding: true,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    );
+  });
 });

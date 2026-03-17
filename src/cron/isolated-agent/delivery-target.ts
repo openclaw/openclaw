@@ -6,15 +6,16 @@ import {
   resolveStorePath,
 } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
+import { resolveWhatsAppAccount } from "../../plugin-sdk-internal/whatsapp.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
-import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export type DeliveryTargetResolution =
@@ -190,10 +191,16 @@ export async function resolveDeliveryTarget(
       error: docked.error,
     };
   }
+  const idLikeTarget = await maybeResolveIdLikeTarget({
+    cfg,
+    channel,
+    input: docked.to,
+    accountId,
+  });
   return {
     ok: true,
     channel,
-    to: docked.to,
+    to: idLikeTarget?.to ?? docked.to,
     accountId,
     threadId,
     mode,

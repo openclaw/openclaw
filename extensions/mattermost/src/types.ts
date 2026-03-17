@@ -5,6 +5,9 @@ import type {
   SecretInput,
 } from "openclaw/plugin-sdk/mattermost";
 
+export type MattermostReplyToMode = "off" | "first" | "all";
+export type MattermostChatTypeKey = "direct" | "channel" | "group";
+
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
 export type MattermostAccountConfig = {
@@ -54,6 +57,14 @@ export type MattermostAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /**
+   * Controls whether channel and group replies are sent as thread replies.
+   * - "off" (default): only thread-reply when incoming message is already a thread reply
+   * - "first": reply in a thread under the triggering message
+   * - "all": always reply in a thread; uses existing thread root or starts a new thread under the message
+   * Direct messages always behave as "off".
+   */
+  replyToMode?: MattermostReplyToMode;
   /** Action toggles for this account. */
   actions?: {
     /** Enable message reaction actions. Default: true. */
@@ -69,6 +80,15 @@ export type MattermostAccountConfig = {
     callbackPath?: string;
     /** Explicit callback URL (e.g. behind reverse proxy). */
     callbackUrl?: string;
+  };
+  interactions?: {
+    /** External base URL used for Mattermost interaction callbacks. */
+    callbackBaseUrl?: string;
+    /**
+     * IP/CIDR allowlist for callback request sources when Mattermost reaches the gateway
+     * over a non-loopback path. Keep this narrow to the Mattermost server or trusted ingress.
+     */
+    allowedSourceIps?: string[];
   };
 };
 

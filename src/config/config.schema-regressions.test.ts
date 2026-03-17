@@ -184,4 +184,44 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
   });
+
+  it("accepts signal accountUuid for loop protection", () => {
+    const res = validateConfigObject({
+      channels: {
+        signal: {
+          accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts telegram actions editMessage and createForumTopic", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          actions: {
+            editMessage: true,
+            createForumTopic: false,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
+    const res = validateConfigObject({
+      discovery: {
+        wideArea: {
+          enabled: true,
+          domain: "openclaw.internal",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

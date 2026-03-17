@@ -380,4 +380,36 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       emitLifecycleHooks: true,
     });
   });
+
+  it("cleans up the provisional session when lineage patching fails after thread binding", async () => {
+    const callGatewayMock = getCallGatewayMock();
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.patch" && typeof request.params?.spawnedBy === "string") {
+        throw new Error("lineage patch failed");
+      }
+      if (request.method === "sessions.delete") {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await executeDiscordThreadSessionSpawn("call9");
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "lineage patch failed",
+    });
+    expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
+    expect(hookRunnerMocks.runSubagentEnded).not.toHaveBeenCalled();
+    const methods = getGatewayMethods();
+    expect(methods).toContain("sessions.delete");
+    expect(methods).not.toContain("agent");
+    const deleteCall = findGatewayRequest("sessions.delete");
+    expect(deleteCall?.params).toMatchObject({
+      key: (result.details as { childSessionKey?: string }).childSessionKey,
+      deleteTranscript: true,
+      emitLifecycleHooks: true,
+    });
+  });
 });

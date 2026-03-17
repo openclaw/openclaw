@@ -8,11 +8,13 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
-import { getCustomProviderApiKey } from "../agents/model-auth.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { resolveRequiredHomeDir } from "./home-dir.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -21,46 +23,31 @@ export type ProviderAuth = {
   accountId?: string;
 };
 
-function parseGoogleToken(apiKey: string): { token: string } | null {
+type AuthStore = ReturnType<typeof ensureAuthProfileStore>;
+
+type UsageAuthState = {
+  cfg: OpenClawConfig;
+  store: AuthStore;
+  env: NodeJS.ProcessEnv;
+  agentDir?: string;
+};
+
+function parseGoogleUsageToken(apiKey: string): string {
   try {
     const parsed = JSON.parse(apiKey) as { token?: unknown };
-    if (parsed && typeof parsed.token === "string") {
-      return { token: parsed.token };
+    if (typeof parsed?.token === "string") {
+      return parsed.token;
     }
   } catch {
     // ignore
   }
-  return null;
+  return apiKey;
 }
 
-function resolveZaiApiKey(): string | undefined {
-  const envDirect =
-    normalizeSecretInput(process.env.ZAI_API_KEY) || normalizeSecretInput(process.env.Z_AI_API_KEY);
-  if (envDirect) {
-    return envDirect;
-  }
-
-  const cfg = loadConfig();
-  const key = getCustomProviderApiKey(cfg, "zai") || getCustomProviderApiKey(cfg, "z-ai");
-  if (key) {
-    return key;
-  }
-
-  const store = ensureAuthProfileStore();
-  const apiProfile = [
-    ...listProfilesForProvider(store, "zai"),
-    ...listProfilesForProvider(store, "z-ai"),
-  ].find((id) => store.profiles[id]?.type === "api_key");
-  if (apiProfile) {
-    const cred = store.profiles[apiProfile];
-    if (cred?.type === "api_key" && normalizeSecretInput(cred.key)) {
-      return normalizeSecretInput(cred.key);
-    }
-  }
-
+function resolveLegacyZaiUsageToken(env: NodeJS.ProcessEnv): string | undefined {
   try {
     const authPath = path.join(
-      resolveRequiredHomeDir(process.env, os.homedir),
+      resolveRequiredHomeDir(env, os.homedir),
       ".pi",
       "agent",
       "auth.json",
@@ -68,48 +55,42 @@ function resolveZaiApiKey(): string | undefined {
     if (!fs.existsSync(authPath)) {
       return undefined;
     }
-    const data = JSON.parse(fs.readFileSync(authPath, "utf-8")) as Record<
+    const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<
       string,
       { access?: string }
     >;
-    return data["z-ai"]?.access || data.zai?.access;
+    return parsed["z-ai"]?.access || parsed.zai?.access;
   } catch {
     return undefined;
   }
 }
 
-function resolveMinimaxApiKey(): string | undefined {
-  return resolveProviderApiKeyFromConfigAndStore({
-    providerId: "minimax",
-    envDirect: [process.env.MINIMAX_CODE_PLAN_KEY, process.env.MINIMAX_API_KEY],
-  });
-}
-
-function resolveXiaomiApiKey(): string | undefined {
-  return resolveProviderApiKeyFromConfigAndStore({
-    providerId: "xiaomi",
-    envDirect: [process.env.XIAOMI_API_KEY],
-  });
-}
-
 function resolveProviderApiKeyFromConfigAndStore(params: {
-  providerId: UsageProviderId;
-  envDirect: Array<string | undefined>;
+  state: UsageAuthState;
+  providerIds: string[];
+  envDirect?: Array<string | undefined>;
 }): string | undefined {
-  const envDirect = params.envDirect.map(normalizeSecretInput).find(Boolean);
+  const envDirect = params.envDirect?.map(normalizeSecretInput).find(Boolean);
   if (envDirect) {
     return envDirect;
   }
 
-  const cfg = loadConfig();
-  const key = getCustomProviderApiKey(cfg, params.providerId);
-  if (key) {
-    return key;
+  for (const providerId of params.providerIds) {
+    const key = resolveUsableCustomProviderApiKey({
+      cfg: params.state.cfg,
+      provider: providerId,
+    })?.apiKey;
+    if (key) {
+      return key;
+    }
   }
 
-  const store = ensureAuthProfileStore();
-  const cred = listProfilesForProvider(store, params.providerId)
-    .map((id) => store.profiles[id])
+  const normalizedProviderIds = new Set(
+    params.providerIds.map((providerId) => normalizeProviderId(providerId)).filter(Boolean),
+  );
+  const cred = [...normalizedProviderIds]
+    .flatMap((providerId) => listProfilesForProvider(params.state.store, providerId))
+    .map((id) => params.state.store.profiles[id])
     .find(
       (
         profile,
@@ -122,28 +103,32 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
     return undefined;
   }
   if (cred.type === "api_key") {
-    return normalizeSecretInput(cred.key);
+    const key = normalizeSecretInput(cred.key);
+    if (key && !isNonSecretApiKeyMarker(key)) {
+      return key;
+    }
+    return undefined;
   }
-  return normalizeSecretInput(cred.token);
+  const token = normalizeSecretInput(cred.token);
+  if (token && !isNonSecretApiKeyMarker(token)) {
+    return token;
+  }
+  return undefined;
 }
 
 async function resolveOAuthToken(params: {
+  state: UsageAuthState;
   provider: UsageProviderId;
-  agentDir?: string;
 }): Promise<ProviderAuth | null> {
-  const cfg = loadConfig();
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
   const order = resolveAuthProfileOrder({
-    cfg,
-    store,
+    cfg: params.state.cfg,
+    store: params.state.store,
     provider: params.provider,
   });
   const deduped = dedupeProfileIds(order);
 
   for (const profileId of deduped) {
-    const cred = store.profiles[profileId];
+    const cred = params.state.store.profiles[profileId];
     if (!cred || (cred.type !== "oauth" && cred.type !== "token")) {
       continue;
     }
@@ -152,25 +137,21 @@ async function resolveOAuthToken(params: {
         // Usage snapshots should work even if config profile metadata is stale.
         // (e.g. config says api_key but the store has a token profile.)
         cfg: undefined,
-        store,
+        store: params.state.store,
         profileId,
-        agentDir: params.agentDir,
+        agentDir: params.state.agentDir,
       });
-      if (resolved) {
-        let token = resolved.apiKey;
-        if (params.provider === "google-gemini-cli") {
-          const parsed = parseGoogleToken(resolved.apiKey);
-          token = parsed?.token ?? resolved.apiKey;
-        }
-        return {
-          provider: params.provider,
-          token,
-          accountId:
-            cred.type === "oauth" && "accountId" in cred
-              ? (cred as { accountId?: string }).accountId
-              : undefined,
-        };
+      if (!resolved) {
+        continue;
       }
+      return {
+        provider: params.provider,
+        token: resolved.apiKey,
+        accountId:
+          cred.type === "oauth" && "accountId" in cred
+            ? (cred as { accountId?: string }).accountId
+            : undefined,
+      };
     } catch {
       // ignore
     }
@@ -179,33 +160,93 @@ async function resolveOAuthToken(params: {
   return null;
 }
 
-function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
-  const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
+async function resolveProviderUsageAuthViaPlugin(params: {
+  state: UsageAuthState;
+  provider: UsageProviderId;
+}): Promise<ProviderAuth | null> {
+  const resolved = await resolveProviderUsageAuthWithPlugin({
+    provider: params.provider,
+    config: params.state.cfg,
+    env: params.state.env,
+    context: {
+      config: params.state.cfg,
+      agentDir: params.state.agentDir,
+      env: params.state.env,
+      provider: params.provider,
+      resolveApiKeyFromConfigAndStore: (options) =>
+        resolveProviderApiKeyFromConfigAndStore({
+          state: params.state,
+          providerIds: options?.providerIds ?? [params.provider],
+          envDirect: options?.envDirect,
+        }),
+      resolveOAuthToken: async () => {
+        const auth = await resolveOAuthToken({
+          state: params.state,
+          provider: params.provider,
+        });
+        return auth
+          ? {
+              token: auth.token,
+              ...(auth.accountId ? { accountId: auth.accountId } : {}),
+            }
+          : null;
+      },
+    },
   });
-  const cfg = loadConfig();
-  const providers = [
-    "anthropic",
-    "github-copilot",
-    "google-gemini-cli",
-    "openai-codex",
-  ] satisfies UsageProviderId[];
-  const isOAuthLikeCredential = (id: string) => {
-    const cred = store.profiles[id];
-    return cred?.type === "oauth" || cred?.type === "token";
+  if (!resolved?.token) {
+    return null;
+  }
+  return {
+    provider: params.provider,
+    token: resolved.token,
+    ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
   };
-  return providers.filter((provider) => {
-    const profiles = listProfilesForProvider(store, provider).filter(isOAuthLikeCredential);
-    if (profiles.length > 0) {
-      return true;
+}
+
+async function resolveProviderUsageAuthFallback(params: {
+  state: UsageAuthState;
+  provider: UsageProviderId;
+}): Promise<ProviderAuth | null> {
+  switch (params.provider) {
+    case "anthropic":
+    case "github-copilot":
+    case "openai-codex":
+      return await resolveOAuthToken(params);
+    case "google-gemini-cli": {
+      const auth = await resolveOAuthToken(params);
+      return auth ? { ...auth, token: parseGoogleUsageToken(auth.token) } : null;
     }
-    const normalized = normalizeProviderId(provider);
-    const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
-      .filter(([, profile]) => normalizeProviderId(profile.provider) === normalized)
-      .map(([id]) => id)
-      .filter(isOAuthLikeCredential);
-    return configuredProfiles.length > 0;
-  });
+    case "zai": {
+      const apiKey = resolveProviderApiKeyFromConfigAndStore({
+        state: params.state,
+        providerIds: ["zai", "z-ai"],
+        envDirect: [params.state.env.ZAI_API_KEY, params.state.env.Z_AI_API_KEY],
+      });
+      if (apiKey) {
+        return { provider: "zai", token: apiKey };
+      }
+      const legacyToken = resolveLegacyZaiUsageToken(params.state.env);
+      return legacyToken ? { provider: "zai", token: legacyToken } : null;
+    }
+    case "minimax": {
+      const apiKey = resolveProviderApiKeyFromConfigAndStore({
+        state: params.state,
+        providerIds: ["minimax"],
+        envDirect: [params.state.env.MINIMAX_CODE_PLAN_KEY, params.state.env.MINIMAX_API_KEY],
+      });
+      return apiKey ? { provider: "minimax", token: apiKey } : null;
+    }
+    case "xiaomi": {
+      const apiKey = resolveProviderApiKeyFromConfigAndStore({
+        state: params.state,
+        providerIds: ["xiaomi"],
+        envDirect: [params.state.env.XIAOMI_API_KEY],
+      });
+      return apiKey ? { provider: "xiaomi", token: apiKey } : null;
+    }
+    default:
+      return null;
+  }
 }
 
 export async function resolveProviderAuths(params: {
@@ -217,41 +258,31 @@ export async function resolveProviderAuths(params: {
     return params.auth;
   }
 
-  const oauthProviders = resolveOAuthProviders(params.agentDir);
+  const state: UsageAuthState = {
+    cfg: loadConfig(),
+    store: ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    }),
+    env: process.env,
+    agentDir: params.agentDir,
+  };
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {
-    if (provider === "zai") {
-      const apiKey = resolveZaiApiKey();
-      if (apiKey) {
-        auths.push({ provider, token: apiKey });
-      }
-      continue;
-    }
-    if (provider === "minimax") {
-      const apiKey = resolveMinimaxApiKey();
-      if (apiKey) {
-        auths.push({ provider, token: apiKey });
-      }
-      continue;
-    }
-    if (provider === "xiaomi") {
-      const apiKey = resolveXiaomiApiKey();
-      if (apiKey) {
-        auths.push({ provider, token: apiKey });
-      }
-      continue;
-    }
-
-    if (!oauthProviders.includes(provider)) {
-      continue;
-    }
-    const auth = await resolveOAuthToken({
+    const pluginAuth = await resolveProviderUsageAuthViaPlugin({
+      state,
       provider,
-      agentDir: params.agentDir,
     });
-    if (auth) {
-      auths.push(auth);
+    if (pluginAuth) {
+      auths.push(pluginAuth);
+      continue;
+    }
+    const fallbackAuth = await resolveProviderUsageAuthFallback({
+      state,
+      provider,
+    });
+    if (fallbackAuth) {
+      auths.push(fallbackAuth);
     }
   }
 

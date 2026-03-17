@@ -7,6 +7,8 @@ import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import * as embeddedModule from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
+import { readSessionMessages } from "../gateway/session-utils.fs.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
 
@@ -123,6 +125,107 @@ function mockAcpManager(params: {
   } as unknown as ReturnType<typeof acpManagerModule.getAcpSessionManager>);
 }
 
+async function withAcpSessionEnv(fn: () => Promise<void>) {
+  await withTempHome(async (home) => {
+    const storePath = path.join(home, "sessions.json");
+    writeAcpSessionStore(storePath);
+    mockConfig(home, storePath);
+    await fn();
+  });
+}
+
+async function withAcpSessionEnvInfo(
+  fn: (env: { home: string; storePath: string }) => Promise<void>,
+) {
+  await withTempHome(async (home) => {
+    const storePath = path.join(home, "sessions.json");
+    writeAcpSessionStore(storePath);
+    mockConfig(home, storePath);
+    await fn({ home, storePath });
+  });
+}
+
+function createRunTurnFromTextDeltas(chunks: string[]) {
+  return vi.fn(async (paramsUnknown: unknown) => {
+    const params = paramsUnknown as {
+      onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
+    };
+    for (const text of chunks) {
+      await params.onEvent?.({ type: "text_delta", text });
+    }
+    await params.onEvent?.({ type: "done", stopReason: "stop" });
+  });
+}
+
+function subscribeAssistantEvents() {
+  const assistantEvents: Array<{ text?: string; delta?: string }> = [];
+  const stop = onAgentEvent((evt) => {
+    if (evt.stream !== "assistant") {
+      return;
+    }
+    assistantEvents.push({
+      text: typeof evt.data?.text === "string" ? evt.data.text : undefined,
+      delta: typeof evt.data?.delta === "string" ? evt.data.delta : undefined,
+    });
+  });
+  return { assistantEvents, stop };
+}
+
+async function runAcpTurnWithAssistantEvents(chunks: string[]) {
+  const { assistantEvents, stop } = subscribeAssistantEvents();
+  const runTurn = createRunTurnFromTextDeltas(chunks);
+
+  mockAcpManager({
+    runTurn: (params: unknown) => runTurn(params),
+  });
+
+  try {
+    await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+  } finally {
+    stop();
+  }
+
+  const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
+  return { assistantEvents, logLines };
+}
+
+async function runAcpTurnWithTextDeltas(params: { message?: string; chunks: string[] }) {
+  const runTurn = createRunTurnFromTextDeltas(params.chunks);
+  mockAcpManager({
+    runTurn: (input: unknown) => runTurn(input),
+  });
+  await agentCommand(
+    {
+      message: params.message ?? "ping",
+      sessionKey: "agent:codex:acp:test",
+    },
+    runtime,
+  );
+  return { runTurn };
+}
+
+function expectPersistedAcpTranscript(params: {
+  storePath: string;
+  userContent: string;
+  assistantText: string;
+}) {
+  const persistedStore = JSON.parse(fs.readFileSync(params.storePath, "utf-8")) as Record<
+    string,
+    { sessionFile?: string }
+  >;
+  const sessionFile = persistedStore["agent:codex:acp:test"]?.sessionFile;
+  const messages = readSessionMessages("acp-session-1", params.storePath, sessionFile);
+  expect(messages).toHaveLength(2);
+  expect(messages[0]).toMatchObject({
+    role: "user",
+    content: params.userContent,
+  });
+  expect(messages[1]).toMatchObject({
+    role: "assistant",
+    content: [{ type: "text", text: params.assistantText }],
+  });
+}
+
 async function runAcpSessionWithPolicyOverrides(params: {
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
   resolveSession?: Parameters<typeof mockAcpManager>[0]["resolveSession"];
@@ -160,25 +263,8 @@ describe("agentCommand ACP runtime routing", () => {
   });
 
   it("routes ACP sessions through AcpSessionManager instead of embedded agent", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfig(home, storePath);
-
-      const runTurn = vi.fn(async (paramsUnknown: unknown) => {
-        const params = paramsUnknown as {
-          onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
-        };
-        await params.onEvent?.({ type: "text_delta", text: "ACP_" });
-        await params.onEvent?.({ type: "text_delta", text: "OK" });
-        await params.onEvent?.({ type: "done", stopReason: "stop" });
-      });
-
-      mockAcpManager({
-        runTurn: (params: unknown) => runTurn(params),
-      });
-
-      await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+    await withAcpSessionEnv(async () => {
+      const { runTurn } = await runAcpTurnWithTextDeltas({ chunks: ["ACP_", "OK"] });
 
       expect(runTurn).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -192,6 +278,89 @@ describe("agentCommand ACP runtime routing", () => {
         .mocked(runtime.log)
         .mock.calls.some(([first]) => typeof first === "string" && first.includes("ACP_OK"));
       expect(hasAckLog).toBe(true);
+    });
+  });
+
+  it("persists ACP child session history to the transcript store", async () => {
+    await withAcpSessionEnvInfo(async ({ storePath }) => {
+      await runAcpTurnWithTextDeltas({ chunks: ["ACP_", "OK"] });
+      expectPersistedAcpTranscript({
+        storePath,
+        userContent: "ping",
+        assistantText: "ACP_OK",
+      });
+    });
+  });
+
+  it("preserves exact ACP transcript text without trimming whitespace", async () => {
+    await withAcpSessionEnvInfo(async ({ storePath }) => {
+      await runAcpTurnWithTextDeltas({
+        message: "  ping\n",
+        chunks: ["  ACP_OK\n"],
+      });
+      expectPersistedAcpTranscript({
+        storePath,
+        userContent: "  ping\n",
+        assistantText: "  ACP_OK\n",
+      });
+    });
+  });
+
+  it("suppresses ACP NO_REPLY lead fragments before emitting assistant text", async () => {
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents([
+        "NO",
+        "NO_",
+        "NO_RE",
+        "NO_REPLY",
+        "Actual answer",
+      ]);
+
+      expect(assistantEvents).toEqual([{ text: "Actual answer", delta: "Actual answer" }]);
+      expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
+      expect(logLines.some((line) => line.includes("Actual answer"))).toBe(true);
+    });
+  });
+
+  it("keeps silent-only ACP turns out of assistant output", async () => {
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents([
+        "NO",
+        "NO_",
+        "NO_RE",
+        "NO_REPLY",
+      ]);
+      expect(assistantEvents.map((event) => event.text).filter(Boolean)).toEqual([]);
+      expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
+      expect(logLines.some((line) => line.includes("No reply from agent."))).toBe(true);
+    });
+  });
+
+  it("preserves repeated identical ACP delta chunks", async () => {
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents([
+        "b",
+        "o",
+        "o",
+        "k",
+      ]);
+
+      expect(assistantEvents).toEqual([
+        { text: "b", delta: "b" },
+        { text: "bo", delta: "o" },
+        { text: "boo", delta: "o" },
+        { text: "book", delta: "k" },
+      ]);
+      expect(logLines.some((line) => line.includes("book"))).toBe(true);
+    });
+  });
+
+  it("re-emits buffered NO prefix when ACP text becomes visible content", async () => {
+    await withAcpSessionEnv(async () => {
+      const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents(["NO", "W"]);
+
+      expect(assistantEvents).toEqual([{ text: "NOW", delta: "NOW" }]);
+      expect(logLines.some((line) => line.includes("NOW"))).toBe(true);
     });
   });
 

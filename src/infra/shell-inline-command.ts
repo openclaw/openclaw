@@ -1,5 +1,14 @@
 export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
-export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set(["-c", "-command", "--command"]);
+export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+  "-c",
+  "-command",
+  "--command",
+  "-f",
+  "-file",
+  "-encodedcommand",
+  "-enc",
+  "-e",
+]);
 
 export function resolveInlineCommandMatch(
   argv: string[],

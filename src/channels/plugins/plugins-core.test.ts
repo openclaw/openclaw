@@ -2,24 +2,33 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import type { DiscordProbe } from "../../../extensions/discord/src/probe.js";
+import type { DiscordTokenResolution } from "../../../extensions/discord/src/token.js";
+import type { IMessageProbe } from "../../../extensions/imessage/src/probe.js";
+import type { SignalProbe } from "../../../extensions/signal/src/probe.js";
+import type { SlackProbe } from "../../../extensions/slack/src/probe.js";
+import type { TelegramProbe } from "../../../extensions/telegram/src/probe.js";
+import type { TelegramTokenResolution } from "../../../extensions/telegram/src/token.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { DiscordProbe } from "../../discord/probe.js";
-import type { DiscordTokenResolution } from "../../discord/token.js";
-import type { IMessageProbe } from "../../imessage/probe.js";
 import type { LineProbeResult } from "../../line/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { SignalProbe } from "../../signal/probe.js";
-import type { SlackProbe } from "../../slack/probe.js";
-import type { TelegramProbe } from "../../telegram/probe.js";
-import type { TelegramTokenResolution } from "../../telegram/token.js";
 import {
   createChannelTestPluginBase,
   createMSTeamsTestPluginBase,
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { getChannelPluginCatalogEntry, listChannelPluginCatalogEntries } from "./catalog.js";
-import { resolveChannelConfigWrites } from "./config-writes.js";
+import {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveExplicitConfigWriteTarget,
+  resolveChannelConfigWrites,
+  resolveConfigWriteTargetFromPath,
+} from "./config-writes.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -143,6 +152,126 @@ describe("channel plugin catalog", () => {
       (entry) => entry.id,
     );
     expect(ids).toContain("demo-channel");
+  });
+
+  it("preserves plugin ids when they differ from channel ids", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-catalog-state-"));
+    const pluginDir = path.join(stateDir, "extensions", "demo-channel-plugin");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@vendor/demo-channel-plugin",
+        openclaw: {
+          extensions: ["./index.js"],
+          channel: {
+            id: "demo-channel",
+            label: "Demo Channel",
+            selectionLabel: "Demo Channel",
+            docsPath: "/channels/demo-channel",
+            blurb: "Demo channel",
+          },
+          install: {
+            npmSpec: "@vendor/demo-channel-plugin",
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "@vendor/demo-runtime",
+        configSchema: {},
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "module.exports = {}", "utf-8");
+
+    const entry = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+    }).find((item) => item.id === "demo-channel");
+
+    expect(entry?.pluginId).toBe("@vendor/demo-runtime");
+  });
+
+  it("uses the provided env for external catalog path resolution", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-home-"));
+    const catalogPath = path.join(home, "catalog.json");
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-demo-channel",
+            openclaw: {
+              channel: {
+                id: "env-demo-channel",
+                label: "Env Demo Channel",
+                selectionLabel: "Env Demo Channel",
+                docsPath: "/channels/env-demo-channel",
+                blurb: "Env demo entry",
+                order: 1000,
+              },
+              install: {
+                npmSpec: "@openclaw/env-demo-channel",
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const ids = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_PLUGIN_CATALOG_PATHS: "~/catalog.json",
+        HOME: home,
+      },
+    }).map((entry) => entry.id);
+
+    expect(ids).toContain("env-demo-channel");
+  });
+
+  it("uses the provided env for default catalog paths", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-state-"));
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/default-env-demo",
+            openclaw: {
+              channel: {
+                id: "default-env-demo",
+                label: "Default Env Demo",
+                selectionLabel: "Default Env Demo",
+                docsPath: "/channels/default-env-demo",
+                blurb: "Default env demo entry",
+              },
+              install: {
+                npmSpec: "@openclaw/default-env-demo",
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const ids = listChannelPluginCatalogEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        CLAWDBOT_STATE_DIR: undefined,
+      },
+    }).map((entry) => entry.id);
+
+    expect(ids).toContain("default-env-demo");
   });
 });
 
@@ -324,6 +453,108 @@ describe("resolveChannelConfigWrites", () => {
   });
 });
 
+describe("authorizeConfigWrite", () => {
+  function expectConfigWriteBlocked(params: {
+    disabledAccountId: string;
+    reason: "target-disabled" | "origin-disabled";
+    blockedScope: "target" | "origin";
+  }) {
+    expect(
+      authorizeConfigWrite({
+        cfg: makeSlackConfigWritesCfg(params.disabledAccountId),
+        origin: { channelId: "slack", accountId: "default" },
+        target: resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" }),
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: params.reason,
+      blockedScope: {
+        kind: params.blockedScope,
+        scope: {
+          channelId: "slack",
+          accountId: params.blockedScope === "target" ? "work" : "default",
+        },
+      },
+    });
+  }
+
+  it("blocks when a target account disables writes", () => {
+    expectConfigWriteBlocked({
+      disabledAccountId: "work",
+      reason: "target-disabled",
+      blockedScope: "target",
+    });
+  });
+
+  it("blocks when the origin account disables writes", () => {
+    expectConfigWriteBlocked({
+      disabledAccountId: "default",
+      reason: "origin-disabled",
+      blockedScope: "origin",
+    });
+  });
+
+  it("allows bypass for internal operator.admin writes", () => {
+    const cfg = makeSlackConfigWritesCfg("work");
+    expect(
+      authorizeConfigWrite({
+        cfg,
+        origin: { channelId: "slack", accountId: "default" },
+        target: resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" }),
+        allowBypass: canBypassConfigWritePolicy({
+          channel: INTERNAL_MESSAGE_CHANNEL,
+          gatewayClientScopes: ["operator.admin"],
+        }),
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("treats non-channel config paths as global writes", () => {
+    const cfg = makeSlackConfigWritesCfg("work");
+    expect(
+      authorizeConfigWrite({
+        cfg,
+        origin: { channelId: "slack", accountId: "default" },
+        target: resolveConfigWriteTargetFromPath(["messages", "ackReaction"]),
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("rejects ambiguous channel collection writes", () => {
+    expect(resolveConfigWriteTargetFromPath(["channels", "telegram"])).toEqual({
+      kind: "ambiguous",
+      scopes: [{ channelId: "telegram" }],
+    });
+    expect(resolveConfigWriteTargetFromPath(["channels", "telegram", "accounts"])).toEqual({
+      kind: "ambiguous",
+      scopes: [{ channelId: "telegram" }],
+    });
+  });
+
+  it("resolves explicit channel and account targets", () => {
+    expect(resolveExplicitConfigWriteTarget({ channelId: "slack" })).toEqual({
+      kind: "channel",
+      scope: { channelId: "slack" },
+    });
+    expect(resolveExplicitConfigWriteTarget({ channelId: "slack", accountId: "work" })).toEqual({
+      kind: "account",
+      scope: { channelId: "slack", accountId: "work" },
+    });
+  });
+
+  it("formats denied messages consistently", () => {
+    expect(
+      formatConfigWriteDeniedMessage({
+        result: {
+          allowed: false,
+          reason: "target-disabled",
+          blockedScope: { kind: "target", scope: { channelId: "slack", accountId: "work" } },
+        },
+      }),
+    ).toContain("channels.slack.accounts.work.configWrites=true");
+  });
+});
+
 describe("directory (config-backed)", () => {
   it("lists Slack peers/groups from config", async () => {
     const cfg = {
@@ -406,6 +637,72 @@ describe("directory (config-backed)", () => {
         sorted: true,
       },
     );
+    await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, ["-1001"]);
+  });
+
+  it("keeps Telegram config-backed directory fallback semantics when accountId is omitted", async () => {
+    await withEnvAsync({ TELEGRAM_BOT_TOKEN: "tok-env" }, async () => {
+      const cfg = {
+        channels: {
+          telegram: {
+            allowFrom: ["alice"],
+            groups: { "-1001": {} },
+            accounts: {
+              work: {
+                botToken: "tok-work",
+                allowFrom: ["bob"],
+                groups: { "-2002": {} },
+              },
+            },
+          },
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any;
+
+      await expectDirectoryIds(listTelegramDirectoryPeersFromConfig, cfg, ["@alice"]);
+      await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, ["-1001"]);
+    });
+  });
+
+  it("keeps config-backed directories readable when channel tokens are unresolved SecretRefs", async () => {
+    const envSecret = {
+      source: "env",
+      provider: "default",
+      id: "MISSING_TEST_SECRET",
+    } as const;
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: envSecret,
+          appToken: envSecret,
+          dm: { allowFrom: ["U123"] },
+          channels: { C111: {} },
+        },
+        discord: {
+          token: envSecret,
+          dm: { allowFrom: ["<@111>"] },
+          guilds: {
+            "123": {
+              channels: {
+                "555": {},
+              },
+            },
+          },
+        },
+        telegram: {
+          botToken: envSecret,
+          allowFrom: ["alice"],
+          groups: { "-1001": {} },
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
+    await expectDirectoryIds(listSlackDirectoryPeersFromConfig, cfg, ["user:u123"]);
+    await expectDirectoryIds(listSlackDirectoryGroupsFromConfig, cfg, ["channel:c111"]);
+    await expectDirectoryIds(listDiscordDirectoryPeersFromConfig, cfg, ["user:111"]);
+    await expectDirectoryIds(listDiscordDirectoryGroupsFromConfig, cfg, ["channel:555"]);
+    await expectDirectoryIds(listTelegramDirectoryPeersFromConfig, cfg, ["@alice"]);
     await expectDirectoryIds(listTelegramDirectoryGroupsFromConfig, cfg, ["-1001"]);
   });
 

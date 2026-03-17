@@ -1,12 +1,14 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
-import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
-import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
+import { markdownToSignalTextChunks } from "../../../extensions/signal/src/format.js";
+import {
+  signalOutbound,
+  telegramOutbound,
+  whatsappOutbound,
+} from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { markdownToSignalTextChunks } from "../../signal/format.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
@@ -38,6 +40,15 @@ const logMocks = vi.hoisted(() => ({
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
     "../../config/sessions.js",
+  );
+  return {
+    ...actual,
+    appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+  };
+});
+vi.mock("../../config/sessions/transcript.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/transcript.js")>(
+    "../../config/sessions/transcript.js",
   );
   return {
     ...actual,
@@ -87,7 +98,7 @@ async function deliverWhatsAppPayload(params: {
   sendWhatsApp: NonNullable<
     NonNullable<Parameters<typeof deliverOutboundPayloads>[0]["deps"]>["sendWhatsApp"]
   >;
-  payload: { text: string; mediaUrl?: string };
+  payload: DeliverOutboundPayload;
   cfg?: OpenClawConfig;
 }) {
   return deliverOutboundPayloads({
@@ -189,6 +200,7 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 describe("deliverOutboundPayloads", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSent.mockClear();
@@ -288,6 +300,24 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("formats BTW replies prominently for telegram delivery", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      cfg: {
+        channels: { telegram: { botToken: "tok-1", textChunkLimit: 100 } },
+      },
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
+      expect.objectContaining({ verbose: false, textMode: "html" }),
+    );
+  });
+
   it("preserves HTML text for telegram sendPayload channelData path", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
@@ -305,6 +335,107 @@ describe("deliverOutboundPayloads", () => {
       "<b>hello</b>",
       expect.objectContaining({ textMode: "html" }),
     );
+  });
+
+  it("does not inject telegram approval buttons from plain approval text", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "tok-1",
+            execApprovals: {
+              enabled: true,
+              approvers: ["123"],
+              target: "dm",
+            },
+          },
+        },
+      },
+      payload: {
+        text: "Mode: foreground\nRun: /approve 117ba06d allow-once (or allow-always / deny).",
+      },
+    });
+
+    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { buttons?: unknown } | undefined;
+    expect(sendOpts?.buttons).toBeUndefined();
+  });
+
+  it("preserves explicit telegram buttons when sender path provides them", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"],
+            target: "dm",
+          },
+        },
+      },
+    };
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      cfg,
+      payload: {
+        text: "Approval required",
+        channelData: {
+          telegram: {
+            buttons: [
+              [
+                { text: "Allow Once", callback_data: "/approve 117ba06d allow-once" },
+                { text: "Allow Always", callback_data: "/approve 117ba06d allow-always" },
+              ],
+              [{ text: "Deny", callback_data: "/approve 117ba06d deny" }],
+            ],
+          },
+        },
+      },
+    });
+
+    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { buttons?: unknown } | undefined;
+    expect(sendOpts?.buttons).toEqual([
+      [
+        { text: "Allow Once", callback_data: "/approve 117ba06d allow-once" },
+        { text: "Allow Always", callback_data: "/approve 117ba06d allow-always" },
+      ],
+      [{ text: "Deny", callback_data: "/approve 117ba06d deny" }],
+    ]);
+  });
+
+  it("renders shared interactive payloads into telegram buttons", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverTelegramPayload({
+      sendTelegram,
+      payload: {
+        text: "Approval required",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Allow once", value: "allow-once", style: "success" },
+                { label: "Always allow", value: "allow-always", style: "primary" },
+                { label: "Deny", value: "deny", style: "danger" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { buttons?: unknown } | undefined;
+    expect(sendOpts?.buttons).toEqual([
+      [
+        { text: "Allow once", callback_data: "allow-once", style: "success" },
+        { text: "Always allow", callback_data: "allow-always", style: "primary" },
+        { text: "Deny", callback_data: "deny", style: "danger" },
+      ],
+    ]);
   });
 
   it("scopes media local roots to the active agent workspace when agentId is provided", async () => {
@@ -656,6 +787,21 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
+  it("formats BTW replies prominently for whatsapp delivery", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverWhatsAppPayload({
+      sendWhatsApp,
+      payload: { text: "323", btw: { question: "what is 17 * 19?" } },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
+      expect.any(Object),
+    );
+  });
+
   it("continues on errors when bestEffort is enabled", async () => {
     const { sendWhatsApp, onError, results } = await runBestEffortPartialFailureDelivery();
 
@@ -800,11 +946,15 @@ describe("deliverOutboundPayloads", () => {
         sessionKey: "agent:main:main",
         text: "caption",
         mediaUrls: ["https://example.com/files/report.pdf?sig=1"],
+        idempotencyKey: "idem-deliver-1",
       },
     });
 
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "report.pdf" }),
+      expect.objectContaining({
+        text: "report.pdf",
+        idempotencyKey: "idem-deliver-1",
+      }),
     );
   });
 

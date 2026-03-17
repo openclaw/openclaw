@@ -1,15 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { coerceSecretRef, hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import type { SecretDefaults } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
 
-const GATEWAY_TOKEN_ENV_KEYS = ["OPENCLAW_GATEWAY_TOKEN", "CLAWDBOT_GATEWAY_TOKEN"] as const;
-const GATEWAY_PASSWORD_ENV_KEYS = [
-  "OPENCLAW_GATEWAY_PASSWORD",
-  "CLAWDBOT_GATEWAY_PASSWORD",
-] as const;
-
 export const GATEWAY_AUTH_SURFACE_PATHS = [
+  "gateway.auth.token",
   "gateway.auth.password",
   "gateway.remote.token",
   "gateway.remote.password",
@@ -25,20 +20,6 @@ export type GatewayAuthSurfaceState = {
 };
 
 export type GatewayAuthSurfaceStateMap = Record<GatewayAuthSurfacePath, GatewayAuthSurfaceState>;
-
-function readNonEmptyEnv(env: NodeJS.ProcessEnv, names: readonly string[]): string | undefined {
-  for (const name of names) {
-    const raw = env[name];
-    if (typeof raw !== "string") {
-      continue;
-    }
-    const trimmed = raw.trim();
-    if (trimmed.length > 0) {
-      return trimmed;
-    }
-  }
-  return undefined;
-}
 
 function formatAuthMode(mode: string | undefined): string {
   return mode ?? "unset";
@@ -81,10 +62,15 @@ export function evaluateGatewayAuthSurfaceStates(params: {
   env: NodeJS.ProcessEnv;
   defaults?: SecretDefaults;
 }): GatewayAuthSurfaceStateMap {
-  const defaults = params.defaults ?? params.config.secrets?.defaults;
   const gateway = params.config.gateway as Record<string, unknown> | undefined;
   if (!isRecord(gateway)) {
     return {
+      "gateway.auth.token": createState({
+        path: "gateway.auth.token",
+        active: false,
+        reason: "gateway configuration is not set.",
+        hasSecretRef: false,
+      }),
       "gateway.auth.password": createState({
         path: "gateway.auth.password",
         active: false,
@@ -107,90 +93,92 @@ export function evaluateGatewayAuthSurfaceStates(params: {
   }
   const auth = isRecord(gateway?.auth) ? gateway.auth : undefined;
   const remote = isRecord(gateway?.remote) ? gateway.remote : undefined;
-  const authMode = auth && typeof auth.mode === "string" ? auth.mode : undefined;
-
-  const hasAuthPasswordRef = coerceSecretRef(auth?.password, defaults) !== null;
-  const hasRemoteTokenRef = coerceSecretRef(remote?.token, defaults) !== null;
-  const hasRemotePasswordRef = coerceSecretRef(remote?.password, defaults) !== null;
-
-  const envToken = readNonEmptyEnv(params.env, GATEWAY_TOKEN_ENV_KEYS);
-  const envPassword = readNonEmptyEnv(params.env, GATEWAY_PASSWORD_ENV_KEYS);
-  const localTokenConfigured = hasConfiguredSecretInput(auth?.token, defaults);
-  const localPasswordConfigured = hasConfiguredSecretInput(auth?.password, defaults);
-  const remoteTokenConfigured = hasConfiguredSecretInput(remote?.token, defaults);
-
-  const localTokenCanWin =
-    authMode !== "password" && authMode !== "none" && authMode !== "trusted-proxy";
-  const tokenCanWin = Boolean(envToken || localTokenConfigured || remoteTokenConfigured);
-  const passwordCanWin =
-    authMode === "password" ||
-    (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
-
-  const remoteMode = gateway?.mode === "remote";
-  const remoteUrlConfigured = typeof remote?.url === "string" && remote.url.trim().length > 0;
-  const tailscale =
-    isRecord(gateway?.tailscale) && typeof gateway.tailscale.mode === "string"
-      ? gateway.tailscale
-      : undefined;
-  const tailscaleRemoteExposure = tailscale?.mode === "serve" || tailscale?.mode === "funnel";
-  const remoteEnabled = remote?.enabled !== false;
-  const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
-  const remoteTokenFallbackActive = localTokenCanWin && !envToken && !localTokenConfigured;
-  const remoteTokenActive = remoteEnabled && (remoteConfiguredSurface || remoteTokenFallbackActive);
-  const remotePasswordFallbackActive = !envPassword && !localPasswordConfigured && passwordCanWin;
-  const remotePasswordActive =
-    remoteEnabled && (remoteConfiguredSurface || remotePasswordFallbackActive);
+  const plan = createGatewayCredentialPlan({
+    config: params.config,
+    env: params.env,
+    includeLegacyEnv: true,
+    defaults: params.defaults,
+  });
 
   const authPasswordReason = (() => {
     if (!auth) {
       return "gateway.auth is not configured.";
     }
-    if (passwordCanWin) {
-      return authMode === "password"
+    if (plan.passwordCanWin) {
+      return plan.authMode === "password"
         ? 'gateway.auth.mode is "password".'
         : "no token source can win, so password auth can win.";
     }
-    if (authMode === "token" || authMode === "none" || authMode === "trusted-proxy") {
-      return `gateway.auth.mode is "${authMode}".`;
+    if (
+      plan.authMode === "token" ||
+      plan.authMode === "none" ||
+      plan.authMode === "trusted-proxy"
+    ) {
+      return `gateway.auth.mode is "${plan.authMode}".`;
     }
-    if (envToken) {
+    if (plan.envToken) {
       return "gateway token env var is configured.";
     }
-    if (localTokenConfigured) {
+    if (plan.localToken.configured) {
       return "gateway.auth.token is configured.";
     }
-    if (remoteTokenConfigured) {
+    if (plan.remoteToken.configured) {
       return "gateway.remote.token is configured.";
     }
     return "token auth can win.";
   })();
 
+  const authTokenReason = (() => {
+    if (!auth) {
+      return "gateway.auth is not configured.";
+    }
+    if (plan.authMode === "token") {
+      return plan.envToken
+        ? "gateway token env var is configured."
+        : 'gateway.auth.mode is "token".';
+    }
+    if (
+      plan.authMode === "password" ||
+      plan.authMode === "none" ||
+      plan.authMode === "trusted-proxy"
+    ) {
+      return `gateway.auth.mode is "${plan.authMode}".`;
+    }
+    if (plan.envToken) {
+      return "gateway token env var is configured.";
+    }
+    if (plan.envPassword) {
+      return "gateway password env var is configured.";
+    }
+    if (plan.localPassword.configured) {
+      return "gateway.auth.password is configured.";
+    }
+    return "token auth can win (mode is unset and no password source is configured).";
+  })();
+
   const remoteSurfaceReason = describeRemoteConfiguredSurface({
-    remoteMode,
-    remoteUrlConfigured,
-    tailscaleRemoteExposure,
+    remoteMode: plan.remoteMode,
+    remoteUrlConfigured: plan.remoteUrlConfigured,
+    tailscaleRemoteExposure: plan.tailscaleRemoteExposure,
   });
 
   const remoteTokenReason = (() => {
     if (!remote) {
       return "gateway.remote is not configured.";
     }
-    if (!remoteEnabled) {
-      return "gateway.remote.enabled is false.";
-    }
-    if (remoteConfiguredSurface) {
+    if (plan.remoteConfiguredSurface) {
       return `remote surface is active: ${remoteSurfaceReason}.`;
     }
-    if (remoteTokenFallbackActive) {
+    if (plan.remoteTokenFallbackActive) {
       return "local token auth can win and no env/auth token is configured.";
     }
-    if (!localTokenCanWin) {
-      return `token auth cannot win with gateway.auth.mode="${formatAuthMode(authMode)}".`;
+    if (!plan.localTokenCanWin) {
+      return `token auth cannot win with gateway.auth.mode="${formatAuthMode(plan.authMode)}".`;
     }
-    if (envToken) {
+    if (plan.envToken) {
       return "gateway token env var is configured.";
     }
-    if (localTokenConfigured) {
+    if (plan.localToken.configured) {
       return "gateway.auth.token is configured.";
     }
     return "remote token fallback is not active.";
@@ -200,48 +188,55 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     if (!remote) {
       return "gateway.remote is not configured.";
     }
-    if (!remoteEnabled) {
-      return "gateway.remote.enabled is false.";
-    }
-    if (remoteConfiguredSurface) {
+    if (plan.remoteConfiguredSurface) {
       return `remote surface is active: ${remoteSurfaceReason}.`;
     }
-    if (remotePasswordFallbackActive) {
+    if (plan.remotePasswordFallbackActive) {
       return "password auth can win and no env/auth password is configured.";
     }
-    if (!passwordCanWin) {
-      if (authMode === "token" || authMode === "none" || authMode === "trusted-proxy") {
-        return `password auth cannot win with gateway.auth.mode="${authMode}".`;
+    if (!plan.passwordCanWin) {
+      if (
+        plan.authMode === "token" ||
+        plan.authMode === "none" ||
+        plan.authMode === "trusted-proxy"
+      ) {
+        return `password auth cannot win with gateway.auth.mode="${plan.authMode}".`;
       }
       return "a token source can win, so password auth cannot win.";
     }
-    if (envPassword) {
+    if (plan.envPassword) {
       return "gateway password env var is configured.";
     }
-    if (localPasswordConfigured) {
+    if (plan.localPassword.configured) {
       return "gateway.auth.password is configured.";
     }
     return "remote password fallback is not active.";
   })();
 
   return {
+    "gateway.auth.token": createState({
+      path: "gateway.auth.token",
+      active: plan.localTokenSurfaceActive,
+      reason: authTokenReason,
+      hasSecretRef: plan.localToken.hasSecretRef,
+    }),
     "gateway.auth.password": createState({
       path: "gateway.auth.password",
-      active: passwordCanWin,
+      active: plan.passwordCanWin,
       reason: authPasswordReason,
-      hasSecretRef: hasAuthPasswordRef,
+      hasSecretRef: plan.localPassword.hasSecretRef,
     }),
     "gateway.remote.token": createState({
       path: "gateway.remote.token",
-      active: remoteTokenActive,
+      active: plan.remoteTokenActive,
       reason: remoteTokenReason,
-      hasSecretRef: hasRemoteTokenRef,
+      hasSecretRef: plan.remoteToken.hasSecretRef,
     }),
     "gateway.remote.password": createState({
       path: "gateway.remote.password",
-      active: remotePasswordActive,
+      active: plan.remotePasswordActive,
       reason: remotePasswordReason,
-      hasSecretRef: hasRemotePasswordRef,
+      hasSecretRef: plan.remotePassword.hasSecretRef,
     }),
   };
 }
