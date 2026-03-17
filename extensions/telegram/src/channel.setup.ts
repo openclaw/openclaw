@@ -3,20 +3,22 @@ import {
   createScopedAccountConfigAccessors,
   formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
   getChatChannelMeta,
-  inspectTelegramAccount,
-  listTelegramAccountIds,
   normalizeAccountId,
+  TelegramConfigSchema,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/telegram";
+import { inspectTelegramAccount } from "./account-inspect.js";
+import {
+  listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
-  TelegramConfigSchema,
-  type ChannelPlugin,
-  type OpenClawConfig,
   type ResolvedTelegramAccount,
-  type TelegramProbe,
-} from "openclaw/plugin-sdk/telegram";
+} from "./accounts.js";
+import type { TelegramProbe } from "./probe.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 

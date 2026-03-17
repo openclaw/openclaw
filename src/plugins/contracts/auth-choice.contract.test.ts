@@ -1,7 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../commands/auth-choice.apply.plugin-provider.js";
-import { resolvePreferredProviderForAuthChoice } from "../../commands/auth-choice.preferred-provider.js";
 import type { AuthChoice } from "../../commands/onboard-types.js";
 import {
   createAuthTestLifecycle,
@@ -13,14 +12,23 @@ import {
 } from "../../commands/test-wizard-helpers.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
+import { providerContractRegistry } from "./registry.js";
+
+type ResolvePluginProviders =
+  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolvePluginProviders;
+type ResolveProviderPluginChoice =
+  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolveProviderPluginChoice;
+type RunProviderModelSelectedHook =
+  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").runProviderModelSelectedHook;
 
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn());
-const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-const resolveProviderPluginChoiceMock = vi.hoisted(() =>
-  vi.fn<() => { provider: ProviderPlugin; method: ProviderPlugin["auth"][number] } | null>(),
+const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
+const resolveProviderPluginChoiceMock = vi.hoisted(() => vi.fn<ResolveProviderPluginChoice>());
+const runProviderModelSelectedHookMock = vi.hoisted(() =>
+  vi.fn<RunProviderModelSelectedHook>(async () => {}),
 );
-const runProviderModelSelectedHookMock = vi.hoisted(() => vi.fn(async () => {}));
+const resolvePreferredProviderPluginProvidersMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
   loginQwenPortalOAuth: loginQwenPortalOAuthMock,
@@ -31,10 +39,22 @@ vi.mock("../../providers/github-copilot-auth.js", () => ({
 }));
 
 vi.mock("../../commands/auth-choice.apply.plugin-provider.runtime.js", () => ({
-  resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
-  resolveProviderPluginChoice: (...args: unknown[]) => resolveProviderPluginChoiceMock(...args),
-  runProviderModelSelectedHook: (...args: unknown[]) => runProviderModelSelectedHookMock(...args),
+  resolvePluginProviders: resolvePluginProvidersMock,
+  resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
+  runProviderModelSelectedHook: runProviderModelSelectedHookMock,
 }));
+
+vi.mock("../../plugins/providers.js", async () => {
+  const actual = await vi.importActual<object>("../../plugins/providers.js");
+  return {
+    ...actual,
+    resolvePluginProviders: (...args: unknown[]) =>
+      resolvePreferredProviderPluginProvidersMock(...args),
+  };
+});
+
+const { resolvePreferredProviderForAuthChoice } =
+  await import("../../commands/auth-choice.preferred-provider.js");
 
 type StoredAuthProfile = {
   type?: string;
@@ -79,6 +99,15 @@ describe("provider auth-choice contract", () => {
     activeStateDir = env.stateDir;
     lifecycle.setStateDir(env.stateDir);
   }
+
+  beforeEach(() => {
+    resolvePreferredProviderPluginProvidersMock.mockReset();
+    resolvePreferredProviderPluginProvidersMock.mockReturnValue([
+      ...new Map(
+        providerContractRegistry.map((entry) => [entry.provider.id, entry.provider]),
+      ).values(),
+    ]);
+  });
 
   afterEach(async () => {
     loginQwenPortalOAuthMock.mockReset();

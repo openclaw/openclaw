@@ -10,6 +10,7 @@ import type {
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
   buildStreamErrorAssistantMessage,
@@ -18,7 +19,7 @@ import {
 
 const log = createSubsystemLogger("ollama-stream");
 
-export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
+export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
 export function resolveOllamaBaseUrlForRun(params: {
   modelBaseUrl?: string;

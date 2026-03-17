@@ -3,7 +3,6 @@ const rootEntries = [
   "src/index.ts!",
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
-  "src/extensionAPI.ts!",
   "src/infra/warning-filter.ts!",
   "src/channels/plugins/agent-tools/whatsapp-login.ts!",
   "src/channels/plugins/actions/discord.ts!",

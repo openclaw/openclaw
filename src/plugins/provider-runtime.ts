@@ -1,7 +1,16 @@
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveOwningPluginIdsForProvider, resolvePluginProviders } from "./providers.js";
+import {
+  augmentBundledProviderCatalog,
+  resolveBundledProviderBuiltInModelSuppression,
+} from "./provider-catalog-metadata.js";
+import {
+  resolveNonBundledProviderPluginIds,
+  resolveOwningPluginIdsForProvider,
+  resolvePluginProviders,
+} from "./providers.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 import type {
   ProviderAuthDoctorHintContext,
   ProviderAugmentModelCatalogContext,
@@ -33,18 +42,112 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
   return (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
 }
 
+let cachedHookProvidersWithoutConfig = new WeakMap<
+  NodeJS.ProcessEnv,
+  Map<string, ProviderPlugin[]>
+>();
+let cachedHookProvidersByConfig = new WeakMap<
+  OpenClawConfig,
+  WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>
+>();
+
+function resolveHookProviderCacheBucket(params: {
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}) {
+  if (!params.config) {
+    let bucket = cachedHookProvidersWithoutConfig.get(params.env);
+    if (!bucket) {
+      bucket = new Map<string, ProviderPlugin[]>();
+      cachedHookProvidersWithoutConfig.set(params.env, bucket);
+    }
+    return bucket;
+  }
+
+  let envBuckets = cachedHookProvidersByConfig.get(params.config);
+  if (!envBuckets) {
+    envBuckets = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>();
+    cachedHookProvidersByConfig.set(params.config, envBuckets);
+  }
+  let bucket = envBuckets.get(params.env);
+  if (!bucket) {
+    bucket = new Map<string, ProviderPlugin[]>();
+    envBuckets.set(params.env, bucket);
+  }
+  return bucket;
+}
+
+function buildHookProviderCacheKey(params: {
+  workspaceDir?: string;
+  onlyPluginIds?: string[];
+  env?: NodeJS.ProcessEnv;
+}) {
+  const { roots } = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
+}
+
+export function resetProviderRuntimeHookCacheForTest(): void {
+  cachedHookProvidersWithoutConfig = new WeakMap<
+    NodeJS.ProcessEnv,
+    Map<string, ProviderPlugin[]>
+  >();
+  cachedHookProvidersByConfig = new WeakMap<
+    OpenClawConfig,
+    WeakMap<NodeJS.ProcessEnv, Map<string, ProviderPlugin[]>>
+  >();
+}
+
 function resolveProviderPluginsForHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
 }): ProviderPlugin[] {
-  return resolvePluginProviders({
+  const env = params.env ?? process.env;
+  const cacheBucket = resolveHookProviderCacheBucket({
+    config: params.config,
+    env,
+  });
+  const cacheKey = buildHookProviderCacheKey({
+    workspaceDir: params.workspaceDir,
+    onlyPluginIds: params.onlyPluginIds,
+    env,
+  });
+  const cached = cacheBucket.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const resolved = resolvePluginProviders({
     ...params,
+    env,
     activate: false,
     cache: false,
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
+  });
+  cacheBucket.set(cacheKey, resolved);
+  return resolved;
+}
+
+function resolveProviderPluginsForCatalogHooks(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderPlugin[] {
+  const onlyPluginIds = resolveNonBundledProviderPluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (onlyPluginIds.length === 0) {
+    return [];
+  }
+  return resolveProviderPluginsForHooks({
+    ...params,
+    onlyPluginIds,
   });
 }
 
@@ -54,14 +157,18 @@ export function resolveProviderRuntimePlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
+  const owningPluginIds = resolveOwningPluginIdsForProvider({
+    provider: params.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (!owningPluginIds || owningPluginIds.length === 0) {
+    return undefined;
+  }
   return resolveProviderPluginsForHooks({
     ...params,
-    onlyPluginIds: resolveOwningPluginIdsForProvider({
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }),
+    onlyPluginIds: owningPluginIds,
   }).find((plugin) => matchesProviderId(plugin, params.provider));
 }
 
@@ -261,7 +368,11 @@ export function resolveProviderBuiltInModelSuppression(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderBuiltInModelSuppressionContext;
 }) {
-  for (const plugin of resolveProviderPluginsForHooks(params)) {
+  const bundledResult = resolveBundledProviderBuiltInModelSuppression(params.context);
+  if (bundledResult?.suppress) {
+    return bundledResult;
+  }
+  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
     const result = plugin.suppressBuiltInModel?.(params.context);
     if (result?.suppress) {
       return result;
@@ -276,8 +387,10 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderAugmentModelCatalogContext;
 }) {
-  const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
-  for (const plugin of resolveProviderPluginsForHooks(params)) {
+  const supplemental = [
+    ...augmentBundledProviderCatalog(params.context),
+  ] as ProviderAugmentModelCatalogContext["entries"];
+  for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
     const next = await plugin.augmentModelCatalog?.(params.context);
     if (!next || next.length === 0) {
       continue;

@@ -1,15 +1,20 @@
 import {
-  buildVllmProvider,
-  configureOpenAICompatibleSelfHostedProviderNonInteractive,
-  discoverOpenAICompatibleSelfHostedProvider,
   emptyPluginConfigSchema,
-  promptAndConfigureOpenAICompatibleSelfHostedProviderAuth,
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/core";
+import {
+  VLLM_DEFAULT_API_KEY_ENV_VAR,
+  VLLM_DEFAULT_BASE_URL,
+  VLLM_MODEL_PLACEHOLDER,
+  VLLM_PROVIDER_LABEL,
+} from "../../src/agents/vllm-defaults.js";
 
 const PROVIDER_ID = "vllm";
-const DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
+
+async function loadProviderSetup() {
+  return await import("openclaw/plugin-sdk/self-hosted-provider-setup");
+}
 
 const vllmPlugin = {
   id: "vllm",
@@ -25,38 +30,44 @@ const vllmPlugin = {
       auth: [
         {
           id: "custom",
-          label: "vLLM",
+          label: VLLM_PROVIDER_LABEL,
           hint: "Local/self-hosted OpenAI-compatible server",
           kind: "custom",
-          run: async (ctx) =>
-            promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
+          run: async (ctx) => {
+            const providerSetup = await loadProviderSetup();
+            return await providerSetup.promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
               cfg: ctx.config,
               prompter: ctx.prompter,
               providerId: PROVIDER_ID,
-              providerLabel: "vLLM",
-              defaultBaseUrl: DEFAULT_BASE_URL,
-              defaultApiKeyEnvVar: "VLLM_API_KEY",
-              modelPlaceholder: "meta-llama/Meta-Llama-3-8B-Instruct",
-            }),
-          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
-            configureOpenAICompatibleSelfHostedProviderNonInteractive({
+              providerLabel: VLLM_PROVIDER_LABEL,
+              defaultBaseUrl: VLLM_DEFAULT_BASE_URL,
+              defaultApiKeyEnvVar: VLLM_DEFAULT_API_KEY_ENV_VAR,
+              modelPlaceholder: VLLM_MODEL_PLACEHOLDER,
+            });
+          },
+          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
+            const providerSetup = await loadProviderSetup();
+            return await providerSetup.configureOpenAICompatibleSelfHostedProviderNonInteractive({
               ctx,
               providerId: PROVIDER_ID,
-              providerLabel: "vLLM",
-              defaultBaseUrl: DEFAULT_BASE_URL,
-              defaultApiKeyEnvVar: "VLLM_API_KEY",
-              modelPlaceholder: "meta-llama/Meta-Llama-3-8B-Instruct",
-            }),
+              providerLabel: VLLM_PROVIDER_LABEL,
+              defaultBaseUrl: VLLM_DEFAULT_BASE_URL,
+              defaultApiKeyEnvVar: VLLM_DEFAULT_API_KEY_ENV_VAR,
+              modelPlaceholder: VLLM_MODEL_PLACEHOLDER,
+            });
+          },
         },
       ],
       discovery: {
         order: "late",
-        run: async (ctx) =>
-          discoverOpenAICompatibleSelfHostedProvider({
+        run: async (ctx) => {
+          const providerSetup = await loadProviderSetup();
+          return await providerSetup.discoverOpenAICompatibleSelfHostedProvider({
             ctx,
             providerId: PROVIDER_ID,
-            buildProvider: buildVllmProvider,
-          }),
+            buildProvider: providerSetup.buildVllmProvider,
+          });
+        },
       },
       wizard: {
         setup: {
