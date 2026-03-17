@@ -518,7 +518,7 @@ describe("provider runtime contract", () => {
     });
 
     it("falls back to legacy pi auth tokens for usage auth", async () => {
-      const provider = requireProvider("zai");
+      const provider = requireProviderContractProvider("zai");
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-contract-"));
       await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
       await fs.writeFile(

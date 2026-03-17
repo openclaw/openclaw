@@ -1,7 +1,8 @@
 import { loginWeb as loginWebImpl } from "../../../extensions/whatsapp/src/login.js";
+import type { PluginRuntime } from "./types.js";
 
-type LoginWeb = typeof import("../../../extensions/whatsapp/src/login.js").loginWeb;
+type RuntimeWhatsAppLogin = Pick<PluginRuntime["channel"]["whatsapp"], "loginWeb">;
 
-export function loginWeb(...args: Parameters<LoginWeb>): ReturnType<LoginWeb> {
-  return loginWebImpl(...args);
-}
+export const runtimeWhatsAppLogin = {
+  loginWeb: loginWebImpl,
+} satisfies RuntimeWhatsAppLogin;
