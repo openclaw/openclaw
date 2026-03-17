@@ -330,6 +330,29 @@ export function buildBootstrapPromptWarning(params: {
   };
 }
 
+export function prependBootstrapPromptWarning(
+  prompt: string,
+  warningLines?: string[],
+  options?: {
+    preserveExactPrompt?: string;
+  },
+): string {
+  const normalizedLines = (warningLines ?? []).map((line) => line.trim()).filter(Boolean);
+  if (normalizedLines.length === 0) {
+    return prompt;
+  }
+  if (options?.preserveExactPrompt && prompt === options.preserveExactPrompt) {
+    return prompt;
+  }
+  const warningBlock = [
+    "[Bootstrap truncation warning]",
+    "Some workspace bootstrap files were truncated before injection.",
+    "Treat Project Context as partial and read the relevant files directly if details seem missing.",
+    ...normalizedLines.map((line) => `- ${line}`),
+  ].join("\n");
+  return prompt ? `${warningBlock}\n\n${prompt}` : warningBlock;
+}
+
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;
   warningMode: BootstrapPromptWarningMode;

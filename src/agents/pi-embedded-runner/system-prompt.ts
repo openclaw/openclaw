@@ -51,7 +51,6 @@ export function buildEmbeddedSystemPrompt(params: {
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
-  bootstrapTruncationWarningLines?: string[];
   memoryCitationsMode?: MemoryCitationsMode;
 }): string {
   return buildAgentSystemPrompt({
@@ -81,7 +80,6 @@ export function buildEmbeddedSystemPrompt(params: {
     userTime: params.userTime,
     userTimeFormat: params.userTimeFormat,
     contextFiles: params.contextFiles,
-    bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     memoryCitationsMode: params.memoryCitationsMode,
   });
 }
