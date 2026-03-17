@@ -2,8 +2,8 @@ category: resource_exhaustion
 critical:
   - pod_issues
   - prom_critical
-  - log_signals
 optional:
+  - log_signals
   - argocd_sync
   - changes_in_window
   - image_revision

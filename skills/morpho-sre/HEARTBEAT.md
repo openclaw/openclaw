@@ -95,7 +95,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
 - Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into any Slack thread.
 - Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.
-- Content gate: before posting any message to an incident thread, verify it contains at least one `*Evidence:*` fact or `*Mitigation:*` action. If it doesn't, do not send it — buffer all content into a single reply.
+- Content gate: before posting any message to an incident thread, verify it contains at least one `*Evidence:*` fact or `*Mitigation:*` action. If it doesn't, do not send it — buffer all content into a single reply. Exception: the single non-incident acknowledgment with ETA/next step allowed by the progress-chatter rule above is exempt from this gate.
 - For recurring indexer freshness alerts on the same workload, answer as one ongoing RCA instead of a fresh transient update.
 - Before claiming repo/tool access is unavailable, run one live probe (`gh repo view <owner/repo>` or the target helper in dry-run mode) and quote the exact error.
 - Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement.
