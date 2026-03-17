@@ -22,6 +22,7 @@ type OnboardEnv = {
   configPath: string;
   runtime: NonInteractiveRuntime;
 };
+type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
@@ -61,7 +62,7 @@ type ProviderAuthConfigSnapshot = {
   };
 };
 
-function createZaiFetchMock(responses: Record<string, number>): typeof fetch {
+function createZaiFetchMock(responses: Record<string, number>): FetchLike {
   return vi.fn(async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : "";
     const parsedBody =
@@ -77,12 +78,12 @@ function createZaiFetchMock(responses: Record<string, number>): typeof fetch {
         headers: { "content-type": "application/json" },
       },
     );
-  }) as typeof fetch;
+  });
 }
 
 async function withZaiProbeFetch<T>(
   responses: Record<string, number>,
-  run: (fetchMock: typeof fetch) => Promise<T>,
+  run: (fetchMock: FetchLike) => Promise<T>,
 ): Promise<T> {
   const originalVitest = process.env.VITEST;
   delete process.env.VITEST;
