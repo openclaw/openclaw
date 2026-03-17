@@ -31,12 +31,18 @@ export function buildSandboxEnv(params: {
   defaultPath: string;
   paramsEnv?: Record<string, string>;
   sandboxEnv?: Record<string, string>;
+  /** Config-level env.vars that should be forwarded into the sandbox (pre-filtered). */
+  configEnvVars?: Record<string, string>;
   containerWorkdir: string;
 }) {
   const env: Record<string, string> = {
     PATH: params.defaultPath,
     HOME: params.containerWorkdir,
   };
+  // Apply config env.vars first (lowest priority after defaults).
+  for (const [key, value] of Object.entries(params.configEnvVars ?? {})) {
+    env[key] = value;
+  }
   for (const [key, value] of Object.entries(params.sandboxEnv ?? {})) {
     env[key] = value;
   }

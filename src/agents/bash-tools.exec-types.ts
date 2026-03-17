@@ -27,6 +27,8 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  /** Config-level env.vars to forward into sandbox exec environments. */
+  configEnvVars?: Record<string, string>;
 };
 
 export type ExecElevatedDefaults = {
