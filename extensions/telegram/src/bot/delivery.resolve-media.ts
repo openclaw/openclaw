@@ -128,7 +128,7 @@ async function downloadAndSaveTelegramFile(params: {
   const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({
     url,
-    fetchImpl: params.transport.sourceFetch,
+    fetchImpl: params.transport.fetch,
     dispatcherPolicy: params.transport.pinnedDispatcherPolicy,
     fallbackDispatcherPolicy: params.transport.fallbackPinnedDispatcherPolicy,
     shouldRetryFetchError: shouldRetryTelegramIpv4Fallback,
