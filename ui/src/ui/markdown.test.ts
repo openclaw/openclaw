@@ -162,4 +162,32 @@ describe("toSanitizedMarkdownHtml", () => {
       warnSpy.mockRestore();
     }
   });
+
+  it("bypasses marked for repeated escaped code fences inside JSON-like dumps (#49021)", () => {
+    const input = [
+      "[",
+      "  {",
+      `    "content": "${Array.from(
+        { length: 10 },
+        (_, i) => `\\n\`\`\`shell\\ncmd${i}\\n\`\`\`\\nlabel${i}`,
+      ).join("")}"`,
+      "  }",
+      "]",
+    ].join("\n");
+    const parseSpy = vi.spyOn(marked, "parse").mockImplementation(() => {
+      throw new Error("marked.parse should not run for risky escaped-fence dumps");
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const html = toSanitizedMarkdownHtml(input);
+      expect(parseSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(html).toContain('class="markdown-plain-text-fallback"');
+      expect(html).toContain("cmd0");
+      expect(html).toContain("label9");
+    } finally {
+      parseSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
 });
