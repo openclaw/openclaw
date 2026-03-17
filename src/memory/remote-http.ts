@@ -1,4 +1,7 @@
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  GUARDED_FETCH_MODE,
+} from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 
 export function buildRemoteBaseUrlPolicy(baseUrl: string): SsrFPolicy | undefined {
@@ -29,8 +32,7 @@ export async function withRemoteHttpResponse<T>(params: {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
-    proxy: "env",
-    dangerouslyAllowEnvProxyWithoutPinnedDns: true,
+    mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
   });

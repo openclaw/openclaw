@@ -293,6 +293,7 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it("skips local DNS pinning when trusted env proxy mode is active", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
     const lookupFn = vi.fn(async () => {
       throw new Error("lookup should not run");
     });
