@@ -713,6 +713,68 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(getGlobalHookRunner()).toBeNull();
   });
 
+  it("only publishes plugin commands to the global registry during activating loads", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "command-plugin",
+      filename: "command-plugin.cjs",
+      body: `module.exports = {
+        id: "command-plugin",
+        register(api) {
+          api.registerCommand({
+            name: "pair",
+            description: "Pair device",
+            acceptsArgs: true,
+            handler: async ({ args }) => ({ text: \`paired:\${args ?? ""}\` }),
+          });
+        },
+      };`,
+    });
+    const { clearPluginCommands, getPluginCommandSpecs } = await import("./commands.js");
+
+    clearPluginCommands();
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["command-plugin"],
+        },
+      },
+      onlyPluginIds: ["command-plugin"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
+    expect(scoped.commands.map((entry) => entry.command.name)).toEqual(["pair"]);
+    expect(getPluginCommandSpecs("telegram")).toEqual([]);
+
+    const active = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["command-plugin"],
+        },
+      },
+      onlyPluginIds: ["command-plugin"],
+    });
+
+    expect(active.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
+    expect(getPluginCommandSpecs("telegram")).toEqual([
+      {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+      },
+    ]);
+
+    clearPluginCommands();
+  });
+
   it("throws when activate:false is used without cache:false", () => {
     expect(() => loadOpenClawPlugins({ activate: false })).toThrow(
       "activate:false requires cache:false",
