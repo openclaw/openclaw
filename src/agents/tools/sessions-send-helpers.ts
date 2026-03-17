@@ -24,7 +24,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
     return null;
   }
   const [channelRaw, kind, ...rest] = parts;
-  if (kind !== "group" && kind !== "channel" && kind !== "thread") {
+  if (channelRaw === "main" || (kind !== "group" && kind !== "channel" && kind !== "thread")) {
     return null;
   }
 
