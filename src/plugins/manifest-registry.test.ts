@@ -193,6 +193,9 @@ describe("loadPluginManifestRegistry", () => {
     });
 
     expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(
+      registry.plugins.some((plugin) => plugin.id === "zalouser" && plugin.origin === "global"),
+    ).toBe(true);
   });
 
   it("preserves provider auth env metadata from plugin manifests", () => {

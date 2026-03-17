@@ -281,13 +281,13 @@ function isIntentionalBundledInstallOverride(params: {
 }): boolean {
   const pair: [PluginCandidate, PluginCandidate] = [params.left, params.right];
   const bundled = pair.find((candidate) => candidate.origin === "bundled");
-  const global = pair.find((candidate) => candidate.origin === "global");
-  if (!bundled || !global) {
+  const globalCandidate = pair.find((candidate) => candidate.origin === "global");
+  if (!bundled || !globalCandidate) {
     return false;
   }
   return matchesInstalledPluginRecord({
     pluginId: params.pluginId,
-    candidate: global,
+    candidate: globalCandidate,
     config: params.config,
     env: params.env,
   });
