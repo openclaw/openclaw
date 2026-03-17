@@ -20,7 +20,7 @@ function getNestedTranslation(map: TranslationMap | null, ...path: string[]): st
 
 describe("ui i18n locale registry", () => {
   it("lists supported locales", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de", "es"]);
+    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "pt-BR", "de", "es", "vi"]);
     expect(DEFAULT_LOCALE).toBe("en");
   });
 
@@ -31,6 +31,8 @@ describe("ui i18n locale registry", () => {
     expect(resolveNavigatorLocale("pt-PT")).toBe("pt-BR");
     expect(resolveNavigatorLocale("zh-HK")).toBe("zh-TW");
     expect(resolveNavigatorLocale("en-US")).toBe("en");
+    expect(resolveNavigatorLocale("vi")).toBe("vi");
+    expect(resolveNavigatorLocale("vi-VN")).toBe("vi");
   });
 
   it("loads lazy locale translations from the registry", async () => {
@@ -45,5 +47,10 @@ describe("ui i18n locale registry", () => {
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
     expect(await loadLazyLocaleTranslation("en")).toBeNull();
+
+    const vi = await loadLazyLocaleTranslation("vi");
+    expect(getNestedTranslation(vi, "common", "health")).toBe("Tình trạng");
+    expect(getNestedTranslation(vi, "languages", "vi")).toBe("Tiếng Việt");
+    expect(getNestedTranslation(vi, "nav", "chat")).toBe("Trò chuyện");
   });
 });
