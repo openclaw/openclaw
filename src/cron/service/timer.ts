@@ -148,6 +148,20 @@ function isTransientCronError(error: string | undefined, retryOn?: CronRetryOn[]
   return keys.some((k) => TRANSIENT_PATTERNS[k]?.test(error));
 }
 
+/**
+ * Detect connectivity/network errors that typically occur during host
+ * sleep/hibernate or temporary network loss.  These should not inflate
+ * consecutiveErrors because they are environmental, not application failures.
+ */
+function isConnectivityError(error: string | undefined): boolean {
+  if (!error || typeof error !== "string") {
+    return false;
+  }
+  return (
+    TRANSIENT_PATTERNS.network.test(error) || TRANSIENT_PATTERNS.timeout.test(error)
+  );
+}
+
 function resolveRetryConfig(cronConfig?: CronConfig) {
   const retry = cronConfig?.retry;
   return {
@@ -335,8 +349,14 @@ export function applyJobResult(
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
+  // Connectivity errors (network/timeout) during host sleep/hibernate are
+  // environmental, not application failures — skip the counter so agents
+  // don't treat them as real breakage (#49124).
   if (result.status === "error") {
-    job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    const connectivity = isConnectivityError(result.error);
+    if (!connectivity) {
+      job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    }
     const alertConfig = resolveFailureAlert(state, job);
     if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
       const isBestEffort =
