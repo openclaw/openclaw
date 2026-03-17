@@ -171,6 +171,50 @@ async function resolveProfileGatewayProbeTlsFingerprint(cfg: {
   return tlsRuntime.enabled ? tlsRuntime.fingerprintSha256 : undefined;
 }
 
+type LoadedGatewayRuntime =
+  | {
+      ok: true;
+      cfg: {
+        gateway?: {
+          port?: number;
+          bind?: import("../config/config.js").GatewayBindMode;
+          customBindHost?: string;
+          tls?: import("../config/types.gateway.js").GatewayTlsConfig;
+        };
+      };
+      auth: { token?: string; password?: string };
+      warning?: string;
+      tlsFingerprint?: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+async function loadGatewayRuntime(env: NodeJS.ProcessEnv): Promise<LoadedGatewayRuntime> {
+  try {
+    const cfg = createConfigIO({ env }).loadConfig();
+    const { auth, warning } = resolveGatewayProbeAuthSafe({
+      cfg,
+      mode: "local",
+      env,
+    });
+    const tlsFingerprint = await resolveProfileGatewayProbeTlsFingerprint(cfg);
+    return {
+      ok: true,
+      cfg,
+      auth,
+      warning,
+      tlsFingerprint,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `failed to load monitored profile config: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 async function probeProfileGateway(params: {
   cfg: {
     gateway?: {
@@ -388,95 +432,91 @@ export async function runRescueWatchdogJob(params: {
   }
   const installedCommand = await service.readCommand(baseEnv).catch(() => null);
   const env = mergeManagedServiceEnv(baseEnv, installedCommand);
-  let cfg;
-  try {
-    cfg = createConfigIO({ env }).loadConfig();
-  } catch (error) {
-    return {
-      status: "error",
-      error: `failed to load monitored profile config: ${error instanceof Error ? error.message : String(error)}`,
-    };
-  }
-  const { auth, warning } = resolveGatewayProbeAuthSafe({
-    cfg,
-    mode: "local",
-    env,
-  });
-  const port = await resolveManagedGatewayProbePort({
-    cfg,
-    env,
-    service,
-    command: installedCommand,
-  });
   const actions: string[] = [];
-  const tlsFingerprint = await resolveProfileGatewayProbeTlsFingerprint(cfg);
-
-  const initialProbe = await probeProfileGateway({ cfg, port, auth, tlsFingerprint });
-  if (initialProbe.healthy) {
-    return {
-      status: "ok",
-      summary: buildSummary(monitoredProfile, actions),
-    };
-  }
-
+  const initialRuntime = await loadGatewayRuntime(env);
+  let warning = initialRuntime.ok ? initialRuntime.warning : undefined;
   let restartError: string | undefined;
-  const remainingBeforeRestartMs = resolveRemainingJobBudgetMs({
-    startedAtMs,
-    payload: params.job.payload,
-  });
-  if (
-    typeof remainingBeforeRestartMs === "number" &&
-    remainingBeforeRestartMs < MIN_RESTART_TIMEOUT_MS
-  ) {
-    restartError = `skipped restart because only ${remainingBeforeRestartMs}ms remained in the cron job budget`;
-  } else {
-    const restartTimeoutMs =
-      typeof remainingBeforeRestartMs === "number"
-        ? Math.min(RESTART_TIMEOUT_MS, remainingBeforeRestartMs)
-        : RESTART_TIMEOUT_MS;
-    const restartResult = await runBoundedStep({
-      run: async (signal) => {
-        await service.restart({ env, stdout: process.stdout, signal });
-      },
-      timeoutMs: restartTimeoutMs,
-      abortSignal: params.abortSignal,
-      label: "service restart",
+  let preDoctorFailureDetail = initialRuntime.ok ? "unreachable" : initialRuntime.error;
+  if (initialRuntime.ok) {
+    const port = await resolveManagedGatewayProbePort({
+      cfg: initialRuntime.cfg,
+      env,
+      service,
+      command: installedCommand,
     });
-    if (restartResult.ok) {
-      actions.push("restarted managed gateway service");
+    const initialProbe = await probeProfileGateway({
+      cfg: initialRuntime.cfg,
+      port,
+      auth: initialRuntime.auth,
+      tlsFingerprint: initialRuntime.tlsFingerprint,
+    });
+    if (initialProbe.healthy) {
+      return {
+        status: "ok",
+        summary: buildSummary(monitoredProfile, actions),
+      };
+    }
+    preDoctorFailureDetail = initialProbe.detail ?? "unreachable";
+
+    const remainingBeforeRestartMs = resolveRemainingJobBudgetMs({
+      startedAtMs,
+      payload: params.job.payload,
+    });
+    if (
+      typeof remainingBeforeRestartMs === "number" &&
+      remainingBeforeRestartMs < MIN_RESTART_TIMEOUT_MS
+    ) {
+      restartError = `skipped restart because only ${remainingBeforeRestartMs}ms remained in the cron job budget`;
     } else {
-      restartError = restartResult.error;
-      if (restartResult.aborted) {
-        return {
-          status: "error",
-          error: restartResult.error,
-          summary: actions.length > 0 ? buildSummary(monitoredProfile, actions) : undefined,
-        };
+      const restartTimeoutMs =
+        typeof remainingBeforeRestartMs === "number"
+          ? Math.min(RESTART_TIMEOUT_MS, remainingBeforeRestartMs)
+          : RESTART_TIMEOUT_MS;
+      const restartResult = await runBoundedStep({
+        run: async (signal) => {
+          await service.restart({ env, stdout: process.stdout, signal });
+        },
+        timeoutMs: restartTimeoutMs,
+        abortSignal: params.abortSignal,
+        label: "service restart",
+      });
+      if (restartResult.ok) {
+        actions.push("restarted managed gateway service");
+      } else {
+        restartError = restartResult.error;
+        if (restartResult.aborted) {
+          return {
+            status: "error",
+            error: restartResult.error,
+            summary: actions.length > 0 ? buildSummary(monitoredProfile, actions) : undefined,
+          };
+        }
       }
     }
-  }
 
-  const restartProbe = await waitForProfileGateway({
-    cfg,
-    port,
-    auth,
-    tlsFingerprint,
-    abortSignal: params.abortSignal,
-    timeoutMs: (() => {
-      const remaining = resolveRemainingJobBudgetMs({
-        startedAtMs,
-        payload: params.job.payload,
-      });
-      return typeof remaining === "number"
-        ? Math.min(RECOVERY_WAIT_DEADLINE_MS, remaining)
-        : undefined;
-    })(),
-  });
-  if (restartProbe.healthy) {
-    return {
-      status: "ok",
-      summary: buildSummary(monitoredProfile, actions),
-    };
+    const restartProbe = await waitForProfileGateway({
+      cfg: initialRuntime.cfg,
+      port,
+      auth: initialRuntime.auth,
+      tlsFingerprint: initialRuntime.tlsFingerprint,
+      abortSignal: params.abortSignal,
+      timeoutMs: (() => {
+        const remaining = resolveRemainingJobBudgetMs({
+          startedAtMs,
+          payload: params.job.payload,
+        });
+        return typeof remaining === "number"
+          ? Math.min(RECOVERY_WAIT_DEADLINE_MS, remaining)
+          : undefined;
+      })(),
+    });
+    if (restartProbe.healthy) {
+      return {
+        status: "ok",
+        summary: buildSummary(monitoredProfile, actions),
+      };
+    }
+    preDoctorFailureDetail = restartProbe.detail ?? preDoctorFailureDetail;
   }
 
   const remainingJobBudgetMs = resolveRemainingJobBudgetMs({
@@ -488,7 +528,7 @@ export async function runRescueWatchdogJob(params: {
       warning,
       restartError ? `restart failed: ${restartError}` : undefined,
       `skipped doctor fallback because only ${remainingJobBudgetMs}ms remained in the cron job budget`,
-      `probe failed: ${restartProbe.detail ?? initialProbe.detail ?? "unreachable"}`,
+      initialRuntime.ok ? `probe failed: ${preDoctorFailureDetail}` : preDoctorFailureDetail,
     ].filter(Boolean);
     return {
       status: "error",
@@ -502,7 +542,7 @@ export async function runRescueWatchdogJob(params: {
       warning,
       restartError ? `restart failed: ${restartError}` : undefined,
       "doctor fallback aborted",
-      `probe failed: ${restartProbe.detail ?? initialProbe.detail ?? "unreachable"}`,
+      initialRuntime.ok ? `probe failed: ${preDoctorFailureDetail}` : preDoctorFailureDetail,
     ].filter(Boolean);
     return {
       status: "error",
@@ -532,43 +572,56 @@ export async function runRescueWatchdogJob(params: {
 
   const doctorProbeCommand =
     doctorResult.code === 0 ? await service.readCommand(env).catch(() => null) : installedCommand;
-  const doctorProbePort =
-    doctorResult.code === 0
-      ? await resolveManagedGatewayProbePort({
-          cfg,
-          env,
-          service,
-          command: doctorProbeCommand,
-        })
-      : port;
-  const doctorProbe = await waitForProfileGateway({
-    cfg,
-    port: doctorProbePort,
-    auth,
-    tlsFingerprint,
-    abortSignal: params.abortSignal,
-    timeoutMs: (() => {
-      const remaining = resolveRemainingJobBudgetMs({
-        startedAtMs,
-        payload: params.job.payload,
-      });
-      return typeof remaining === "number"
-        ? Math.min(RECOVERY_WAIT_DEADLINE_MS, remaining)
-        : undefined;
-    })(),
-  });
-  if (doctorProbe.healthy) {
-    return {
-      status: "ok",
-      summary: buildSummary(monitoredProfile, actions),
-    };
+  if (doctorResult.code === 0) {
+    const doctorEnv = mergeManagedServiceEnv(env, doctorProbeCommand);
+    const doctorRuntime = await loadGatewayRuntime(doctorEnv);
+    if (!doctorRuntime.ok) {
+      return {
+        status: "error",
+        error: [warning, doctorRuntime.error].filter(Boolean).join(" | "),
+        summary: actions.length > 0 ? buildSummary(monitoredProfile, actions) : undefined,
+      };
+    }
+    warning = doctorRuntime.warning;
+    const doctorProbePort = await resolveManagedGatewayProbePort({
+      cfg: doctorRuntime.cfg,
+      env: doctorEnv,
+      service,
+      command: doctorProbeCommand,
+    });
+    const doctorProbe = await waitForProfileGateway({
+      cfg: doctorRuntime.cfg,
+      port: doctorProbePort,
+      auth: doctorRuntime.auth,
+      tlsFingerprint: doctorRuntime.tlsFingerprint,
+      abortSignal: params.abortSignal,
+      timeoutMs: (() => {
+        const remaining = resolveRemainingJobBudgetMs({
+          startedAtMs,
+          payload: params.job.payload,
+        });
+        return typeof remaining === "number"
+          ? Math.min(RECOVERY_WAIT_DEADLINE_MS, remaining)
+          : undefined;
+      })(),
+    });
+    if (doctorProbe.healthy) {
+      return {
+        status: "ok",
+        summary: buildSummary(monitoredProfile, actions),
+      };
+    }
+    preDoctorFailureDetail = doctorProbe.detail ?? preDoctorFailureDetail;
   }
 
   const errors = [
     warning,
     restartError ? `restart failed: ${restartError}` : undefined,
+    initialRuntime.ok ? undefined : initialRuntime.error,
     doctorResult.code === 0 ? undefined : `doctor failed: ${summarizeCommandFailure(doctorResult)}`,
-    `probe failed: ${doctorProbe.detail ?? restartProbe.detail ?? initialProbe.detail ?? "unreachable"}`,
+    doctorResult.code === 0 || initialRuntime.ok
+      ? `probe failed: ${preDoctorFailureDetail}`
+      : undefined,
   ].filter(Boolean);
 
   return {

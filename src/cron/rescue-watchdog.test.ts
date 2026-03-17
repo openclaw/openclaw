@@ -682,6 +682,42 @@ describe("runRescueWatchdogJob", () => {
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
+  it("runs doctor repair when the monitored config cannot be loaded initially", async () => {
+    loadConfig
+      .mockImplementationOnce(() => {
+        throw new Error("invalid config json");
+      })
+      .mockImplementationOnce(() => createDefaultConfig());
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      error: null,
+    });
+
+    const result = await runRescueWatchdogJob({
+      job: {
+        id: "job-config-load-fallback",
+        name: "rescue",
+        payload: {
+          kind: "rescueWatchdog",
+          monitoredProfile: "work",
+          timeoutSeconds: 120,
+        },
+      } as never,
+      monitoredProfile: "work",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(restartService).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      expect.arrayContaining(["--profile", "work", "doctor", "--repair", "--non-interactive"]),
+      expect.objectContaining({
+        timeoutMs: expect.any(Number),
+      }),
+    );
+    expect(result.summary).toContain("ran doctor --repair --non-interactive");
+  });
+
   it("falls back to doctor with a fixed argv when restart does not recover the gateway", async () => {
     let probeCount = 0;
     probeGateway.mockImplementation(async () => {
