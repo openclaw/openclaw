@@ -66,35 +66,34 @@ function clearChatInboundTimers(): void {
 
 function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string): void {
   clearChatInboundTimers();
+  const staleStreamMs = 30_000;
   _chatInboundTimerFast = setTimeout(() => {
     _chatInboundTimerFast = null;
-    // Skip if user has switched to a different session since the event
     if (host.sessionKey !== triggerSessionKey) {
       return;
     }
-    // Skip if an agent run is actively streaming — reload would clear chatStream
-    if (
-      host.chatRunId ||
-      (host as unknown as { chatStreamStartedAt?: number | null }).chatStreamStartedAt
-    ) {
+    const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
+      .chatStreamStartedAt;
+    if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < staleStreamMs)) {
       return;
     }
     void loadChatHistory(host as unknown as OpenClawApp);
-    // Second refresh: wait for message persistence to complete.
-    _chatInboundTimerSlow = setTimeout(() => {
-      _chatInboundTimerSlow = null;
-      if (host.sessionKey !== triggerSessionKey) {
-        return;
-      }
-      if (
-        host.chatRunId ||
-        (host as unknown as { chatStreamStartedAt?: number | null }).chatStreamStartedAt
-      ) {
-        return;
-      }
-      void loadChatHistory(host as unknown as OpenClawApp);
-    }, 3000);
   }, 500);
+  // Second refresh scheduled independently so it still fires even when the
+  // fast timer is skipped (e.g. streaming was active at 500ms but finished
+  // before 3500ms). Total delay matches the original 500+3000=3500ms.
+  _chatInboundTimerSlow = setTimeout(() => {
+    _chatInboundTimerSlow = null;
+    if (host.sessionKey !== triggerSessionKey) {
+      return;
+    }
+    const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
+      .chatStreamStartedAt;
+    if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < staleStreamMs)) {
+      return;
+    }
+    void loadChatHistory(host as unknown as OpenClawApp);
+  }, 3500);
 }
 
 function isGenericBrowserFetchFailure(message: string): boolean {

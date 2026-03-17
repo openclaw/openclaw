@@ -110,7 +110,8 @@ describe("chat.inbound UI event handler", () => {
     // Debounce should have merged 5 events into a single loadChatHistory call
     expect(requestSpy).toHaveBeenCalledTimes(1);
 
-    // Advance past the slow timer (3000ms) to verify two-phase debounce
+    // Advance past the slow timer (3500ms from last event, minus the 500ms
+    // already elapsed = 3000ms remaining)
     vi.advanceTimersByTime(3000);
     expect(requestSpy).toHaveBeenCalledTimes(2);
   });
