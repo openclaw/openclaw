@@ -17,6 +17,8 @@ type ResolveLineOutboundMediaOpts = {
   trackingId?: string;
 };
 
+export const LINE_MEDIA_KIND_PROBE_TIMEOUT_MS = 2000;
+
 export function validateLineMediaUrl(url: string): void {
   let parsed: URL;
   try {
@@ -47,25 +49,18 @@ export function detectLineMediaKind(mimeType: string): LineOutboundMediaKind {
   return "image";
 }
 
-function inferMimeTypeFromUrl(url: string): string {
-  let pathname = "";
-  try {
-    pathname = new URL(url).pathname.toLowerCase();
-  } catch {
-    const hashStripped = url.split("#")[0] ?? "";
-    pathname = (hashStripped.split("?")[0] ?? "").toLowerCase();
+function detectKnownLineMediaKind(mimeType: string): LineOutboundMediaKind | undefined {
+  const normalized = mimeType.toLowerCase();
+  if (normalized.startsWith("image/")) {
+    return "image";
   }
-
-  if (/\.(jpe?g|png|gif|webp)$/.test(pathname)) {
-    return "image/jpeg";
+  if (normalized.startsWith("video/")) {
+    return "video";
   }
-  if (/\.(mp4|mov|m4v|webm)$/.test(pathname)) {
-    return "video/mp4";
+  if (normalized.startsWith("audio/")) {
+    return "audio";
   }
-  if (/\.(mp3|m4a|aac|wav|ogg)$/.test(pathname)) {
-    return "audio/mpeg";
-  }
-  return "application/octet-stream";
+  return undefined;
 }
 
 function isHttpsUrl(url: string): boolean {
@@ -76,6 +71,43 @@ function isHttpsUrl(url: string): boolean {
   }
 }
 
+function parseResponseMimeType(contentType: string | null): string | undefined {
+  const raw = contentType?.split(";")[0]?.trim().toLowerCase();
+  return raw || undefined;
+}
+
+async function fetchMimeTypeWithTimeout(
+  url: string,
+  method: "HEAD" | "GET",
+): Promise<string | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LINE_MEDIA_KIND_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method,
+      redirect: "follow",
+      signal: controller.signal,
+      ...(method === "GET" ? { headers: { Range: "bytes=0-0" } } : {}),
+    });
+    return parseResponseMimeType(response.headers.get("content-type"));
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function detectMediaKindFromRemote(url: string): Promise<LineOutboundMediaKind | undefined> {
+  const headMimeType = await fetchMimeTypeWithTimeout(url, "HEAD");
+  const fromHead = headMimeType ? detectKnownLineMediaKind(headMimeType) : undefined;
+  if (fromHead) {
+    return fromHead;
+  }
+
+  const getMimeType = await fetchMimeTypeWithTimeout(url, "GET");
+  return getMimeType ? detectKnownLineMediaKind(getMimeType) : undefined;
+}
+
 export async function resolveLineOutboundMedia(
   mediaUrl: string,
   opts: ResolveLineOutboundMediaOpts = {},
@@ -83,7 +115,7 @@ export async function resolveLineOutboundMedia(
   const trimmedUrl = mediaUrl.trim();
   if (isHttpsUrl(trimmedUrl)) {
     validateLineMediaUrl(trimmedUrl);
-    const mediaKind = opts.mediaKind ?? detectLineMediaKind(inferMimeTypeFromUrl(trimmedUrl));
+    const mediaKind = opts.mediaKind ?? (await detectMediaKindFromRemote(trimmedUrl)) ?? "image";
     return {
       mediaUrl: trimmedUrl,
       mediaKind,
