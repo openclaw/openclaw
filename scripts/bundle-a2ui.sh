@@ -2,8 +2,8 @@
 set -euo pipefail
 
 on_error() {
-  echo "A2UI bundling failed. Re-run with: pnpm canvas:a2ui:bundle" >&2
-  echo "If this persists, verify pnpm deps and try again." >&2
+  echo "A2UI bundling failed. Re-run with: npx pnpm canvas:a2ui:bundle" >&2
+  echo "If this persists, verify npx pnpm deps and try again." >&2
 }
 trap on_error ERR
 
@@ -85,7 +85,7 @@ if [[ -f "$HASH_FILE" ]]; then
   fi
 fi
 
-pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
+npx pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
 if command -v rolldown >/dev/null 2>&1 && rolldown --version >/dev/null 2>&1; then
   rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 elif [[ -f "$ROOT_DIR/node_modules/.pnpm/node_modules/rolldown/bin/cli.mjs" ]]; then
@@ -94,7 +94,7 @@ elif [[ -f "$ROOT_DIR/node_modules/.pnpm/rolldown@1.0.0-rc.9/node_modules/rolldo
   node "$ROOT_DIR/node_modules/.pnpm/rolldown@1.0.0-rc.9/node_modules/rolldown/bin/cli.mjs" \
     -c "$A2UI_APP_DIR/rolldown.config.mjs"
 else
-  pnpm -s dlx rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+  npx pnpm -s dlx rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 fi
 
 echo "$current_hash" > "$HASH_FILE"

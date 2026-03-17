@@ -252,7 +252,24 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const rotated = await rotateDeviceToken({ deviceId, role, scopes });
-    if (!rotated.ok) {
+    if ('error' in rotated) {
+      // Handle detailed error object
+      logDeviceTokenRotationDenied({
+        log: context.logGateway,
+        deviceId,
+        role,
+        reason: rotated.error,
+        message: rotated.message,
+        details: rotated.details
+      });
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_TOKEN_ROTATION_DENIED_MESSAGE),
+      );
+      return;
+    } else if (!rotated.ok) {
+      // Handle legacy ok/reason format
       logDeviceTokenRotationDenied({
         log: context.logGateway,
         deviceId,
