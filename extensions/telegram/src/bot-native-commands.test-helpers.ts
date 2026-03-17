@@ -8,6 +8,7 @@ import {
   createNativeCommandTestParams,
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
+import type { RegisterTelegramNativeCommandsParams } from "./bot-native-commands.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
 type GetPluginCommandSpecsFn =
@@ -29,13 +30,7 @@ type NativeCommandHarness = {
   sendMessage: AnyAsyncMock;
   setMyCommands: AnyAsyncMock;
   log: AnyMock;
-  bot: {
-    api: {
-      setMyCommands: AnyAsyncMock;
-      sendMessage: AnyAsyncMock;
-    };
-    command: (name: string, handler: (ctx: unknown) => Promise<void>) => void;
-  };
+  bot: RegisterTelegramNativeCommandsParams["bot"];
 };
 
 const pluginCommandMocks = vi.hoisted(() => ({
@@ -109,7 +104,7 @@ export function createNativeCommandsHarness(params?: {
   const sendMessage: AnyAsyncMock = vi.fn(async () => undefined);
   const setMyCommands: AnyAsyncMock = vi.fn(async () => undefined);
   const log: AnyMock = vi.fn();
-  const bot: NativeCommandHarness["bot"] = {
+  const bot = {
     api: {
       setMyCommands,
       sendMessage,
@@ -117,10 +112,10 @@ export function createNativeCommandsHarness(params?: {
     command: (name: string, handler: (ctx: unknown) => Promise<void>) => {
       handlers[name] = handler;
     },
-  } as const;
+  } as unknown as RegisterTelegramNativeCommandsParams["bot"];
 
   registerTelegramNativeCommands({
-    bot: bot as unknown as NativeCommandTestParams["bot"],
+    bot,
     cfg: params?.cfg ?? ({} as OpenClawConfig),
     runtime: params?.runtime ?? ({ log } as unknown as RuntimeEnv),
     accountId: "default",
