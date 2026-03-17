@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
 import {
   extractSlackToolSend,
@@ -12,7 +13,7 @@ type SlackActionInvoke = (
   action: Record<string, unknown>,
   cfg: unknown,
   toolContext: unknown,
-) => Promise<unknown>;
+) => Promise<AgentToolResult<unknown>>;
 
 export function createSlackActions(
   providerId: string,
