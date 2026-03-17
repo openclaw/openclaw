@@ -1955,51 +1955,55 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.status).toBe("loaded");
   });
 
-  it("supports legacy plugins importing monolithic plugin-sdk root", async () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "legacy-root-import",
-      filename: "legacy-root-import.cjs",
-      body: `module.exports = {
+  it(
+    "supports legacy plugins importing monolithic plugin-sdk root",
+    { timeout: 60_000 },
+    async () => {
+      useNoBundledPlugins();
+      const plugin = writePlugin({
+        id: "legacy-root-import",
+        filename: "legacy-root-import.cjs",
+        body: `module.exports = {
   id: "legacy-root-import",
   configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
   register() {},
 };`,
-    });
-
-    const loaderModuleUrl = pathToFileURL(
-      path.join(process.cwd(), "src", "plugins", "loader.ts"),
-    ).href;
-    const script = `
-      import { loadOpenClawPlugins } from ${JSON.stringify(loaderModuleUrl)};
-      const registry = loadOpenClawPlugins({
-        cache: false,
-        workspaceDir: ${JSON.stringify(plugin.dir)},
-        config: {
-          plugins: {
-            load: { paths: [${JSON.stringify(plugin.file)}] },
-            allow: ["legacy-root-import"],
-          },
-        },
       });
-      const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
-      if (!record || record.status !== "loaded") {
-        console.error(record?.error ?? "legacy-root-import missing");
-        process.exit(1);
-      }
-    `;
 
-    execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
-      encoding: "utf-8",
-      stdio: "pipe",
-    });
-  });
+      const loaderModuleUrl = pathToFileURL(
+        path.join(process.cwd(), "src", "plugins", "loader.ts"),
+      ).href;
+      const script = `
+        import { loadOpenClawPlugins } from ${JSON.stringify(loaderModuleUrl)};
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: ${JSON.stringify(plugin.dir)},
+          config: {
+            plugins: {
+              load: { paths: [${JSON.stringify(plugin.file)}] },
+              allow: ["legacy-root-import"],
+            },
+          },
+        });
+        const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
+        if (!record || record.status !== "loaded") {
+          console.error(record?.error ?? "legacy-root-import missing");
+          process.exit(1);
+        }
+      `;
+
+      const subEnv = { ...process.env };
+      delete subEnv.VITEST;
+      subEnv.OPENCLAW_HOME = "";
+      subEnv.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+      execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+        cwd: process.cwd(),
+        env: subEnv,
+        encoding: "utf-8",
+        stdio: "pipe",
+      });
+    },
+  );
 
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {
     const { root, distFile } = createPluginSdkAliasFixture();

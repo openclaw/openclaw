@@ -69,6 +69,8 @@ function getJiti() {
   const { createJiti } = require("jiti");
   jitiLoader = createJiti(__filename, {
     interopDefault: true,
+    // Vitest workers can contend on Jiti's shared fs cache path.
+    fsCache: !process.env.VITEST,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
   });
   return jitiLoader;

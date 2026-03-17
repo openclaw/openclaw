@@ -9,6 +9,8 @@ const pnpm = "pnpm";
 
 const unitIsolatedFilesRaw = [
   "src/plugins/loader.test.ts",
+  "src/plugin-sdk/index.test.ts",
+  "src/infra/warning-filter.test.ts",
   "src/plugins/tools.optional.test.ts",
   "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
   "src/security/fix.test.ts",

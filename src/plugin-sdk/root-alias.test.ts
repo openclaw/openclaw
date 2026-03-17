@@ -22,8 +22,10 @@ type EmptySchema = {
 function loadRootAliasWithStubs(options?: {
   distExists?: boolean;
   monolithicExports?: Record<string | symbol, unknown>;
+  processEnv?: Record<string, string | undefined>;
 }) {
   let createJitiCalls = 0;
+  let createJitiOptions: Record<string, unknown> | undefined;
   let jitiLoadCalls = 0;
   const loadedSpecifiers: string[] = [];
   const monolithicExports = options?.monolithicExports ?? {
@@ -31,7 +33,11 @@ function loadRootAliasWithStubs(options?: {
   };
   const wrapper = vm.runInNewContext(
     `(function (exports, require, module, __filename, __dirname) {${rootAliasSource}\n})`,
-    {},
+    {
+      process: {
+        env: options?.processEnv ?? {},
+      },
+    },
     { filename: rootAliasPath },
   ) as (
     exports: Record<string, unknown>,
@@ -52,8 +58,9 @@ function loadRootAliasWithStubs(options?: {
     }
     if (id === "jiti") {
       return {
-        createJiti() {
+        createJiti(_filename: string, options?: Record<string, unknown>) {
           createJitiCalls += 1;
+          createJitiOptions = options;
           return (specifier: string) => {
             jitiLoadCalls += 1;
             loadedSpecifiers.push(specifier);
@@ -69,6 +76,9 @@ function loadRootAliasWithStubs(options?: {
     moduleExports: module.exports,
     get createJitiCalls() {
       return createJitiCalls;
+    },
+    get createJitiOptions() {
+      return createJitiOptions;
     },
     get jitiLoadCalls() {
       return jitiLoadCalls;
@@ -102,6 +112,28 @@ describe("plugin-sdk root alias", () => {
     expect(factory?.().safeParse({})).toEqual({ success: true, data: {} });
     expect(lazyModule.createJitiCalls).toBe(0);
     expect(lazyModule.jitiLoadCalls).toBe(0);
+  });
+
+  it("disables Jiti fs cache under Vitest", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      processEnv: {
+        VITEST: "true",
+      },
+    });
+    const lazyRootSdk = lazyModule.moduleExports;
+
+    expect("slowHelper" in lazyRootSdk).toBe(true);
+    expect(lazyModule.createJitiOptions?.fsCache).toBe(false);
+  });
+
+  it("keeps Jiti fs cache enabled outside Vitest", () => {
+    const lazyModule = loadRootAliasWithStubs({
+      processEnv: {},
+    });
+    const lazyRootSdk = lazyModule.moduleExports;
+
+    expect("slowHelper" in lazyRootSdk).toBe(true);
+    expect(lazyModule.createJitiOptions?.fsCache).toBe(true);
   });
 
   it("loads legacy root exports on demand and preserves reflection", () => {
