@@ -69,6 +69,42 @@ OpenClaw resolves known Claude marketplace names from
 `~/.claude/plugins/known_marketplaces.json`. You can also pass an explicit
 marketplace source with `--marketplace`.
 
+## Conversation binding callbacks
+
+Plugins that bind a conversation can now react when an approval is resolved.
+
+Use `api.onConversationBindingResolved(...)` to receive a callback after a bind
+request is approved or denied:
+
+```ts
+export default {
+  id: "my-plugin",
+  register(api) {
+    api.onConversationBindingResolved(async (event) => {
+      if (event.status === "approved") {
+        // A binding now exists for this plugin + conversation.
+        console.log(event.binding?.conversationId);
+        return;
+      }
+
+      // The request was denied; clear any local pending state.
+      console.log(event.request.conversation.conversationId);
+    });
+  },
+};
+```
+
+Callback payload fields:
+
+- `status`: `"approved"` or `"denied"`
+- `decision`: `"allow-once"`, `"allow-always"`, or `"deny"`
+- `binding`: the resolved binding for approved requests
+- `request`: the original request summary, detach hint, sender id, and
+  conversation metadata
+
+This callback is notification-only. It does not change who is allowed to bind a
+conversation, and it runs after core approval handling finishes.
+
 ## Architecture
 
 OpenClaw's plugin system has four layers:
@@ -862,6 +898,26 @@ Notes:
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
 - `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
+Plugins can also launch background subagent runs through `api.runtime.subagent`:
+
+```ts
+const result = await api.runtime.subagent.run({
+  sessionKey: "agent:main:subagent:search-helper",
+  message: "Expand this query into focused follow-up searches.",
+  provider: "openai",
+  model: "gpt-4.1-mini",
+  deliver: false,
+});
+```
+
+Notes:
+
+- `provider` and `model` are optional per-run overrides, not persistent session changes.
+- OpenClaw only honors those override fields for trusted callers.
+- For plugin-owned fallback runs, operators must opt in with `plugins.entries.<id>.subagent.allowModelOverride: true`.
+- Use `plugins.entries.<id>.subagent.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets, or `"*"` to allow any target explicitly.
+- Untrusted plugin subagent runs still work, but override requests are rejected instead of silently falling back.
+
 For web search, plugins can consume the shared runtime helper instead of
 reaching into the agent tool wiring:
 
@@ -929,12 +985,24 @@ authoring plugins:
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/lazy-runtime`,
   `openclaw/plugin-sdk/reply-history`,
   `openclaw/plugin-sdk/routing`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
 - `openclaw/plugin-sdk/compat` remains as a legacy migration surface for older
-  external plugins. Bundled plugins should not use it.
+  external plugins. Bundled plugins should not use it, and non-test imports emit
+  a one-time deprecation warning outside test environments.
+- Bundled extension internals remain private. External plugins should use only
+  `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
+  public seams under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
+  `setup-entry.js`, and narrowly scoped files such as `login-qr-api.js`. Never
+  import `extensions/<id>/src/*` from core or from another extension.
+- Repo seam split:
+  `extensions/<id>/api.js` is the helper/types barrel,
+  `extensions/<id>/runtime-api.js` is the runtime-only barrel,
+  `extensions/<id>/index.js` is the bundled plugin entry,
+  and `extensions/<id>/setup-entry.js` is the setup plugin entry.
 - `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.
