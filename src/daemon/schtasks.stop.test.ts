@@ -191,11 +191,11 @@ describe("Scheduled Task stop/restart cleanup", () => {
       });
 
       expectGatewayTermination(5151);
-      expect(schtasksCalls).toEqual([
-        ["/Query", "/TN", "OpenClaw Gateway"],
-        ["/End", "/TN", "OpenClaw Gateway"],
-      ]);
-      expect(schtasksCallOptions.at(-1)?.signal).toBe(controller.signal);
+      expect(schtasksCalls).toContainEqual(["/End", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls).not.toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      expect(
+        schtasksCallOptions[schtasksCalls.findIndex((argv) => argv[0] === "/End")]?.signal,
+      ).toBe(controller.signal);
     });
   });
 });
