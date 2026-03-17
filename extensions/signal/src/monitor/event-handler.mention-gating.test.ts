@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
+import { buildDispatchInboundCaptureMock } from "../../../../src/channels/plugins/contracts/inbound-testkit.js";
 import type { OpenClawConfig } from "../../../../src/config/types.js";
-import { buildDispatchInboundCaptureMock } from "../../../../test/helpers/dispatch-inbound-capture.js";
 import {
   createBaseSignalEventHandlerDeps,
   createSignalReceiveEvent,
