@@ -12,6 +12,8 @@ import {
   buildSuppressedBuiltInModelError,
   shouldSuppressBuiltInModel,
 } from "../model-suppression.js";
+import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
 /**
  * Compare model IDs treating dots and dashes as equivalent.
@@ -21,8 +23,6 @@ import {
 function modelIdMatchesDotDash(a: string, b: string): boolean {
   return a === b || a.replace(/\./g, "-") === b.replace(/\./g, "-");
 }
-import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
-import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
 type InlineModelEntry = ModelDefinitionConfig & {
   provider: string;
@@ -194,16 +194,16 @@ export function resolveModelWithRegistry(params: {
   const providers = cfg?.models?.providers ?? {};
   const inlineModels = buildInlineProviderModels(providers);
   const normalizedProvider = normalizeProviderId(provider);
-  const inlineMatch = inlineModels.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider &&
-      modelIdMatchesDotDash(entry.id, modelId),
+  // Prefer exact ID match first, then fall back to dot/dash-insensitive match.
+  // This ensures providers with genuinely distinct model IDs aren't mismatched.
+  const providerInline = inlineModels.filter(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider,
   );
+  const inlineMatch =
+    providerInline.find((entry) => entry.id === modelId) ??
+    providerInline.find((entry) => modelIdMatchesDotDash(entry.id, modelId));
   if (inlineMatch?.api) {
-    // Preserve the provider's original model ID (e.g., dots for copilot-proxy)
-    // so the dispatched API call uses the format the provider expects.
-    const model = { ...inlineMatch, id: inlineMatch.id } as Model<Api>;
-    return normalizeResolvedModel({ provider, model });
+    return normalizeResolvedModel({ provider, model: inlineMatch as Model<Api> });
   }
 
   // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
