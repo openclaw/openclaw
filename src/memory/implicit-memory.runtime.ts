@@ -13,13 +13,37 @@ export function isAutoMemoryEnabled(config: OpenClawConfig | undefined): boolean
   return config?.memory?.implicit?.enabled === true;
 }
 
-export async function retrieveImplicitContext(userQuery: string): Promise<string | null> {
+export function resolveImplicitMemoryScopeKey(params: {
+  sessionId: string;
+  sessionKey?: string | null;
+  messageChannel?: string | null;
+  messageProvider?: string | null;
+  senderId?: string | null;
+}): string {
+  const senderId = params.senderId?.trim();
+  if (senderId) {
+    const channel = params.messageChannel?.trim() || params.messageProvider?.trim() || "unknown";
+    return `sender:${channel}:${senderId}`;
+  }
+
+  const sessionKey = params.sessionKey?.trim();
+  if (sessionKey) {
+    return `session:${sessionKey}`;
+  }
+
+  return `session:${params.sessionId}`;
+}
+
+export async function retrieveImplicitContext(
+  userQuery: string,
+  scopeKey: string,
+): Promise<string | null> {
   const normalizedQuery = userQuery.trim();
   if (!normalizedQuery) {
     return null;
   }
   const stdout = await runMemoryManagerCommand(
-    ["retrieve", "--query", normalizedQuery],
+    ["retrieve", "--query", normalizedQuery, "--scope-key", scopeKey],
     RETRIEVE_TIMEOUT_MS,
   );
   const context = stdout.trim();
@@ -29,14 +53,19 @@ export async function retrieveImplicitContext(userQuery: string): Promise<string
 export async function saveImplicitExperience(params: {
   intent: string;
   rules: string;
+  scopeKey: string;
 }): Promise<void> {
   const intent = sanitizeStoredValue(params.intent, MAX_SAVED_INTENT_CHARS);
   const rules = sanitizeStoredValue(params.rules, MAX_SAVED_RULE_CHARS);
-  if (!intent || !rules) {
+  const scopeKey = sanitizeStoredValue(params.scopeKey, MAX_SAVED_INTENT_CHARS);
+  if (!intent || !rules || !scopeKey) {
     return;
   }
 
-  await runMemoryManagerCommand(["save", "--intent", intent, "--rules", rules], SAVE_TIMEOUT_MS);
+  await runMemoryManagerCommand(
+    ["save", "--intent", intent, "--rules", rules, "--scope-key", scopeKey],
+    SAVE_TIMEOUT_MS,
+  );
 }
 
 export function buildImplicitMemoryWriteback(params: {

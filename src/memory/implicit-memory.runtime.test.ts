@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildImplicitMemoryWriteback,
   isAutoMemoryEnabled,
+  resolveImplicitMemoryScopeKey,
   retrieveImplicitContext,
   saveImplicitExperience,
 } from "./implicit-memory.runtime.js";
@@ -39,6 +40,26 @@ describe("implicit memory runtime", () => {
     expect(isAutoMemoryEnabled({ memory: { implicit: { enabled: true } } } as never)).toBe(true);
   });
 
+  it("prefers sender-based scoping when sender metadata is available", () => {
+    expect(
+      resolveImplicitMemoryScopeKey({
+        sessionId: "session-1",
+        sessionKey: "agent:main:discord:channel:abc",
+        messageChannel: "discord",
+        senderId: "user-42",
+      }),
+    ).toBe("sender:discord:user-42");
+  });
+
+  it("falls back to session scoping when sender metadata is unavailable", () => {
+    expect(
+      resolveImplicitMemoryScopeKey({
+        sessionId: "session-1",
+        sessionKey: "agent:main:discord:channel:abc",
+      }),
+    ).toBe("session:agent:main:discord:channel:abc");
+  });
+
   it("builds a writeback payload from the user input and assistant output", () => {
     expect(
       buildImplicitMemoryWriteback({
@@ -69,19 +90,25 @@ describe("implicit memory runtime", () => {
 
   it("stores experiences in an isolated temp database and retrieves matching context", async () => {
     await saveImplicitExperience({
+      scopeKey: "sender:slack:user-weather",
       intent: "query weather",
       rules: "Always use Celsius and return JSON.",
     });
     await saveImplicitExperience({
+      scopeKey: "sender:slack:user-coffee",
       intent: "coffee preference",
       rules: "Default to oat milk and no sugar.",
     });
     await saveImplicitExperience({
+      scopeKey: "sender:slack:user-calendar",
       intent: "calendar scheduling",
       rules: "Prefer 30 minute meetings in the afternoon.",
     });
 
-    const context = await retrieveImplicitContext("What is tomorrow's weather?");
+    const context = await retrieveImplicitContext(
+      "What is tomorrow's weather?",
+      "sender:slack:user-weather",
+    );
 
     expect(await fs.stat(dbPath)).toBeTruthy();
     expect(context).toContain("Always use Celsius and return JSON.");
@@ -90,10 +117,34 @@ describe("implicit memory runtime", () => {
 
   it("returns null when no implicit memory matches the query", async () => {
     await saveImplicitExperience({
+      scopeKey: "sender:slack:user-coffee",
       intent: "coffee preference",
       rules: "Default to oat milk and no sugar.",
     });
 
-    await expect(retrieveImplicitContext("Explain TCP congestion control")).resolves.toBeNull();
+    await expect(
+      retrieveImplicitContext("Explain TCP congestion control", "sender:slack:user-coffee"),
+    ).resolves.toBeNull();
+  });
+
+  it("does not retrieve memories from a different scope", async () => {
+    await saveImplicitExperience({
+      scopeKey: "sender:discord:user-a",
+      intent: "query weather",
+      rules: "Always use Celsius and return JSON.",
+    });
+    await saveImplicitExperience({
+      scopeKey: "sender:discord:user-b",
+      intent: "query weather",
+      rules: "Always use Fahrenheit and plain text.",
+    });
+
+    const context = await retrieveImplicitContext(
+      "What is tomorrow's weather?",
+      "sender:discord:user-b",
+    );
+
+    expect(context).toContain("Always use Fahrenheit and plain text.");
+    expect(context).not.toContain("Always use Celsius and return JSON.");
   });
 });

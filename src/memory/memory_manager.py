@@ -47,40 +47,59 @@ class MemoryManager:
                 try:
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
-                    conn.executescript(
-                        f"""
-                        BEGIN;
-
+                    conn.execute("BEGIN")
+                    conn.execute(
+                        """
                         CREATE TABLE IF NOT EXISTS user_experiences (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            scope_key TEXT NOT NULL DEFAULT '',
                             trigger_intent TEXT NOT NULL,
                             implicit_rules TEXT NOT NULL,
                             created_at TEXT NOT NULL
-                        );
-
+                        )
+                        """
+                    )
+                    if not self._has_scope_key_column(conn):
+                        conn.execute(
+                            """
+                            ALTER TABLE user_experiences
+                            ADD COLUMN scope_key TEXT NOT NULL DEFAULT ''
+                            """
+                        )
+                    conn.execute(
+                        f"""
                         CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE_NAME}
                         USING fts5(
                             trigger_intent,
                             implicit_rules,
                             content='user_experiences',
                             content_rowid='id'
-                        );
-
+                        )
+                        """
+                    )
+                    conn.execute(
+                        f"""
                         CREATE TRIGGER IF NOT EXISTS user_experiences_ai
                         AFTER INSERT ON user_experiences
                         BEGIN
                             INSERT INTO {FTS_TABLE_NAME}(rowid, trigger_intent, implicit_rules)
                             VALUES (new.id, new.trigger_intent, new.implicit_rules);
-                        END;
-
+                        END
+                        """
+                    )
+                    conn.execute(
+                        f"""
                         CREATE TRIGGER IF NOT EXISTS user_experiences_ad
                         AFTER DELETE ON user_experiences
                         BEGIN
                             INSERT INTO
                                 {FTS_TABLE_NAME}({FTS_TABLE_NAME}, rowid, trigger_intent, implicit_rules)
                             VALUES('delete', old.id, old.trigger_intent, old.implicit_rules);
-                        END;
-
+                        END
+                        """
+                    )
+                    conn.execute(
+                        f"""
                         CREATE TRIGGER IF NOT EXISTS user_experiences_au
                         AFTER UPDATE ON user_experiences
                         BEGIN
@@ -89,11 +108,10 @@ class MemoryManager:
                             VALUES('delete', old.id, old.trigger_intent, old.implicit_rules);
                             INSERT INTO {FTS_TABLE_NAME}(rowid, trigger_intent, implicit_rules)
                             VALUES (new.id, new.trigger_intent, new.implicit_rules);
-                        END;
-
-                        COMMIT;
+                        END
                         """
                     )
+                    conn.commit()
                 except sqlite3.OperationalError:
                     conn.rollback()
                     self._logger.debug("FTS5 initialization failed for %s", self._db_path, exc_info=True)
@@ -102,23 +120,25 @@ class MemoryManager:
             self._initialized = True
             self._logger.debug("Implicit memory database initialized")
 
-    async def save_experience(self, intent: str, rules: str) -> None:
-        await asyncio.to_thread(self._save_experience_sync, intent, rules)
+    async def save_experience(self, scope_key: str, intent: str, rules: str) -> None:
+        await asyncio.to_thread(self._save_experience_sync, scope_key, intent, rules)
 
-    async def retrieve_implicit_context(self, user_query: str) -> str | None:
-        return await asyncio.to_thread(self._retrieve_implicit_context_sync, user_query)
+    async def retrieve_implicit_context(self, scope_key: str, user_query: str) -> str | None:
+        return await asyncio.to_thread(self._retrieve_implicit_context_sync, scope_key, user_query)
 
-    def _save_experience_sync(self, intent: str, rules: str) -> None:
+    def _save_experience_sync(self, scope_key: str, intent: str, rules: str) -> None:
         self.init_db()
 
+        normalized_scope_key = scope_key.strip()
         normalized_intent = intent.strip()
         normalized_rules = rules.strip()
-        if not normalized_intent or not normalized_rules:
-            raise ValueError("intent and rules must be non-empty strings")
+        if not normalized_scope_key or not normalized_intent or not normalized_rules:
+            raise ValueError("scope_key, intent, and rules must be non-empty strings")
 
         created_at = datetime.now(timezone.utc).isoformat()
         self._logger.debug(
-            "Saving implicit experience for intent=%r created_at=%s",
+            "Saving implicit experience for scope_key=%r intent=%r created_at=%s",
+            normalized_scope_key,
             normalized_intent,
             created_at,
         )
@@ -126,18 +146,19 @@ class MemoryManager:
         with closing(self._connect()) as conn:
             conn.execute(
                 """
-                INSERT INTO user_experiences (trigger_intent, implicit_rules, created_at)
-                VALUES (?, ?, ?)
+                INSERT INTO user_experiences (scope_key, trigger_intent, implicit_rules, created_at)
+                VALUES (?, ?, ?, ?)
                 """,
-                (normalized_intent, normalized_rules, created_at),
+                (normalized_scope_key, normalized_intent, normalized_rules, created_at),
             )
             conn.commit()
 
-    def _retrieve_implicit_context_sync(self, user_query: str) -> str | None:
+    def _retrieve_implicit_context_sync(self, scope_key: str, user_query: str) -> str | None:
         self.init_db()
 
+        normalized_scope_key = scope_key.strip()
         normalized_query = user_query.strip()
-        if not normalized_query:
+        if not normalized_scope_key or not normalized_query:
             self._logger.debug("Skipping implicit context retrieval for empty query")
             return None
 
@@ -152,6 +173,7 @@ class MemoryManager:
             rows = conn.execute(
                 f"""
                 SELECT
+                    ue.scope_key,
                     ue.trigger_intent,
                     ue.implicit_rules,
                     ue.created_at,
@@ -159,10 +181,11 @@ class MemoryManager:
                 FROM {FTS_TABLE_NAME}
                 JOIN user_experiences AS ue ON ue.id = {FTS_TABLE_NAME}.rowid
                 WHERE {FTS_TABLE_NAME} MATCH ?
+                  AND ue.scope_key = ?
                 ORDER BY score ASC, ue.created_at DESC
                 LIMIT ?
                 """,
-                (match_query, MAX_CONTEXT_RESULTS),
+                (match_query, normalized_scope_key, MAX_CONTEXT_RESULTS),
             ).fetchall()
 
         if not rows:
@@ -185,6 +208,11 @@ class MemoryManager:
         return conn
 
     @staticmethod
+    def _has_scope_key_column(conn: sqlite3.Connection) -> bool:
+        rows = conn.execute("PRAGMA table_info(user_experiences)").fetchall()
+        return any(row["name"] == "scope_key" for row in rows)
+
+    @staticmethod
     def _build_match_query(user_query: str) -> str:
         tokens = re.findall(r"[\w\u4e00-\u9fff]+", user_query.casefold())
         unique_tokens = list(dict.fromkeys(tokens))
@@ -200,10 +228,12 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     save_parser = subparsers.add_parser("save", help="Persist an implicit memory experience")
+    save_parser.add_argument("--scope-key", required=True)
     save_parser.add_argument("--intent", required=True)
     save_parser.add_argument("--rules", required=True)
 
     retrieve_parser = subparsers.add_parser("retrieve", help="Fetch matching implicit memory")
+    retrieve_parser.add_argument("--scope-key", required=True)
     retrieve_parser.add_argument("--query", required=True)
 
     return parser
@@ -214,11 +244,11 @@ async def _run_cli(argv: list[str]) -> int:
     manager = MemoryManager()
 
     if args.command == "save":
-        await manager.save_experience(args.intent, args.rules)
+        await manager.save_experience(args.scope_key, args.intent, args.rules)
         return 0
 
     if args.command == "retrieve":
-        context = await manager.retrieve_implicit_context(args.query)
+        context = await manager.retrieve_implicit_context(args.scope_key, args.query)
         if context:
             print(context)
         return 0
