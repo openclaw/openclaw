@@ -399,13 +399,25 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       agentPayload.sessionKey === host.sessionKey &&
       (!host.chatRunId || host.chatRunId === agentPayload.runId)
     ) {
-      // Agent run ended — cancel any pending inbound timers to avoid a
-      // redundant loadChatHistory after the definitive reload below.
-      clearChatInboundTimers();
-      // Clear streaming state only after history loads successfully to avoid
-      // a blank UI if the reload races ahead of durable writes or fails.
-      // On failure, chatStream is preserved as a graceful degradation.
+      // Cancel the fast timer — lifecycle.end provides the immediate reload.
+      // Keep the slow timer (if pending from chat.inbound) as a persistence-lag
+      // safety net. If no slow timer exists, schedule one so the inbound turn
+      // is picked up even when lifecycle.end races ahead of durable writes.
+      if (_chatInboundTimerFast) {
+        clearTimeout(_chatInboundTimerFast);
+        _chatInboundTimerFast = null;
+      }
       void loadChatHistory(host as unknown as OpenClawApp);
+      if (!_chatInboundTimerSlow) {
+        const endSessionKey = agentPayload.sessionKey;
+        _chatInboundTimerSlow = setTimeout(() => {
+          _chatInboundTimerSlow = null;
+          if (host.sessionKey !== endSessionKey) {
+            return;
+          }
+          void loadChatHistory(host as unknown as OpenClawApp);
+        }, 3000);
+      }
     }
     return;
   }
