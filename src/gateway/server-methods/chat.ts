@@ -56,6 +56,7 @@ import {
   loadSessionEntry,
   readSessionMessages,
   resolveSessionModelRef,
+  resolveSessionTranscriptCandidates,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -1393,5 +1394,98 @@ export const chatHandlers: GatewayRequestHandlers = {
     context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
 
     respond(true, { ok: true, messageId: appended.messageId });
+  },
+  "chat.deleteMessages": ({ params, respond, context }) => {
+    const key = (params as { key?: string }).key;
+    const match = (
+      params as { match?: { role?: string; timestamp?: number; contentPrefix?: string } }
+    ).match;
+    if (!key || typeof key !== "string") {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key is required"));
+      return;
+    }
+    if (!match || typeof match !== "object") {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "match is required"));
+      return;
+    }
+
+    const { storePath, entry } = loadSessionEntry(key);
+    const sessionId = entry?.sessionId;
+    if (!sessionId || !storePath) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
+      return;
+    }
+
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, entry?.sessionFile);
+    const filePath = candidates.find((c) => fs.existsSync(c));
+    if (!filePath) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "transcript not found"));
+      return;
+    }
+
+    try {
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const lines = raw.split(/\r?\n/);
+      let deletedCount = 0;
+
+      const kept = lines.filter((line) => {
+        if (!line.trim()) {
+          return true;
+        }
+        try {
+          const parsed = JSON.parse(line) as {
+            message?: { role?: string; timestamp?: number; content?: unknown };
+          };
+          const msg = parsed?.message;
+          if (!msg) {
+            return true;
+          }
+
+          // Match by role + timestamp (primary match)
+          if (match.role && msg.role !== match.role) {
+            return true;
+          }
+          if (match.timestamp != null && msg.timestamp !== match.timestamp) {
+            return true;
+          }
+
+          // Optional content prefix match for disambiguation
+          if (match.contentPrefix) {
+            const text =
+              typeof msg.content === "string"
+                ? msg.content
+                : Array.isArray(msg.content)
+                  ? (msg.content as Array<{ text?: string }>).map((c) => c.text ?? "").join("")
+                  : "";
+            if (!text.startsWith(match.contentPrefix)) {
+              return true;
+            }
+          }
+
+          deletedCount++;
+          return false;
+        } catch {
+          return true; // Keep unparseable lines
+        }
+      });
+
+      if (deletedCount === 0) {
+        respond(true, { deleted: 0 });
+        return;
+      }
+
+      fs.writeFileSync(filePath, kept.join("\n"), "utf-8");
+      context.logGateway.info(`chat.deleteMessages deleted=${deletedCount} session=${key}`);
+      respond(true, { deleted: deletedCount });
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INTERNAL_ERROR,
+          `Failed to delete messages: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }
   },
 };
