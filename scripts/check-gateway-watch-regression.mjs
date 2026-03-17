@@ -215,12 +215,16 @@ async function runTimedWatch(options, outputDir) {
   const stderrPath = path.join(outputDir, "watch.stderr.log");
   const startedAt = Date.now();
   let startupReadyMs = null;
-  const child = spawn("pnpm", ["gateway:watch"], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-  });
+  const child = spawn(
+    process.execPath,
+    ["scripts/watch-node.mjs", "gateway", "--force", "--allow-unconfigured"],
+    {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    },
+  );
   const watchPid = child.pid;
   if (typeof watchPid !== "number") {
     throw new Error("Failed to spawn pnpm gateway:watch");
