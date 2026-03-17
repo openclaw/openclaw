@@ -1,3 +1,4 @@
+import { findNormalizedProviderKey } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type {
@@ -159,10 +160,17 @@ function resolveProviderModelMergeState(
   providerId: string,
 ): ProviderModelMergeState {
   const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
-  const existingProvider = providers[providerId] as ModelProviderConfig | undefined;
+  const existingProviderKey = findNormalizedProviderKey(providers, providerId);
+  const existingProvider =
+    existingProviderKey !== undefined
+      ? (providers[existingProviderKey] as ModelProviderConfig | undefined)
+      : undefined;
   const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
     ? existingProvider.models
     : [];
+  if (existingProviderKey && existingProviderKey !== providerId) {
+    delete providers[existingProviderKey];
+  }
   return { providers, existingProvider, existingModels };
 }
 

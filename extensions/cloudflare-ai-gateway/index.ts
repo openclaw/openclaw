@@ -11,7 +11,7 @@ import {
   validateApiKeyInput,
 } from "../../src/commands/auth-choice.api-key.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "../../src/commands/auth-choice.apply-helpers.js";
-import { buildApiKeyCredential } from "../../src/commands/onboard-auth.credentials.js";
+import { buildApiKeyCredential } from "../../src/commands/auth-credentials.js";
 import { applyAuthProfileConfig } from "../../src/commands/onboard-auth.js";
 import type { SecretInput } from "../../src/config/types.secrets.js";
 import { coerceSecretRef } from "../../src/config/types.secrets.js";

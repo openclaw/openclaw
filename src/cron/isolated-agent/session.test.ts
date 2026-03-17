@@ -63,7 +63,7 @@ describe("resolveCronSession", () => {
         modelOverride: "deepseek-v3-4bit-mlx",
         providerOverride: "inferencer",
         thinkingLevel: "high",
-        model: "k2p5",
+        model: "kimi-code",
       },
     });
 
@@ -71,7 +71,7 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.providerOverride).toBe("inferencer");
     expect(result.sessionEntry.thinkingLevel).toBe("high");
     // The model field (last-used model) should also be preserved
-    expect(result.sessionEntry.model).toBe("k2p5");
+    expect(result.sessionEntry.model).toBe("kimi-code");
   });
 
   it("handles missing modelOverride gracefully", () => {
