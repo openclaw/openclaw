@@ -782,6 +782,32 @@ Notes:
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
 - `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
+For web search, plugins can consume the shared runtime helper instead of
+reaching into the agent tool wiring:
+
+```ts
+const providers = api.runtime.webSearch.listProviders({
+  config: api.config,
+});
+
+const result = await api.runtime.webSearch.search({
+  config: api.config,
+  args: {
+    query: "OpenClaw plugin runtime helpers",
+    count: 5,
+  },
+});
+```
+
+Plugins can also register web-search providers via
+`api.registerWebSearchProvider(...)`.
+
+Notes:
+
+- Keep provider selection, credential resolution, and shared request semantics in core.
+- Use web-search providers for vendor-specific search transports.
+- `api.runtime.webSearch.*` is the preferred shared surface for feature/channel plugins that need search behavior without depending on the agent tool wrapper.
+
 ## Gateway HTTP routes
 
 Plugins can expose HTTP endpoints with `api.registerHttpRoute(...)`.

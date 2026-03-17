@@ -11,6 +11,7 @@ import {
   transcribeAudioFile,
 } from "../../media-understanding/runtime.js";
 import { listSpeechVoices, textToSpeech, textToSpeechTelephony } from "../../tts/tts.js";
+import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeConfig } from "./runtime-config.js";
@@ -146,6 +147,10 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       describeImageFile,
       describeVideoFile,
       transcribeAudioFile,
+    },
+    webSearch: {
+      listProviders: listWebSearchProviders,
+      search: runWebSearch,
     },
     stt: { transcribeAudioFile },
     tools: createRuntimeTools(),
