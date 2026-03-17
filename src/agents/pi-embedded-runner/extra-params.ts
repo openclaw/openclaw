@@ -26,6 +26,7 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAIAttributionHeadersWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIResponsesContextManagementWrapper,
@@ -303,9 +304,12 @@ export function applyExtraParamsToAgent(
       },
     }) ?? merged;
 
-  if (provider === "openai") {
-    // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
-    agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
+  if (provider === "openai" || provider === "openai-codex") {
+    if (provider === "openai") {
+      // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
+      agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
+    }
+    agent.streamFn = createOpenAIAttributionHeadersWrapper(agent.streamFn);
   }
   const wrappedStreamFn = createStreamFnWithExtraParams(
     agent.streamFn,

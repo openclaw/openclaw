@@ -4,6 +4,7 @@ import { normalizeProviderId } from "./model-selection.js";
 
 export type ProviderAttributionVerification =
   | "vendor-documented"
+  | "vendor-hidden-api-spec"
   | "vendor-sdk-hook-only"
   | "internal-runtime";
 
@@ -28,6 +29,7 @@ export type ProviderAttributionPolicy = {
 export type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
 
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
+const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
 
 export function resolveProviderAttributionIdentity(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
@@ -58,6 +60,44 @@ function buildOpenRouterAttributionPolicy(
   };
 }
 
+function buildOpenAIAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "openai",
+    enabledByDefault: true,
+    verification: "vendor-hidden-api-spec",
+    hook: "request-headers",
+    reviewNote:
+      "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
+    ...identity,
+    headers: {
+      originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
+      "User-Agent": `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${identity.version}`,
+    },
+  };
+}
+
+function buildOpenAICodexAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "openai-codex",
+    enabledByDefault: true,
+    verification: "vendor-hidden-api-spec",
+    hook: "request-headers",
+    reviewNote:
+      "OpenAI Codex ChatGPT-backed traffic supports the same hidden originator/User-Agent attribution contract.",
+    ...identity,
+    headers: {
+      originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
+      "User-Agent": `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${identity.version}`,
+    },
+  };
+}
+
 function buildSdkHookOnlyPolicy(
   provider: string,
   hook: ProviderAttributionHook,
@@ -79,6 +119,8 @@ export function listProviderAttributionPolicies(
 ): ProviderAttributionPolicy[] {
   return [
     buildOpenRouterAttributionPolicy(env),
+    buildOpenAIAttributionPolicy(env),
+    buildOpenAICodexAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
       "default-headers",
@@ -101,12 +143,6 @@ export function listProviderAttributionPolicies(
       "mistral",
       "custom-user-agent",
       "Mistral JS SDK exposes a custom userAgent option, but app attribution is not yet verified.",
-      env,
-    ),
-    buildSdkHookOnlyPolicy(
-      "openai",
-      "default-headers",
-      "OpenAI JS SDK exposes defaultHeaders, but public app attribution support is not yet verified.",
       env,
     ),
     buildSdkHookOnlyPolicy(
