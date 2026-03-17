@@ -24,11 +24,11 @@ vi.mock("../../../agents/tools/slack-actions.js", () => ({
   handleSlackAction,
 }));
 
-const { discordMessageActions } = await import("./discord.js");
-const { handleDiscordMessageAction } = await import("./discord/handle-action.js");
-const { telegramMessageActions } = await import("./telegram.js");
-const { signalMessageActions } = await import("./signal.js");
-const { createSlackActions } = await import("../slack.actions.js");
+let discordMessageActions: typeof import("./discord.js").discordMessageActions;
+let handleDiscordMessageAction: typeof import("./discord/handle-action.js").handleDiscordMessageAction;
+let telegramMessageActions: typeof import("./telegram.js").telegramMessageActions;
+let signalMessageActions: typeof import("./signal.js").signalMessageActions;
+let createSlackActions: typeof import("../slack.actions.js").createSlackActions;
 
 function telegramCfg(): OpenClawConfig {
   return { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
@@ -191,7 +191,13 @@ async function expectSlackSendRejected(params: Record<string, unknown>, error: R
   expect(handleSlackAction).not.toHaveBeenCalled();
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ discordMessageActions } = await import("./discord.js"));
+  ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
+  ({ telegramMessageActions } = await import("./telegram.js"));
+  ({ signalMessageActions } = await import("./signal.js"));
+  ({ createSlackActions } = await import("../slack.actions.js"));
   vi.clearAllMocks();
 });
 

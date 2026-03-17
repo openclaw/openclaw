@@ -48,7 +48,8 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { resolveOutboundTarget } from "./targets.js";
+
+let resolveOutboundTarget: typeof import("./targets.js").resolveOutboundTarget;
 
 describe("resolveOutboundTarget channel resolution", () => {
   let registrySeq = 0;
@@ -60,7 +61,9 @@ describe("resolveOutboundTarget channel resolution", () => {
       mode: "explicit",
     });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveOutboundTarget } = await import("./targets.js"));
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `targets-test-${registrySeq}`);
     mocks.getChannelPlugin.mockReset();

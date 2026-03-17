@@ -68,28 +68,59 @@ export function getUpsertChannelPairingRequestMock(): AnyAsyncMock {
   return upsertChannelPairingRequest;
 }
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore,
+    upsertChannelPairingRequest,
+  };
+});
 
 const skillCommandsHoisted = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
+  replySpy: vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+    await opts?.onReplyStart?.();
+    return undefined;
+  }) as MockFn<
+    (
+      ctx: MsgContext,
+      opts?: GetReplyOptions,
+      configOverride?: OpenClawConfig,
+    ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
+  >,
 }));
 export const listSkillCommandsForAgents = skillCommandsHoisted.listSkillCommandsForAgents;
+export const replySpy = skillCommandsHoisted.replySpy;
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  listSkillCommandsForAgents,
-}));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    listSkillCommandsForAgents: skillCommandsHoisted.listSkillCommandsForAgents,
+    getReplyFromConfig: skillCommandsHoisted.replySpy,
+    __replySpy: skillCommandsHoisted.replySpy,
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
+      async ({ ctx, replyOptions }: { ctx: MsgContext; replyOptions?: GetReplyOptions }) => {
+        await skillCommandsHoisted.replySpy(ctx, replyOptions);
+        return { queuedFinal: false };
+      },
+    ),
+  };
+});
 
 const systemEventsHoisted = vi.hoisted(() => ({
   enqueueSystemEventSpy: vi.fn(),
 }));
 export const enqueueSystemEventSpy: AnyMock = systemEventsHoisted.enqueueSystemEventSpy;
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
-  enqueueSystemEvent: enqueueSystemEventSpy,
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: systemEventsHoisted.enqueueSystemEventSpy,
+  };
+});
 
 const sentMessageCacheHoisted = vi.hoisted(() => ({
   wasSentByBot: vi.fn(() => false),
@@ -97,7 +128,7 @@ const sentMessageCacheHoisted = vi.hoisted(() => ({
 export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
 
 vi.mock("./sent-message-cache.js", () => ({
-  wasSentByBot,
+  wasSentByBot: sentMessageCacheHoisted.wasSentByBot,
   recordSentMessage: vi.fn(),
   clearSentMessageCache: vi.fn(),
 }));
@@ -182,36 +213,24 @@ vi.mock("grammy", () => ({
   InputFile: class {},
 }));
 
-const sequentializeMiddleware = vi.fn();
-export const sequentializeSpy: AnyMock = vi.fn(() => sequentializeMiddleware);
+const runnerHoisted = vi.hoisted(() => ({
+  sequentializeMiddleware: vi.fn(),
+  sequentializeSpy: vi.fn(),
+  throttlerSpy: vi.fn(() => "throttler"),
+}));
+export const sequentializeSpy: AnyMock = runnerHoisted.sequentializeSpy;
 export let sequentializeKey: ((ctx: unknown) => string) | undefined;
 vi.mock("@grammyjs/runner", () => ({
   sequentialize: (keyFn: (ctx: unknown) => string) => {
     sequentializeKey = keyFn;
-    return sequentializeSpy();
+    return runnerHoisted.sequentializeSpy();
   },
 }));
 
-export const throttlerSpy: AnyMock = vi.fn(() => "throttler");
+export const throttlerSpy: AnyMock = runnerHoisted.throttlerSpy;
 
 vi.mock("@grammyjs/transformer-throttler", () => ({
-  apiThrottler: () => throttlerSpy(),
-}));
-
-export const replySpy: MockFn<
-  (
-    ctx: MsgContext,
-    opts?: GetReplyOptions,
-    configOverride?: OpenClawConfig,
-  ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
-> = vi.fn(async (_ctx, opts) => {
-  await opts?.onReplyStart?.();
-  return undefined;
-});
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  getReplyFromConfig: replySpy,
-  __replySpy: replySpy,
+  apiThrottler: () => runnerHoisted.throttlerSpy(),
 }));
 
 export const getOnHandler = (event: string) => {

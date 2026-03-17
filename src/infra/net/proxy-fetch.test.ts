@@ -51,12 +51,10 @@ vi.mock("undici", () => ({
   fetch: undiciFetch,
 }));
 
-import {
-  getProxyUrlFromFetch,
-  makeProxyFetch,
-  PROXY_FETCH_PROXY_URL,
-  resolveProxyFetchFromEnv,
-} from "./proxy-fetch.js";
+let getProxyUrlFromFetch: typeof import("./proxy-fetch.js").getProxyUrlFromFetch;
+let makeProxyFetch: typeof import("./proxy-fetch.js").makeProxyFetch;
+let PROXY_FETCH_PROXY_URL: typeof import("./proxy-fetch.js").PROXY_FETCH_PROXY_URL;
+let resolveProxyFetchFromEnv: typeof import("./proxy-fetch.js").resolveProxyFetchFromEnv;
 
 function clearProxyEnv(): void {
   for (const key of PROXY_ENV_KEYS) {
@@ -75,7 +73,12 @@ function restoreProxyEnv(): void {
 }
 
 describe("makeProxyFetch", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    ({ getProxyUrlFromFetch, makeProxyFetch, PROXY_FETCH_PROXY_URL, resolveProxyFetchFromEnv } =
+      await import("./proxy-fetch.js"));
+  });
 
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
     const proxyUrl = "http://proxy.test:8080";

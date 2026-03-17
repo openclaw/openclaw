@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnMock, ptyKillMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -39,11 +39,9 @@ function expectSpawnEnv() {
 describe("createPtyAdapter", () => {
   let createPtyAdapter: typeof import("./pty.js").createPtyAdapter;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ createPtyAdapter } = await import("./pty.js"));
-  });
-
-  beforeEach(() => {
     spawnMock.mockClear();
     ptyKillMock.mockClear();
     killProcessTreeMock.mockClear();

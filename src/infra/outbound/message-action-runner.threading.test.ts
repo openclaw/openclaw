@@ -1,11 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  installMessageActionRunnerTestRegistry,
-  resetMessageActionRunnerTestRegistry,
-  slackConfig,
-  telegramConfig,
-} from "./message-action-runner.test-helpers.js";
-
 const mocks = vi.hoisted(() => ({
   executeSendAction: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
@@ -31,10 +24,18 @@ vi.mock("../../config/sessions.js", async () => {
   };
 });
 
-import { runMessageAction } from "./message-action-runner.js";
+type MessageActionRunnerModule = typeof import("./message-action-runner.js");
+type MessageActionRunnerTestHelpersModule =
+  typeof import("./message-action-runner.test-helpers.js");
+
+let runMessageAction: MessageActionRunnerModule["runMessageAction"];
+let installMessageActionRunnerTestRegistry: MessageActionRunnerTestHelpersModule["installMessageActionRunnerTestRegistry"];
+let resetMessageActionRunnerTestRegistry: MessageActionRunnerTestHelpersModule["resetMessageActionRunnerTestRegistry"];
+let slackConfig: MessageActionRunnerTestHelpersModule["slackConfig"];
+let telegramConfig: MessageActionRunnerTestHelpersModule["telegramConfig"];
 
 async function runThreadingAction(params: {
-  cfg: typeof slackConfig;
+  cfg: MessageActionRunnerTestHelpersModule["slackConfig"];
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
 }) {
@@ -65,12 +66,20 @@ const defaultTelegramToolContext = {
 } as const;
 
 describe("runMessageAction threading auto-injection", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ runMessageAction } = await import("./message-action-runner.js"));
+    ({
+      installMessageActionRunnerTestRegistry,
+      resetMessageActionRunnerTestRegistry,
+      slackConfig,
+      telegramConfig,
+    } = await import("./message-action-runner.test-helpers.js"));
     installMessageActionRunnerTestRegistry();
   });
 
   afterEach(() => {
-    resetMessageActionRunnerTestRegistry();
+    resetMessageActionRunnerTestRegistry?.();
     mocks.executeSendAction.mockClear();
     mocks.recordSessionMetaFromInbound.mockClear();
   });

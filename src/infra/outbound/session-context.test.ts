@@ -1,12 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
-}));
+type SessionContextModule = typeof import("./session-context.js");
 
-import { buildOutboundSessionContext } from "./session-context.js";
+let buildOutboundSessionContext: SessionContextModule["buildOutboundSessionContext"];
+
+beforeEach(async () => {
+  vi.resetModules();
+  resolveSessionAgentIdMock.mockReset();
+  vi.doMock("../../agents/agent-scope.js", () => ({
+    resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
+  }));
+  ({ buildOutboundSessionContext } = await import("./session-context.js"));
+});
 
 describe("buildOutboundSessionContext", () => {
   it("returns undefined when both session key and agent id are blank", () => {

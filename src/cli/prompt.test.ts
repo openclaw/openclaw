@@ -1,12 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-import { isYes, setVerbose, setYes } from "../globals.js";
-
-vi.mock("node:readline/promises", () => {
-  const question = vi.fn(async () => "");
-  const close = vi.fn();
-  const createInterface = vi.fn(() => ({ question, close }));
-  return { default: { createInterface } };
-});
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type ReadlineMock = {
   default: {
@@ -17,8 +9,27 @@ type ReadlineMock = {
   };
 };
 
-const { promptYesNo } = await import("./prompt.js");
-const readline = (await import("node:readline/promises")) as unknown as ReadlineMock;
+type PromptModule = typeof import("./prompt.js");
+type GlobalsModule = typeof import("../globals.js");
+
+let promptYesNo: PromptModule["promptYesNo"];
+let readline: ReadlineMock;
+let isYes: GlobalsModule["isYes"];
+let setVerbose: GlobalsModule["setVerbose"];
+let setYes: GlobalsModule["setYes"];
+
+beforeEach(async () => {
+  vi.resetModules();
+  vi.doMock("node:readline/promises", () => {
+    const question = vi.fn(async () => "");
+    const close = vi.fn();
+    const createInterface = vi.fn(() => ({ question, close }));
+    return { default: { createInterface } };
+  });
+  ({ promptYesNo } = await import("./prompt.js"));
+  ({ isYes, setVerbose, setYes } = await import("../globals.js"));
+  readline = (await import("node:readline/promises")) as unknown as ReadlineMock;
+});
 
 describe("promptYesNo", () => {
   it("returns true when global --yes is set", async () => {

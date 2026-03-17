@@ -93,6 +93,19 @@ const unitIsolatedFilesRaw = [
   "src/infra/git-commit.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
+const unitSingletonIsolatedFilesRaw = [];
+const unitSingletonIsolatedFiles = unitSingletonIsolatedFilesRaw.filter((file) =>
+  fs.existsSync(file),
+);
+const unitVmForkSingletonFilesRaw = [
+  "src/channels/plugins/contracts/inbound.telegram.contract.test.ts",
+];
+const unitVmForkSingletonFiles = unitVmForkSingletonFilesRaw.filter((file) => fs.existsSync(file));
+const groupedUnitIsolatedFiles = unitIsolatedFiles.filter(
+  (file) => !unitSingletonIsolatedFiles.includes(file),
+);
+const channelSingletonFilesRaw = [];
+const channelSingletonFiles = channelSingletonFilesRaw.filter((file) => fs.existsSync(file));
 
 const children = new Set();
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -139,20 +152,55 @@ const runs = [
             "vitest.unit.config.ts",
             `--pool=${useVmForks ? "vmForks" : "forks"}`,
             ...(disableIsolation ? ["--isolate=false"] : []),
-            ...unitIsolatedFiles.flatMap((file) => ["--exclude", file]),
+            ...[
+              ...unitIsolatedFiles,
+              ...unitSingletonIsolatedFiles,
+              ...unitVmForkSingletonFiles,
+            ].flatMap((file) => ["--exclude", file]),
           ],
         },
-        {
-          name: "unit-isolated",
+        ...(groupedUnitIsolatedFiles.length > 0
+          ? [
+              {
+                name: "unit-isolated",
+                args: [
+                  "vitest",
+                  "run",
+                  "--config",
+                  "vitest.unit.config.ts",
+                  "--pool=forks",
+                  ...groupedUnitIsolatedFiles,
+                ],
+              },
+            ]
+          : []),
+        ...unitSingletonIsolatedFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-isolated`,
           args: [
             "vitest",
             "run",
             "--config",
             "vitest.unit.config.ts",
-            "--pool=forks",
-            ...unitIsolatedFiles,
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            file,
           ],
-        },
+        })),
+        ...unitVmForkSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-vmforks`,
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.unit.config.ts",
+            `--pool=${useVmForks ? "vmForks" : "forks"}`,
+            ...(disableIsolation ? ["--isolate=false"] : []),
+            file,
+          ],
+        })),
+        ...channelSingletonFiles.map((file) => ({
+          name: `${path.basename(file, ".test.ts")}-channels-isolated`,
+          args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
+        })),
       ]
     : [
         {
@@ -380,9 +428,24 @@ const resolveFilterMatches = (fileFilter) => {
   }
   return allKnownTestFiles.filter((file) => file.includes(normalizedFilter));
 };
+const isVmForkSingletonUnitFile = (fileFilter) => unitVmForkSingletonFiles.includes(fileFilter);
 const createTargetedEntry = (owner, isolated, filters) => {
   const name = isolated ? `${owner}-isolated` : owner;
   const forceForks = isolated;
+  if (owner === "unit-vmforks") {
+    return {
+      name,
+      args: [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.unit.config.ts",
+        `--pool=${useVmForks ? "vmForks" : "forks"}`,
+        ...(disableIsolation ? ["--isolate=false"] : []),
+        ...filters,
+      ],
+    };
+  }
   if (owner === "unit") {
     return {
       name,
@@ -460,16 +523,19 @@ const targetedEntries = (() => {
   const groups = passthroughFileFilters.reduce((acc, fileFilter) => {
     const matchedFiles = resolveFilterMatches(fileFilter);
     if (matchedFiles.length === 0) {
-      const target = inferTarget(normalizeRepoPath(fileFilter));
-      const key = `${target.owner}:${target.isolated ? "isolated" : "default"}`;
+      const normalizedFile = normalizeRepoPath(fileFilter);
+      const target = inferTarget(normalizedFile);
+      const owner = isVmForkSingletonUnitFile(normalizedFile) ? "unit-vmforks" : target.owner;
+      const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
-      files.push(normalizeRepoPath(fileFilter));
+      files.push(normalizedFile);
       acc.set(key, files);
       return acc;
     }
     for (const matchedFile of matchedFiles) {
       const target = inferTarget(matchedFile);
-      const key = `${target.owner}:${target.isolated ? "isolated" : "default"}`;
+      const owner = isVmForkSingletonUnitFile(matchedFile) ? "unit-vmforks" : target.owner;
+      const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(matchedFile);
       acc.set(key, files);

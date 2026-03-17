@@ -2,15 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const getMemorySearchManager = vi.fn();
-const loadConfig = vi.fn(() => ({}));
-const resolveDefaultAgentId = vi.fn(() => "main");
-const resolveCommandSecretRefsViaGateway = vi.fn(async ({ config }: { config: unknown }) => ({
-  resolvedConfig: config,
-  diagnostics: [] as string[],
-}));
+const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
+const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [] as string[],
+  })),
+);
 
 vi.mock("../memory/index.js", () => ({
   getMemorySearchManager,
@@ -33,7 +35,8 @@ let defaultRuntime: typeof import("../runtime.js").defaultRuntime;
 let isVerbose: typeof import("../globals.js").isVerbose;
 let setVerbose: typeof import("../globals.js").setVerbose;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ registerMemoryCli } = await import("./memory-cli.js"));
   ({ defaultRuntime } = await import("../runtime.js"));
   ({ isVerbose, setVerbose } = await import("../globals.js"));

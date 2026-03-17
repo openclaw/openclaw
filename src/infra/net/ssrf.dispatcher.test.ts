@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
@@ -21,7 +21,14 @@ vi.mock("undici", () => ({
   ProxyAgent: proxyAgentCtor,
 }));
 
-import { createPinnedDispatcher, type PinnedHostname } from "./ssrf.js";
+import type { PinnedHostname } from "./ssrf.js";
+
+let createPinnedDispatcher: typeof import("./ssrf.js").createPinnedDispatcher;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ createPinnedDispatcher } = await import("./ssrf.js"));
+});
 
 describe("createPinnedDispatcher", () => {
   it("uses pinned lookup without overriding global family policy", () => {

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const execFileMock = vi.hoisted(() => vi.fn());
@@ -13,7 +13,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { runCommandWithTimeout, runExec } from "./exec.js";
+let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
+let runExec: typeof import("./exec.js").runExec;
 
 type MockChild = EventEmitter & {
   stdout: EventEmitter;
@@ -64,6 +65,11 @@ function expectCmdWrappedInvocation(params: {
 }
 
 describe("windows command wrapper behavior", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ runCommandWithTimeout, runExec } = await import("./exec.js"));
+  });
+
   afterEach(() => {
     spawnMock.mockReset();
     execFileMock.mockReset();
