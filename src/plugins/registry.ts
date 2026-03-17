@@ -22,6 +22,7 @@ import {
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
+  ImageGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliRegistrar,
@@ -116,6 +117,8 @@ export type PluginSpeechProviderRegistration =
   PluginOwnedProviderRegistration<SpeechProviderPlugin>;
 export type PluginMediaUnderstandingProviderRegistration =
   PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
+export type PluginImageGenerationProviderRegistration =
+  PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 
@@ -165,6 +168,7 @@ export type PluginRecord = {
   providerIds: string[];
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  imageGenerationProviderIds: string[];
   webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
@@ -187,6 +191,7 @@ export type PluginRegistry = {
   providers: PluginProviderRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
+  imageGenerationProviders: PluginImageGenerationProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -234,6 +239,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     providers: [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
     webSearchProviders: [],
     gatewayHandlers: {},
     httpRoutes: [],
@@ -631,6 +637,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerImageGenerationProvider = (
+    record: PluginRecord,
+    provider: ImageGenerationProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "image-generation provider",
+      registrations: registry.imageGenerationProviders,
+      ownedIds: record.imageGenerationProviderIds,
+    });
+  };
+
   const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
     registerUniqueProviderLike({
       record,
@@ -857,6 +876,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         registrationMode === "full"
           ? (provider) => registerMediaUnderstandingProvider(record, provider)
           : () => {},
+      registerImageGenerationProvider:
+        registrationMode === "full"
+          ? (provider) => registerImageGenerationProvider(record, provider)
+          : () => {},
       registerWebSearchProvider:
         registrationMode === "full"
           ? (provider) => registerWebSearchProvider(record, provider)
@@ -932,6 +955,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerProvider,
     registerSpeechProvider,
     registerMediaUnderstandingProvider,
+    registerImageGenerationProvider,
     registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,

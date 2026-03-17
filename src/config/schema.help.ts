@@ -1019,6 +1019,10 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.imageGenerationModel.primary":
+    "Optional image-generation model (provider/model) used by the shared image generation capability.",
+  "agents.defaults.imageGenerationModel.fallbacks":
+    "Ordered fallback image-generation models (provider/model).",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",

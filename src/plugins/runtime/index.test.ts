@@ -59,8 +59,15 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime();
     expect(typeof runtime.mediaUnderstanding.runFile).toBe("function");
     expect(typeof runtime.mediaUnderstanding.describeImageFile).toBe("function");
+    expect(typeof runtime.mediaUnderstanding.describeImageFileWithModel).toBe("function");
     expect(typeof runtime.mediaUnderstanding.describeVideoFile).toBe("function");
     expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(runtime.stt.transcribeAudioFile);
+  });
+
+  it("exposes runtime.imageGeneration helpers", () => {
+    const runtime = createPluginRuntime();
+    expect(typeof runtime.imageGeneration.generate).toBe("function");
+    expect(typeof runtime.imageGeneration.listProviders).toBe("function");
   });
 
   it("exposes runtime.webSearch helpers", () => {
