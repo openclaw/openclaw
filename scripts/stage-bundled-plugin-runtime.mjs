@@ -91,17 +91,29 @@ function mergePathLists(...groups) {
   return merged;
 }
 
-function ensurePathInsideRoot(rootDir, rawPath) {
-  const resolved = path.resolve(rootDir, rawPath);
-  const relative = path.relative(rootDir, resolved);
-  if (
+function isPathInside(rootDir, candidatePath) {
+  const relative = path.relative(rootDir, candidatePath);
+  return (
     relative === "" ||
     relative === "." ||
     (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  ) {
+  );
+}
+
+function ensurePathInsideRoot(rootDir, rawPath) {
+  const resolved = path.resolve(rootDir, rawPath);
+  if (isPathInside(rootDir, resolved)) {
     return resolved;
   }
   throw new Error(`path escapes plugin root: ${rawPath}`);
+}
+
+function ensureRealPathInsideRoot(rootRealDir, candidatePath, rawPath = candidatePath) {
+  const resolvedRealPath = fs.realpathSync(candidatePath);
+  if (isPathInside(rootRealDir, resolvedRealPath)) {
+    return resolvedRealPath;
+  }
+  throw new Error(`path escapes plugin root via symlink: ${rawPath}`);
 }
 
 function readJsonFileIfExists(filePath) {
@@ -115,7 +127,7 @@ function defaultExistingPaths(sourceDir, paths) {
   return paths.filter((relativePath) => fs.existsSync(path.join(sourceDir, relativePath)));
 }
 
-function resolveDeclaredRuntimeCopyPaths(sourceDir) {
+function resolveDeclaredRuntimeCopyPaths(sourceDir, sourceRealDir) {
   const resolved = [];
   const addPaths = (rawPaths) => {
     for (const rawPath of rawPaths) {
@@ -123,6 +135,7 @@ function resolveDeclaredRuntimeCopyPaths(sourceDir) {
       if (!fs.existsSync(sourcePath)) {
         continue;
       }
+      ensureRealPathInsideRoot(sourceRealDir, sourcePath, rawPath);
       const relativePath = normalizeManifestPath(path.relative(sourceDir, sourcePath));
       if (relativePath) {
         resolved.push(relativePath);
@@ -184,11 +197,17 @@ function writeRuntimeModuleWrapper(sourcePath, targetPath) {
   );
 }
 
-function copyRuntimeOverlayPath(sourcePath, targetPath) {
+function copyRuntimeOverlayPath(sourcePath, targetPath, options) {
   fs.cpSync(sourcePath, targetPath, {
     dereference: true,
     force: true,
     recursive: true,
+    filter(candidatePath) {
+      const displayPath =
+        normalizeManifestPath(path.relative(options.pluginRootDir, candidatePath)) || candidatePath;
+      ensureRealPathInsideRoot(options.pluginRootRealDir, candidatePath, displayPath);
+      return true;
+    },
   });
 }
 
@@ -207,7 +226,7 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir, options) {
     // Skill trees must stay physically inside dist-runtime so the realpath
     // containment checks still accept bundled plugin skills from the runtime root.
     if (shouldCopyDeclaredRuntimePath(relativePath, options.copiedPaths)) {
-      copyRuntimeOverlayPath(sourcePath, targetPath);
+      copyRuntimeOverlayPath(sourcePath, targetPath, options);
       continue;
     }
 
@@ -269,13 +288,15 @@ export function stageBundledPluginRuntime(params = {}) {
       continue;
     }
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
+    const distPluginRealDir = fs.realpathSync(distPluginDir);
     const runtimePluginDir = path.join(runtimeExtensionsRoot, dirent.name);
     const sourcePluginNodeModulesDir = path.join(sourceExtensionsRoot, dirent.name, "node_modules");
-    const copiedPaths = resolveDeclaredRuntimeCopyPaths(distPluginDir);
+    const copiedPaths = resolveDeclaredRuntimeCopyPaths(distPluginDir, distPluginRealDir);
 
     stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir, {
       copiedPaths,
       pluginRootDir: distPluginDir,
+      pluginRootRealDir: distPluginRealDir,
     });
     linkPluginNodeModules({
       runtimePluginDir,

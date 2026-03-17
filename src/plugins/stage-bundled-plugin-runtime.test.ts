@@ -10,6 +10,7 @@ import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 const tempDirs: string[] = [];
+const DIR_SYMLINK_TYPE = process.platform === "win32" ? "junction" : "dir";
 
 function makeRepoRoot(prefix: string): string {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -314,6 +315,90 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.realpathSync(runtimeDefaultSkillPath)).toBe(
       path.join(distPluginDir, "skills", "default-skill", "SKILL.md"),
     );
+  });
+
+  it("rejects manifest-declared skill roots that escape the plugin tree via symlink", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-escape-root-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "codex-demo");
+    const escapedSkillsDir = path.join(repoRoot, "external-skills");
+    fs.mkdirSync(path.join(distPluginDir, ".codex-plugin"), { recursive: true });
+    writeJson(path.join(distPluginDir, "package.json"), {
+      name: "@openclaw/codex-demo",
+    });
+    writeJson(path.join(distPluginDir, ".codex-plugin", "plugin.json"), {
+      name: "Codex Demo",
+      skills: ["bundle-skills"],
+    });
+    writeSkill(
+      path.join(escapedSkillsDir, "secret-skill", "SKILL.md"),
+      "secret-skill",
+      "Escaped content",
+    );
+    fs.symlinkSync(escapedSkillsDir, path.join(distPluginDir, "bundle-skills"), DIR_SYMLINK_TYPE);
+
+    expect(() => stageBundledPluginRuntime({ repoRoot })).toThrow(
+      "path escapes plugin root via symlink: bundle-skills",
+    );
+    expect(
+      fs.existsSync(
+        path.join(
+          repoRoot,
+          "dist-runtime",
+          "extensions",
+          "codex-demo",
+          "bundle-skills",
+          "secret-skill",
+          "SKILL.md",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects nested symlink escapes under copied runtime skill trees", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-escape-nested-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "codex-demo");
+    const escapedSkillsDir = path.join(repoRoot, "external-skills");
+    fs.mkdirSync(path.join(distPluginDir, ".codex-plugin"), { recursive: true });
+    writeJson(path.join(distPluginDir, "package.json"), {
+      name: "@openclaw/codex-demo",
+    });
+    writeJson(path.join(distPluginDir, ".codex-plugin", "plugin.json"), {
+      name: "Codex Demo",
+      skills: ["bundle-skills"],
+    });
+    writeSkill(
+      path.join(distPluginDir, "bundle-skills", "safe-skill", "SKILL.md"),
+      "safe-skill",
+      "Safe content",
+    );
+    writeSkill(
+      path.join(escapedSkillsDir, "secret-skill", "SKILL.md"),
+      "secret-skill",
+      "Escaped content",
+    );
+    fs.symlinkSync(
+      escapedSkillsDir,
+      path.join(distPluginDir, "bundle-skills", "escaped"),
+      DIR_SYMLINK_TYPE,
+    );
+
+    expect(() => stageBundledPluginRuntime({ repoRoot })).toThrow(
+      "path escapes plugin root via symlink: bundle-skills/escaped",
+    );
+    expect(
+      fs.existsSync(
+        path.join(
+          repoRoot,
+          "dist-runtime",
+          "extensions",
+          "codex-demo",
+          "bundle-skills",
+          "escaped",
+          "secret-skill",
+          "SKILL.md",
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("preserves package metadata needed for bundled plugin discovery from dist-runtime", () => {
