@@ -159,7 +159,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       payload: {
         channelId: messageChannelId,
         messageId: message.id,
-        text: baseText ?? "",
+        text: messageText,
         senderId: sender.id,
         senderName: sender.name ?? author.username,
         isGuild: isGuildMessage,

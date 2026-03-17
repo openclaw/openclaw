@@ -1,7 +1,6 @@
 import { type Bot, GrammyError } from "grammy";
-import { logVerbose } from "../../globals.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
 import { EMPTY_TEXT_ERR_RE } from "../network-errors.js";

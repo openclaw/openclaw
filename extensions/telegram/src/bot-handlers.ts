@@ -1,25 +1,13 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../auto-reply/inbound-debounce.js";
-import { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
-import {
-  buildModelsProviderData,
-  formatModelsAvailableHeader,
-} from "../auto-reply/reply/commands-models.js";
-import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
-import { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
-import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
-import { buildCommandsMessagePaginated } from "../auto-reply/status.js";
-import { shouldDebounceTextInbound } from "../channels/inbound-debounce-policy.js";
-import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
-import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
-import { loadConfig } from "../config/config.js";
-import { writeConfigFile } from "../config/io.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/channel-plugin-common";
+import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -31,16 +19,39 @@ import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "../config/types.js";
-import { danger, logVerbose, warn } from "../globals.js";
-import { writePendingInbound } from "../infra/pending-inbound-store.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import { logWarn } from "../logger.js";
-import { MediaFetchError } from "../media/fetch.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
-import { isGatewayDraining } from "../process/command-queue.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/config-runtime";
+import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  buildPluginBindingResolvedText,
+  parsePluginBindingApprovalCustomId,
+  resolvePluginConversationBindingApproval,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { buildCommandsPaginationKeyboard } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  buildModelsProviderData,
+  formatModelsAvailableHeader,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { buildMentionRegexes, matchesMentionWithExplicit } from "openclaw/plugin-sdk/reply-runtime";
+import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveStoredModelOverride } from "openclaw/plugin-sdk/reply-runtime";
+import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/reply-runtime";
+import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+// Drain-queue internals not yet in plugin-sdk — import directly from src.
+import { writePendingInbound } from "../../../src/infra/pending-inbound-store.js";
+import { logWarn } from "../../../src/logger.js";
+import { isGatewayDraining } from "../../../src/process/command-queue.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -1843,9 +1854,26 @@ export const registerTelegramHandlers = ({
               // Use resolveMentionGatingWithBypass so that slash commands (e.g. /status)
               // bypass the mention gate even when the bot is not mentioned — matching the
               // command bypass path in the normal (non-drain) message processing flow.
-              // The sender has already passed group access checks above, so commandAuthorized=true.
+              // Derive commandAuthorized via resolveControlCommandGate (matching the
+              // non-drain path in bot-message-context.body.ts) instead of hard-coding true,
+              // so that command access policy is respected even during drain.
+              const allowForCommands = event.isGroup ? effectiveGroupAllow : effectiveDmAllow;
+              const senderAllowedForCommands = isSenderAllowed({
+                allow: allowForCommands,
+                senderId: event.senderId,
+                senderUsername: event.senderUsername,
+              });
+              const useAccessGroups = cfg.commands?.useAccessGroups !== false;
               const hasControlCommandInMessage = hasControlCommand(messageText, cfg, {
                 botUsername,
+              });
+              const commandGate = resolveControlCommandGate({
+                useAccessGroups,
+                authorizers: [
+                  { configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands },
+                ],
+                allowTextCommands: true,
+                hasControlCommand: hasControlCommandInMessage,
               });
               const mentionGate = resolveMentionGatingWithBypass({
                 isGroup: true,
@@ -1856,7 +1884,7 @@ export const registerTelegramHandlers = ({
                 hasAnyMention,
                 allowTextCommands: true,
                 hasControlCommand: hasControlCommandInMessage,
-                commandAuthorized: true, // sender passed group access checks above
+                commandAuthorized: commandGate.commandAuthorized,
               });
               if (mentionGate.shouldSkip) {
                 logVerbose(`Blocked drain: requireMention not satisfied for group ${event.chatId}`);
