@@ -230,8 +230,9 @@ export async function monitorWebhook({
   httpServers.set(accountId, server);
 
   return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      server.close();
+    const cleanup = async () => {
+      (server.closeAllConnections as (() => void) | undefined)?.();
+      await new Promise<void>((cb) => server.close(() => cb()));
       httpServers.delete(accountId);
       botOpenIds.delete(accountId);
       botNames.delete(accountId);
@@ -239,13 +240,11 @@ export async function monitorWebhook({
 
     const handleAbort = () => {
       log(`feishu[${accountId}]: abort signal received, stopping Webhook server`);
-      cleanup();
-      resolve();
+      void cleanup().then(() => resolve());
     };
 
     if (abortSignal?.aborted) {
-      cleanup();
-      resolve();
+      void cleanup().then(() => resolve());
       return;
     }
 

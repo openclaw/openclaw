@@ -132,12 +132,29 @@ export function recordWebhookStatus(
   });
 }
 
-export function stopFeishuMonitorState(accountId?: string): void {
+const SERVER_CLOSE_TIMEOUT_MS = 5_000;
+
+function closeHttpServer(server: http.Server): Promise<void> {
+  return Promise.race([
+    new Promise<void>((resolve) => {
+      (server.closeAllConnections as (() => void) | undefined)?.();
+      server.close(() => resolve());
+    }),
+    new Promise<void>((resolve) => {
+      setTimeout(() => {
+        console.warn("feishu: HTTP server close timed out, continuing cleanup");
+        resolve();
+      }, SERVER_CLOSE_TIMEOUT_MS);
+    }),
+  ]);
+}
+
+export async function stopFeishuMonitorState(accountId?: string): Promise<void> {
   if (accountId) {
     wsClients.delete(accountId);
     const server = httpServers.get(accountId);
     if (server) {
-      server.close();
+      await closeHttpServer(server);
       httpServers.delete(accountId);
     }
     botOpenIds.delete(accountId);
@@ -146,9 +163,7 @@ export function stopFeishuMonitorState(accountId?: string): void {
   }
 
   wsClients.clear();
-  for (const server of httpServers.values()) {
-    server.close();
-  }
+  await Promise.all([...httpServers.values()].map((server) => closeHttpServer(server)));
   httpServers.clear();
   botOpenIds.clear();
   botNames.clear();
