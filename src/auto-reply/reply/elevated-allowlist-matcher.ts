@@ -101,8 +101,8 @@ export function addFormattedTokens(params: {
 export function matchesFormattedTokens(params: {
   formatAllowFrom: AllowFromFormatter;
   value: string;
-    ...CORE_CHAT_CHANNEL_PREFIXES,
-    INTERNAL_ALLOWLIST_CHANNEL,
+  includeStripped?: boolean;
+  tokens: Set<string>;
 }): boolean {
   const probeTokens = new Set<string>();
   const values = params.includeStripped
