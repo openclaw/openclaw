@@ -19,6 +19,7 @@ Assess and harden the host running OpenClaw, then align it to a user-defined ris
 - If role/identity is unknown, provide recommendations only.
 - Formatting: every set of user choices must be numbered so the user can reply with a single digit.
 - System-level backups are recommended; try to verify status.
+- All timestamps in alerts, reports, and logs must use the user's local timezone (from the `Current time:` line provided by the cron system, or from `agents.defaults.userTimezone` in the config). Never display raw UTC timestamps to the user.
 
 ## Workflow (follow in order)
 
