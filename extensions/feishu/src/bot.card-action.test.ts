@@ -49,7 +49,7 @@ describe("Feishu Card Action Handler", () => {
       operator: { open_id: openId, user_id: userId, union_id: params.unionId ?? "un1" },
       token: params.token,
       action: {
-        value: params.actionValue,
+        value: params.actionValue as Record<string, unknown>,
         tag: "button",
       },
       context: { open_id: openId, user_id: userId, chat_id: params.chatId ?? "chat1" },

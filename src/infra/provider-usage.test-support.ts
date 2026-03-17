@@ -10,15 +10,13 @@ type ProviderUsageLoader = (params: {
   fetch?: typeof fetch;
 }) => Promise<UsageSummary>;
 
-export type ProviderUsageAuth<T extends ProviderUsageLoader> = NonNullable<
-  NonNullable<Parameters<T>[0]>["auth"]
->[number];
+export type ProviderUsageAuth = ProviderAuth;
 
-export async function loadUsageWithAuth<T extends ProviderUsageLoader>(
-  loadProviderUsageSummary: T,
-  auth: ProviderUsageAuth<T>[],
+export async function loadUsageWithAuth(
+  loadProviderUsageSummary: ProviderUsageLoader,
+  auth: ProviderUsageAuth[],
   mockFetch: ReturnType<typeof createProviderUsageFetch>,
-) {
+): Promise<UsageSummary> {
   return await loadProviderUsageSummary({
     now: usageNow,
     auth,

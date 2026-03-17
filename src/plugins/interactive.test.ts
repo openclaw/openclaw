@@ -154,7 +154,7 @@ describe("plugin interactive handlers", () => {
         clearButtons: vi.fn(async () => {}),
         deleteMessage: vi.fn(async () => {}),
       },
-    };
+    } as unknown as Parameters<typeof dispatchPluginInteractiveHandler>[0];
 
     await expectDedupedInteractiveDispatch({
       baseParams,
@@ -227,7 +227,7 @@ describe("plugin interactive handlers", () => {
         editMessage: vi.fn(async () => {}),
         clearComponents: vi.fn(async () => {}),
       },
-    };
+    } as unknown as Parameters<typeof dispatchPluginInteractiveHandler>[0];
 
     await expectDedupedInteractiveDispatch({
       baseParams,
@@ -288,7 +288,7 @@ describe("plugin interactive handlers", () => {
         followUp: vi.fn(async () => {}),
         editMessage: vi.fn(async () => {}),
       },
-    };
+    } as unknown as Parameters<typeof dispatchPluginInteractiveHandler>[0];
 
     await expectDedupedInteractiveDispatch({
       baseParams,
