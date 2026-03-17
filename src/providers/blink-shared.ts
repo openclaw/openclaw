@@ -72,14 +72,31 @@ type GatewayModelEntry = { id: string; name: string };
 /** Cached model catalog — populated once by fetchBlinkModelCatalog(). */
 let _cachedCatalog: BlinkModelCatalogEntry[] | null = null;
 
-/** Convert a gateway entry to OpenClaw catalog format. */
+// Build a fast lookup from the static catalog so dynamically-fetched entries
+// inherit the correct input capabilities instead of defaulting to text-only.
+const _staticById = new Map(BLINK_MODEL_CATALOG_STATIC.map((m) => [m.id, m]));
+
+/**
+ * Convert a gateway entry to OpenClaw catalog format.
+ * Inherits input/contextWindow/maxTokens from the static catalog when the
+ * model ID is known — falls back to pattern-matching for unknown IDs.
+ */
 function fromGatewayEntry(m: GatewayModelEntry): BlinkModelCatalogEntry {
+  const known = _staticById.get(m.id);
+  if (known) {
+    return { ...known, name: m.name };
+  }
   const reasoning = /\/o[1-9]\b|\/o3\b|\/o4|-thinking/.test(m.id);
+  // Vision models: Claude, GPT-4/5 (non-o-series), Gemini
+  const supportsImage =
+    /\/claude-/.test(m.id) ||
+    (/\/(gpt-4|gpt-5)/.test(m.id) && !reasoning) ||
+    /\/gemini-/.test(m.id);
   return {
     id: m.id,
     name: m.name,
     reasoning,
-    input: ["text"],
+    input: supportsImage ? ["text", "image"] : ["text"],
     contextWindow: 200000,
     maxTokens: 65536,
   };

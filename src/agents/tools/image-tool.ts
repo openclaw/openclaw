@@ -109,11 +109,16 @@ export function resolveImageModelConfigForTool(params: {
 
   let preferred: string | null = null;
 
+  const blinkOk = hasAuthForProvider({ provider: "blink", agentDir: params.agentDir });
+
   // MiniMax users: always try the canonical vision model first when auth exists.
   if (isMinimaxVlmProvider(primary.provider) && providerOk) {
     preferred = `${primary.provider}/MiniMax-VL-01`;
   } else if (providerOk && providerVisionFromConfig) {
     preferred = providerVisionFromConfig;
+  } else if (primary.provider === "blink" && blinkOk) {
+    // Blink provider routes through the Blink AI Gateway — use Claude Sonnet (vision-capable)
+    preferred = "blink/anthropic/claude-sonnet-4.6";
   } else if (primary.provider === "zai" && providerOk) {
     preferred = "zai/glm-4.6v";
   } else if (primary.provider === "openai" && openaiOk) {
@@ -138,6 +143,15 @@ export function resolveImageModelConfigForTool(params: {
   }
 
   // Cross-provider fallback when we can't pair with the primary provider.
+  if (blinkOk) {
+    // Blink API key is always present in Blink Claw containers — prefer it over raw provider keys.
+    if (openaiOk) addFallback("openai/gpt-5-mini");
+    if (anthropicOk) addFallback(ANTHROPIC_IMAGE_FALLBACK);
+    return {
+      primary: "blink/anthropic/claude-sonnet-4.6",
+      ...(fallbacks.length ? { fallbacks } : {}),
+    };
+  }
   if (openaiOk) {
     if (anthropicOk) {
       addFallback(ANTHROPIC_IMAGE_FALLBACK);

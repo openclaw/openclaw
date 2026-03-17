@@ -48,6 +48,7 @@ export const AUTO_IMAGE_KEY_PROVIDERS = [
   "minimax",
   "minimax-portal",
   "zai",
+  "blink",
 ] as const;
 export const AUTO_VIDEO_KEY_PROVIDERS = ["google", "moonshot"] as const;
 export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
@@ -57,6 +58,7 @@ export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
   minimax: "MiniMax-VL-01",
   "minimax-portal": "MiniMax-VL-01",
   zai: "glm-4.6v",
+  blink: "anthropic/claude-sonnet-4.6",
 };
 export const CLI_OUTPUT_MAX_BUFFER = 5 * MB;
 export const DEFAULT_MEDIA_CONCURRENCY = 2;
