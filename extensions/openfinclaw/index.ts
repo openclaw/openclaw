@@ -543,7 +543,7 @@ const openfinclawPlugin = {
           targetDir: Type.Optional(
             Type.String({
               description:
-                "Custom target directory. Default: ~/.openfinclaw/strategies/{date}/{name}-{shortId}/",
+                "Custom target directory. Default: ~/.openfinclaw/workspace/strategies/{date}/{name}-{shortId}/",
             }),
           ),
           dateDir: Type.Optional(

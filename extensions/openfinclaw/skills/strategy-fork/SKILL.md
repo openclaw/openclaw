@@ -21,7 +21,7 @@
 ## 目录结构
 
 ```
-~/.openfinclaw/strategies/
+~/.openfinclaw/workspace/strategies/
 └── 2026-03-16/                              # 按日期组织
     ├── btc-adaptive-dca-34a5792f/           # 名称 + 短ID（防冲突）
     │   ├── fep.yaml                         # 策略配置

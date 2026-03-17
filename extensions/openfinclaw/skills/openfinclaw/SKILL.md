@@ -175,10 +175,10 @@ openfinclaw strategy remove btc-adaptive-dca-34a5792f --force
 
 ## 本地存储结构
 
-策略存储在 `~/.openfinclaw/strategies/` 目录：
+策略存储在 `~/.openfinclaw/workspace/strategies/` 目录：
 
 ```
-~/.openfinclaw/strategies/
+~/.openfinclaw/workspace/strategies/
 └── 2026-03-16/                              # 按日期组织
     ├── btc-adaptive-dca-34a5792f/           # 名称 + 短ID（Fork 来的）
     │   ├── fep.yaml                         # 策略配置

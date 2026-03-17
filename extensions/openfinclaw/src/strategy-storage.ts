@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { ForkMeta, CreatedMeta, LocalStrategy, StrategyPerformance } from "./types.js";
 
+const WORKSPACE_DIRNAME = "workspace";
 const STRATEGIES_DIRNAME = "strategies";
 const FORK_META_FILENAME = ".fork-meta.json";
 const CREATED_META_FILENAME = ".created-meta.json";
@@ -10,13 +11,13 @@ const FEP_FILENAME = "fep.yaml";
 
 /**
  * Get the root strategies directory.
- * Default: ~/.openfinclaw/strategies/
- * Also checks legacy ~/.openclaw/strategies/
+ * Default: ~/.openfinclaw/workspace/strategies/
+ * Also checks legacy ~/.openclaw/workspace/strategies/
  */
 export function getStrategiesRoot(): string {
   const home = homedir();
-  const newDir = path.join(home, ".openfinclaw", STRATEGIES_DIRNAME);
-  const legacyDir = path.join(home, ".openclaw", STRATEGIES_DIRNAME);
+  const newDir = path.join(home, ".openfinclaw", WORKSPACE_DIRNAME, STRATEGIES_DIRNAME);
+  const legacyDir = path.join(home, ".openclaw", WORKSPACE_DIRNAME, STRATEGIES_DIRNAME);
 
   if (fs.existsSync(newDir)) {
     return newDir;

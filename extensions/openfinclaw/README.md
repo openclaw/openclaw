@@ -131,10 +131,10 @@ Agent:
 
 ## 本地存储
 
-策略存储在 `~/.openfinclaw/strategies/`：
+策略存储在 `~/.openfinclaw/workspace/strategies/`：
 
 ```
-~/.openfinclaw/strategies/
+~/.openfinclaw/workspace/strategies/
 └── 2026-03-16/
     ├── btc-adaptive-dca-34a5792f/   # Fork 来的策略
     │   ├── fep.yaml
