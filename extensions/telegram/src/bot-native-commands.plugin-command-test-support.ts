@@ -6,7 +6,7 @@ export const pluginCommandMocks = {
   executePluginCommand: vi.fn(async () => ({ text: "ok" })),
 };
 
-vi.mock("../../../src/plugins/commands.js", () => ({
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
   matchPluginCommand: pluginCommandMocks.matchPluginCommand,
   executePluginCommand: pluginCommandMocks.executePluginCommand,
