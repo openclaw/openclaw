@@ -572,6 +572,29 @@ function buildTtsFailureResult(errors: string[]): { success: false; error: strin
   };
 }
 
+function resolveReadySpeechProvider(params: {
+  provider: TtsProvider;
+  cfg: OpenClawConfig;
+  config: ResolvedTtsConfig;
+  errors: string[];
+  requireTelephony?: boolean;
+}): NonNullable<ReturnType<typeof getSpeechProvider>> | null {
+  const resolvedProvider = getSpeechProvider(params.provider, params.cfg);
+  if (!resolvedProvider) {
+    params.errors.push(`${params.provider}: no provider registered`);
+    return null;
+  }
+  if (!resolvedProvider.isConfigured({ cfg: params.cfg, config: params.config })) {
+    params.errors.push(`${params.provider}: not configured`);
+    return null;
+  }
+  if (params.requireTelephony && !resolvedProvider.synthesizeTelephony) {
+    params.errors.push(`${params.provider}: unsupported for telephony`);
+    return null;
+  }
+  return resolvedProvider;
+}
+
 function resolveTtsRequestSetup(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -627,13 +650,13 @@ export async function textToSpeech(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
-      const resolvedProvider = getSpeechProvider(provider, params.cfg);
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+        errors,
+      });
       if (!resolvedProvider) {
-        errors.push(`${provider}: no provider registered`);
-        continue;
-      }
-      if (!resolvedProvider.isConfigured({ cfg: params.cfg, config })) {
-        errors.push(`${provider}: not configured`);
         continue;
       }
       const synthesis = await resolvedProvider.synthesize({
@@ -689,17 +712,14 @@ export async function textToSpeechTelephony(params: {
   for (const provider of providers) {
     const providerStart = Date.now();
     try {
-      const resolvedProvider = getSpeechProvider(provider, params.cfg);
-      if (!resolvedProvider) {
-        errors.push(`${provider}: no provider registered`);
-        continue;
-      }
-      if (!resolvedProvider.isConfigured({ cfg: params.cfg, config })) {
-        errors.push(`${provider}: not configured`);
-        continue;
-      }
-      if (!resolvedProvider.synthesizeTelephony) {
-        errors.push(`${provider}: unsupported for telephony`);
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+        errors,
+        requireTelephony: true,
+      });
+      if (!resolvedProvider?.synthesizeTelephony) {
         continue;
       }
       const synthesis = await resolvedProvider.synthesizeTelephony({
