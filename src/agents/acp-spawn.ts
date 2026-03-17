@@ -755,16 +755,6 @@ export async function spawnAcpDirect(
     }
     parentRelay?.notifyStarted();
     
-    // Emit lifecycle hook: agent:dispatch
-    emitLifecycleHook("agent:dispatch", {
-      sessionKey,
-      taskId: childRunId,
-      agentId: targetAgentId,
-      contextKeys: parentSessionKey ? [parentSessionKey] : undefined,
-      runtime: runtimeMode,
-      mode: spawnMode,
-    });
-    
     return {
       status: "accepted",
       childSessionKey: sessionKey,
@@ -774,16 +764,6 @@ export async function spawnAcpDirect(
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
   }
-
-  // Emit lifecycle hook: agent:dispatch
-  emitLifecycleHook("agent:dispatch", {
-    sessionKey,
-    taskId: childRunId,
-    agentId: targetAgentId,
-    contextKeys: parentSessionKey ? [parentSessionKey] : undefined,
-    runtime: runtimeMode,
-    mode: spawnMode,
-  });
 
   return {
     status: "accepted",
