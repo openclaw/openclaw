@@ -1,11 +1,8 @@
-import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
 import {
   buildAccountScopedAllowlistConfigEditor,
   buildAccountScopedDmSecurityPolicy,
   collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
-  createScopedAccountConfigAccessors,
-  formatAllowFromLowercase,
 } from "openclaw/plugin-sdk/compat";
 import {
   buildAgentSessionKey,
@@ -32,11 +29,8 @@ import {
 } from "openclaw/plugin-sdk/slack";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
-import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listEnabledSlackAccounts,
-  listSlackAccountIds,
-  resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
@@ -52,6 +46,7 @@ import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import { getSlackRuntime } from "./runtime.js";
 import { fetchSlackScopes } from "./scopes.js";
 import { createSlackSetupWizardProxy, slackSetupAdapter } from "./setup-core.js";
+import { isSlackPluginAccountConfigured, slackConfigAccessors, slackConfigBase } from "./shared.js";
 import { parseSlackTarget } from "./targets.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
@@ -77,18 +72,6 @@ function getTokenForOperation(
     return botToken;
   }
   return botToken ?? userToken;
-}
-
-function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
-  const mode = account.config.mode ?? "socket";
-  const hasBotToken = Boolean(account.botToken?.trim());
-  if (!hasBotToken) {
-    return false;
-  }
-  if (mode === "http") {
-    return Boolean(account.config.signingSecret?.trim());
-  }
-  return Boolean(account.appToken?.trim());
 }
 
 type SlackSendFn = ReturnType<typeof getSlackRuntime>["channel"]["slack"]["sendMessageSlack"];
@@ -345,22 +328,6 @@ async function resolveSlackAllowlistNames(params: {
   return await resolveSlackUserAllowlist({ token, entries: params.entries });
 }
 
-const slackConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveSlackAccount({ cfg, accountId }),
-  resolveAllowFrom: (account: ResolvedSlackAccount) => account.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account: ResolvedSlackAccount) => account.config.defaultTo,
-});
-
-const slackConfigBase = createScopedChannelConfigBase({
-  sectionKey: "slack",
-  listAccountIds: listSlackAccountIds,
-  resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
-  inspectAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
-  defaultAccountId: resolveDefaultSlackAccountId,
-  clearBaseFields: ["botToken", "appToken", "name"],
-});
-
 const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
   slackSetupWizard: (await loadSlackChannelRuntime()).slackSetupWizard,
 }));
@@ -425,12 +392,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   configSchema: buildChannelConfigSchema(SlackConfigSchema),
   config: {
     ...slackConfigBase,
-    isConfigured: (account) => isSlackAccountConfigured(account),
+    isConfigured: (account) => isSlackPluginAccountConfigured(account),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: isSlackAccountConfigured(account),
+      configured: isSlackPluginAccountConfigured(account),
       botTokenSource: account.botTokenSource,
       appTokenSource: account.appTokenSource,
     }),
@@ -722,7 +689,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
           : resolveConfiguredFromRequiredCredentialStatuses(account, [
               "botTokenStatus",
               "appTokenStatus",
-            ])) ?? isSlackAccountConfigured(account);
+            ])) ?? isSlackPluginAccountConfigured(account);
       const base = buildComputedAccountStatusSnapshot({
         accountId: account.accountId,
         name: account.name,
