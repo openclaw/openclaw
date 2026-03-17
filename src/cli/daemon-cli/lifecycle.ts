@@ -186,6 +186,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     try {
       await transitionRestartSentinelStatus("in-progress", {
         allowedCurrentStatuses: ["pending"],
+        env: restartSentinelEnv,
       });
     } catch {
       // best-effort
