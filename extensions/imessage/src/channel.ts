@@ -6,11 +6,9 @@ import {
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import {
-  buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   formatTrimmedAllowFromEntries,
-  IMessageConfigSchema,
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
   resolveIMessageGroupRequireMention,
@@ -100,7 +98,6 @@ function resolveIMessageOutboundSessionRoute(params: {
 
 export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   ...createIMessagePluginBase({
-    configSchema: buildChannelConfigSchema(IMessageConfigSchema),
     setupWizard: imessageSetupWizard,
     setup: imessageSetupAdapter,
   }),
