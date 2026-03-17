@@ -16,6 +16,17 @@ WIZ_API_ACTIVE_CLIENT_ID=""
 WIZ_API_ACTIVE_CLIENT_SECRET=""
 WIZ_API_CREDENTIAL_SOURCE=""
 WIZ_API_BEARER_TOKEN=""
+WIZ_API_TMP_DIR=""
+
+cleanup_tmp() {
+  [[ -n "$WIZ_API_TMP_DIR" && -d "$WIZ_API_TMP_DIR" ]] && rm -rf "$WIZ_API_TMP_DIR"
+}
+ensure_tmp_dir() {
+  if [[ -z "$WIZ_API_TMP_DIR" ]]; then
+    WIZ_API_TMP_DIR="$(mktemp -d /tmp/wiz-api.XXXXXX)"
+    trap cleanup_tmp EXIT
+  fi
+}
 
 die() {
   printf 'wiz-api: %s\n' "$*" >&2
@@ -170,7 +181,8 @@ wiz_graphql_with_retry() {
     '{ query: $query, variables: $variables }'
   )" || die "failed to build GraphQL payload"
 
-  tmp_body="$(mktemp /tmp/wiz-api-body.XXXXXX)"
+  ensure_tmp_dir
+  tmp_body="${WIZ_API_TMP_DIR}/body.$$.$RANDOM"
 
   http_code="$(
     "$WIZ_API_CURL_BIN" -sS --max-time "$WIZ_API_TIMEOUT" \
@@ -193,7 +205,7 @@ wiz_graphql_with_retry() {
     WIZ_API_BEARER_TOKEN=""
     authenticate
 
-    tmp_body="$(mktemp /tmp/wiz-api-body.XXXXXX)"
+    tmp_body="${WIZ_API_TMP_DIR}/body.$$.$RANDOM"
     http_code="$(
       "$WIZ_API_CURL_BIN" -sS --max-time "$WIZ_API_TIMEOUT" \
         -o "$tmp_body" -w '%{http_code}' \
@@ -238,7 +250,7 @@ paginated_query() {
     if [[ "$cursor" == "null" ]]; then
       page_vars="$vars_json"
     else
-      page_vars="$(printf '%s\n' "$vars_json" | "$WIZ_API_JQ_BIN" -c --arg after "$cursor" '. + {after: $after}')"
+      page_vars="$(printf '%s\n' "$vars_json" | "$WIZ_API_JQ_BIN" -c --arg after "$cursor" '. + {after: $after}')" || die "failed to build pagination variables"
     fi
 
     response="$(wiz_graphql_with_retry "$query" "$page_vars")"
@@ -325,8 +337,12 @@ cmd_issues() {
       --status)      status="$2"; shift 2 ;;
       --type)        issue_type="$2"; shift 2 ;;
       --entity-type) entity_type="$2"; shift 2 ;;
-      --first)       first="$2"; shift 2 ;;
-      --max-pages)   max_pages="$2"; shift 2 ;;
+      --first)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        first="$2"; shift 2 ;;
+      --max-pages)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        max_pages="$2"; shift 2 ;;
       *) die "unknown issues flag: $1" ;;
     esac
   done
@@ -377,8 +393,12 @@ cmd_vulns() {
       --image)     image="$2"; shift 2 ;;
       --cve)       cve="$2"; shift 2 ;;
       --has-fix)   has_fix="true"; shift ;;
-      --first)     first="$2"; shift 2 ;;
-      --max-pages) max_pages="$2"; shift 2 ;;
+      --first)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        first="$2"; shift 2 ;;
+      --max-pages)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        max_pages="$2"; shift 2 ;;
       *) die "unknown vulns flag: $1" ;;
     esac
   done
@@ -389,10 +409,10 @@ cmd_vulns() {
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
   if [[ -n "$image" ]]; then
-    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$image" '. + {imageName: $s}')"
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg v "$image" '. + {imageName: $v}')"
   fi
   if [[ -n "$cve" ]]; then
-    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$cve" '. + {name: $s}')"
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg v "$cve" '. + {name: $v}')"
   fi
   if [[ "$has_fix" == "true" ]]; then
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c '. + {hasFix: true}')"
@@ -430,26 +450,25 @@ cmd_inventory() {
       --type)         res_type="$2"; shift 2 ;;
       --subscription) subscription="$2"; shift 2 ;;
       --search)       search="$2"; shift 2 ;;
-      --first)        first="$2"; shift 2 ;;
-      --max-pages)    max_pages="$2"; shift 2 ;;
+      --first)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        first="$2"; shift 2 ;;
+      --max-pages)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        max_pages="$2"; shift 2 ;;
       *) die "unknown inventory flag: $1" ;;
     esac
   done
 
-  local where_parts=()
+  local where_clause="[]"
   if [[ -n "$res_type" ]]; then
-    where_parts+=("{type: {equals: [\"${res_type}\"]}}")
+    where_clause="$(printf '%s' "$where_clause" | "$WIZ_API_JQ_BIN" -c --arg v "$res_type" '. + [{type: {equals: [$v]}}]')"
   fi
   if [[ -n "$subscription" ]]; then
-    where_parts+=("{subscription: {equals: [\"${subscription}\"]}}")
+    where_clause="$(printf '%s' "$where_clause" | "$WIZ_API_JQ_BIN" -c --arg v "$subscription" '. + [{subscription: {equals: [$v]}}]')"
   fi
   if [[ -n "$search" ]]; then
-    where_parts+=("{name: {contains: \"${search}\"}}")
-  fi
-
-  local where_clause="[]"
-  if [[ "${#where_parts[@]}" -gt 0 ]]; then
-    where_clause="[$(IFS=','; printf '%s' "${where_parts[*]}")]"
+    where_clause="$(printf '%s' "$where_clause" | "$WIZ_API_JQ_BIN" -c --arg v "$search" '. + [{name: {contains: $v}}]')"
   fi
 
   local query
@@ -480,8 +499,12 @@ cmd_cloud_config() {
       --severity)  severity="$2"; shift 2 ;;
       --rule)      rule="$2"; shift 2 ;;
       --status)    status="$2"; shift 2 ;;
-      --first)     first="$2"; shift 2 ;;
-      --max-pages) max_pages="$2"; shift 2 ;;
+      --first)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        first="$2"; shift 2 ;;
+      --max-pages)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        max_pages="$2"; shift 2 ;;
       *) die "unknown cloud-config flag: $1" ;;
     esac
   done
@@ -492,7 +515,7 @@ cmd_cloud_config() {
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
   if [[ -n "$rule" ]]; then
-    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$rule" '. + {rule: $s}')"
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg v "$rule" '. + {rule: $v}')"
   fi
   if [[ -n "$status" ]]; then
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$status" '. + {status: ($s | split(","))}')"
@@ -525,8 +548,12 @@ cmd_k8s() {
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       --cluster)   cluster="$2"; shift 2 ;;
-      --first)     first="$2"; shift 2 ;;
-      --max-pages) max_pages="$2"; shift 2 ;;
+      --first)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        first="$2"; shift 2 ;;
+      --max-pages)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        max_pages="$2"; shift 2 ;;
       *) die "unknown k8s flag: $1" ;;
     esac
   done
@@ -534,7 +561,7 @@ cmd_k8s() {
   # Build filter JSON via jq — search is a string, passed as a variable for safety
   local filter_json="{}"
   if [[ -n "$cluster" ]]; then
-    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$cluster" '. + {search: $s}')"
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg v "$cluster" '. + {search: $v}')"
   fi
 
   local query
@@ -562,8 +589,12 @@ cmd_runtime() {
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       --severity)  severity="$2"; shift 2 ;;
-      --first)     first="$2"; shift 2 ;;
-      --max-pages) max_pages="$2"; shift 2 ;;
+      --first)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        first="$2"; shift 2 ;;
+      --max-pages)
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        max_pages="$2"; shift 2 ;;
       *) die "unknown runtime flag: $1" ;;
     esac
   done
@@ -699,6 +730,8 @@ main() {
 
   [[ "$#" -ge 1 ]] || { usage; exit 1; }
 
+  case "$1" in -h|--help|help) usage; return 0 ;; esac
+
   load_credentials
 
   case "$1" in
@@ -712,7 +745,6 @@ main() {
     k8s)          shift; cmd_k8s "$@" ;;
     runtime)      shift; cmd_runtime "$@" ;;
     summary)      shift; cmd_summary "$@" ;;
-    -h|--help|help) usage ;;
     *) die "unknown command: $1" ;;
   esac
 }

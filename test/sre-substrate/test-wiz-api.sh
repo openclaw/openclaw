@@ -342,7 +342,7 @@ for arg in "$@"; do
   esac
 done
 # Track call count via file
-count_file="/tmp/wiz-api-401-count"
+count_file="${WIZ_API_TEST_COUNT_FILE:-/tmp/wiz-api-401-count}"
 count=0
 if [[ -f "$count_file" ]]; then count="$(cat "$count_file")"; fi
 count=$((count + 1))
@@ -361,7 +361,8 @@ fi
 CURL_EOF
 chmod +x "${TMP}/mock-curl-401.sh"
 
-rm -f /tmp/wiz-api-401-count
+export WIZ_API_TEST_COUNT_FILE="${TMP}/wiz-api-401-count"
+rm -f "${TMP}/wiz-api-401-count"
 retry_result="$(
   export WIZ_API_SKIP_VAULT=1
   export WIZ_CLIENT_ID='retry-id'
@@ -369,9 +370,10 @@ retry_result="$(
   export WIZ_API_CURL_BIN="${TMP}/mock-curl-401.sh"
   export WIZ_API_JQ_BIN='jq'
   export WIZ_API_TOKEN_CACHE="${TMP}/token-retry.json"
+  export WIZ_API_TEST_COUNT_FILE="${TMP}/wiz-api-401-count"
   "${SCRIPT_PATH}" query '{ test }' 2>/dev/null
 )"
-rm -f /tmp/wiz-api-401-count
+rm -f "${TMP}/wiz-api-401-count"
 
 assert_ok "401 retry: returns data after retry" \
   "printf '%s' '$retry_result' | jq -e '.data.test == true' >/dev/null"
