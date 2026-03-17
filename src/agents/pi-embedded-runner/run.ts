@@ -654,11 +654,13 @@ export async function runEmbeddedPiAgent(
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
         const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
         if (!apiKeyInfo.apiKey) {
-          if (apiKeyInfo.mode !== "aws-sdk") {
+          if (apiKeyInfo.mode !== "aws-sdk" && apiKeyInfo.mode !== "oauth") {
             throw new Error(
               `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
             );
           }
+          // For ADC-backed oauth (e.g. google-vertex) and AWS SDK, auth is handled
+          // by the provider SDK directly — no literal key to set on pi-ai's auth storage.
           lastProfileId = resolvedProfileId;
           return;
         }

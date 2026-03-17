@@ -33,3 +33,54 @@ export function ensureCustomApiRegistered(api: Api, streamFn: StreamFn): boolean
   );
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// google-vertex ADC fix
+//
+// pi-ai's AuthStorage.getApiKey falls back to getEnvApiKey("google-vertex")
+// which returns the "<authenticated>" sentinel when GOOGLE_APPLICATION_CREDENTIALS
+// is configured.  pi-coding-agent passes this sentinel as options.apiKey to
+// both stream and completeSimple, where the google-vertex provider treats it
+// as a literal API key (→ 401).
+//
+// Wrapping the registered google-vertex provider so it strips the sentinel
+// covers every code path (stream, streamSimple, compact, branch-summary).
+// ---------------------------------------------------------------------------
+
+type ProviderStreamOptions = Record<string, unknown>;
+
+function stripAdcSentinel(options: unknown): unknown {
+  if (
+    options &&
+    typeof options === "object" &&
+    "apiKey" in options &&
+    (options as ProviderStreamOptions).apiKey === "<authenticated>"
+  ) {
+    const { apiKey: _, ...rest } = options as ProviderStreamOptions;
+    return rest;
+  }
+  return options;
+}
+
+let vertexAdcFixApplied = false;
+
+export function installGoogleVertexAdcFix(): void {
+  if (vertexAdcFixApplied) {
+    return;
+  }
+  const original = getApiProvider("google-vertex" as Api);
+  if (!original) {
+    return;
+  }
+  vertexAdcFixApplied = true;
+  registerApiProvider(
+    {
+      api: "google-vertex" as Api,
+      stream: (model, context, options) =>
+        original.stream(model, context, stripAdcSentinel(options) as typeof options),
+      streamSimple: (model, context, options) =>
+        original.streamSimple(model, context, stripAdcSentinel(options) as typeof options),
+    },
+    "openclaw-vertex-adc-fix",
+  );
+}

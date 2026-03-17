@@ -191,6 +191,21 @@ export function installGaxiosFetchCompat(): void {
     return;
   }
 
+  // Patch the global `window` check that gaxios uses in both its CJS and ESM
+  // builds to decide whether to import node-fetch.  Node.js 25 does not define
+  // `window`, so gaxios falls back to `import('node-fetch')`, which triggers a
+  // `Cannot convert undefined or null to object` crash in Node 25's ESM loader.
+  // Setting a minimal `window` shim makes every gaxios instance (including the
+  // CJS copy used by google-auth-library) skip the node-fetch import and use
+  // the native global fetch instead.
+  if (typeof globalThis.window === "undefined") {
+    Object.defineProperty(globalThis, "window", {
+      value: { fetch: globalThis.fetch },
+      configurable: true,
+      writable: true,
+    });
+  }
+
   const prototype = Gaxios.prototype as unknown as GaxiosPrototype;
   const originalDefaultAdapter = prototype._defaultAdapter;
   const compatFetch = createGaxiosCompatFetch();

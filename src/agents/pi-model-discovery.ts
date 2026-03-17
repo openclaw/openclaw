@@ -6,6 +6,7 @@ import type {
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { installGoogleVertexAdcFix } from "./custom-api-registry.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
@@ -148,5 +149,9 @@ export function discoverAuthStorage(agentDir: string): PiAuthStorage {
 }
 
 export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
+  // Ensure the google-vertex ADC fix is applied before any models are used.
+  // Must run after pi-ai's builtin providers are registered (side-effect of
+  // importing @mariozechner/pi-coding-agent at the top of this module).
+  installGoogleVertexAdcFix();
   return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
 }

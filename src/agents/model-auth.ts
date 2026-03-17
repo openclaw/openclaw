@@ -347,7 +347,11 @@ export async function resolveApiKeyForProvider(params: {
     return {
       apiKey: envResolved.apiKey,
       source: envResolved.source,
-      mode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+      // "gcloud adc" means auth is via Application Default Credentials — no literal key.
+      mode:
+        envResolved.source.includes("OAUTH_TOKEN") || envResolved.source === "gcloud adc"
+          ? "oauth"
+          : "api-key",
     };
   }
 
@@ -426,7 +430,10 @@ export function resolveEnvApiKey(
     if (!envKey) {
       return null;
     }
-    return { apiKey: envKey, source: "gcloud adc" };
+    // "<authenticated>" is pi-ai's ADC sentinel — not a literal API key.
+    // Return empty apiKey so callers know credentials exist but skip setting
+    // a literal key on the pi-ai auth storage (letting pi-ai use ADC directly).
+    return { apiKey: envKey === "<authenticated>" ? "" : envKey, source: "gcloud adc" };
   }
   return null;
 }
