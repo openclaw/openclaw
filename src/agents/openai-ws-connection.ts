@@ -14,7 +14,7 @@
  */
 
 import { EventEmitter } from "node:events";
-import WebSocket from "ws";
+import WebSocket, { type ClientOptions } from "ws";
 import { resolveProviderAttributionHeaders } from "./provider-attribution.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -268,7 +268,7 @@ export interface OpenAIWebSocketManagerOptions {
   /** Custom backoff delays in ms (default: [1000, 2000, 4000, 8000, 16000]) */
   backoffDelaysMs?: readonly number[];
   /** Custom socket factory for tests. */
-  socketFactory?: (url: string, options: ConstructorParameters<typeof WebSocket>[1]) => WebSocket;
+  socketFactory?: (url: string, options: ClientOptions) => WebSocket;
 }
 
 type InternalEvents = {
@@ -308,10 +308,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
   private readonly wsUrl: string;
   private readonly maxRetries: number;
   private readonly backoffDelaysMs: readonly number[];
-  private readonly socketFactory: (
-    url: string,
-    options: ConstructorParameters<typeof WebSocket>[1],
-  ) => WebSocket;
+  private readonly socketFactory: (url: string, options: ClientOptions) => WebSocket;
 
   constructor(options: OpenAIWebSocketManagerOptions = {}) {
     super();
