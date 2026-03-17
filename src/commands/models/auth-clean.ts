@@ -75,7 +75,7 @@ function sanitizeProfileId(id: string): string {
   return id
     .replace(
       // eslint-disable-next-line no-control-regex
-      /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S])/g,
+      /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[\s\S]?)/g,
       "",
     )
     .replace(/[\r\n]/g, "");
@@ -139,6 +139,11 @@ export async function modelsAuthCleanCommand(
   const store = isMainAgentDir
     ? ensureAuthProfileStore(agentDir, storeLoadOpts)
     : loadAgentLocalAuthProfileStore(agentDir, storeLoadOpts);
+
+  // Snapshot config-only profile IDs BEFORE adding store-derived ones.
+  // The empty-config safety guard must gate on config-derived IDs only;
+  // store.order IDs must NOT inflate the count and bypass the guard.
+  const configOnlyProfileIds = new Set(configuredProfiles);
 
   // Also keep profiles referenced in store.order (per-agent overrides set via
   // 'models auth order set'). These are not reflected in cfg.auth.order or
@@ -213,7 +218,9 @@ export async function modelsAuthCleanCommand(
   // Safety guard: refuse to wipe everything when openclaw.json has no auth
   // config at all (e.g. profiles and order both absent/empty). This avoids
   // accidentally nuking a store-only setup. Require --dry-run to inspect.
-  if (configuredProfiles.size === 0 && storeProfileIds.length > 0) {
+  // Gate on configOnlyProfileIds (config-derived IDs only) so that store.order
+  // IDs cannot inflate the count and bypass the guard.
+  if (configOnlyProfileIds.size === 0 && storeProfileIds.length > 0) {
     if (opts.dryRun) {
       if (opts.json) {
         runtime.log(
