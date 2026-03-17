@@ -4,7 +4,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
-} from "openclaw/plugin-sdk/nextcloud-talk";
+} from "../runtime-api.js";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 

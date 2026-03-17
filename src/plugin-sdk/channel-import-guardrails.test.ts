@@ -123,6 +123,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "llm-task",
   "line",
   "memory-lancedb",
+  "nextcloud-talk",
   "synology-chat",
   "talk-voice",
   "thread-ownership",
@@ -260,7 +261,8 @@ function collectExtensionFiles(extensionId: string): string[] {
         fullPath.includes(".test-") ||
         fullPath.includes(".spec.") ||
         fullPath.includes(".fixture.") ||
-        fullPath.includes(".snap")
+        fullPath.includes(".snap") ||
+        fullPath.endsWith("/runtime-api.ts")
       ) {
         continue;
       }
