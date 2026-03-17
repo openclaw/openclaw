@@ -6,10 +6,14 @@ const hoisted = vi.hoisted(() => {
   return { updateSessionStore, resolveStorePath };
 });
 
-vi.mock("../../../../src/config/sessions.js", () => ({
-  updateSessionStore: hoisted.updateSessionStore,
-  resolveStorePath: hoisted.resolveStorePath,
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    updateSessionStore: hoisted.updateSessionStore,
+    resolveStorePath: hoisted.resolveStorePath,
+  };
+});
 
 const { closeDiscordThreadSessions } = await import("./thread-session-close.js");
 

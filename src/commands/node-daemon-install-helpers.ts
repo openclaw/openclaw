@@ -4,6 +4,7 @@ import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
+  resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
@@ -54,7 +55,12 @@ export async function buildNodeInstallPlan(params: {
     title: "Node daemon runtime",
   });
 
-  const environment = buildNodeServiceEnvironment({ env: params.env });
+  const environment = buildNodeServiceEnvironment({
+    env: params.env,
+    // Match the gateway install path so supervised node services keep the chosen
+    // node toolchain on PATH for sibling binaries like npm/pnpm when needed.
+    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
+  });
   const description = formatNodeServiceDescription({
     version: environment.OPENCLAW_SERVICE_VERSION,
   });

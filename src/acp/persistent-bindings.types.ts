@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import type { AcpRuntimeSessionMode } from "./runtime/types.js";
 
@@ -102,5 +103,74 @@ export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): Se
       ...(spec.backend ? { backend: spec.backend } : {}),
       ...(spec.cwd ? { cwd: spec.cwd } : {}),
     },
+  };
+}
+
+export function parseConfiguredAcpSessionKey(
+  sessionKey: string,
+): { channel: ConfiguredAcpBindingChannel; accountId: string } | null {
+  const trimmed = sessionKey.trim();
+  if (!trimmed.startsWith("agent:")) {
+    return null;
+  }
+  const rest = trimmed.slice(trimmed.indexOf(":") + 1);
+  const nextSeparator = rest.indexOf(":");
+  if (nextSeparator === -1) {
+    return null;
+  }
+  const tokens = rest.slice(nextSeparator + 1).split(":");
+  if (tokens.length !== 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
+    return null;
+  }
+  const channel = tokens[2]?.trim().toLowerCase();
+  if (!channel) {
+    return null;
+  }
+  return {
+    channel: channel as ConfiguredAcpBindingChannel,
+    accountId: normalizeAccountId(tokens[3] ?? "default"),
+  };
+}
+
+export function resolveConfiguredAcpBindingSpecFromRecord(
+  record: SessionBindingRecord,
+): ConfiguredAcpBindingSpec | null {
+  if (record.targetKind !== "session") {
+    return null;
+  }
+  const conversationId = record.conversation.conversationId.trim();
+  if (!conversationId) {
+    return null;
+  }
+  const agentId =
+    normalizeText(record.metadata?.agentId) ??
+    resolveAgentIdFromSessionKey(record.targetSessionKey);
+  if (!agentId) {
+    return null;
+  }
+  return {
+    channel: record.conversation.channel as ConfiguredAcpBindingChannel,
+    accountId: normalizeAccountId(record.conversation.accountId),
+    conversationId,
+    parentConversationId: normalizeText(record.conversation.parentConversationId),
+    agentId,
+    acpAgentId: normalizeText(record.metadata?.acpAgentId),
+    mode: normalizeMode(record.metadata?.mode),
+    cwd: normalizeText(record.metadata?.cwd),
+    backend: normalizeText(record.metadata?.backend),
+    label: normalizeText(record.metadata?.label),
+  };
+}
+
+export function toResolvedConfiguredAcpBinding(
+  record: SessionBindingRecord,
+): ResolvedConfiguredAcpBinding | null {
+  const spec = resolveConfiguredAcpBindingSpecFromRecord(record);
+  if (!spec) {
+    return null;
+  }
+  return {
+    spec,
+    record,
   };
 }

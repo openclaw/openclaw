@@ -7,29 +7,24 @@ const loadCronStore = vi.fn();
 const resolveCronStorePath = vi.fn();
 const saveCronStore = vi.fn();
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     readConfigFileSnapshotForWrite,
     writeConfigFile,
-  };
-});
-
-vi.mock("../../../src/cron/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/cron/store.js")>();
-  return {
-    ...actual,
     loadCronStore,
     resolveCronStorePath,
     saveCronStore,
   };
 });
 
-const { maybePersistResolvedTelegramTarget } = await import("./target-writeback.js");
-
 describe("maybePersistResolvedTelegramTarget", () => {
-  beforeEach(() => {
+  let maybePersistResolvedTelegramTarget: typeof import("./target-writeback.js").maybePersistResolvedTelegramTarget;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ maybePersistResolvedTelegramTarget } = await import("./target-writeback.js"));
     readConfigFileSnapshotForWrite.mockReset();
     writeConfigFile.mockReset();
     loadCronStore.mockReset();

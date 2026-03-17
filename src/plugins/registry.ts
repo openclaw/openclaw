@@ -28,6 +28,7 @@ import type {
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
+  PluginConversationBindingResolvedEvent,
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteMatch,
   OpenClawPluginHttpRouteHandler,
@@ -147,6 +148,15 @@ export type PluginCommandRegistration = {
   rootDir?: string;
 };
 
+export type PluginConversationBindingResolvedHandlerRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot?: string;
+  handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginRecord = {
   id: string;
   name: string;
@@ -199,6 +209,7 @@ export type PluginRegistry = {
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
+  conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };
 
@@ -247,6 +258,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     cliRegistrars: [],
     services: [],
     commands: [],
+    conversationBindingResolvedHandlers: [],
     diagnostics: [],
   };
 }
@@ -829,6 +841,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     } as TypedPluginHookRegistration);
   };
 
+  const registerConversationBindingResolvedHandler = (
+    record: PluginRecord,
+    handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
+  ) => {
+    registry.conversationBindingResolvedHandlers.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      pluginRoot: record.rootDir,
+      handler,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const normalizeLogger = (logger: PluginLogger): PluginLogger => ({
     info: logger.info,
     warn: logger.warn,
@@ -941,6 +967,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 });
               }
             }
+          : () => {},
+      onConversationBindingResolved:
+        registrationMode === "full"
+          ? (handler) => registerConversationBindingResolvedHandler(record, handler)
           : () => {},
       registerCommand:
         registrationMode === "full" ? (command) => registerCommand(record, command) : () => {},

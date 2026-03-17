@@ -1,4 +1,8 @@
-export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
+export type {
+  ChannelAccountSnapshot,
+  ChannelGatewayContext,
+  ChannelMessageActionAdapter,
+} from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
 export type { DiscordPluralKitConfig } from "../../extensions/discord/src/pluralkit.js";
@@ -13,6 +17,11 @@ export type {
   ThreadBindingRecord,
   ThreadBindingTargetKind,
 } from "../../extensions/discord/src/monitor/thread-bindings.js";
+export type {
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+} from "../channels/plugins/types.adapters.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
