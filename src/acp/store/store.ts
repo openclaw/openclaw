@@ -98,8 +98,9 @@ function mapTerminalKindToRunState(
 function mapWorkerHeartbeatStateToRunState(
   state: AcpWorkerHeartbeatEnvelope["state"],
   hasAcceptedEvents: boolean,
+  hasDurableCancelRequest: boolean,
 ): AcpGatewayRunRecord["state"] {
-  if (state === "cancelling") {
+  if (state === "cancelling" && hasDurableCancelRequest) {
     return "cancelling";
   }
   return hasAcceptedEvents ? "running" : "accepted";
@@ -1025,7 +1026,11 @@ export class AcpGatewayStore {
     if (typeof params.workerProtocolVersion === "number") {
       lease.workerProtocolVersion = params.workerProtocolVersion;
     }
-    run.state = mapWorkerHeartbeatStateToRunState(params.state, run.highestAcceptedSeq > 0);
+    run.state = mapWorkerHeartbeatStateToRunState(
+      params.state,
+      run.highestAcceptedSeq > 0,
+      typeof run.cancelRequestedAt === "number",
+    );
     delete run.recoveryReason;
     run.updatedAt = now;
     session.state = "running";

@@ -390,7 +390,7 @@ describe("handleNodeEvent ACP worker ingress", () => {
     expect(await runtime.store.getRun("run-1")).not.toHaveProperty("cancelRequestedAt");
   });
 
-  it("preserves worker-reported cancelling state during reconnect reconcile", async () => {
+  it("does not revive cancelling during reconnect when durable cancel intent never landed", async () => {
     const runtime = await createRuntime();
     const now = Date.now();
     const lease = await runtime.store.acquireLease({
@@ -444,8 +444,9 @@ describe("handleNodeEvent ACP worker ingress", () => {
     });
 
     expect(await runtime.store.getRun("run-1")).toMatchObject({
-      state: "cancelling",
+      state: "running",
     });
+    expect(await runtime.store.getRun("run-1")).not.toHaveProperty("cancelRequestedAt");
   });
 
   it("keeps a durably cancelling run cancelling during reconnect after node-host cancel-timeout status", async () => {

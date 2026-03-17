@@ -1383,6 +1383,123 @@ describe("AcpGatewayNodeRuntime", () => {
     expect(commands).toContain("acp.turn.cancel");
   });
 
+  it("does not report cancelling after gateway-side cancel transport fails before durable cancel record lands", async () => {
+    const { runtime } = await createRuntime();
+    const sessionKey = "agent:main:acp:test-session";
+    let reportedState: "idle" | "running" | "cancelling" = "running";
+
+    const backend = new AcpNodeRuntime({
+      gatewayRuntime: runtime,
+      listNodes: () =>
+        [
+          {
+            nodeId: "node-1",
+            caps: ["acp:v1"],
+            commands: [
+              "acp.session.ensure",
+              "acp.session.load",
+              "acp.turn.start",
+              "acp.turn.cancel",
+              "acp.session.close",
+              "acp.session.status",
+            ],
+          },
+        ] as never,
+      invokeNode: async ({ command, params }) => {
+        const payload = params as Record<string, unknown>;
+        if (command === "acp.session.ensure") {
+          return {
+            ok: true,
+            payload: {
+              ok: true,
+              sessionKey: payload.sessionKey,
+              leaseId: payload.leaseId,
+              leaseEpoch: payload.leaseEpoch,
+              nodeRuntimeSessionId: "runtime-1",
+            },
+          };
+        }
+        if (command === "acp.turn.cancel") {
+          reportedState = "cancelling";
+          return {
+            ok: false,
+            error: {
+              message: "gateway transport timeout after node accepted cancel",
+            },
+          };
+        }
+        if (command === "acp.session.status") {
+          return {
+            ok: true,
+            payload: {
+              nodeId: "node-1",
+              ok: true,
+              sessionKey: payload.sessionKey,
+              leaseId: payload.leaseId,
+              leaseEpoch: payload.leaseEpoch,
+              state: reportedState,
+              nodeRuntimeSessionId: "runtime-1",
+              nodeWorkerRunId: "worker-1",
+              workerProtocolVersion: 1,
+            },
+          };
+        }
+        throw new Error(`unexpected command ${command}`);
+      },
+    });
+
+    const handle = await backend.ensureSession({
+      sessionKey,
+      agent: "main",
+      mode: "persistent",
+    });
+
+    await runtime.store.startRun({
+      sessionKey,
+      runId: "run-cancel",
+      requestId: "req-cancel",
+      now: 10,
+    });
+    const lease = await runtime.store.getActiveLease(sessionKey);
+    await runtime.store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey,
+      runId: "run-cancel",
+      leaseId: lease?.leaseId ?? "",
+      leaseEpoch: lease?.leaseEpoch ?? 0,
+      seq: 1,
+      event: {
+        type: "status",
+        text: "working",
+      },
+      now: 11,
+    });
+
+    await expect(
+      backend.cancel({
+        handle,
+        reason: "manual-cancel",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "gateway transport timeout after node accepted cancel",
+    });
+
+    expect(await runtime.store.getRun("run-cancel")).toMatchObject({
+      state: "running",
+    });
+    expect(await runtime.store.getRun("run-cancel")).not.toHaveProperty("cancelRequestedAt");
+
+    await expect(backend.getStatus({ handle })).resolves.toMatchObject({
+      summary: "acp-node status: running",
+      details: {
+        state: "running",
+        nodeWorkerRunId: "worker-1",
+        workerProtocolVersion: 1,
+      },
+    });
+  });
+
   it.each([
     {
       name: "suppresses a cancel transport failure once a terminal is already durable",

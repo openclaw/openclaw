@@ -413,17 +413,21 @@ export class AcpNodeRuntime implements AcpRuntime {
       leaseId: state.leaseId,
       leaseEpoch: state.leaseEpoch,
     });
+    const reconciledState = await this.gatewayRuntime.normalizeReconnectStatusState({
+      sessionKey: state.sessionKey,
+      state: status.state,
+    });
     return {
       summary:
         typeof status.details?.summary === "string" && status.details.summary.trim()
           ? status.details.summary.trim()
-          : `acp-node status: ${status.state}`,
+          : `acp-node status: ${reconciledState}`,
       ...(status.nodeRuntimeSessionId ? { backendSessionId: status.nodeRuntimeSessionId } : {}),
       details: {
         nodeId: status.nodeId,
         leaseId: status.leaseId,
         leaseEpoch: status.leaseEpoch,
-        state: status.state,
+        state: reconciledState,
         ...(status.nodeWorkerRunId ? { nodeWorkerRunId: status.nodeWorkerRunId } : {}),
         ...(typeof status.workerProtocolVersion === "number"
           ? { workerProtocolVersion: status.workerProtocolVersion }
@@ -532,8 +536,24 @@ export class AcpNodeRuntime implements AcpRuntime {
       status.nodeId !== params.nodeId ||
       status.sessionKey !== params.sessionKey ||
       status.leaseId !== params.leaseId ||
-      status.leaseEpoch !== params.leaseEpoch ||
-      (status.state !== "idle" && status.state !== "running" && status.state !== "cancelling")
+      status.leaseEpoch !== params.leaseEpoch
+    ) {
+      await this.gatewayRuntime.store.markStatusMismatch({
+        sessionKey: params.sessionKey,
+      });
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        `ACP node status reconcile failed for session ${params.sessionKey}.`,
+      );
+    }
+    const reconciledState = await this.gatewayRuntime.normalizeReconnectStatusState({
+      sessionKey: params.sessionKey,
+      state: status.state,
+    });
+    if (
+      reconciledState !== "idle" &&
+      reconciledState !== "running" &&
+      reconciledState !== "cancelling"
     ) {
       await this.gatewayRuntime.store.markStatusMismatch({
         sessionKey: params.sessionKey,
@@ -549,7 +569,7 @@ export class AcpNodeRuntime implements AcpRuntime {
         nodeId: params.nodeId,
         leaseId: params.leaseId,
         leaseEpoch: params.leaseEpoch,
-        state: status.state,
+        state: reconciledState,
         ...(status.nodeRuntimeSessionId
           ? { nodeRuntimeSessionId: status.nodeRuntimeSessionId }
           : {}),

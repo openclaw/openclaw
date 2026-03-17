@@ -305,6 +305,21 @@ function parseWorkerHeartbeatEnvelope(payloadJSON?: string | null): AcpWorkerHea
 export class AcpGatewayNodeRuntime {
   constructor(readonly store = new AcpGatewayStore()) {}
 
+  async normalizeReconnectStatusState(params: {
+    sessionKey: string;
+    state: AcpGatewayNodeSessionStatus["state"];
+  }): Promise<AcpGatewayNodeSessionStatus["state"]> {
+    if (params.state !== "cancelling") {
+      return params.state;
+    }
+    const session = await this.store.getSession(params.sessionKey);
+    const run = session?.activeRunId ? await this.store.getRun(session.activeRunId) : undefined;
+    if (run && !run.terminal && typeof run.cancelRequestedAt === "number") {
+      return "cancelling";
+    }
+    return run && !run.terminal ? "running" : "idle";
+  }
+
   async ingestNodeEvent(nodeId: string, evt: NodeEvent): Promise<boolean> {
     switch (evt.event) {
       case "acp.worker.event": {
@@ -458,19 +473,25 @@ export class AcpGatewayNodeRuntime {
           leaseId: lease.leaseId,
           leaseEpoch: lease.leaseEpoch,
         });
+        const reconciledState = await this.normalizeReconnectStatusState({
+          sessionKey: lease.sessionKey,
+          state: status.state,
+        });
         if (
           status.nodeId === params.nodeId &&
           status.sessionKey === lease.sessionKey &&
           status.leaseId === lease.leaseId &&
           status.leaseEpoch === lease.leaseEpoch &&
-          (status.state === "idle" || status.state === "running" || status.state === "cancelling")
+          (reconciledState === "idle" ||
+            reconciledState === "running" ||
+            reconciledState === "cancelling")
         ) {
           const next = await this.store.reconcileSuspectLease({
             sessionKey: lease.sessionKey,
             nodeId: params.nodeId,
             leaseId: lease.leaseId,
             leaseEpoch: lease.leaseEpoch,
-            state: status.state,
+            state: reconciledState,
             now,
             ...(status.nodeRuntimeSessionId
               ? { nodeRuntimeSessionId: status.nodeRuntimeSessionId }
