@@ -70,4 +70,23 @@ describe("command secret target ids", () => {
     expect(scoped.allowedPaths?.has("channels.discord.accounts.ops.token")).toBe(true);
     expect(scoped.allowedPaths?.has("channels.discord.accounts.chat.token")).toBe(false);
   });
+
+  it("keeps account-scoped allowedPaths as an empty set when scoped target paths are absent", () => {
+    const scoped = getScopedChannelsCommandSecretTargets({
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              ops: { enabled: true },
+            },
+          },
+        },
+      } as never,
+      channel: "custom-plugin-channel-without-secret-targets",
+      accountId: "ops",
+    });
+
+    expect(scoped.allowedPaths).toBeDefined();
+    expect(scoped.allowedPaths?.size).toBe(0);
+  });
 });

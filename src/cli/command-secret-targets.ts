@@ -98,7 +98,7 @@ export function getScopedChannelsCommandSecretTargets(params: {
       allowedPaths.add(target.path);
     }
   }
-  return allowedPaths.size > 0 ? { targetIds, allowedPaths } : { targetIds };
+  return { targetIds, allowedPaths };
 }
 
 export function getMemoryCommandSecretTargetIds(): Set<string> {
