@@ -298,7 +298,7 @@ describe("web inbound helpers", () => {
         },
       } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
     ).toBe(
-      '<media:gif title="Say &quot;Hello&quot; To My Little Friend" source="https://example.com/gif?a=1&b=&gt;2">',
+      '<media:gif title="Say &quot;Hello&quot; To My Little Friend" source="https://example.com/gif?a=1&amp;b=&gt;2">',
     );
   });
 
