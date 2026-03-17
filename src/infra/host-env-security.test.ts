@@ -48,6 +48,16 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
     expect(isDangerousHostEnvVarName("ld_preload")).toBe(true);
     expect(isDangerousHostEnvVarName("BASH_FUNC_echo%%")).toBe(true);
+    expect(isDangerousHostEnvVarName("JAVA_TOOL_OPTIONS")).toBe(true);
+    expect(isDangerousHostEnvVarName("java_tool_options")).toBe(true);
+    expect(isDangerousHostEnvVarName("_JAVA_OPTIONS")).toBe(true);
+    expect(isDangerousHostEnvVarName("_java_options")).toBe(true);
+    expect(isDangerousHostEnvVarName("JDK_JAVA_OPTIONS")).toBe(true);
+    expect(isDangerousHostEnvVarName("jdk_java_options")).toBe(true);
+    expect(isDangerousHostEnvVarName("PYTHONBREAKPOINT")).toBe(true);
+    expect(isDangerousHostEnvVarName("pythonbreakpoint")).toBe(true);
+    expect(isDangerousHostEnvVarName("DOTNET_STARTUP_HOOKS")).toBe(true);
+    expect(isDangerousHostEnvVarName("dotnet_startup_hooks")).toBe(true);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
   });
