@@ -460,30 +460,30 @@ jobs:
         run: pre-commit run --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          BASE="$(
-            python - <<'PY'
-            import json
-            import os
+          if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base SHA detected; skipping zizmor."
+            exit 0
+          fi
 
-            with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as fh:
-                event = json.load(fh)
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} is unavailable; skipping zizmor."
+            exit 0
+          fi
 
-            if os.environ["GITHUB_EVENT_NAME"] == "push":
-                print(event["before"])
-            else:
-                print(event["pull_request"]["base"]["sha"])
-            PY
-          )"
-
-          mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          mapfile -t workflow_files < <(
+            git diff --name-only "${BASE_SHA}" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
+          )
           if [ "${#workflow_files[@]}" -eq 0 ]; then
             echo "No workflow changes detected; skipping zizmor."
             exit 0
           fi
 
+          printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
           pre-commit run zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
