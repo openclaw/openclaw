@@ -48,7 +48,7 @@ export async function runMediaUnderstandingFile(
     return { text: undefined };
   }
 
-  const providerRegistry = buildProviderRegistry();
+  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: [path.dirname(params.filePath)],
   });
