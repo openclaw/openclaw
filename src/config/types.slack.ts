@@ -48,6 +48,8 @@ export type SlackChannelConfig = {
   incidentIgnoreResolved?: boolean;
   /** Cooldown window for duplicate incident ingress suppression. */
   incidentDedupeWindowSeconds?: number;
+  /** When set, bot messages whose body does not start with this exact case-sensitive prefix are dropped. Human messages are unaffected. */
+  incidentBotAllowPrefix?: string;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

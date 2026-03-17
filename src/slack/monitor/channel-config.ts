@@ -16,6 +16,7 @@ export type SlackChannelConfigResolved = {
   allowHumanThreadFollowups: boolean;
   incidentIgnoreResolved: boolean;
   incidentDedupeWindowSeconds: number;
+  incidentBotAllowPrefix?: string;
   allowBots?: boolean;
   users?: Array<string | number>;
   skills?: string[];
@@ -33,6 +34,7 @@ export type SlackChannelConfigEntry = {
   allowHumanThreadFollowups?: boolean;
   incidentIgnoreResolved?: boolean;
   incidentDedupeWindowSeconds?: number;
+  incidentBotAllowPrefix?: string;
   allowBots?: boolean;
   users?: Array<string | number>;
   skills?: string[];
@@ -200,6 +202,10 @@ export function resolveSlackChannelConfig(params: {
       fallback?.incidentDedupeWindowSeconds,
       INCIDENT_POLICY_DEFAULTS.incidentDedupeWindowSeconds,
     ) ?? INCIDENT_POLICY_DEFAULTS.incidentDedupeWindowSeconds;
+  const incidentBotAllowPrefix = firstDefined(
+    resolved.incidentBotAllowPrefix,
+    fallback?.incidentBotAllowPrefix,
+  );
   const allowBots = firstDefined(resolved.allowBots, fallback?.allowBots);
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
@@ -212,6 +218,7 @@ export function resolveSlackChannelConfig(params: {
     allowHumanThreadFollowups,
     incidentIgnoreResolved,
     incidentDedupeWindowSeconds,
+    incidentBotAllowPrefix,
     allowBots,
     users,
     skills,

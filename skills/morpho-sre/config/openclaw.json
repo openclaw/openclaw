@@ -400,6 +400,7 @@
           "allowHumanThreadFollowups": true,
           "incidentIgnoreResolved": true,
           "incidentDedupeWindowSeconds": 21600,
+          "incidentBotAllowPrefix": "New incident",
           "allowBots": true,
           "skills": ["morpho-sre"],
           "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
@@ -412,6 +413,7 @@
           "allowHumanThreadFollowups": true,
           "incidentIgnoreResolved": true,
           "incidentDedupeWindowSeconds": 21600,
+          "incidentBotAllowPrefix": "New incident",
           "allowBots": true,
           "skills": ["morpho-sre"],
           "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
@@ -424,6 +426,7 @@
           "allowHumanThreadFollowups": true,
           "incidentIgnoreResolved": true,
           "incidentDedupeWindowSeconds": 21600,
+          "incidentBotAllowPrefix": "New incident",
           "allowBots": true,
           "skills": ["morpho-sre"],
           "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
