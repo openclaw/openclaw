@@ -115,6 +115,17 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
   },
 ];
 
+const LOCAL_EXTENSION_API_BARREL_GUARDS = [
+  "device-pair",
+  "diagnostics-otel",
+  "diffs",
+  "llm-task",
+  "memory-lancedb",
+  "talk-voice",
+  "thread-ownership",
+  "voice-call",
+] as const;
+
 function readSource(path: string): string {
   return readFileSync(resolve(ROOT_DIR, "..", path), "utf8");
 }
@@ -216,6 +227,36 @@ function collectCoreSourceFiles(): string[] {
   return files;
 }
 
+function collectExtensionFiles(extensionId: string): string[] {
+  const extensionDir = resolve(ROOT_DIR, "..", "extensions", extensionId);
+  const files: string[] = [];
+  const stack = [extensionDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const fullPath = resolve(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
+          continue;
+        }
+        stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
+        continue;
+      }
+      if (entry.name.endsWith(".d.ts")) {
+        continue;
+      }
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
 function collectExtensionImports(text: string): string[] {
   return [...text.matchAll(/["']([^"']*extensions\/[^"']+\.(?:[cm]?[jt]sx?))["']/g)].map(
     (match) => match[1] ?? "",
@@ -297,6 +338,28 @@ describe("channel import guardrails", () => {
   it("keeps extension-to-extension imports limited to approved public seams", () => {
     for (const file of collectExtensionSourceFiles()) {
       expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readFileSync(file, "utf8")));
+    }
+  });
+
+  it("keeps internalized extension helper seams behind local api barrels", () => {
+    for (const extensionId of LOCAL_EXTENSION_API_BARREL_GUARDS) {
+      for (const file of collectExtensionFiles(extensionId)) {
+        const normalized = file.replaceAll("\\", "/");
+        if (
+          normalized.endsWith("/api.ts") ||
+          normalized.includes(".test.") ||
+          normalized.includes(".spec.") ||
+          normalized.includes(".fixture.") ||
+          normalized.includes(".snap")
+        ) {
+          continue;
+        }
+        const text = readFileSync(file, "utf8");
+        expect(
+          text,
+          `${normalized} should import ${extensionId} helpers via the local api barrel`,
+        ).not.toMatch(new RegExp(`["']openclaw/plugin-sdk/${extensionId}["']`, "u"));
+      }
     }
   });
 });
