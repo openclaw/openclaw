@@ -25,10 +25,6 @@ type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginRoot?: string;
 };
 
-type PluginCommandRegistryLoadState = {
-  moduleUrls: Set<string>;
-};
-
 // Registry of plugin commands
 const pluginCommands: Map<string, RegisteredPluginCommand> = new Map();
 
@@ -37,38 +33,6 @@ let registryLocked = false;
 
 // Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
-const PLUGIN_COMMAND_REGISTRY_LOAD_STATE_KEY = Symbol.for("openclaw.pluginCommandRegistryLoads");
-
-function getPluginCommandRegistryLoadState(): PluginCommandRegistryLoadState {
-  const globalState = globalThis as typeof globalThis & {
-    [PLUGIN_COMMAND_REGISTRY_LOAD_STATE_KEY]?: PluginCommandRegistryLoadState;
-  };
-  if (!globalState[PLUGIN_COMMAND_REGISTRY_LOAD_STATE_KEY]) {
-    globalState[PLUGIN_COMMAND_REGISTRY_LOAD_STATE_KEY] = {
-      moduleUrls: new Set(),
-    };
-  }
-  return globalState[PLUGIN_COMMAND_REGISTRY_LOAD_STATE_KEY];
-}
-
-function recordPluginCommandRegistryModuleLoad(moduleUrl: string = import.meta.url): void {
-  const state = getPluginCommandRegistryLoadState();
-  const normalizedModuleUrl = moduleUrl.trim() || "<unknown>";
-  state.moduleUrls.add(normalizedModuleUrl);
-  if (
-    process.env.OPENCLAW_THROW_ON_DUPLICATE_PLUGIN_COMMAND_REGISTRY !== "0" &&
-    state.moduleUrls.size > 1
-  ) {
-    throw new Error(
-      `Duplicate plugin command registry modules loaded:\n${Array.from(state.moduleUrls)
-        .toSorted()
-        .map((url) => `- ${url}`)
-        .join("\n")}`,
-    );
-  }
-}
-
-recordPluginCommandRegistryModuleLoad();
 
 /**
  * Reserved command names that plugins cannot override.
@@ -515,8 +479,4 @@ export function getPluginCommandSpecs(provider?: string): Array<{
 
 export const __testing = {
   resolveBindingConversationFromCommand,
-  recordPluginCommandRegistryModuleLoad,
-  resetPluginCommandRegistryModuleLoads: () => {
-    getPluginCommandRegistryLoadState().moduleUrls.clear();
-  },
 };

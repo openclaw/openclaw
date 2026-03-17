@@ -3,7 +3,6 @@ import { discordPlugin } from "../../../extensions/discord/src/channel.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -124,7 +123,6 @@ vi.mock("./route-reply.js", () => ({
 
 vi.mock("./abort.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
-  isAbortRequestText: () => false,
   formatAbortReplyText: (stoppedSubagents?: number) => {
     if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
       return "⚙️ Agent was aborted.";
@@ -298,7 +296,6 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.loadSessionStore.mockClear();
     sessionStoreMocks.resolveStorePath.mockClear();
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
-    clearPluginCommands();
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
@@ -2128,70 +2125,6 @@ describe("dispatchReplyFromConfig", () => {
     );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
-  });
-
-  it("lets same-plugin slash commands bypass targeted inbound_claim for plugin-owned bindings", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "binding-command-1",
-      targetSessionKey: "plugin-binding:codex:command123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:command",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginName: "Codex App Server",
-        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
-        detachHint: "/codex_detach",
-      },
-    } satisfies SessionBindingRecord);
-    registerPluginCommand("openclaw-codex-app-server", {
-      name: "codex_status",
-      description: "Show status.",
-      acceptsArgs: true,
-      handler: async () => ({ text: "plugin command handled" }),
-    });
-
-    const dispatcher = createDispatcher();
-
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        OriginatingTo: "discord:channel:command",
-        To: "discord:channel:command",
-        AccountId: "default",
-        MessageSid: "msg-command-1",
-        SessionKey: "agent:main:discord:channel:command",
-        CommandBody: "/codex_status",
-        RawBody: "/codex_status",
-        Body: "/codex_status",
-        CommandAuthorized: true,
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-    });
-
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-1");
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "plugin command handled" }),
-    );
   });
 
   it("routes plugin-owned Discord DM bindings to the owning plugin before generic inbound claim broadcast", async () => {

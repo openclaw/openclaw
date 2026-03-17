@@ -26,7 +26,6 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
-import { matchPluginCommand } from "../../plugins/commands.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -44,7 +43,6 @@ import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
-import { buildCommandContext } from "./commands-context.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -326,91 +324,65 @@ export async function dispatchReplyFromConfig(params: {
     logVerbose(
       `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
     );
-    const commandSource =
-      typeof ctx.BodyForCommands === "string"
-        ? ctx.BodyForCommands
-        : typeof ctx.CommandBody === "string"
-          ? ctx.CommandBody
-          : typeof ctx.RawBody === "string"
-            ? ctx.RawBody
-            : typeof ctx.Body === "string"
-              ? ctx.Body
-              : "";
-    const pluginCommandMatch = matchPluginCommand(
-      buildCommandContext({
-        ctx,
-        cfg,
-        isGroup,
-        triggerBodyNormalized: commandSource,
-        commandAuthorized:
-          typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
-      }).commandBodyNormalized,
-    );
-    if (pluginCommandMatch?.command.pluginId === pluginOwnedBinding.pluginId) {
-      logVerbose(
-        `plugin-bound inbound bypassed targeted claim for plugin command ${pluginCommandMatch.command.name} plugin=${pluginOwnedBinding.pluginId}`,
-      );
-    } else {
-      const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
-        ? await hookRunner.runInboundClaimForPluginOutcome(
-            pluginOwnedBinding.pluginId,
-            inboundClaimEvent,
-            inboundClaimContext,
-          )
-        : (() => {
-            const pluginLoaded =
-              getGlobalPluginRegistry()?.plugins.some(
-                (plugin) => plugin.id === pluginOwnedBinding.pluginId && plugin.status === "loaded",
-              ) ?? false;
-            return pluginLoaded
-              ? ({ status: "no_handler" } as const)
-              : ({ status: "missing_plugin" } as const);
-          })();
+    const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
+      ? await hookRunner.runInboundClaimForPluginOutcome(
+          pluginOwnedBinding.pluginId,
+          inboundClaimEvent,
+          inboundClaimContext,
+        )
+      : (() => {
+          const pluginLoaded =
+            getGlobalPluginRegistry()?.plugins.some(
+              (plugin) => plugin.id === pluginOwnedBinding.pluginId && plugin.status === "loaded",
+            ) ?? false;
+          return pluginLoaded
+            ? ({ status: "no_handler" } as const)
+            : ({ status: "missing_plugin" } as const);
+        })();
 
-      switch (targetedClaimOutcome.status) {
-        case "handled": {
-          markIdle("plugin_binding_dispatch");
-          recordProcessed("completed", { reason: "plugin-bound-handled" });
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
-        }
-        case "missing_plugin":
-        case "no_handler": {
-          pluginFallbackReason =
-            targetedClaimOutcome.status === "missing_plugin"
-              ? "plugin-bound-fallback-missing-plugin"
-              : "plugin-bound-fallback-no-handler";
-          if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
-            const didSendNotice = await sendBindingNotice(
-              { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
-              "additive",
-            );
-            if (didSendNotice) {
-              markPluginBindingFallbackNoticeShown(pluginOwnedBinding.bindingId);
-            }
+    switch (targetedClaimOutcome.status) {
+      case "handled": {
+        markIdle("plugin_binding_dispatch");
+        recordProcessed("completed", { reason: "plugin-bound-handled" });
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+      }
+      case "missing_plugin":
+      case "no_handler": {
+        pluginFallbackReason =
+          targetedClaimOutcome.status === "missing_plugin"
+            ? "plugin-bound-fallback-missing-plugin"
+            : "plugin-bound-fallback-no-handler";
+        if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
+          const didSendNotice = await sendBindingNotice(
+            { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
+            "additive",
+          );
+          if (didSendNotice) {
+            markPluginBindingFallbackNoticeShown(pluginOwnedBinding.bindingId);
           }
-          break;
         }
-        case "declined": {
-          await sendBindingNotice(
-            { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
-            "terminal",
-          );
-          markIdle("plugin_binding_declined");
-          recordProcessed("completed", { reason: "plugin-bound-declined" });
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
-        }
-        case "error": {
-          logVerbose(
-            `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
-          );
-          await sendBindingNotice(
-            { text: buildPluginBindingErrorText(pluginOwnedBinding) },
-            "terminal",
-          );
-          markIdle("plugin_binding_error");
-          recordProcessed("completed", { reason: "plugin-bound-error" });
-          return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
-        }
+        break;
+      }
+      case "declined": {
+        await sendBindingNotice(
+          { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
+          "terminal",
+        );
+        markIdle("plugin_binding_declined");
+        recordProcessed("completed", { reason: "plugin-bound-declined" });
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+      }
+      case "error": {
+        logVerbose(
+          `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
+        );
+        await sendBindingNotice(
+          { text: buildPluginBindingErrorText(pluginOwnedBinding) },
+          "terminal",
+        );
+        markIdle("plugin_binding_error");
+        recordProcessed("completed", { reason: "plugin-bound-error" });
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
       }
     }
   }

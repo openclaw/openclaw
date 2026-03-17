@@ -107,18 +107,6 @@ describe("registerPluginCommand", () => {
     expect(getPluginCommandSpecs("slack")).toEqual([]);
   });
 
-  it("trips on duplicate bundled command registry modules by default", () => {
-    __testing.resetPluginCommandRegistryModuleLoads();
-    try {
-      __testing.recordPluginCommandRegistryModuleLoad("file:///dist/registry-a.js");
-      expect(() =>
-        __testing.recordPluginCommandRegistryModuleLoad("file:///dist/registry-b.js"),
-      ).toThrow(/Duplicate plugin command registry modules loaded/);
-    } finally {
-      __testing.resetPluginCommandRegistryModuleLoads();
-    }
-  });
-
   it("resolves Discord DM command bindings with the user target prefix intact", () => {
     expect(
       __testing.resolveBindingConversationFromCommand({
