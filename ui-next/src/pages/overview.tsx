@@ -167,7 +167,7 @@ export function OverviewPage() {
     const checkOnboarding = async () => {
       try {
         const result = await sendRpc<{ status: string }>("onboarding.status");
-        if (result.status === "pending") {
+        if (result.status === "pending" || result.status === "in_progress") {
           void navigate("/onboarding", { replace: true });
         }
       } catch {
