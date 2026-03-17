@@ -121,6 +121,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "diagnostics-otel",
   "diffs",
   "llm-task",
+  "line",
   "memory-lancedb",
   "synology-chat",
   "talk-voice",

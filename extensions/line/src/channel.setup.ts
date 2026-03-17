@@ -4,12 +4,8 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
   type ResolvedLineAccount,
-} from "openclaw/plugin-sdk/line";
-import {
-  listLineAccountIds,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-} from "openclaw/plugin-sdk/line";
+} from "../api.js";
+import { listLineAccountIds, resolveDefaultLineAccountId, resolveLineAccount } from "../api.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
