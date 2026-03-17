@@ -13,73 +13,108 @@ type PaletteItem = {
   description?: string;
 };
 
-const SLASH_PALETTE_ITEMS: PaletteItem[] = SLASH_COMMANDS.map((command) => ({
-  id: `slash:${command.name}`,
-  label: `/${command.name}`,
-  icon: command.icon ?? "terminal",
-  category: "search",
-  action: `/${command.name}`,
-  description: command.description,
-}));
+const CMD_DESC_KEYS: Record<string, string> = {
+  new: "cmdNew",
+  reset: "cmdReset",
+  compact: "cmdCompact",
+  stop: "cmdStop",
+  clear: "cmdClear",
+  focus: "cmdFocus",
+  model: "cmdModel",
+  think: "cmdThink",
+  verbose: "cmdVerbose",
+  fast: "cmdFast",
+  help: "cmdHelp",
+  status: "cmdStatus",
+  export: "cmdExport",
+  usage: "cmdUsage",
+  agents: "cmdAgents",
+  kill: "cmdKill",
+  skill: "cmdSkill",
+  steer: "cmdSteer",
+};
 
-const PALETTE_ITEMS: PaletteItem[] = [
-  ...SLASH_PALETTE_ITEMS,
-  {
+function getCmdDescription(name: string, fallback: string): string {
+  const key = CMD_DESC_KEYS[name];
+  return key ? t(`common.${key}`) : fallback;
+}
+
+// Lazy evaluation wrapper for command descriptions
+const SLASH_PALETTE_ITEMS: (() => PaletteItem)[] = SLASH_COMMANDS.map((command) => {
+  return () => ({
+    id: `slash:${command.name}`,
+    label: `/${command.name}`,
+    icon: command.icon ?? "terminal",
+    category: "search",
+    action: `/${command.name}`,
+    description: getCmdDescription(command.name, command.description),
+  });
+});
+
+// Lazy evaluation wrapper for nav items to support i18n
+const NAV_PALETTE_ITEMS: (() => PaletteItem)[] = [
+  () => ({
     id: "nav-overview",
-    label: "Overview",
+    label: t("nav.overview"),
     icon: "barChart",
     category: "navigation",
     action: "nav:overview",
-  },
-  {
+  }),
+  () => ({
     id: "nav-sessions",
-    label: "Sessions",
+    label: t("nav.sessions"),
     icon: "fileText",
     category: "navigation",
     action: "nav:sessions",
-  },
-  {
+  }),
+  () => ({
     id: "nav-cron",
-    label: "Scheduled",
+    label: t("nav.scheduled"),
     icon: "scrollText",
     category: "navigation",
     action: "nav:cron",
-  },
-  { id: "nav-skills", label: "Skills", icon: "zap", category: "navigation", action: "nav:skills" },
-  {
+  }),
+  () => ({
+    id: "nav-skills",
+    label: t("nav.skills"),
+    icon: "zap",
+    category: "navigation",
+    action: "nav:skills",
+  }),
+  () => ({
     id: "nav-config",
-    label: "Settings",
+    label: t("nav.settings"),
     icon: "settings",
     category: "navigation",
     action: "nav:config",
-  },
-  {
+  }),
+  () => ({
     id: "nav-agents",
-    label: "Agents",
+    label: t("nav.agents"),
     icon: "folder",
     category: "navigation",
     action: "nav:agents",
-  },
-  {
+  }),
+  () => ({
     id: "skill-shell",
-    label: "Shell Command",
+    label: t("nav.shellCommand"),
     icon: "monitor",
     category: "skills",
     action: "/skill shell",
-    description: "Run shell",
-  },
-  {
+    description: t("nav.shellCommandDesc") || "Run shell",
+  }),
+  () => ({
     id: "skill-debug",
-    label: "Debug Mode",
+    label: t("nav.debugMode"),
     icon: "bug",
     category: "skills",
     action: "/verbose full",
-    description: "Toggle debug",
-  },
+    description: t("nav.debugModeDesc") || "Toggle debug",
+  }),
 ];
 
-export function getPaletteItems(): readonly PaletteItem[] {
-  return PALETTE_ITEMS;
+function getPaletteItems(): PaletteItem[] {
+  return [...SLASH_PALETTE_ITEMS.map((fn) => fn()), ...NAV_PALETTE_ITEMS.map((fn) => fn())];
 }
 
 export type CommandPaletteProps = {
@@ -94,11 +129,12 @@ export type CommandPaletteProps = {
 };
 
 function filteredItems(query: string): PaletteItem[] {
+  const items = getPaletteItems();
   if (!query) {
-    return PALETTE_ITEMS;
+    return items;
   }
   const q = query.toLowerCase();
-  return PALETTE_ITEMS.filter(
+  return items.filter(
     (item) =>
       item.label.toLowerCase().includes(q) ||
       (item.description?.toLowerCase().includes(q) ?? false),
@@ -175,10 +211,10 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
   }
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  search: "Search",
-  navigation: "Navigation",
-  skills: "Skills",
+const CATEGORY_LABELS: Record<string, () => string> = {
+  search: () => t("common.search"),
+  navigation: () => t("nav.navigation"),
+  skills: () => t("nav.skills"),
 };
 
 function focusInput(el: Element | undefined) {
@@ -225,7 +261,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                 </div>`
               : grouped.map(
                   ([category, groupedItems]) => html`
-                <div class="cmd-palette__group-label">${CATEGORY_LABELS[category] ?? category}</div>
+                <div class="cmd-palette__group-label">${CATEGORY_LABELS[category]?.() ?? category}</div>
                 ${groupedItems.map((item) => {
                   const globalIndex = items.indexOf(item);
                   const isActive = globalIndex === props.activeIndex;
