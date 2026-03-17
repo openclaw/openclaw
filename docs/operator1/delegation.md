@@ -13,8 +13,8 @@ Tasks flow top-down through the agent hierarchy. Each level adds detail, refines
 | Rule             | Flow                              | Description                                                          |
 | ---------------- | --------------------------------- | -------------------------------------------------------------------- |
 | Tier 1 to Tier 2 | Operator1 → Neo/Morpheus/Trinity  | Operator1 classifies by department and delegates to the C-suite head |
-| Tier 2 to Tier 3 | Neo → Tank, Morpheus → Ink, etc.  | Department heads assign specific workers                             |
-| Tier 3 to ACP    | Tank → Claude Code                | Workers spawn Claude Code sessions for code-level execution          |
+| Tier 2 to Tier 3 | Neo/Morph/Trin → Specialist       | Department heads spawn workers from the Persona Registry             |
+| Tier 3 to ACP    | Specialist → Claude Code          | Workers spawn Claude Code sessions for code-level execution          |
 | Cross-department | Engineering → Operator1 → Finance | Always routes back through Operator1                                 |
 
 ## Task classification flow
@@ -39,7 +39,7 @@ flowchart TD
 
 For multi-department tasks, Operator1 breaks the work into department-scoped subtasks and delegates each one separately, tracking progress across all.
 
-## Spawning via sessions_spawn
+## Spawning via sessions.spawn
 
 Delegation happens through the `sessions.spawn` RPC call. Each spawn creates an isolated agent session with explicit context.
 
@@ -47,29 +47,29 @@ Delegation happens through the `sessions.spawn` RPC call. Each spawn creates an 
 
 ```json
 {
-  "agentId": "neo",
+  "agentId": "backend-architect",
   "task": "[Project: subzero | Path: ~/dev/subzero-app]\n[Task]: Add rate limiting to the API endpoints",
-  "label": "neo-subzero-ratelimit-1709712060000",
+  "label": "backend-subzero-ratelimit-1709712060000",
   "runTimeoutSeconds": 1800
 }
 ```
 
 | Field               | Description                                                                            |
 | ------------------- | -------------------------------------------------------------------------------------- |
-| `agentId`           | The agent to spawn (must be in the spawner's `subagents` list)                         |
+| `agentId`           | The persona slug to spawn (e.g., `backend-architect`, `seo-specialist`)                |
 | `task`              | The task description with project context                                              |
 | `label`             | Human-readable label for tracking (convention: `{agent}-{project}-{task}-{timestamp}`) |
 | `runTimeoutSeconds` | Maximum session duration (default: 1800 = 30 minutes)                                  |
 
 ### Label conventions
 
-Labels follow the pattern: `{agentId}-{project}-{taskSlug}-{timestamp}`
+Labels follow the pattern: `{agentSlug}-{project}-{taskSlug}-{timestamp}`
 
 Examples:
 
-- `neo-subzero-ratelimit-1709712060000`
-- `morpheus-website-blogpost-1709712060000`
-- `trinity-q1-budget-review-1709712060000`
+- `backend-architect-subzero-ratelimit-1709712060000`
+- `content-creator-website-blogpost-1709712060000`
+- `data-analyst-q1-budget-review-1709712060000`
 
 ## Context passing
 
@@ -98,14 +98,15 @@ For ACP sessions, use cwd: {project-path}.
 
 3. Neo receives, reads SOUL.md + AGENTS.md, classifies as Medium task:
    - Creates requirements brief
-   - Selects Tank (Backend Engineer)
-   - Spawns Tank with refined context:
+   - Accesses Persona Registry
+   - Selects "backend-architect"
+   - Spawns backend-architect with refined context:
      task: "[Project: subzero | Path: ~/dev/subzero-app]
             [Requirements]: Add express-rate-limit middleware to all API routes.
             Rate: 100 requests/15min per IP. Return 429 with retry-after header.
             [Task]: Implement rate limiting per the requirements above."
 
-4. Tank receives, spawns Claude Code via ACP:
+4. Worker receives, spawns Claude Code via ACP:
    - cwd: ~/dev/subzero-app
    - Implements the actual code changes
    - Reports results back to Neo
@@ -123,7 +124,7 @@ The system enforces `maxSpawnDepth` to prevent runaway delegation chains:
 Level 0: Human (CEO)
 Level 1: Operator1 (COO)
 Level 2: Neo/Morpheus/Trinity (Department Heads)
-Level 3: Tank/Ink/Oracle (Workers)
+Level 3: Dynamic Specialists (Workers)
 Level 4: Claude Code (ACP)
 ```
 

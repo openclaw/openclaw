@@ -47,7 +47,7 @@ Daily notes capture raw session data — what the agent did, what it learned, an
 ## Sessions
 
 - Reviewed SubZero rate limiting PR — approved with minor changes
-- Delegated database migration to Tank — completed in 25 min
+- Delegated database migration to `backend-architect` — completed in 25 min
 
 ## Decisions
 
@@ -57,7 +57,7 @@ Daily notes capture raw session data — what the agent did, what it learned, an
 ## Notes
 
 - SubZero API has 12 endpoints, all now rate-limited
-- Tank works efficiently on middleware tasks — good fit for similar work
+- `backend-architect` works efficiently on middleware tasks — good fit for similar work
 ```
 
 **Rules:**
@@ -100,9 +100,9 @@ MEMORY.md holds curated, distilled knowledge that should persist across sessions
 
 ## Worker Fit
 
-- Tank: excellent for middleware, API routes, database migrations
-- Mouse: strong at research tasks, good at finding edge cases
-- Spark: fast with React components, prefers Tailwind
+- `backend-architect`: excellent for middleware, API routes, database migrations
+- `ux-researcher`: strong at research tasks, good at finding edge cases
+- `tailwind-expert`: fast with React components, prefers Tailwind
 
 ## Human Preferences
 

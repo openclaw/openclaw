@@ -27,9 +27,8 @@ flowchart TD
     end
 
     subgraph Tier3["Tier 3 — Workers"]
-        ENG["Tank, Dozer, Mouse, Spark, Cipher, Relay, Ghost, Binary, Kernel, Prism"]
-        MKT["Niobe, Switch, Rex, Ink, Vibe, Lens, Echo, Nova, Pulse, Blaze"]
-        FIN["Oracle, Seraph, Zee, Ledger, Vault, Shield, Trace, Quota, Merit, Beacon"]
+        PL["Persona Registry (147+ Personas)"]
+        WORKER["Specialist Worker (Dynamic Spawn)"]
     end
 
     subgraph Execution["Execution Layer"]
@@ -40,12 +39,11 @@ flowchart TD
     OP1 --> NEO
     OP1 --> MORPH
     OP1 --> TRIN
-    NEO --> ENG
-    MORPH --> MKT
-    TRIN --> FIN
-    ENG --> ACP
-    MKT --> ACP
-    FIN --> ACP
+    NEO -.->|Select Persona| WORKER
+    MORPH -.->|Select Persona| WORKER
+    TRIN -.->|Select Persona| WORKER
+    PL -.->|Inject Context| WORKER
+    WORKER --> ACP
 ```
 
 ## Core components
@@ -105,24 +103,24 @@ The database is created automatically and updates to the latest version on start
 
 The hierarchy enforces structured delegation with clear boundaries:
 
-| Tier       | Role               | Agents                         | Model                   | Delegation                     |
-| ---------- | ------------------ | ------------------------------ | ----------------------- | ------------------------------ |
-| **Tier 1** | Coordinator        | Operator1                      | Strongest available     | Delegates to Tier 2 only       |
-| **Tier 2** | Department heads   | Neo, Morpheus, Trinity         | Strong (e.g., glm-5)    | Delegates to any Tier 3 worker |
-| **Tier 3** | Specialist workers | 30 agents across 3 departments | Capable (e.g., glm-4.7) | Spawns Claude Code via ACP     |
+| Tier       | Role               | Agents                 | Model                | Delegation                    |
+| ---------- | ------------------ | ---------------------- | -------------------- | ----------------------------- |
+| **Tier 1** | Coordinator        | Operator1              | Strongest available  | Delegates to Tier 2 only      |
+| **Tier 2** | Department heads   | Neo, Morpheus, Trinity | Strong (e.g., glm-5) | Spawns persona-based workers  |
+| **Tier 3** | Specialist workers | Dynamic Persona Spawns | Capable              | Executes task via Claude Code |
 
 ### Spawn depth
 
 The system enforces `maxSpawnDepth: 4` to prevent runaway delegation chains:
 
 ```
-Human → Operator1 → Neo → Tank → Claude Code (ACP)
-  0         1         2      3         4
+Human → Operator1 → Neo → backend-architect → Claude Code (ACP)
+  0         1         2          3               4
 ```
 
 ### Shared talent pool
 
-Tier 3 workers are available to **all** department heads, not just their home department. Neo can spawn Oracle (finance) for data analysis, and Trinity can spawn Tank (engineering) for automation tasks. Cross-department spawning is configured via the `subagents` field on each Tier 2 agent.
+Tier 3 workers are available to **all** department heads, not just their home department. Neo can spawn a `data-analyst` (finance) for data analysis, and Trinity can spawn a `backend-architect` (engineering) for automation tasks. Cross-department spawning is enabled by selecting personas from the Registry.
 
 ## Integration stack
 
@@ -146,7 +144,7 @@ flowchart LR
     subgraph Agents["Agent Layer"]
         OP1["Operator1"]
         Heads["Department Heads"]
-        Workers["Workers"]
+        Workers["Dynamic Workers"]
     end
 
     subgraph Backend["Execution"]

@@ -15,45 +15,46 @@ sequenceDiagram
     participant H as Human (CEO)
     participant O as Operator1
     participant N as Neo (CTO)
-    participant T as Tank (Worker)
+    participant P as Persona Registry
+    participant W as Specialist (Worker)
     participant A as ACP (Claude Code)
 
     H->>O: "Add rate limiting to SubZero"
     O->>O: Classify → Engineering
     O->>N: sessions.spawn(neo, task)
     N->>N: Read SOUL.md, AGENTS.md
-    N->>N: Classify task (Medium)
-    N->>N: Create requirements brief
-    N->>T: sessions.spawn(tank, refined task)
-    T->>A: ACP session (cwd: project path)
+    N->>P: Select "backend-architect"
+    P-->>N: Persona Definition
+    N->>W: sessions.spawn(backend-architect, refined task)
+    W->>A: ACP session (cwd: project path)
     A->>A: Implement code changes
-    A-->>T: Results
-    T-->>N: Report
+    A-->>W: Results
+    W-->>N: Report
     N-->>O: Report
     O-->>H: Status update
 ```
 
 ## sessions.spawn
 
-The `sessions.spawn` RPC creates a new agent session with explicit task context.
+The `sessions.spawn` RPC creates a new agent session with explicit task context. In Operator1, Tier 2 agents use this to spawn specialists directly from the **Persona Registry**.
 
 ### Parameters
 
 ```json
 {
-  "agentId": "neo",
+  "agentId": "backend-architect",
   "task": "[Project: subzero | Path: ~/dev/subzero-app]\n[Task]: Add rate limiting to the API endpoints",
-  "label": "neo-subzero-ratelimit-1709712060000",
+  "label": "backend-subzero-ratelimit-1709712060000",
   "runTimeoutSeconds": 1800
 }
 ```
 
-| Parameter           | Type   | Required | Description                                             |
-| ------------------- | ------ | -------- | ------------------------------------------------------- |
-| `agentId`           | string | Yes      | Target agent ID (must be in spawner's `subagents` list) |
-| `task`              | string | Yes      | Task description with structured context                |
-| `label`             | string | No       | Human-readable session label for tracking               |
-| `runTimeoutSeconds` | number | No       | Max session duration (default: 1800 = 30 min)           |
+| Parameter           | Type   | Required | Description                                       |
+| ------------------- | ------ | -------- | ------------------------------------------------- |
+| `agentId`           | string | Yes      | Persona slug to spawn (e.g., `backend-architect`) |
+| `task`              | string | Yes      | Task description with structured context          |
+| `label`             | string | No       | Human-readable session label for tracking         |
+| `runTimeoutSeconds` | number | No       | Max session duration (default: 1800 = 30 min)     |
 
 ### Subagent validation
 

@@ -6,7 +6,7 @@ title: "Configuration"
 
 # Configuration
 
-Operator1 is configured through JSON files. These define the agent hierarchy, gateway behavior, channels, and how memory is stored.
+Operator1 uses a **SQL-first configuration model** with JSON fallbacks. While primary logic and hierarchies can be defined in JSON files, all runtime settings, UI overrides, and project bindings are persisted to a unified SQLite database (`operator1.db`).
 
 ## Visual Overview
 
@@ -52,13 +52,15 @@ The database auto-updates to the latest schema (current: v10) on startup. Run `o
 
 ### Config priority
 
+The system has migrated to a SQL-first configuration model. Settings changed via the **Configuration tab** in the UI or the **Onboarding GUI** are persisted to `operator1.db`.
+
 Settings are checked in this order:
 
-1. SQLite (if set)
-2. openclaw.json
-3. Built-in defaults
+1. **SQLite (`op1_config`)** — Highest priority (UI/GUI overrides)
+2. **`openclaw.json`** — File-based settings
+3. **Built-in defaults** — System fallbacks
 
-This lets you change settings either way.
+This ensures that UI-driven changes take precedence over static configuration files without requiring manual JSON editing.
 
 ## Primary config: openclaw.json
 
@@ -300,7 +302,7 @@ CLI command configuration, native skills, and display settings.
 
 ## Agent hierarchy: matrix-agents.json
 
-This file defines the full agent tree. It is included into `openclaw.json` via `$include` and merges into the `agents.list` array.
+This file defines the 4 core agents in the hierarchy. It is included into `openclaw.json` via `$include` and merges into the `agents.list` array. Specialist workers are spawned dynamically from the **Persona Registry** and do not need to be statically defined here.
 
 ### Agent definition schema
 
@@ -320,7 +322,7 @@ Each agent entry has these fields:
 | `maxConcurrent`  | number   | No       | Max concurrent sessions                              |
 | `timeoutSeconds` | number   | No       | Session timeout                                      |
 
-### Example: Tier 2 agent
+### Example: Core Department Head (Tier 2)
 
 ```json
 {
@@ -332,36 +334,15 @@ Each agent entry has these fields:
   "workspace": "~/.openclaw/workspace-neo",
   "agentDir": "~/.openclaw/agents/neo/agent",
   "identity": "~/.openclaw/workspace-neo/IDENTITY.md",
-  "subagents": [
-    "tank",
-    "dozer",
-    "mouse",
-    "spark",
-    "cipher",
-    "relay",
-    "ghost",
-    "binary",
-    "kernel",
-    "prism"
-  ]
+  "subagents": ["*"]
 }
 ```
 
-### Example: Tier 3 worker
+_Note: `subagents: ["*"]` allows the agent to spawn any persona from the Registry._
 
-```json
-{
-  "id": "tank",
-  "name": "Tank",
-  "department": "engineering",
-  "role": "Backend Engineer",
-  "model": "zai/glm-4.7",
-  "workspace": "~/.openclaw/workspace-tank",
-  "agentDir": "~/.openclaw/agents/tank/agent",
-  "identity": "~/.openclaw/workspace-tank/IDENTITY.md",
-  "subagents": []
-}
-```
+### Persona-Based Spawning
+
+Tier 3 workers are spawned using their persona slug. The gateway resolves the persona from `agents/personas/_index.json` and injects the corresponding settings and personality at runtime.
 
 ### Template
 

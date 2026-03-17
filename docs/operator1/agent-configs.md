@@ -98,11 +98,11 @@ Workspace rules that govern the agent's operational behavior, memory management,
 
 ## Delegation
 
-- Backend tasks → Tank
-- DevOps tasks → Dozer
-- QA/research → Mouse
-- Frontend → Spark
-- Security → Cipher
+- Backend tasks → `backend-architect`
+- DevOps tasks → `sre`
+- QA/research → `ux-researcher`
+- Frontend → `tailwind-expert`
+- Security → `security-engineer`
 
 ## Heartbeat
 
@@ -249,17 +249,28 @@ docs/reference/templates/
 
 ### Matrix-specific templates
 
-Role-specific overrides for each agent:
+Role-specific overrides for each core agent:
 
 ```
 docs/reference/templates/matrix/
    +-- neo/         # CTO templates (SOUL.md, AGENTS.md, etc.)
    +-- morpheus/    # CMO templates
    +-- trinity/     # CFO templates
-   +-- tank/        # Backend Engineer templates
-   +-- dozer/       # DevOps templates
-   +-- ...          # All 30+ Tier 3 agents
 ```
+
+### Persona Registry
+
+The vast library of specialized worker personas is stored in:
+
+```
+agents/personas/
+   +-- engineering/
+   +-- marketing/
+   +-- finance/
+   +-- _index.json   # The central registry of all 147+ personas
+```
+
+Each persona defined in `_index.json` includes a `path` to its master definition file (e.g., `agents/personas/engineering/backend-architect.md`). When a persona is spawned, this master file provides the `SOUL.md` and `AGENTS.md` context for the dynamic session.
 
 ### Bootstrapping a new agent
 

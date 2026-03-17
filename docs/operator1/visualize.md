@@ -61,7 +61,7 @@ Color: green. Right middle section.
 
 Houses the **Tier 3 engineering and cross-department workers** that do the actual execution work:
 
-Tank, Dozer, Mouse, Niobe, Switch, Rex, Oracle, Seraph, Zee.
+Specialist workers spawned from the Persona Registry.
 
 Any agent not found in the zone map defaults to Machine City.
 

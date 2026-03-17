@@ -1,19 +1,19 @@
 ---
-summary: "Complete agent hierarchy for the Operator1 system — all 34 agents, their roles, departments, and workspace structure."
+summary: "Core agent hierarchy for the Operator1 system — 4 leadership agents and a 147+ persona registry for specialist workers."
 updated: "2026-03-16"
 title: "Agent Hierarchy"
 ---
 
 # Agent Hierarchy
 
-Operator1 has 34 agents organized into three tiers: a coordinator, three department heads, and thirty specialist workers. Each agent has a specific role and workspace.
+Operator1 has **4 core agents** organized into two leadership tiers, supported by a vast **Persona Registry of 147+ specialist personas** that can be spawned on-demand for specific tasks.
 
 ## Visual Overview
 
 ![Operator1 Agent Hierarchy](/images/agent-hierarchy-infographic.png)
-_The 34-agent Matrix hierarchy organized into three tiers across Engineering, Marketing, and Finance departments_
+_The 4-agent core hierarchy supported by a dynamic library of specialist personas._
 
-## Full agent tree
+## Core agent tree
 
 ```
 CEO (Human operator)
@@ -21,40 +21,11 @@ CEO (Human operator)
    +-- Operator1 (COO) ........................ Tier 1
           |
           +-- Neo (CTO - Engineering) ......... Tier 2
-          |      +-- Tank (Backend Engineer)
-          |      +-- Dozer (DevOps Engineer)
-          |      +-- Mouse (QA + Research)
-          |      +-- Spark (Frontend Engineer)
-          |      +-- Cipher (Security Engineer)
-          |      +-- Relay (Integration Engineer)
-          |      +-- Ghost (Data Engineer)
-          |      +-- Binary (Mobile Engineer)
-          |      +-- Kernel (Systems Engineer)
-          |      +-- Prism (AI/ML Engineer)
-          |
           +-- Morpheus (CMO - Marketing) ...... Tier 2
-          |      +-- Niobe (Content Strategist)
-          |      +-- Switch (Creative Director)
-          |      +-- Rex (PR + Communications)
-          |      +-- Ink (Copywriter)
-          |      +-- Vibe (Social Media Manager)
-          |      +-- Lens (Video Producer)
-          |      +-- Echo (Email Marketing)
-          |      +-- Nova (SEO Specialist)
-          |      +-- Pulse (Community Manager)
-          |      +-- Blaze (Brand Strategist)
-          |
           +-- Trinity (CFO - Finance) ......... Tier 2
-                 +-- Oracle (Data Analyst)
-                 +-- Seraph (Security + Compliance)
-                 +-- Zee (Financial Analyst)
-                 +-- Ledger (Bookkeeper)
-                 +-- Vault (Investment Analyst)
-                 +-- Shield (Insurance + Risk)
-                 +-- Trace (Expense Tracker)
-                 +-- Quota (Budget Manager)
-                 +-- Merit (Procurement)
-                 +-- Beacon (Tax Specialist)
+                 |
+                 +-- [Dynamic Specialist Workers] (Tier 3)
+                     (Spawned from Persona Registry)
 ```
 
 ## Tier 1 — Coordinator
@@ -69,7 +40,6 @@ Operator1 is the single entry point for all human requests. It:
 - Classifies tasks by department (engineering, marketing, finance)
 - Delegates to the appropriate C-suite head
 - Tracks progress and reports back
-- Handles cross-department coordination
 
 ## Tier 2 — Department heads
 
@@ -79,61 +49,30 @@ Operator1 is the single entry point for all human requests. It:
 | **Morpheus** | CMO   | Marketing   | Content strategy, brand direction, campaign planning, creative oversight   |
 | **Trinity**  | CFO   | Finance     | Financial analysis, budgeting, compliance, risk management                 |
 
-Department heads:
+Department heads receive delegated tasks from Operator1 and use the **Persona Registry** to spawn the best-fit specialist for the work.
 
-- Receive delegated tasks from Operator1
-- Read their workspace SOUL.md and AGENTS.md for context
-- Break down complex tasks into worker-sized units
-- Create requirements briefs for workers
-- Can spawn **any** Tier 3 worker (shared talent pool)
-- Report results back to Operator1
+## Tier 3 — Specialist Workers (Persona Registry)
 
-## Tier 3 — Workers
+Specialist workers are no longer fixed, pre-deployed agents. Instead, they are created dynamically using the **Persona Registry**, which contains over 147 specialized personas across 13 categories.
 
-### Engineering (reports to Neo)
+### Persona Categories
 
-| Agent      | Role                 | Specialization                           |
-| ---------- | -------------------- | ---------------------------------------- |
-| **Tank**   | Backend Engineer     | APIs, databases, server-side logic       |
-| **Dozer**  | DevOps Engineer      | CI/CD, infrastructure, deployment        |
-| **Mouse**  | QA + Research        | Testing, research, investigation         |
-| **Spark**  | Frontend Engineer    | UI components, web apps, styling         |
-| **Cipher** | Security Engineer    | Security audits, vulnerability analysis  |
-| **Relay**  | Integration Engineer | APIs, webhooks, third-party services     |
-| **Ghost**  | Data Engineer        | Data pipelines, ETL, data modeling       |
-| **Binary** | Mobile Engineer      | iOS, Android, cross-platform apps        |
-| **Kernel** | Systems Engineer     | OS-level, performance, low-level systems |
-| **Prism**  | AI/ML Engineer       | Machine learning, model integration      |
+| Category        | Description                                     | Example Personas                                  |
+| --------------- | ----------------------------------------------- | ------------------------------------------------- |
+| **Engineering** | Backend, Frontend, DevOps, Security, AI, Mobile | `backend-architect`, `sre`, `security-engineer`   |
+| **Marketing**   | Content, SEO, Social Media, Growth, PR          | `content-creator`, `seo-specialist`, `copywriter` |
+| **Leadership**  | Role templates for core agents                  | `cto`, `cmo`, `cfo`, `coo`                        |
+| **Design**      | UI/UX, Visual Storytelling, Brand Identity      | `ui-designer`, `ux-researcher`                    |
+| **Game Dev**    | Godot, Unity, Unreal, Level/Narrative Design    | `unity-architect`, `narrative-designer`           |
+| **Finance**     | Analysis, Compliance, Bookkeeping, Risk         | `data-analyst`, `financial-analyst`               |
+| **Specialized** | Support, HR, Legal, and other niche roles       | `technical-writer`, `support-specialist`          |
 
-### Marketing (reports to Morpheus)
+### Benefits of Persona Spawning
 
-| Agent      | Role                 | Specialization                        |
-| ---------- | -------------------- | ------------------------------------- |
-| **Niobe**  | Content Strategist   | Content planning, editorial calendar  |
-| **Switch** | Creative Director    | Visual design, creative direction     |
-| **Rex**    | PR + Communications  | Press releases, external comms        |
-| **Ink**    | Copywriter           | Copy, messaging, tone of voice        |
-| **Vibe**   | Social Media Manager | Social content, engagement            |
-| **Lens**   | Video Producer       | Video content, editing                |
-| **Echo**   | Email Marketing      | Email campaigns, newsletters          |
-| **Nova**   | SEO Specialist       | Search optimization, keyword strategy |
-| **Pulse**  | Community Manager    | Community engagement, support         |
-| **Blaze**  | Brand Strategist     | Brand identity, positioning           |
-
-### Finance (reports to Trinity)
-
-| Agent      | Role                  | Specialization                          |
-| ---------- | --------------------- | --------------------------------------- |
-| **Oracle** | Data Analyst          | Data analysis, reporting, dashboards    |
-| **Seraph** | Security + Compliance | Regulatory compliance, security policy  |
-| **Zee**    | Financial Analyst     | Financial modeling, forecasting         |
-| **Ledger** | Bookkeeper            | Transaction records, reconciliation     |
-| **Vault**  | Investment Analyst    | Investment research, portfolio analysis |
-| **Shield** | Insurance + Risk      | Risk assessment, insurance management   |
-| **Trace**  | Expense Tracker       | Expense categorization, reporting       |
-| **Quota**  | Budget Manager        | Budget planning, allocation tracking    |
-| **Merit**  | Procurement           | Vendor management, purchasing           |
-| **Beacon** | Tax Specialist        | Tax planning, compliance, filing        |
+- **On-Demand Specialization**: Spawn the exact expert needed for a single sub-task.
+- **Resource Efficiency**: Only run the agents you need right now.
+- **Vast Knowledge Base**: Access 147+ distinct personality and decision frameworks.
+- **Consistent Context**: Each worker inherits the parent's project context and goals.
 
 ## Model assignments
 
@@ -141,7 +80,9 @@ Department heads:
 | ------ | ------------------- | --------------- | ------------------------------------------------ |
 | Tier 1 | Strongest available | Latest flagship | Complex reasoning, multi-department coordination |
 | Tier 2 | Strong              | zai/glm-5       | Department-level planning and oversight          |
-| Tier 3 | Capable             | zai/glm-4.7     | Task execution, code generation                  |
+| Tier 3 | Capable             | zai/glm-4.7     | Specialized task execution                       |
+
+Model assignments are configured in the global `openclaw.json` and can be overridden per agent or per spawn.
 
 Model assignments are configured in `matrix-agents.json` and can be overridden per agent.
 
