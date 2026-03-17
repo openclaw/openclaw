@@ -398,6 +398,13 @@ function recordCloseFailure(session: AcpNodeSessionRecord, reason: string, error
   session.updatedAt = Date.now();
 }
 
+function isCancelAcknowledgementTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("ACP turn cancel timed out waiting for cancel acknowledgement")
+  );
+}
+
 async function closeSessionRecord(
   session: AcpNodeSessionRecord,
   reason: string,
@@ -1097,6 +1104,12 @@ async function handleTurnCancel(params: AcpTurnCancelParams): Promise<AcpInvokeC
           accepted: true,
         },
       };
+    }
+    if (!isCancelAcknowledgementTimeoutError(error)) {
+      session.state = "running";
+      activeTurn.cancelRequested = false;
+      activeTurn.cancelReason = undefined;
+      session.updatedAt = Date.now();
     }
     return {
       handled: true,

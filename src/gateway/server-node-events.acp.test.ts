@@ -322,7 +322,7 @@ describe("handleNodeEvent ACP worker ingress", () => {
     });
   });
 
-  it("reconciles a suspect lease on live node reconnect through acp.session.status", async () => {
+  it("keeps a non-cancelling run running during reconnect reconcile", async () => {
     const runtime = await createRuntime();
     const now = Date.now();
     const lease = await runtime.store.acquireLease({
@@ -387,6 +387,7 @@ describe("handleNodeEvent ACP worker ingress", () => {
     expect(await runtime.store.getRun("run-1")).toMatchObject({
       state: "running",
     });
+    expect(await runtime.store.getRun("run-1")).not.toHaveProperty("cancelRequestedAt");
   });
 
   it("preserves worker-reported cancelling state during reconnect reconcile", async () => {

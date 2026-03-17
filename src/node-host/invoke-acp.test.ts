@@ -745,6 +745,109 @@ describe("handleAcpInvokeCommand", () => {
     ).not.toHaveProperty("nodeWorkerRunId");
   });
 
+  it("rolls cancel status back to running when cancel RPC fails before any durable cancel is accepted", async () => {
+    const runtime = new FakeNodeHostRuntime();
+    runtime.cancelError = new Error("cancel backend exploded");
+    runtime.rewriteStopReasonOnCancel = false;
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime,
+    });
+    const nodeEvents: NodeEventCall[] = [];
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.ensure",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          agent: "main",
+          mode: "persistent",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.start",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-cancel-error",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          requestId: "req-cancel-error",
+          mode: "prompt",
+          text: "cancel fails",
+        },
+      }),
+      buildDeps(async (event, payload) => {
+        nodeEvents.push({ event, payload });
+      }),
+    );
+
+    await runtime.waitForTurnStart();
+
+    const cancelResult = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.turn.cancel",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          runId: "run-cancel-error",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+          reason: "manual-cancel",
+        },
+      }),
+      buildDeps(),
+    );
+
+    expect(cancelResult).toMatchObject({
+      handled: true,
+      ok: false,
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("cancel backend exploded"),
+    });
+
+    const status = await handleAcpInvokeCommand(
+      buildFrame({
+        command: "acp.session.status",
+        payload: {
+          sessionKey: "agent:main:acp:test",
+          leaseId: "lease-1",
+          leaseEpoch: 1,
+        },
+      }),
+      buildDeps(),
+    );
+    expect(status).toMatchObject({
+      handled: true,
+      ok: true,
+      payload: {
+        state: "running",
+        nodeRuntimeSessionId: "acpx-session-1",
+        nodeWorkerRunId: expect.any(String),
+      },
+    });
+
+    await runtime.waitForTurnFinish();
+    await vi.waitFor(() => {
+      expect(nodeEvents.at(-1)).toMatchObject({
+        event: "acp.worker.terminal",
+        payload: {
+          runId: "run-cancel-error",
+          terminal: {
+            kind: "completed",
+            stopReason: "done",
+          },
+        },
+      });
+    });
+  });
+
   it("fails closed when runtime cancel never resolves during acp.turn.cancel", async () => {
     __testing.setActiveCancelAcknowledgementTimeoutMsForTests(50);
     const runtime = new FakeNodeHostRuntime();
