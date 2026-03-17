@@ -1,4 +1,4 @@
-import type { MockFn } from "openclaw/plugin-sdk/test-utils";
+import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
@@ -15,32 +15,36 @@ export type PluginCommandSpecMock = {
   acceptsArgs: boolean;
 };
 
-type AnyMock = MockFn;
-
 type ProviderMonitorTestMocks = {
-  clientHandleDeployRequestMock: AnyMock;
-  clientFetchUserMock: AnyMock;
-  clientGetPluginMock: AnyMock;
-  clientConstructorOptionsMock: AnyMock;
-  createDiscordAutoPresenceControllerMock: AnyMock;
-  createDiscordNativeCommandMock: AnyMock;
-  createDiscordMessageHandlerMock: AnyMock;
-  createNoopThreadBindingManagerMock: AnyMock;
-  createThreadBindingManagerMock: AnyMock;
-  reconcileAcpThreadBindingsOnStartupMock: AnyMock;
+  clientHandleDeployRequestMock: Mock<() => Promise<void>>;
+  clientFetchUserMock: Mock<(target: string) => Promise<{ id: string }>>;
+  clientGetPluginMock: Mock<(name: string) => unknown>;
+  clientConstructorOptionsMock: Mock<(options?: unknown) => void>;
+  createDiscordAutoPresenceControllerMock: Mock<() => unknown>;
+  createDiscordNativeCommandMock: Mock<(params?: { command?: { name?: string } }) => unknown>;
+  createDiscordMessageHandlerMock: Mock<() => unknown>;
+  createNoopThreadBindingManagerMock: Mock<() => { stop: ReturnType<typeof vi.fn> }>;
+  createThreadBindingManagerMock: Mock<() => { stop: ReturnType<typeof vi.fn> }>;
+  reconcileAcpThreadBindingsOnStartupMock: Mock<() => unknown>;
   createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }>;
-  getAcpSessionStatusMock: AnyMock;
-  getPluginCommandSpecsMock: AnyMock;
-  listNativeCommandSpecsForConfigMock: AnyMock;
-  listSkillCommandsForAgentsMock: AnyMock;
-  monitorLifecycleMock: AnyMock;
-  resolveDiscordAccountMock: AnyMock;
-  resolveDiscordAllowlistConfigMock: AnyMock;
-  resolveNativeCommandsEnabledMock: AnyMock;
-  resolveNativeSkillsEnabledMock: AnyMock;
-  isVerboseMock: AnyMock;
-  shouldLogVerboseMock: AnyMock;
-  voiceRuntimeModuleLoadedMock: AnyMock;
+  getAcpSessionStatusMock: Mock<
+    (params: {
+      cfg: OpenClawConfig;
+      sessionKey: string;
+      signal?: AbortSignal;
+    }) => Promise<{ state: string }>
+  >;
+  getPluginCommandSpecsMock: Mock<() => PluginCommandSpecMock[]>;
+  listNativeCommandSpecsForConfigMock: Mock<() => NativeCommandSpecMock[]>;
+  listSkillCommandsForAgentsMock: Mock<() => unknown[]>;
+  monitorLifecycleMock: Mock<(params: { threadBindings: { stop: () => void } }) => Promise<void>>;
+  resolveDiscordAccountMock: Mock<() => unknown>;
+  resolveDiscordAllowlistConfigMock: Mock<() => Promise<unknown>>;
+  resolveNativeCommandsEnabledMock: Mock<() => boolean>;
+  resolveNativeSkillsEnabledMock: Mock<() => boolean>;
+  isVerboseMock: Mock<() => boolean>;
+  shouldLogVerboseMock: Mock<() => boolean>;
+  voiceRuntimeModuleLoadedMock: Mock<() => void>;
 };
 
 export function baseDiscordAccountConfig() {
