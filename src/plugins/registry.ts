@@ -877,6 +877,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         const subagent = Reflect.get(target, prop, receiver);
         return {
           run: (params) => withPluginRuntimePluginIdScope(pluginId, () => subagent.run(params)),
+          enqueue: (params) =>
+            withPluginRuntimePluginIdScope(pluginId, () => subagent.enqueue(params)),
+          abort: (params) =>
+            withPluginRuntimePluginIdScope(pluginId, () => subagent.abort(params)),
           waitForRun: (params) =>
             withPluginRuntimePluginIdScope(pluginId, () => subagent.waitForRun(params)),
           getSessionMessages: (params) =>
