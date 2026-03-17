@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   getOnboardingState,
@@ -131,7 +132,10 @@ export const onboardingHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const resolvedPath = path.resolve(params.path);
+      const expandedPath = params.path.startsWith("~/")
+        ? path.join(os.homedir(), params.path.slice(2))
+        : params.path;
+      const resolvedPath = path.resolve(expandedPath);
       const exists = fs.existsSync(resolvedPath);
       let isDirectory = false;
       let writable = false;

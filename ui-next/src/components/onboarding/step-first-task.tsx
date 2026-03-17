@@ -6,7 +6,7 @@ import { useChatStore } from "@/store/chat-store";
 
 type Props = { onValidChange: (valid: boolean) => void };
 
-const ONBOARDING_SESSION_KEY = "onboarding-test";
+const ONBOARDING_SESSION_KEY = "agent:main:onboarding-test";
 
 type AgentSummary = {
   agentId: string;
@@ -60,6 +60,7 @@ export function StepFirstTask({ onValidChange }: Props) {
       const params: Record<string, string> = {
         message: message.trim(),
         sessionKey: ONBOARDING_SESSION_KEY,
+        idempotencyKey: crypto.randomUUID(),
       };
       if (selectedAgent) {
         params.agentId = selectedAgent;
@@ -103,8 +104,8 @@ export function StepFirstTask({ onValidChange }: Props) {
               value={selectedAgent}
               onChange={(e) => setSelectedAgent(e.target.value)}
             >
-              {agents.map((a) => (
-                <option key={a.agentId} value={a.agentId}>
+              {agents.map((a, i) => (
+                <option key={a.agentId ?? `agent-${i}`} value={a.agentId}>
                   {a.name ?? a.agentId}
                 </option>
               ))}
