@@ -1,17 +1,87 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as imageGenerationRuntime from "../../image-generation/runtime.js";
 import * as imageOps from "../../media/image-ops.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../plugin-sdk/web-media.js";
-import { createImageGenerateTool } from "./image-generate-tool.js";
+import {
+  createImageGenerateTool,
+  resolveImageGenerationModelConfigForTool,
+} from "./image-generate-tool.js";
+
+function stubImageGenerationProviders() {
+  vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+    {
+      id: "google",
+      defaultModel: "gemini-3.1-flash-image-preview",
+      models: ["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"],
+      supportedResolutions: ["1K", "2K", "4K"],
+      supportsImageEditing: true,
+      generateImage: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+    },
+    {
+      id: "openai",
+      defaultModel: "gpt-image-1",
+      models: ["gpt-image-1"],
+      supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
+      supportsImageEditing: false,
+      generateImage: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+    },
+  ]);
+}
 
 describe("createImageGenerateTool", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+  beforeEach(() => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEYS", "");
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("GEMINI_API_KEYS", "");
   });
 
-  it("returns null when image-generation model is not configured", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("returns null when no image-generation model can be inferred", () => {
+    stubImageGenerationProviders();
     expect(createImageGenerateTool({ config: {} })).toBeNull();
+  });
+
+  it("infers an OpenAI image-generation model from env-backed auth", () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+
+    expect(resolveImageGenerationModelConfigForTool({ cfg: {} })).toEqual({
+      primary: "openai/gpt-image-1",
+    });
+    expect(createImageGenerateTool({ config: {} })).not.toBeNull();
+  });
+
+  it("prefers the primary model provider when multiple image providers have auth", () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    vi.stubEnv("GEMINI_API_KEY", "gemini-test");
+
+    expect(
+      resolveImageGenerationModelConfigForTool({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "google/gemini-3.1-pro-preview",
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      primary: "google/gemini-3.1-flash-image-preview",
+      fallbacks: ["openai/gpt-image-1"],
+    });
   });
 
   it("generates images and returns MEDIA paths", async () => {
@@ -215,28 +285,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("lists registered provider and model options", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      {
-        id: "google",
-        defaultModel: "gemini-3.1-flash-image-preview",
-        models: ["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"],
-        supportedResolutions: ["1K", "2K", "4K"],
-        supportsImageEditing: true,
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-      {
-        id: "openai",
-        defaultModel: "gpt-image-1",
-        models: ["gpt-image-1"],
-        supportedSizes: ["1024x1024", "1024x1536", "1536x1024"],
-        supportsImageEditing: false,
-        generateImage: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-      },
-    ]);
+    stubImageGenerationProviders();
 
     const tool = createImageGenerateTool({
       config: {
