@@ -37,6 +37,10 @@ import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
+  resolveModelApiRequestDelayMs,
+  wrapStreamFnWithApiRequestDelay,
+} from "../../api-request-delay.js";
+import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
@@ -2088,6 +2092,15 @@ export async function runEmbeddedAttempt(
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
+        );
+      }
+
+      const apiRequestDelayMs = resolveModelApiRequestDelayMs(params.config, params.provider);
+      if (apiRequestDelayMs > 0) {
+        activeSession.agent.streamFn = wrapStreamFnWithApiRequestDelay(
+          activeSession.agent.streamFn,
+          params.provider,
+          apiRequestDelayMs,
         );
       }
 

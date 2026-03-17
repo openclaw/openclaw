@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/testing: add a public `openclaw/plugin-sdk/testing` seam for plugin-author test helpers, and move bundled-extension-only test bridges out of `extensions/` into private repo test helpers.
 - Plugins/Chutes: add a bundled Chutes provider with plugin-owned OAuth/API-key auth, dynamic model discovery, and default-on extension wiring. (#41416) Thanks @Veightor.
 - Plugins/binding: add `onConversationBindingResolved(...)` so plugins can react immediately after bind approvals or denies without blocking channel interaction acknowledgements. (#48678) Thanks @huntharo.
+- Models: add `models.requestDelayMs` and per-provider `models.providers.<id>.requestDelayMs` to enforce a minimum interval between model API request starts (shared per provider id), helping strict rate limits. (#49077)
 
 ### Breaking
 

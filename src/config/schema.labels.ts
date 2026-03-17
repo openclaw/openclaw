@@ -429,6 +429,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.runtime.installCommand": "ACP Runtime Install Command",
   models: "Models",
   "models.mode": "Model Catalog Mode",
+  "models.requestDelayMs": "Model API Request Delay (ms)",
   "models.providers": "Model Providers",
   "models.providers.*.baseUrl": "Model Provider Base URL",
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
@@ -437,6 +438,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.injectNumCtxForOpenAICompat": "Model Provider Inject num_ctx (OpenAI Compat)",
   "models.providers.*.headers": "Model Provider Headers",
   "models.providers.*.authHeader": "Model Provider Authorization Header",
+  "models.providers.*.requestDelayMs": "Model Provider API Request Delay (ms)",
   "models.providers.*.models": "Model Provider Model List",
   "models.bedrockDiscovery": "Bedrock Model Discovery",
   "models.bedrockDiscovery.enabled": "Bedrock Discovery Enabled",

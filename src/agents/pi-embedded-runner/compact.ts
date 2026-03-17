@@ -35,6 +35,10 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
+import {
+  resolveModelApiRequestDelayMs,
+  wrapStreamFnWithApiRequestDelay,
+} from "../api-request-delay.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
@@ -810,6 +814,15 @@ export async function compactEmbeddedPiSessionDirect(
             model,
             providerBaseUrl,
           }),
+        );
+      }
+
+      const compactionApiDelayMs = resolveModelApiRequestDelayMs(params.config, provider);
+      if (compactionApiDelayMs > 0) {
+        session.agent.streamFn = wrapStreamFnWithApiRequestDelay(
+          session.agent.streamFn,
+          provider,
+          compactionApiDelayMs,
         );
       }
 
