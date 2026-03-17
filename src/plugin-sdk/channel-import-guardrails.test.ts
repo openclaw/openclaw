@@ -22,6 +22,7 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "matrix",
   "mattermost",
   "msteams",
+  "nostr",
   "nextcloud-talk",
   "nostr",
   "signal",
