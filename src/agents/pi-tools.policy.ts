@@ -342,31 +342,42 @@ function resolveDirectToolPolicyFromConfig(params: {
   if (!directEntry && !wildcardEntry) {
     return { rank: 0 };
   }
+  const senderIdsToTry = params.senderId
+    ? [params.senderId]
+    : [
+        params.directId,
+        ...(params.directIdParent && params.directIdParent !== params.directId
+          ? [params.directIdParent]
+          : []),
+      ];
+  const resolveSenderScopedPolicy = (toolsBySender: DirectToolPolicyBySenderConfig | undefined) => {
+    for (const senderId of senderIdsToTry) {
+      const senderPolicy = resolveToolsBySender({
+        toolsBySender,
+        senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      });
+      if (senderPolicy && pickSandboxToolPolicy(senderPolicy)) {
+        return senderPolicy;
+      }
+    }
+    return undefined;
+  };
   // Precedence is:
   // 1. sender-specific override on the exact DM entry
   // 2. exact DM entry tools
   // 3. sender-specific override on the wildcard DM entry
   // 4. wildcard DM entry tools
-  const senderPolicy = resolveToolsBySender({
-    toolsBySender: directEntry?.toolsBySender,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  const senderPolicy = resolveSenderScopedPolicy(directEntry?.toolsBySender);
   if (senderPolicy && pickSandboxToolPolicy(senderPolicy)) {
     return { policy: senderPolicy, rank: 4 };
   }
   if (directEntry?.tools && pickSandboxToolPolicy(directEntry.tools)) {
     return { policy: directEntry.tools, rank: 3 };
   }
-  const wildcardSenderPolicy = resolveToolsBySender({
-    toolsBySender: wildcardEntry?.toolsBySender,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  const wildcardSenderPolicy = resolveSenderScopedPolicy(wildcardEntry?.toolsBySender);
   if (wildcardSenderPolicy && pickSandboxToolPolicy(wildcardSenderPolicy)) {
     return { policy: wildcardSenderPolicy, rank: 2 };
   }
@@ -598,7 +609,7 @@ export function resolveGroupToolPolicy(params: {
         directId: candidate.directId,
         directIdParent: candidate.directIdParent,
         accountId: candidate.accountId,
-        senderId: params.senderId ?? candidate.directIdParent ?? candidate.directId,
+        senderId: params.senderId,
         senderName: params.senderName,
         senderUsername: params.senderUsername,
         senderE164: params.senderE164,

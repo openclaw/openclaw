@@ -1053,6 +1053,36 @@ describe("Agent-specific tool filtering", () => {
     expect(ownerNames).toContain("exec");
   });
 
+  it("should prefer full directId over parent fallback for sender-scoped DM policy", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner:thread:abc": {
+              tools: { allow: ["read"] },
+              toolsBySender: {
+                "id:ou-owner:thread:abc": {
+                  allow: ["read", "exec"],
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const ownerTools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:feishu:direct:ou-owner:thread:abc",
+      messageProvider: "feishu",
+      workspaceDir: "/tmp/test-feishu-direct-thread-token-in-id",
+      agentDir: "/tmp/agent-feishu-direct-thread-token-in-id",
+    });
+    const ownerNames = ownerTools.map((t) => t.name);
+    expect(ownerNames).toContain("read");
+    expect(ownerNames).toContain("exec");
+  });
+
   it("should treat empty account-scoped dms as an explicit override", () => {
     const cfg: OpenClawConfig = {
       tools: {
