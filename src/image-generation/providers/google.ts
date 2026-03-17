@@ -79,11 +79,16 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlu
   return {
     id: "google",
     label: "Google",
+    defaultModel: DEFAULT_GOOGLE_IMAGE_MODEL,
+    models: [DEFAULT_GOOGLE_IMAGE_MODEL, "gemini-3-pro-image-preview"],
+    supportedResolutions: ["1K", "2K", "4K"],
+    supportsImageEditing: true,
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
         provider: "google",
         cfg: req.cfg,
         agentDir: req.agentDir,
+        store: req.authStore,
       });
       if (!auth.apiKey) {
         throw new Error("Google API key missing");
@@ -98,6 +103,16 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlu
       const authHeaders = parseGeminiAuth(auth.apiKey);
       const headers = new Headers(authHeaders.headers);
       const imageConfig = mapSizeToImageConfig(req.size);
+      const inputParts = (req.inputImages ?? []).map((image) => ({
+        inlineData: {
+          mimeType: image.mimeType,
+          data: image.buffer.toString("base64"),
+        },
+      }));
+      const resolvedImageConfig = {
+        ...imageConfig,
+        ...(req.resolution ? { imageSize: req.resolution } : {}),
+      };
 
       const { response: res, release } = await postJsonRequest({
         url: `${baseUrl}/models/${model}:generateContent`,
@@ -106,12 +121,14 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlu
           contents: [
             {
               role: "user",
-              parts: [{ text: req.prompt }],
+              parts: [...inputParts, { text: req.prompt }],
             },
           ],
           generationConfig: {
             responseModalities: ["TEXT", "IMAGE"],
-            ...(imageConfig ? { imageConfig } : {}),
+            ...(Object.keys(resolvedImageConfig).length > 0
+              ? { imageConfig: resolvedImageConfig }
+              : {}),
           },
         },
         timeoutMs: 60_000,
