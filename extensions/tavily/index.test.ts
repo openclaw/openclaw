@@ -31,7 +31,7 @@ describe("tavily plugin", () => {
 
     const provider = registrations.webSearchProviders[0] as Record<string, unknown>;
     expect(provider.id).toBe("tavily");
-    expect(provider.autoDetectOrder).toBe(55);
+    expect(provider.autoDetectOrder).toBe(70);
     expect(provider.envVars).toEqual(["TAVILY_API_KEY"]);
 
     const toolNames = registrations.tools.map((t) => (t as Record<string, unknown>).name);
