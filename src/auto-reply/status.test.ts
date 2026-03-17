@@ -86,6 +86,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("updated 10m ago");
     expect(normalized).toContain("Runtime: direct");
     expect(normalized).toContain("Think: medium");
+    expect(normalized).toContain("Reasoning: hidden");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
@@ -110,7 +111,25 @@ describe("buildStatusMessage", () => {
 
     expect(normalized).toContain("Think: high");
     expect(normalized).toContain("verbose:full");
-    expect(normalized).toContain("Reasoning: on");
+    expect(normalized).toContain("Reasoning: visible");
+  });
+
+  it("shows reasoning stream mode distinctly from hidden visibility", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        reasoningLevel: "stream",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Reasoning: stream");
   });
 
   it("shows fast mode when enabled", () => {

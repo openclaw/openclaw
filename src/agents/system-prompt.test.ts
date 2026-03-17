@@ -605,7 +605,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Reasoning: off");
     expect(prompt).toContain("/reasoning");
-    expect(prompt).toContain("/status shows Reasoning");
+    expect(prompt).toContain("/status shows the current Reasoning status");
   });
 
   it("builds runtime line with agent and channel details", () => {

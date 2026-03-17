@@ -208,6 +208,16 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
 };
 
+const formatReasoningStatus = (reasoningLevel: ReasoningLevel) => {
+  if (reasoningLevel === "off") {
+    return "hidden";
+  }
+  if (reasoningLevel === "on") {
+    return "visible";
+  }
+  return "stream";
+};
+
 const readUsageFromSessionLog = (
   sessionId?: string,
   sessionEntry?: SessionEntry,
@@ -560,7 +570,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Think: ${thinkLevel}`,
     fastMode ? "Fast: on" : null,
     verboseLabel,
-    reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
+    `Reasoning: ${formatReasoningStatus(reasoningLevel)}`,
     elevatedLabel,
   ];
   const optionsLine = optionParts.filter(Boolean).join(" · ");
