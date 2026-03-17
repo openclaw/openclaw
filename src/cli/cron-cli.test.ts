@@ -21,7 +21,7 @@ vi.mock("./gateway-rpc.js", async () => {
   return {
     ...actual,
     callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-      callGatewayFromCli(method, opts, params, extra as number | undefined),
+      callGatewayFromCli(method, opts, params, extra),
   };
 });
 
@@ -264,6 +264,43 @@ describe("cron cli", () => {
     const params = addCall?.[2] as { delivery?: { mode?: string } };
 
     expect(params?.delivery?.mode).toBe("announce");
+  });
+
+  it("skips cron.status helper in json mode", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "Json add",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--json",
+    ]);
+
+    const statusCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.status");
+    expect(statusCalls).toHaveLength(0);
+  });
+
+  it("runs cron.status helper quietly outside json mode", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "Quiet helper",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+    ]);
+
+    const statusCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.status");
+    expect(statusCall?.[3]).toEqual({ progress: false, quiet: true });
   });
 
   it("infers sessionTarget from payload when --session is omitted", async () => {

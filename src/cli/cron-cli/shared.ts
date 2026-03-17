@@ -22,8 +22,19 @@ export function handleCronCliError(err: unknown) {
 }
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
+  if (opts?.json === true) {
+    return;
+  }
   try {
-    const res = (await callGatewayFromCli("cron.status", opts, {})) as {
+    const res = (await callGatewayFromCli(
+      "cron.status",
+      opts,
+      {},
+      {
+        progress: false,
+        quiet: true,
+      },
+    )) as {
       enabled?: boolean;
       storePath?: string;
     };
