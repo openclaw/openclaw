@@ -2625,19 +2625,9 @@ description: test skill
         severity: "critical",
       },
     },
-  ])("$name", async (testCase) => {
-    await withChannelSecurityStateDir(async () => {
-      const res = await runChannelSecurityAudit(testCase.cfg, testCase.plugins);
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
-      );
-    });
-  });
-
-  it("warns when Telegram allowFrom entries are non-numeric (legacy @username configs)", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+    {
+      name: "warns when Telegram allowFrom entries are non-numeric (legacy @username configs)",
+      cfg: {
         channels: {
           telegram: {
             enabled: true,
@@ -2647,22 +2637,19 @@ description: test skill
             groups: { "-100123": {} },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [telegramPlugin],
-      });
+      } satisfies OpenClawConfig,
+      plugins: [telegramPlugin],
+      expectedFinding: {
+        checkId: "channels.telegram.allowFrom.invalid_entries",
+        severity: "warn",
+      },
+    },
+  ])("$name", async (testCase) => {
+    await withChannelSecurityStateDir(async () => {
+      const res = await runChannelSecurityAudit(testCase.cfg, testCase.plugins);
 
       expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.telegram.allowFrom.invalid_entries",
-            severity: "warn",
-          }),
-        ]),
+        expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
       );
     });
   });
