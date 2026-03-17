@@ -1588,51 +1588,56 @@ description: test skill
     );
   });
 
-  it("warns when Feishu doc tool is enabled because create can grant requester access", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        feishu: {
-          appId: "cli_test",
-          appSecret: "secret_test", // pragma: allowlist secret
-        },
-      },
-    };
-
-    const res = await audit(cfg);
-    expectFinding(res, "channels.feishu.doc_owner_open_id", "warn");
-  });
-
-  it("treats Feishu SecretRef appSecret as configured for doc tool risk detection", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        feishu: {
-          appId: "cli_test",
-          appSecret: {
-            source: "env",
-            provider: "default",
-            id: "FEISHU_APP_SECRET",
+  it.each([
+    {
+      name: "warns when Feishu doc tool is enabled because create can grant requester access",
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "cli_test",
+            appSecret: "secret_test", // pragma: allowlist secret
           },
         },
-      },
-    };
-
-    const res = await audit(cfg);
-    expectFinding(res, "channels.feishu.doc_owner_open_id", "warn");
-  });
-
-  it("does not warn for Feishu doc grant risk when doc tools are disabled", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        feishu: {
-          appId: "cli_test",
-          appSecret: "secret_test", // pragma: allowlist secret
-          tools: { doc: false },
+      } satisfies OpenClawConfig,
+      expectedFinding: "channels.feishu.doc_owner_open_id",
+    },
+    {
+      name: "treats Feishu SecretRef appSecret as configured for doc tool risk detection",
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "cli_test",
+            appSecret: {
+              source: "env",
+              provider: "default",
+              id: "FEISHU_APP_SECRET",
+            },
+          },
         },
-      },
-    };
-
-    const res = await audit(cfg);
-    expectNoFinding(res, "channels.feishu.doc_owner_open_id");
+      } satisfies OpenClawConfig,
+      expectedFinding: "channels.feishu.doc_owner_open_id",
+    },
+    {
+      name: "does not warn for Feishu doc grant risk when doc tools are disabled",
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "cli_test",
+            appSecret: "secret_test", // pragma: allowlist secret
+            tools: { doc: false },
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedNoFinding: "channels.feishu.doc_owner_open_id",
+    },
+  ])("$name", async (testCase) => {
+    const res = await audit(testCase.cfg);
+    if (testCase.expectedFinding) {
+      expectFinding(res, testCase.expectedFinding, "warn");
+    }
+    if (testCase.expectedNoFinding) {
+      expectNoFinding(res, testCase.expectedNoFinding);
+    }
   });
 
   it("scores X-Real-IP fallback risk by gateway exposure", async () => {
