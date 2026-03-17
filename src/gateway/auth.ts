@@ -13,6 +13,7 @@ import {
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
 import { resolveGatewayCredentialsFromValues } from "./credentials.js";
+import { isIpAllowed, type IpRestrictionConfig } from "./ip-restriction-policy.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -83,6 +84,8 @@ export type AuthorizeGatewayConnectParams = {
   rateLimitScope?: string;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
+  /** IP restriction configuration for gateway access control. */
+  ipRestriction?: IpRestrictionConfig;
 };
 
 type TailscaleUser = {
@@ -92,6 +95,33 @@ type TailscaleUser = {
 };
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
+
+/**
+ * Detects if a request contains proxy-related headers.
+ * Used to enforce that such headers only come from trusted proxies.
+ * Ignores empty or whitespace-only header values.
+ */
+function hasProxyHeaders(req?: IncomingMessage): boolean {
+  if (!req) {
+    return false;
+  }
+
+  const hasNonEmptyHeader = (value: string | string[] | undefined): boolean => {
+    if (!value) {
+      return false;
+    }
+    const str = Array.isArray(value) ? value[0] : value;
+    return str.trim().length > 0;
+  };
+
+  return (
+    hasNonEmptyHeader(req.headers["x-forwarded-for"]) ||
+    hasNonEmptyHeader(req.headers["x-real-ip"]) ||
+    hasNonEmptyHeader(req.headers["x-forwarded-host"]) ||
+    hasNonEmptyHeader(req.headers["x-forwarded-proto"]) ||
+    hasNonEmptyHeader(req.headers["forwarded"])
+  );
+}
 
 function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
@@ -361,7 +391,9 @@ function authorizeTrustedProxy(params: {
       const origin = headerValue(req.headers.origin) ?? "";
       const tokenResult = verifySignedOriginToken(signedToken, sharedSecret, origin);
       if (!tokenResult.ok) {
-        return { reason: `trusted_proxy_signed_token_invalid: ${tokenResult.reason}` };
+        return {
+          reason: `trusted_proxy_signed_token_invalid: ${tokenResult.reason}`,
+        };
       }
     }
   }
@@ -398,6 +430,39 @@ export async function authorizeGatewayConnect(
     params.allowRealIpFallback === true,
   );
 
+  // Security: Enforce that requests with proxy headers come from trusted proxies
+  // This prevents header spoofing attacks where clients send fake X-Forwarded-For headers
+  // Must happen BEFORE auth mode checks to ensure security regardless of auth configuration
+  // Exception: trusted-proxy mode has its own validation logic, so skip this check for that mode
+  if (auth.mode !== "trusted-proxy" && hasProxyHeaders(req)) {
+    const remoteAddr = req?.socket?.remoteAddress;
+    if (!isTrustedProxyAddress(remoteAddr, trustedProxies)) {
+      const ip =
+        params.clientIp ??
+        resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+        req?.socket?.remoteAddress;
+      const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
+      params.rateLimiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "proxy_headers_from_untrusted_source" };
+    }
+  }
+
+  // Resolve client IP early for IP restriction and rate limiting checks
+  const ip =
+    params.clientIp ??
+    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    req?.socket?.remoteAddress;
+  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
+
+  // IP restriction check - fail fast for blocked IPs
+  // Must happen BEFORE auth mode checks to ensure IP restrictions apply regardless of auth mode
+  if (params.ipRestriction) {
+    if (!isIpAllowed(ip, params.ipRestriction)) {
+      params.rateLimiter?.recordFailure(ip, rateLimitScope);
+      return { ok: false, reason: "ip_not_allowed" };
+    }
+  }
+
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
       return { ok: false, reason: "trusted_proxy_config_missing" };
@@ -423,11 +488,6 @@ export async function authorizeGatewayConnect(
   }
 
   const limiter = params.rateLimiter;
-  const ip =
-    params.clientIp ??
-    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
-    req?.socket?.remoteAddress;
-  const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
   if (limiter) {
     const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
     if (!rlCheck.allowed) {

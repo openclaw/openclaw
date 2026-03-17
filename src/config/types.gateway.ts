@@ -528,4 +528,20 @@ export interface GatewaySecurityConfig {
    * Default: false (opt-in for backward compatibility)
    */
   validateHostHeader?: boolean;
+  /**
+   * IP address allowlist for gateway access.
+   * When set, only clients from these IPs/networks can connect.
+   * Supports CIDR notation (e.g., "192.168.1.0/24", "10.0.0.1") and individual IPs.
+   * IPv4 and IPv6 are both supported.
+   * Default: undefined (no IP restrictions)
+   */
+  ipAllowlist?: string[];
+  /**
+   * IP address blocklist for gateway access.
+   * When set, clients from these IPs/networks are blocked.
+   * Supports CIDR notation and individual IPs.
+   * Takes precedence over ipAllowlist (blocklist is checked first).
+   * Default: undefined (no IP blocking)
+   */
+  ipBlocklist?: string[];
 }

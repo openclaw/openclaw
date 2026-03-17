@@ -185,6 +185,7 @@ async function canRevealReadinessDetails(params: {
   resolvedAuth: ResolvedGatewayAuth;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
+  ipRestriction?: import("./ip-restriction-policy.js").IpRestrictionConfig;
 }): Promise<boolean> {
   if (isLocalDirectRequest(params.req, params.trustedProxies, params.allowRealIpFallback)) {
     return true;
@@ -200,6 +201,7 @@ async function canRevealReadinessDetails(params: {
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
+    ipRestriction: params.ipRestriction,
   });
   return authResult.ok;
 }
@@ -212,6 +214,7 @@ async function handleGatewayProbeRequest(
   trustedProxies: string[],
   allowRealIpFallback: boolean,
   getReadiness?: ReadinessChecker,
+  ipRestriction?: import("./ip-restriction-policy.js").IpRestrictionConfig,
 ): Promise<boolean> {
   const status = GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath);
   if (!status) {
@@ -238,6 +241,7 @@ async function handleGatewayProbeRequest(
       resolvedAuth,
       trustedProxies,
       allowRealIpFallback,
+      ipRestriction,
     });
     try {
       const result = getReadiness();
@@ -774,6 +778,12 @@ export function createGatewayHttpServer(opts: {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      const ipRestriction = configSnapshot.gateway?.security
+        ? {
+            ipAllowlist: configSnapshot.gateway.security.ipAllowlist,
+            ipBlocklist: configSnapshot.gateway.security.ipBlocklist,
+          }
+        : undefined;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -800,6 +810,7 @@ export function createGatewayHttpServer(opts: {
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
+              ipRestriction,
             }),
         },
         {
@@ -869,6 +880,7 @@ export function createGatewayHttpServer(opts: {
               canvasCapability: scopedCanvas.capability,
               malformedScopedPath: scopedCanvas.malformedScopedPath,
               rateLimiter,
+              ipRestriction,
             });
             if (!ok.ok) {
               sendGatewayAuthFailure(res, ok);
@@ -936,6 +948,7 @@ export function createGatewayHttpServer(opts: {
             trustedProxies,
             allowRealIpFallback,
             getReadiness,
+            ipRestriction,
           ),
       });
 
@@ -983,6 +996,12 @@ export function attachGatewayUpgradeHandler(opts: {
           const configSnapshot = loadConfig();
           const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
           const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+          const ipRestriction = configSnapshot.gateway?.security
+            ? {
+                ipAllowlist: configSnapshot.gateway.security.ipAllowlist,
+                ipBlocklist: configSnapshot.gateway.security.ipBlocklist,
+              }
+            : undefined;
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
@@ -992,6 +1011,7 @@ export function attachGatewayUpgradeHandler(opts: {
             canvasCapability: scopedCanvas.capability,
             malformedScopedPath: scopedCanvas.malformedScopedPath,
             rateLimiter,
+            ipRestriction,
           });
           if (!ok.ok) {
             writeUpgradeAuthFailure(socket, ok);

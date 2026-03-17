@@ -35,6 +35,7 @@ import {
   sendMethodNotAllowed,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
+import type { IpRestrictionConfig } from "./ip-restriction-policy.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -91,7 +92,9 @@ function mergeActionIntoArgsIfSupported(params: {
     return args;
   }
   // TypeBox schemas are plain objects; many tools define an `action` property.
-  const schemaObj = toolSchema as { properties?: Record<string, unknown> } | null;
+  const schemaObj = toolSchema as {
+    properties?: Record<string, unknown>;
+  } | null;
   const hasAction = Boolean(
     schemaObj &&
     typeof schemaObj === "object" &&
@@ -142,6 +145,7 @@ export async function handleToolsInvokeHttpRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    ipRestriction?: IpRestrictionConfig;
   },
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -163,6 +167,7 @@ export async function handleToolsInvokeHttpRequest(
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
+    ipRestriction: opts.ipRestriction,
   });
   if (!authResult.ok) {
     sendGatewayAuthFailure(res, authResult);
@@ -346,7 +351,10 @@ export async function handleToolsInvokeHttpRequest(
     if (inputStatus !== null) {
       sendJson(res, inputStatus, {
         ok: false,
-        error: { type: "tool_error", message: getErrorMessage(err) || "invalid tool arguments" },
+        error: {
+          type: "tool_error",
+          message: getErrorMessage(err) || "invalid tool arguments",
+        },
       });
       return true;
     }
