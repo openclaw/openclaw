@@ -105,7 +105,7 @@ function resolveBundleMcpConfigPaths(params: {
   return mergeUniquePathLists(defaults, declared);
 }
 
-function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
+export function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
   if (!isRecord(raw)) {
     return {};
   }
