@@ -16,6 +16,11 @@ function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown
   expect(result.images).toHaveLength(0);
 }
 
+function expectNoImageReferences(prompt: string) {
+  const refs = detectImageReferences(prompt);
+  expect(refs).toHaveLength(0);
+}
+
 describe("detectImageReferences", () => {
   it("detects absolute file paths with common extensions", () => {
     const prompt = "Check this image /path/to/screenshot.png and tell me what you see";
@@ -99,17 +104,11 @@ describe("detectImageReferences", () => {
   });
 
   it("returns empty array when no images found", () => {
-    const prompt = "Just some text without any image references";
-    const refs = detectImageReferences(prompt);
-
-    expect(refs).toHaveLength(0);
+    expectNoImageReferences("Just some text without any image references");
   });
 
   it("ignores non-image file extensions", () => {
-    const prompt = "Check /path/to/document.pdf and /code/file.ts";
-    const refs = detectImageReferences(prompt);
-
-    expect(refs).toHaveLength(0);
+    expectNoImageReferences("Check /path/to/document.pdf and /code/file.ts");
   });
 
   it("handles paths inside quotes (without spaces)", () => {
