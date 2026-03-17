@@ -170,6 +170,7 @@ const hasUsageValues = (
 const mergeUsageIntoAccumulator = (
   target: UsageAccumulator,
   usage: ReturnType<typeof normalizeUsage>,
+  callCount?: number,
 ) => {
   if (!hasUsageValues(usage)) {
     return;
@@ -187,7 +188,9 @@ const mergeUsageIntoAccumulator = (
   target.lastCacheRead = usage.cacheRead ?? 0;
   target.lastCacheWrite = usage.cacheWrite ?? 0;
   target.lastInput = usage.input ?? 0;
-  target.callCount += 1;
+  // callCount from attempt reflects actual LLM API calls including tool-call loops.
+  // Fall back to 1 if not provided (should not happen in practice).
+  target.callCount += callCount ?? 1;
 };
 
 const toNormalizedUsage = (usage: UsageAccumulator) => {
@@ -1028,7 +1031,7 @@ export async function runEmbeddedPiAgent(
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
-          mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
+          mergeUsageIntoAccumulator(usageAccumulator, attemptUsage, attempt.attemptCallCount);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
