@@ -118,6 +118,7 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
 export function renderChannelConfigSection(params: { channelId: string; props: ChannelsProps }) {
   const { channelId, props } = params;
   const disabled = props.configSaving || props.configSchemaLoading;
+  const hasError = Boolean(props.lastError);
   return html`
     <div style="margin-top: 16px;">
       ${
@@ -133,6 +134,15 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
               disabled,
               onPatch: props.onConfigPatch,
             })
+      }
+      ${
+        hasError
+          ? html`
+              <div class="callout danger" style="margin-top: 12px;">
+                ${props.lastError}
+              </div>
+            `
+          : nothing
       }
       <div class="row" style="margin-top: 12px;">
         <button
