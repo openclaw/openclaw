@@ -75,12 +75,14 @@ export function setIrcNickServ(
 export function setIrcGroupAccess(
   cfg: CoreConfig,
   accountId: string,
-  policy: "open" | "allowlist" | "disabled",
+  policy: "open" | "allowlist" | "disabled" | "members",
   entries: string[],
   normalizeGroupEntry: (raw: string) => string | null,
 ): CoreConfig {
-  if (policy !== "allowlist") {
-    return updateIrcAccountConfig(cfg, accountId, { enabled: true, groupPolicy: policy });
+  // "members" is Telegram-only; treat as "open" for IRC.
+  const normalized = policy === "members" ? ("open" as const) : policy;
+  if (normalized !== "allowlist") {
+    return updateIrcAccountConfig(cfg, accountId, { enabled: true, groupPolicy: normalized });
   }
   const normalizedEntries = [
     ...new Set(entries.map((entry) => normalizeGroupEntry(entry)).filter(Boolean)),

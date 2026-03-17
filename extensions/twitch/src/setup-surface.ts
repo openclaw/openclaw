@@ -301,11 +301,13 @@ function resolveTwitchGroupPolicy(
 
 function setTwitchGroupPolicy(
   cfg: OpenClawConfig,
-  policy: "open" | "allowlist" | "disabled",
+  policy: "open" | "allowlist" | "disabled" | "members",
   accountId?: string,
 ): OpenClawConfig {
+  // "members" is Telegram-only; treat as "open" for Twitch.
+  const normalized = policy === "members" ? "open" : policy;
   const allowedRoles: TwitchRole[] =
-    policy === "open" ? ["all"] : policy === "allowlist" ? ["moderator", "vip"] : [];
+    normalized === "open" ? ["all"] : normalized === "allowlist" ? ["moderator", "vip"] : [];
   return setTwitchAccessControl(cfg, allowedRoles, true, accountId);
 }
 

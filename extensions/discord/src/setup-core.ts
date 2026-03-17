@@ -1,5 +1,9 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type {
+  DiscordGuildEntry,
+  GroupPolicy,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup-runtime";
 import { createStandardChannelSetupStatus } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
@@ -140,6 +144,21 @@ export function createDiscordSetupWizardBase(handlers: {
             return [input];
           }
           return channelKeys.map((channelKey) => `${guildKey}/${channelKey}`);
+        }),
+      setPolicy: ({
+        cfg,
+        accountId,
+        policy,
+      }: {
+        cfg: OpenClawConfig;
+        accountId: string;
+        policy: GroupPolicy;
+      }) =>
+        patchChannelConfigForAccount({
+          cfg,
+          channel,
+          accountId,
+          patch: { groupPolicy: policy },
         }),
       updatePrompt: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         Boolean(resolveDiscordSetupAccountConfig({ cfg, accountId }).config.guilds),

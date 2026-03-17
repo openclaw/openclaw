@@ -81,10 +81,11 @@ function setZalouserDmPolicy(
 function setZalouserGroupPolicy(
   cfg: OpenClawConfig,
   accountId: string,
-  groupPolicy: "open" | "allowlist" | "disabled",
+  groupPolicy: "open" | "allowlist" | "disabled" | "members",
 ): OpenClawConfig {
+  // "members" is Telegram-only; treat as "open" for Zalo.
   return setZalouserAccountScopedConfig(cfg, accountId, {
-    groupPolicy,
+    groupPolicy: groupPolicy === "members" ? "open" : groupPolicy,
   });
 }
 
