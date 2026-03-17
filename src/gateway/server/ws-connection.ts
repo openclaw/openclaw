@@ -183,7 +183,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         return;
       }
       closed = true;
-      clearTimeout(handshakeTimer);
+      if (handshakeTimer) clearTimeout(handshakeTimer);
       if (client) {
         clients.delete(client);
       }
