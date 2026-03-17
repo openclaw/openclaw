@@ -26,17 +26,27 @@ import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 /**
  * Resolves the caller identity and admin-bypass flag from the connected client.
  *
- * ownerOverride is true when the client holds the operator.admin scope, meaning
- * it can read and mutate any cron job regardless of ownership metadata.
+ * When the caller supplies a `callerSessionKey` it is explicitly requesting
+ * session-scoped access (multi-agent / multi-user deployments).  In that case
+ * the ownership check in the service layer must fire even if the client holds
+ * `ADMIN_SCOPE`, so `ownerOverride` stays false.
+ *
+ * `ownerOverride` is only true when the client is an admin that did **not**
+ * supply a session key — the typical local-CLI / control-UI case where a
+ * single operator manages all jobs.
  */
-function resolveCronCallerOptions(
+export function resolveCronCallerOptions(
   client: GatewayClient | null,
   callerSessionKey?: string,
 ): CronMutationCallerOptions {
   const scopes: readonly string[] = Array.isArray(client?.connect?.scopes)
     ? (client.connect.scopes as string[])
     : [];
-  const ownerOverride = scopes.includes(ADMIN_SCOPE);
+  const isAdmin = scopes.includes(ADMIN_SCOPE);
+  // Only bypass ownership when the caller is an admin that did NOT supply a
+  // session key.  A present session key signals session-scoped intent, so the
+  // service-layer ownership check must still run.
+  const ownerOverride = isAdmin && !callerSessionKey;
   return {
     callerSessionKey: callerSessionKey ?? undefined,
     ownerOverride,
