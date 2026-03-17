@@ -2,7 +2,11 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
-import { getApiKeyForModel, type ResolvedProviderAuth } from "./model-auth.js";
+import {
+  applyLocalNoAuthHeaderOverride,
+  getApiKeyForModel,
+  type ResolvedProviderAuth,
+} from "./model-auth.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   buildModelAliasIndex,
@@ -159,12 +163,14 @@ export async function prepareSimpleCompletionModel(params: {
     });
   }
 
+  const resolvedAuth: ResolvedProviderAuth = {
+    ...auth,
+    apiKey: resolvedApiKey,
+  };
+
   return {
-    model: resolved.model,
-    auth: {
-      ...auth,
-      apiKey: resolvedApiKey,
-    },
+    model: applyLocalNoAuthHeaderOverride(resolved.model, resolvedAuth),
+    auth: resolvedAuth,
   };
 }
 

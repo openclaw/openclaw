@@ -5,6 +5,7 @@ import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { resolveChannelModelOverride } from "../../../../src/channels/model-overrides.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 import {
@@ -318,6 +319,7 @@ type MaybeCreateDiscordAutoThreadParams = {
   client: Client;
   message: DiscordMessageEvent["message"];
   messageChannelId?: string;
+  channel?: string;
   isGuildMessage: boolean;
   channelConfig?: DiscordChannelConfigResolved | null;
   threadChannel?: DiscordThreadChannel | null;
@@ -346,6 +348,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
     client: params.client,
     message: params.message,
     messageChannelId: messageChannelId || undefined,
+    channel: params.channel,
     isGuildMessage: params.isGuildMessage,
     channelConfig: params.channelConfig,
     threadChannel: params.threadChannel,
@@ -426,12 +429,21 @@ export async function maybeCreateDiscordAutoThread(
       params.cfg &&
       params.agentId
     ) {
+      const modelRef = resolveDiscordThreadTitleModelRef({
+        cfg: params.cfg,
+        channel: params.channel,
+        agentId: params.agentId,
+        threadId: createdId,
+        messageChannelId,
+        channelName: params.channelName,
+      });
       void maybeRenameDiscordAutoThread({
         client: params.client,
         threadId: createdId,
         currentName: threadName,
         fallbackId: params.message.id,
         sourceText: rawThreadSource,
+        modelRef,
         channelName: params.channelName,
         channelDescription: params.channelDescription,
         cfg: params.cfg,
@@ -463,12 +475,43 @@ export async function maybeCreateDiscordAutoThread(
   }
 }
 
+function resolveDiscordThreadTitleModelRef(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  agentId: string;
+  threadId: string;
+  messageChannelId: string;
+  channelName?: string;
+}): string | undefined {
+  const channel = params.channel?.trim();
+  if (!channel) {
+    return undefined;
+  }
+  const parentSessionKey = buildAgentSessionKey({
+    agentId: params.agentId,
+    channel,
+    peer: { kind: "channel", id: params.messageChannelId },
+  });
+  const channelLabel = params.channelName?.trim();
+  const groupChannel = channelLabel ? `#${channelLabel}` : undefined;
+  const channelOverride = resolveChannelModelOverride({
+    cfg: params.cfg,
+    channel,
+    groupId: params.threadId,
+    groupChannel,
+    groupSubject: groupChannel,
+    parentSessionKey,
+  });
+  return channelOverride?.model;
+}
+
 async function maybeRenameDiscordAutoThread(params: {
   client: Client;
   threadId: string;
   currentName: string;
   fallbackId: string;
   sourceText: string;
+  modelRef?: string;
   channelName?: string;
   channelDescription?: string;
   cfg: OpenClawConfig;
@@ -480,6 +523,7 @@ async function maybeRenameDiscordAutoThread(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       messageText: params.sourceText,
+      modelRef: params.modelRef,
       channelName: params.channelName,
       channelDescription: params.channelDescription,
     });

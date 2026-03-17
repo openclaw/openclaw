@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
   getApiKeyForModelMock: vi.fn(),
+  applyLocalNoAuthHeaderOverrideMock: vi.fn(),
   setRuntimeApiKeyMock: vi.fn(),
   resolveCopilotApiTokenMock: vi.fn(),
 }));
@@ -13,6 +14,7 @@ vi.mock("./pi-embedded-runner/model.js", () => ({
 
 vi.mock("./model-auth.js", () => ({
   getApiKeyForModel: hoisted.getApiKeyForModelMock,
+  applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
 vi.mock("../../extensions/github-copilot/token.js", () => ({
@@ -24,8 +26,11 @@ import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
 beforeEach(() => {
   hoisted.resolveModelMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
+  hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
   hoisted.setRuntimeApiKeyMock.mockReset();
   hoisted.resolveCopilotApiTokenMock.mockReset();
+
+  hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
 
   hoisted.resolveModelMock.mockReturnValue({
     model: {
@@ -240,5 +245,55 @@ describe("prepareSimpleCompletionModel", () => {
       error: 'Auth lookup failed for provider "anthropic": Profile not found: copilot',
     });
     expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("applies local no-auth header override before returning model", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "local-openai",
+        id: "chat-local",
+        api: "openai-completions",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "custom-local",
+      source: "models.providers.local-openai (synthetic local key)",
+      mode: "api-key",
+    });
+    hoisted.applyLocalNoAuthHeaderOverrideMock.mockReturnValueOnce({
+      provider: "local-openai",
+      id: "chat-local",
+      api: "openai-completions",
+      headers: { Authorization: null },
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "local-openai",
+      modelId: "chat-local",
+    });
+
+    expect(hoisted.applyLocalNoAuthHeaderOverrideMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "local-openai",
+        id: "chat-local",
+      }),
+      expect.objectContaining({
+        apiKey: "custom-local",
+        source: "models.providers.local-openai (synthetic local key)",
+        mode: "api-key",
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: null }),
+        }),
+      }),
+    );
   });
 });

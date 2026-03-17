@@ -86,6 +86,23 @@ describe("generateThreadTitle", () => {
     });
   });
 
+  it("passes model override refs into shared model prep", async () => {
+    const cfg = {} as OpenClawConfig;
+    await generateThreadTitle({
+      cfg,
+      agentId: "main",
+      modelRef: "openai/gpt-4.1-mini@local",
+      messageText: "Need a generated title.",
+    });
+
+    expect(hoisted.prepareSimpleCompletionModelForAgentMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      modelRef: "openai/gpt-4.1-mini@local",
+      allowMissingApiKeyModes: ["aws-sdk"],
+    });
+  });
+
   it("returns null when shared model prep cannot resolve selection", async () => {
     hoisted.prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
       error: "No model configured for agent main.",

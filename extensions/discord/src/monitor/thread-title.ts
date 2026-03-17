@@ -19,6 +19,7 @@ export async function generateThreadTitle(params: {
   cfg: OpenClawConfig;
   agentId: string;
   messageText: string;
+  modelRef?: string;
   channelName?: string;
   channelDescription?: string;
   timeoutMs?: number;
@@ -31,6 +32,7 @@ export async function generateThreadTitle(params: {
   const prepared = await prepareSimpleCompletionModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    ...(params.modelRef ? { modelRef: params.modelRef } : {}),
     allowMissingApiKeyModes: ["aws-sdk"],
   });
   if ("error" in prepared) {

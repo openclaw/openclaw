@@ -30,6 +30,7 @@ function createBaseParams(
     client: mockClient,
     message: mockMessage,
     messageChannelId: "text1",
+    channel: "discord",
     isGuildMessage: true,
     channelConfig: { allowed: true, autoThread: true },
     channelType: ChannelType.GuildText,
@@ -195,6 +196,72 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     resolveTitle?.("Async summary");
     await flushAsyncWork();
     expect(patchMock).toHaveBeenCalled();
+  });
+
+  it("uses channel-specific thread override for generated title model", async () => {
+    postMock.mockResolvedValueOnce({ id: "thread1" });
+    patchMock.mockResolvedValueOnce({});
+    generateThreadTitleMock.mockResolvedValueOnce("Deploy rollout summary");
+
+    const cfg = {
+      agents: {
+        defaults: { model: "anthropic/claude-opus-4-6" },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            thread1: "openai/gpt-4.1-mini",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await maybeCreateDiscordAutoThread(
+      createBaseParams({
+        channelConfig: { allowed: true, autoThread: true, autoThreadName: "generated" },
+        cfg,
+        agentId: "main",
+      }),
+    );
+
+    await flushAsyncWork();
+    expect(generateThreadTitleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "openai/gpt-4.1-mini",
+      }),
+    );
+  });
+
+  it("falls back to parent channel override for generated title model", async () => {
+    postMock.mockResolvedValueOnce({ id: "thread1" });
+    patchMock.mockResolvedValueOnce({});
+    generateThreadTitleMock.mockResolvedValueOnce("Deploy rollout summary");
+
+    const cfg = {
+      agents: {
+        defaults: { model: "anthropic/claude-opus-4-6" },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            text1: "openai/gpt-4.1-mini",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await maybeCreateDiscordAutoThread(
+      createBaseParams({
+        channelConfig: { allowed: true, autoThread: true, autoThreadName: "generated" },
+        cfg,
+        agentId: "main",
+      }),
+    );
+
+    await flushAsyncWork();
+    expect(generateThreadTitleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "openai/gpt-4.1-mini",
+      }),
+    );
   });
 
   it("skips summarization when cfg or agentId is missing", async () => {
