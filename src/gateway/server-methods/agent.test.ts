@@ -334,8 +334,10 @@ describe("gateway agent handler", () => {
     );
   });
 
-  it("does not forward provider and model overrides for write-scoped callers", async () => {
+  it("rejects provider and model overrides for write-scoped callers", async () => {
     primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
 
     await invokeAgent(
       {
@@ -353,14 +355,51 @@ describe("gateway agent handler", () => {
             scopes: ["operator.write"],
           },
         } as AgentHandlerArgs["client"],
+        respond,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "provider/model overrides are not authorized for this caller.",
+      }),
+    );
+  });
+
+  it("forwards provider and model overrides when internal override authorization is set", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "test override",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        provider: "anthropic",
+        model: "claude-haiku-4-6",
+        idempotencyKey: "test-idem-model-override-internal",
+      },
+      {
+        reqId: "test-idem-model-override-internal",
+        client: {
+          connect: {
+            scopes: ["operator.write"],
+          },
+          internal: {
+            allowModelOverride: true,
+          },
+        } as AgentHandlerArgs["client"],
       },
     );
 
     const lastCall = mocks.agentCommand.mock.calls.at(-1);
     expect(lastCall?.[0]).toEqual(
       expect.objectContaining({
-        provider: undefined,
-        model: undefined,
+        provider: "anthropic",
+        model: "claude-haiku-4-6",
+        senderIsOwner: false,
       }),
     );
   });
