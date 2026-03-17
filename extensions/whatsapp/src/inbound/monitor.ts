@@ -1,5 +1,5 @@
 import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
-import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
+import { DisconnectReason, isJidGroup, jidNormalizedUser } from "@whiskeysockets/baileys";
 import { createInboundDebouncer } from "../../../../src/auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../../../src/channels/location.js";
 import { logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
@@ -399,11 +399,6 @@ export async function monitorWebInbox(options: {
       return;
     }
     for (const msg of upsert.messages ?? []) {
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: options.accountId,
-        direction: "inbound",
-      });
       const inbound = await normalizeInboundMessage(msg);
       if (!inbound) {
         continue;
@@ -422,6 +417,13 @@ export async function monitorWebInbox(options: {
         }
       }
 
+      // Only record activity for real new messages, not deduped or history catch-up.
+      recordChannelActivity({
+        channel: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
+
       const enriched = await enrichInboundMessage(msg);
       if (!enriched) {
         continue;
@@ -430,7 +432,128 @@ export async function monitorWebInbox(options: {
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
+  const handleMessagesReaction = async (
+    reactions: Array<{
+      key: {
+        remoteJid?: string | null;
+        id?: string | null;
+        participant?: string | null;
+        fromMe?: boolean | null;
+      };
+      reaction: { text?: string | null };
+      userJid?: string | null;
+    }>,
+  ) => {
+    for (const { key, reaction, userJid } of reactions) {
+      const emoji = reaction?.text;
+      if (!emoji) continue; // empty string = reaction removed, skip
+
+      const remoteJid = key?.remoteJid;
+      if (!remoteJid) continue;
+      if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast")) continue;
+
+      const group = isJidGroup(remoteJid) === true;
+      // key.participant is the original message sender (the reacted-to message key's participant),
+      // not the reactor. Only userJid carries the actual reactor identity; for DMs fall back to
+      // remoteJid (the peer) when userJid is absent. Never use key.participant as reactor.
+      const reactorJid = userJid ?? (group ? undefined : remoteJid);
+      // In groups, reactor identity is required — skip unattributable reactions.
+      if (group && !reactorJid) continue;
+
+      // Deduplicate before expensive async JID resolution — dedupeKey uses only sync fields.
+      const dedupeKey = `${options.accountId}:${remoteJid}:${reactorJid ?? ""}:${emoji}:${key?.id ?? ""}`;
+      if (isRecentInboundMessage(dedupeKey)) continue;
+
+      const senderE164 = reactorJid ? await resolveInboundJid(reactorJid) : null;
+      // In DMs, `from` must be the E.164 of the conversation peer, not the reactor.
+      // Mirror normalizeInboundMessage: drop the event if E.164 resolution fails rather than
+      // falling back to a raw JID, which would break isSamePhone and allowlist checks downstream.
+      const resolvedFrom = group ? remoteJid : await resolveInboundJid(remoteJid);
+      if (!resolvedFrom) continue;
+      const from = resolvedFrom;
+
+      // Derive isFromMe from reactor identity, not key.fromMe.
+      // key.fromMe on a reaction refers to whether the *reacted-to message* was from us,
+      // not whether the reactor is us. Compare JIDs directly instead.
+      const isFromMe =
+        reactorJid != null &&
+        selfJid != null &&
+        jidNormalizedUser(reactorJid) === jidNormalizedUser(selfJid);
+
+      const access = await checkInboundAccessControl({
+        accountId: options.accountId,
+        from,
+        selfE164,
+        senderE164,
+        group,
+        pushName: undefined,
+        isFromMe,
+        // Reactions carry no timestamp from Baileys. Passing 0 ensures suppressPairingReply is
+        // always true, so unknown DM senders who react never trigger a pairing-challenge reply.
+        messageTimestampMs: 0,
+        connectedAtMs,
+        sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
+        remoteJid,
+      });
+      if (!access.allowed) continue;
+
+      // Only record activity for reactions that pass access control — consistent with
+      // handleMessagesUpsert and prevents blocked/self reactions from inflating inbound metrics.
+      recordChannelActivity({
+        channel: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
+
+      const reactedMessageId = key?.id ?? undefined;
+      const chatJid = remoteJid;
+
+      inboundConsoleLog.info(
+        `Reaction ${emoji} on message ${reactedMessageId ?? "unknown"} from ${senderE164 ?? reactorJid ?? "unknown"}`,
+      );
+
+      const reactionMessage: WebInboundMessage = {
+        id: undefined,
+        from,
+        conversationId: group ? remoteJid : from,
+        to: selfE164 ?? "me",
+        accountId: access.resolvedAccountId,
+        body: emoji,
+        timestamp: Date.now(),
+        chatType: group ? "group" : "direct",
+        chatId: remoteJid,
+        senderJid: reactorJid ?? undefined,
+        senderE164: senderE164 ?? undefined,
+        selfJid,
+        selfE164,
+        fromMe: isFromMe,
+        reactionEmoji: emoji,
+        reactionMessageId: reactedMessageId,
+        sendComposing: async () => {
+          try {
+            await sock.sendPresenceUpdate("composing", chatJid);
+          } catch (err) {
+            logVerbose(`Presence update failed: ${String(err)}`);
+          }
+        },
+        reply: async (text: string) => {
+          await sock.sendMessage(chatJid, { text });
+        },
+        sendMedia: async (payload: AnyMessageContent) => {
+          await sock.sendMessage(chatJid, payload);
+        },
+      };
+
+      try {
+        await options.onMessage(reactionMessage);
+      } catch (err) {
+        inboundLogger.error({ error: String(err) }, "failed handling inbound reaction");
+        inboundConsoleLog.error(`Failed handling inbound reaction: ${String(err)}`);
+      }
+    }
+  };
   sock.ev.on("messages.upsert", handleMessagesUpsert);
+  sock.ev.on("messages.reaction", handleMessagesReaction);
 
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
@@ -472,12 +595,17 @@ export async function monitorWebInbox(options: {
         const connectionUpdateHandler = handleConnectionUpdate as unknown as (
           ...args: unknown[]
         ) => void;
+        const messagesReactionHandler = handleMessagesReaction as unknown as (
+          ...args: unknown[]
+        ) => void;
         if (typeof ev.off === "function") {
           ev.off("messages.upsert", messagesUpsertHandler);
           ev.off("connection.update", connectionUpdateHandler);
+          ev.off("messages.reaction", messagesReactionHandler);
         } else if (typeof ev.removeListener === "function") {
           ev.removeListener("messages.upsert", messagesUpsertHandler);
           ev.removeListener("connection.update", connectionUpdateHandler);
+          ev.removeListener("messages.reaction", messagesReactionHandler);
         }
         sock.ws?.close();
       } catch (err) {
