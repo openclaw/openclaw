@@ -1386,6 +1386,65 @@ Recommended sequence:
 This is how OpenClaw stays opinionated without becoming hardcoded to one
 provider's worldview.
 
+### Capability checklist
+
+When you add a new capability, the implementation should usually touch these
+surfaces together:
+
+- core contract types in `src/<capability>/types.ts`
+- core runner/runtime helper in `src/<capability>/runtime.ts`
+- plugin API registration surface in `src/plugins/types.ts`
+- plugin registry wiring in `src/plugins/registry.ts`
+- plugin runtime exposure in `src/plugins/runtime/*` when feature/channel
+  plugins need to consume it
+- capture/test helpers in `src/test-utils/plugin-registration.ts`
+- ownership/contract assertions in `src/plugins/contracts/registry.ts`
+- operator/plugin docs in `docs/`
+
+If one of those surfaces is missing, that is usually a sign the capability is
+not fully integrated yet.
+
+### Capability template
+
+Minimal pattern:
+
+```ts
+// core contract
+export type VideoGenerationProviderPlugin = {
+  id: string;
+  label: string;
+  generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
+};
+
+// plugin API
+api.registerVideoGenerationProvider({
+  id: "openai",
+  label: "OpenAI",
+  async generateVideo(req) {
+    return await generateOpenAiVideo(req);
+  },
+});
+
+// shared runtime helper for feature/channel plugins
+const clip = await api.runtime.videoGeneration.generateFile({
+  prompt: "Show the robot walking through the lab.",
+  cfg,
+});
+```
+
+Contract test pattern:
+
+```ts
+expect(findVideoGenerationProviderIdsForPlugin("openai")).toEqual(["openai"]);
+```
+
+That keeps the rule simple:
+
+- core owns the capability contract + orchestration
+- vendor plugins own vendor implementations
+- feature/channel plugins consume runtime helpers
+- contract tests keep ownership explicit
+
 Context engine plugins can also register a runtime-owned context manager:
 
 ```ts
