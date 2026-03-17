@@ -384,26 +384,49 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
+
+      // When one side is an explicitly npm-installed global plugin and the
+      // other is the bundled version with the same id, the user intentionally
+      // installed the override — suppress the noisy duplicate warning but let
+      // both records flow through so loader dedup state is preserved.
+      const candidateIsInstalled = matchesInstalledPluginRecord({
         pluginId: manifest.id,
-        source: candidate.source,
-        message:
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate,
-            config,
-            env,
-          }) <
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate: existing.candidate,
-            config,
-            env,
-          })
-            ? `duplicate plugin id detected; ${existing.candidate.origin} plugin will be overridden by ${candidate.origin} plugin (${candidate.source})`
-            : `duplicate plugin id detected; ${candidate.origin} plugin will be overridden by ${existing.candidate.origin} plugin (${candidate.source})`,
+        candidate,
+        config,
+        env,
       });
+      const existingIsInstalled = matchesInstalledPluginRecord({
+        pluginId: manifest.id,
+        candidate: existing.candidate,
+        config,
+        env,
+      });
+      const isIntentionalOverride =
+        (candidateIsInstalled && existing.candidate.origin === "bundled") ||
+        (existingIsInstalled && candidate.origin === "bundled");
+
+      if (!isIntentionalOverride) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message:
+            resolveDuplicatePrecedenceRank({
+              pluginId: manifest.id,
+              candidate,
+              config,
+              env,
+            }) <
+            resolveDuplicatePrecedenceRank({
+              pluginId: manifest.id,
+              candidate: existing.candidate,
+              config,
+              env,
+            })
+              ? `duplicate plugin id detected; ${existing.candidate.origin} plugin will be overridden by ${candidate.origin} plugin (${candidate.source})`
+              : `duplicate plugin id detected; ${candidate.origin} plugin will be overridden by ${existing.candidate.origin} plugin (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

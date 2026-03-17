@@ -159,7 +159,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
   });
 
-  it("reports explicit installed globals as the effective duplicate winner", () => {
+  it("suppresses duplicate warning for npm-installed plugin overriding bundled", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
     const manifest = { id: "zalouser", configSchema: { type: "object" } };
@@ -192,11 +192,47 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("bundled plugin will be overridden by global plugin"),
-      ),
-    ).toBe(true);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    // Both records remain so loader dedup state is preserved; precedence
+    // logic downstream picks the winner.
+    expect(registry.plugins.filter((p) => p.id === "zalouser").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("suppresses duplicate warning for npm-installed plugin overriding bundled (global first)", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "zalouser", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const registry = loadPluginManifestRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          installs: {
+            zalouser: {
+              source: "npm",
+              installPath: globalDir,
+            },
+          },
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+        createPluginCandidate({
+          idHint: "zalouser",
+          rootDir: bundledDir,
+          origin: "bundled",
+        }),
+      ],
+    });
+
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins.filter((p) => p.id === "zalouser").length).toBeGreaterThanOrEqual(1);
   });
 
   it("preserves provider auth env metadata from plugin manifests", () => {
