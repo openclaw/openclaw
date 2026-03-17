@@ -20,6 +20,34 @@ const matrixMonitorListenerRegistry = (() => {
   };
 })();
 
+// Deduplication cache for message processing
+// Key: eventId, Value: timestamp when processed
+const messageDeduplicationCache = new Map<string, number>();
+const DEDUP_CACHE_MAX_SIZE = 1000;
+const DEDUP_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function isMessageDuplicate(eventId: string): boolean {
+  const now = Date.now();
+  const cachedAt = messageDeduplicationCache.get(eventId);
+  
+  if (cachedAt && (now - cachedAt) < DEDUP_CACHE_TTL_MS) {
+    return true;
+  }
+  
+  // Clean up old entries if cache is too large
+  if (messageDeduplicationCache.size >= DEDUP_CACHE_MAX_SIZE) {
+    const cutoff = now - DEDUP_CACHE_TTL_MS;
+    for (const [key, timestamp] of messageDeduplicationCache.entries()) {
+      if (timestamp < cutoff) {
+        messageDeduplicationCache.delete(key);
+      }
+    }
+  }
+  
+  messageDeduplicationCache.set(eventId, now);
+  return false;
+}
+
 function createSelfUserIdResolver(client: Pick<MatrixClient, "getUserId">) {
   let selfUserId: string | undefined;
   let selfUserIdLookup: Promise<string | undefined> | undefined;
@@ -76,6 +104,13 @@ export function registerMatrixMonitorEvents(params: {
   client.on("room.message", (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id;
     const senderId = event?.sender;
+    
+    // Skip duplicate messages
+    if (eventId && isMessageDuplicate(eventId)) {
+      logVerboseMessage(`matrix: dropping duplicate message room=${roomId} id=${eventId}`);
+      return;
+    }
+    
     if (eventId && senderId) {
       void (async () => {
         const currentSelfUserId = await resolveSelfUserId();
@@ -93,8 +128,16 @@ export function registerMatrixMonitorEvents(params: {
     onRoomMessage(roomId, event);
   });
 
+  // Handle encrypted events with deduplication
   client.on("room.encrypted_event", (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id ?? "unknown";
+    
+    // Skip duplicate messages
+    if (isMessageDuplicate(eventId)) {
+      logVerboseMessage(`matrix: dropping duplicate encrypted event room=${roomId} id=${eventId}`);
+      return;
+    }
+    
     const eventType = event?.type ?? "unknown";
     logVerboseMessage(`matrix: encrypted event room=${roomId} type=${eventType} id=${eventId}`);
   });
