@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/zalouser";
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
-import { createTestWizardPrompter } from "../../test-utils/setup-wizard.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createTestWizardPrompter } from "../../../test/helpers/extensions/setup-wizard.js";
 
 vi.mock("./zalo-js.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./zalo-js.js")>();

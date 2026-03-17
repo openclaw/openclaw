@@ -1,8 +1,8 @@
 import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/tlon";
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
-import { createTestWizardPrompter, type WizardPrompter } from "../../test-utils/setup-wizard.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createTestWizardPrompter, type WizardPrompter } from "../../../test/helpers/extensions/setup-wizard.js";
 import { tlonPlugin } from "./channel.js";
 
 const tlonConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
