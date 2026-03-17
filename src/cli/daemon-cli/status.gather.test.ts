@@ -72,9 +72,17 @@ const daemonLoadConfig = vi.fn(() => daemonLoadedConfig);
 const cliLoadConfig = vi.fn(() => cliLoadedConfig);
 const daemonLoadConfigReadOnly = vi.fn(() => daemonLoadedConfig);
 const cliLoadConfigReadOnly = vi.fn(() => cliLoadedConfig);
+const configIoEnvArgs: Array<Record<string, string | undefined>> = [];
 
 vi.mock("../../config/config.js", () => ({
-  createConfigIO: ({ configPath }: { configPath: string }) => {
+  createConfigIO: ({
+    configPath,
+    env,
+  }: {
+    configPath: string;
+    env: Record<string, string | undefined>;
+  }) => {
+    configIoEnvArgs.push(env);
     const isDaemon = configPath.includes("/openclaw-daemon/");
     const loadConfig = isDaemon ? daemonLoadConfig : cliLoadConfig;
     const loadConfigReadOnly = isDaemon ? daemonLoadConfigReadOnly : cliLoadConfigReadOnly;
@@ -170,6 +178,7 @@ describe("gatherDaemonStatus", () => {
     cliLoadConfig.mockClear();
     daemonLoadConfigReadOnly.mockClear();
     cliLoadConfigReadOnly.mockClear();
+    configIoEnvArgs.length = 0;
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -219,6 +228,18 @@ describe("gatherDaemonStatus", () => {
     expect(daemonLoadConfigReadOnly).toHaveBeenCalledTimes(1);
     expect(cliLoadConfig).not.toHaveBeenCalled();
     expect(daemonLoadConfig).not.toHaveBeenCalled();
+  });
+
+  it("isolates daemon status config reads from process env object identity", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(configIoEnvArgs).toHaveLength(2);
+    expect(configIoEnvArgs[0]).not.toBe(process.env);
+    expect(configIoEnvArgs[1]).not.toBe(process.env);
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
