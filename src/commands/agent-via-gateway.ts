@@ -14,6 +14,8 @@ import {
 import { agentCommand } from "./agent.js";
 import { resolveSessionKeyForRequest } from "./agent/session.js";
 
+const SILENT_AGENT_SUMMARIES = new Set(["NO_REPLY", "ANNOUNCE_SKIP"]);
+
 type AgentGatewayResult = {
   payloads?: Array<{
     text?: string;
@@ -31,6 +33,11 @@ type GatewayAgentResponse = {
 };
 
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
+
+function isSilentAgentSummary(text: string | undefined): boolean {
+  const normalized = text?.trim();
+  return normalized ? SILENT_AGENT_SUMMARIES.has(normalized) : false;
+}
 
 export type AgentCliOpts = {
   message: string;
@@ -163,7 +170,10 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const payloads = result?.payloads ?? [];
 
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
+    const summary = response?.summary ? String(response.summary) : undefined;
+    if (!isSilentAgentSummary(summary)) {
+      runtime.log(summary ?? "No reply from agent.");
+    }
     return response;
   }
 

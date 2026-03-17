@@ -107,6 +107,21 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("suppresses silent gateway summaries when no payloads are returned", async () => {
+    await withTempStore(async () => {
+      vi.mocked(callGateway).mockResolvedValue({
+        runId: "idem-1",
+        status: "ok",
+        summary: " ANNOUNCE_SKIP ",
+        result: { payloads: [], meta: { stub: true } },
+      });
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(runtime.log).not.toHaveBeenCalled();
+    });
+  });
+
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
       vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
