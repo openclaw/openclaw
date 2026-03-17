@@ -10,14 +10,17 @@ import {
   waitForActiveEmbeddedRuns,
 } from "./runs.js";
 
+type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
+
 function createRunHandle(
-  overrides: { isCompacting?: boolean; abort?: ReturnType<typeof vi.fn> } = {},
-) {
+  overrides: { isCompacting?: boolean; abort?: () => void } = {},
+): RunHandle {
+  const abort = overrides.abort ?? (() => {});
   return {
     queueMessage: async () => {},
     isStreaming: () => true,
     isCompacting: () => overrides.isCompacting ?? false,
-    abort: overrides.abort ?? vi.fn(),
+    abort,
   };
 }
 

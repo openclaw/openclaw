@@ -25,14 +25,18 @@ function expectClearedTimeoutState(onTimeout: ReturnType<typeof vi.fn>, timedOut
 function buildAggregateTimeoutParams(
   overrides: Partial<AggregateTimeoutParams> &
     Pick<AggregateTimeoutParams, "waitForCompactionRetry">,
-): AggregateTimeoutParams & { onTimeout: ReturnType<typeof vi.fn> } {
-  const onTimeout = overrides.onTimeout ?? vi.fn();
+): { params: AggregateTimeoutParams; onTimeoutSpy: ReturnType<typeof vi.fn> } {
+  const onTimeoutSpy = vi.fn();
+  const onTimeout = overrides.onTimeout ?? (() => onTimeoutSpy());
   return {
-    waitForCompactionRetry: overrides.waitForCompactionRetry,
-    abortable: overrides.abortable ?? (async (promise) => await promise),
-    aggregateTimeoutMs: overrides.aggregateTimeoutMs ?? 60_000,
-    isCompactionStillInFlight: overrides.isCompactionStillInFlight,
-    onTimeout,
+    params: {
+      waitForCompactionRetry: overrides.waitForCompactionRetry,
+      abortable: overrides.abortable ?? (async (promise) => await promise),
+      aggregateTimeoutMs: overrides.aggregateTimeoutMs ?? 60_000,
+      isCompactionStillInFlight: overrides.isCompactionStillInFlight,
+      onTimeout,
+    },
+    onTimeoutSpy,
   };
 }
 
@@ -40,7 +44,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
   it("times out and fires callback when compaction retry never resolves", async () => {
     await withFakeTimers(async () => {
       const waitForCompactionRetry = vi.fn(async () => await new Promise<void>(() => {}));
-      const params = buildAggregateTimeoutParams({ waitForCompactionRetry });
+      const { params, onTimeoutSpy } = buildAggregateTimeoutParams({ waitForCompactionRetry });
 
       const resultPromise = waitForCompactionRetryWithAggregateTimeout(params);
 
@@ -48,7 +52,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(true);
-      expectClearedTimeoutState(params.onTimeout, true);
+      expectClearedTimeoutState(onTimeoutSpy, true);
     });
   });
 
@@ -68,14 +72,15 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
         waitForCompactionRetry,
         isCompactionStillInFlight: () => compactionInFlight,
       });
+      const { params: aggregateTimeoutParams, onTimeoutSpy } = params;
 
-      const resultPromise = waitForCompactionRetryWithAggregateTimeout(params);
+      const resultPromise = waitForCompactionRetryWithAggregateTimeout(aggregateTimeoutParams);
 
       await vi.advanceTimersByTimeAsync(170_000);
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(false);
-      expectClearedTimeoutState(params.onTimeout, false);
+      expectClearedTimeoutState(onTimeoutSpy, false);
     });
   });
 
@@ -86,7 +91,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       setTimeout(() => {
         compactionInFlight = false;
       }, 90_000);
-      const params = buildAggregateTimeoutParams({
+      const { params, onTimeoutSpy } = buildAggregateTimeoutParams({
         waitForCompactionRetry,
         isCompactionStillInFlight: () => compactionInFlight,
       });
@@ -97,19 +102,19 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const result = await resultPromise;
 
       expect(result.timedOut).toBe(true);
-      expectClearedTimeoutState(params.onTimeout, true);
+      expectClearedTimeoutState(onTimeoutSpy, true);
     });
   });
 
   it("does not time out when compaction retry resolves", async () => {
     await withFakeTimers(async () => {
       const waitForCompactionRetry = vi.fn(async () => {});
-      const params = buildAggregateTimeoutParams({ waitForCompactionRetry });
+      const { params, onTimeoutSpy } = buildAggregateTimeoutParams({ waitForCompactionRetry });
 
       const result = await waitForCompactionRetryWithAggregateTimeout(params);
 
       expect(result.timedOut).toBe(false);
-      expectClearedTimeoutState(params.onTimeout, false);
+      expectClearedTimeoutState(onTimeoutSpy, false);
     });
   });
 
@@ -118,7 +123,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
       const abortError = new Error("aborted");
       abortError.name = "AbortError";
       const waitForCompactionRetry = vi.fn(async () => await new Promise<void>(() => {}));
-      const params = buildAggregateTimeoutParams({
+      const { params, onTimeoutSpy } = buildAggregateTimeoutParams({
         waitForCompactionRetry,
         abortable: async () => {
           throw abortError;
@@ -127,7 +132,7 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
 
       await expect(waitForCompactionRetryWithAggregateTimeout(params)).rejects.toThrow("aborted");
 
-      expectClearedTimeoutState(params.onTimeout, false);
+      expectClearedTimeoutState(onTimeoutSpy, false);
     });
   });
 });

@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import { createTestWizardPrompter, type WizardPrompter } from "../../../test/helpers/extensions/setup-wizard.js";
+import {
+  createTestWizardPrompter,
+  type WizardPrompter,
+} from "../../../test/helpers/extensions/setup-wizard.js";
 import { synologyChatPlugin } from "./channel.js";
 import { synologyChatSetupWizard } from "./setup-surface.js";
 
