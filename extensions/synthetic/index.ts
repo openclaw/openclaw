@@ -1,6 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import { applySyntheticConfig, SYNTHETIC_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
 import { buildSyntheticProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "synthetic";
@@ -40,18 +41,12 @@ const syntheticPlugin = {
       ],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...buildSyntheticProvider(),
-              apiKey,
-            },
-          };
-        },
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildSyntheticProvider,
+          }),
       },
     });
   },

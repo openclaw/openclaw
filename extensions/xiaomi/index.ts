@@ -2,6 +2,7 @@ import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin
 import { PROVIDER_LABELS } from "../../src/infra/provider-usage.shared.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import { applyXiaomiConfig, XIAOMI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildSingleProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
 import { buildXiaomiProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "xiaomi";
@@ -41,18 +42,12 @@ const xiaomiPlugin = {
       ],
       catalog: {
         order: "simple",
-        run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...buildXiaomiProvider(),
-              apiKey,
-            },
-          };
-        },
+        run: (ctx) =>
+          buildSingleProviderApiKeyCatalog({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: buildXiaomiProvider,
+          }),
       },
       resolveUsageAuth: async (ctx) => {
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
