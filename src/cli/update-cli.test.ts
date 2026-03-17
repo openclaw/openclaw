@@ -481,47 +481,28 @@ describe("update-cli", () => {
       expectedChannel: "beta" as const,
       expectedTag: undefined as string | undefined,
     },
-    {
-      name: "uses explicit beta channel and persists it",
-      mode: "git" as const,
-      options: { channel: "beta" },
-      prepare: async () => {},
-      expectedChannel: undefined as string | undefined,
-      expectedTag: undefined as string | undefined,
-      expectedPersistedChannel: "beta" as const,
-    },
-  ])(
-    "$name",
-    async ({ mode, options, prepare, expectedChannel, expectedTag, expectedPersistedChannel }) => {
-      await prepare();
-      if (mode) {
-        vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult({ mode }));
+  ])("$name", async ({ mode, options, prepare, expectedChannel, expectedTag }) => {
+    await prepare();
+    if (mode) {
+      vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult({ mode }));
+    }
+
+    await updateCommand(options);
+
+    if (expectedChannel !== undefined) {
+      const call = expectUpdateCallChannel(expectedChannel);
+      if (expectedTag !== undefined) {
+        expect(call?.tag).toBe(expectedTag);
       }
+      return;
+    }
 
-      await updateCommand(options);
-
-      if (expectedChannel !== undefined) {
-        const call = expectUpdateCallChannel(expectedChannel);
-        if (expectedTag !== undefined) {
-          expect(call?.tag).toBe(expectedTag);
-        }
-        if (expectedPersistedChannel !== undefined) {
-          expect(writeConfigFile).toHaveBeenCalled();
-          const writeCall = vi.mocked(writeConfigFile).mock.calls[0]?.[0] as {
-            update?: { channel?: string };
-          };
-          expect(writeCall?.update?.channel).toBe(expectedPersistedChannel);
-        }
-        return;
-      }
-
-      expect(runGatewayUpdate).not.toHaveBeenCalled();
-      expect(runCommandWithTimeout).toHaveBeenCalledWith(
-        ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
-        expect.any(Object),
-      );
-    },
-  );
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
 
   it("falls back to latest when beta tag is older than release", async () => {
     const tempDir = createCaseDir("openclaw-update");
@@ -647,52 +628,39 @@ describe("update-cli", () => {
     expect(updateOptions?.env?.NODE_LLAMA_CPP_SKIP_DOWNLOAD).toBe("1");
   });
 
-  it("updateCommand reports success and failure outcomes", async () => {
-    const cases = [
-      {
-        name: "outputs JSON when --json is set",
-        run: async () => {
-          vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-          vi.mocked(defaultRuntime.log).mockClear();
-          await updateCommand({ json: true });
-        },
-        assert: () => {
-          const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
-          const jsonOutput = logCalls.find((call) => {
-            try {
-              JSON.parse(call[0] as string);
-              return true;
-            } catch {
-              return false;
-            }
-          });
-          expect(jsonOutput).toBeDefined();
-        },
-      },
-      {
-        name: "exits with error on failure",
-        run: async () => {
-          vi.mocked(runGatewayUpdate).mockResolvedValue({
-            status: "error",
-            mode: "git",
-            reason: "rebase-failed",
-            steps: [],
-            durationMs: 100,
-          } satisfies UpdateRunResult);
-          vi.mocked(defaultRuntime.exit).mockClear();
-          await updateCommand({});
-        },
-        assert: () => {
-          expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-        },
-      },
-    ] as const;
+  it("updateCommand outputs JSON when --json is set", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    vi.mocked(defaultRuntime.log).mockClear();
 
-    for (const testCase of cases) {
-      vi.clearAllMocks();
-      await testCase.run();
-      testCase.assert();
-    }
+    await updateCommand({ json: true });
+
+    const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
+    const jsonOutput = logCalls.find((call) => {
+      try {
+        JSON.parse(call[0] as string);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    expect(jsonOutput).toBeDefined();
+  });
+
+  it("updateCommand exits with error on failure", async () => {
+    const mockResult: UpdateRunResult = {
+      status: "error",
+      mode: "git",
+      reason: "rebase-failed",
+      steps: [],
+      durationMs: 100,
+    };
+
+    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
+    vi.mocked(defaultRuntime.exit).mockClear();
+
+    await updateCommand({});
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("updateCommand handles service env refresh and restart behavior", async () => {
@@ -760,21 +728,6 @@ describe("update-cli", () => {
           expect(runDaemonInstall).not.toHaveBeenCalled();
           expect(runRestartScript).not.toHaveBeenCalled();
           expect(runDaemonRestart).not.toHaveBeenCalled();
-        },
-      },
-      {
-        name: "skips success message when restart does not run",
-        run: async () => {
-          vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-          vi.mocked(runDaemonRestart).mockResolvedValue(false);
-          vi.mocked(defaultRuntime.log).mockClear();
-          await updateCommand({ restart: true });
-        },
-        assert: () => {
-          const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
-          expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(
-            false,
-          );
         },
       },
     ] as const;
@@ -913,46 +866,54 @@ describe("update-cli", () => {
     }
   });
 
-  it("validates update command invocation errors", async () => {
-    const cases = [
-      {
-        name: "update command invalid timeout",
-        run: async () => await updateCommand({ timeout: "invalid" }),
-        requireTty: false,
-        expectedError: "timeout",
-      },
-      {
-        name: "update status command invalid timeout",
-        run: async () => await updateStatusCommand({ timeout: "invalid" }),
-        requireTty: false,
-        expectedError: "timeout",
-      },
-      {
-        name: "update wizard invalid timeout",
-        run: async () => await updateWizardCommand({ timeout: "invalid" }),
-        requireTty: true,
-        expectedError: "timeout",
-      },
-      {
-        name: "update wizard requires a TTY",
-        run: async () => await updateWizardCommand({}),
-        requireTty: false,
-        expectedError: "Update wizard requires a TTY",
-      },
-    ] as const;
+  it("updateCommand skips success message when restart does not run", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    vi.mocked(runDaemonRestart).mockResolvedValue(false);
+    vi.mocked(defaultRuntime.log).mockClear();
 
-    for (const testCase of cases) {
-      setTty(testCase.requireTty);
-      vi.mocked(defaultRuntime.error).mockClear();
-      vi.mocked(defaultRuntime.exit).mockClear();
+    await updateCommand({ restart: true });
 
-      await testCase.run();
+    const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(false);
+  });
 
-      expect(defaultRuntime.error, testCase.name).toHaveBeenCalledWith(
-        expect.stringContaining(testCase.expectedError),
-      );
-      expect(defaultRuntime.exit, testCase.name).toHaveBeenCalledWith(1);
-    }
+  it.each([
+    {
+      name: "update command",
+      run: async () => await updateCommand({ timeout: "invalid" }),
+      requireTty: false,
+    },
+    {
+      name: "update status command",
+      run: async () => await updateStatusCommand({ timeout: "invalid" }),
+      requireTty: false,
+    },
+    {
+      name: "update wizard command",
+      run: async () => await updateWizardCommand({ timeout: "invalid" }),
+      requireTty: true,
+    },
+  ])("validates timeout option for $name", async ({ run, requireTty }) => {
+    setTty(requireTty);
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.exit).mockClear();
+
+    await run();
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("persists update channel when --channel is set", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+
+    await updateCommand({ channel: "beta" });
+
+    expect(writeConfigFile).toHaveBeenCalled();
+    const call = vi.mocked(writeConfigFile).mock.calls[0]?.[0] as {
+      update?: { channel?: string };
+    };
+    expect(call?.update?.channel).toBe("beta");
   });
 
   it.each([
@@ -985,6 +946,19 @@ describe("update-cli", () => {
         .mocked(runCommandWithTimeout)
         .mock.calls.some((call) => Array.isArray(call[0]) && call[0][0] === "npm"),
     ).toBe(shouldRunPackageUpdate);
+  });
+
+  it("updateWizardCommand requires a TTY", async () => {
+    setTty(false);
+    vi.mocked(defaultRuntime.error).mockClear();
+    vi.mocked(defaultRuntime.exit).mockClear();
+
+    await updateWizardCommand({});
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Update wizard requires a TTY"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
