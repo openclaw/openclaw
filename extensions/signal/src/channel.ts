@@ -34,6 +34,10 @@ import {
   signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";
+
+/** Default text chunk size for Signal outbound messages (chars). */
+const SIGNAL_TEXT_CHUNK_LIMIT = 4000;
+
 type SignalSendFn = typeof import("./send.runtime.js").sendMessageSignal;
 type SignalProbe = import("./probe.js").SignalProbe;
 
@@ -73,6 +77,30 @@ async function resolveSignalSendContext(params: {
   return { send, maxBytes };
 }
 
+function resolveSignalQuoteParams(
+  to: string,
+  replyToId: string | null | undefined,
+  accountPhone: string | undefined,
+): { quoteTimestamp?: number; quoteAuthor?: string } {
+  if (!replyToId) {
+    return {};
+  }
+  const quoteTimestamp = Number(replyToId);
+  if (!Number.isFinite(quoteTimestamp) || quoteTimestamp <= 0) {
+    return {};
+  }
+  const normalizedTo = to.replace(/^signal:/i, "").trim();
+  const isGroup = normalizedTo.toLowerCase().startsWith("group:");
+  if (isGroup) {
+    return {};
+  }
+  const quoteAuthor = normalizedTo || accountPhone;
+  if (!quoteAuthor) {
+    return {};
+  }
+  return { quoteTimestamp, quoteAuthor };
+}
+
 async function sendSignalOutbound(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   to: string;
@@ -81,9 +109,16 @@ async function sendSignalOutbound(params: {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string;
+  replyToId?: string | null;
   deps?: { [channelId: string]: unknown };
 }) {
   const { send, maxBytes } = await resolveSignalSendContext(params);
+  const accountInfo = resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId });
+  const quoteParams = resolveSignalQuoteParams(
+    params.to,
+    params.replyToId,
+    accountInfo.config.account ?? undefined,
+  );
   return await send(params.to, params.text, {
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
@@ -91,6 +126,7 @@ async function sendSignalOutbound(params: {
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     maxBytes,
     accountId: params.accountId ?? undefined,
+    ...quoteParams,
   });
 }
 
@@ -401,7 +437,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         deliveryMode: "direct",
         chunker: chunkText,
         chunkerMode: "text",
-        textChunkLimit: 4000,
+        textChunkLimit: SIGNAL_TEXT_CHUNK_LIMIT,
         sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>
           await sendFormattedSignalText({
             cfg,
@@ -433,15 +469,62 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             deps,
             abortSignal,
           }),
+        sendPayload: async (ctx) => {
+          const text = ctx.payload.text ?? "";
+          const urls: string[] = ctx.payload.mediaUrls?.length
+            ? ctx.payload.mediaUrls
+            : ctx.payload.mediaUrl
+              ? [ctx.payload.mediaUrl]
+              : [];
+          if (!text && urls.length === 0) {
+            return { channel: "signal", messageId: "" };
+          }
+          if (urls.length > 0) {
+            let lastResult: { channel: string; messageId: string } | undefined;
+            for (let i = 0; i < urls.length; i++) {
+              const mediaUrl = urls[i];
+              if (!mediaUrl) continue;
+              const result = await sendSignalOutbound({
+                cfg: ctx.cfg,
+                to: ctx.to,
+                text: i === 0 ? text : "",
+                mediaUrl,
+                mediaLocalRoots: ctx.mediaLocalRoots,
+                accountId: ctx.accountId ?? undefined,
+                replyToId: i === 0 ? (ctx.replyToId ?? undefined) : undefined,
+                deps: ctx.deps,
+              });
+              lastResult = { channel: "signal", ...result };
+            }
+            return lastResult ?? { channel: "signal", messageId: "" };
+          }
+          const chunks = chunkText(text, SIGNAL_TEXT_CHUNK_LIMIT);
+          let lastResult: { channel: string; messageId: string } | undefined;
+          for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            if (!chunk) continue;
+            const result = await sendSignalOutbound({
+              cfg: ctx.cfg,
+              to: ctx.to,
+              text: chunk,
+              accountId: ctx.accountId ?? undefined,
+              replyToId: i === 0 ? (ctx.replyToId ?? undefined) : undefined,
+              deps: ctx.deps,
+            });
+            lastResult = { channel: "signal", ...result };
+          }
+          return lastResult ?? { channel: "signal", messageId: "" };
+        },
       },
       attachedResults: {
         channel: "signal",
-        sendText: async ({ cfg, to, text, accountId, deps }) =>
+        sendText: async ({ cfg, to, text, accountId, deps, replyToId }) =>
           await sendSignalOutbound({
             cfg,
             to,
             text,
             accountId: accountId ?? undefined,
+            replyToId: replyToId ?? undefined,
             deps,
           }),
         sendMedia: async ({
@@ -453,6 +536,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           mediaReadFile,
           accountId,
           deps,
+          replyToId,
         }) =>
           await sendSignalOutbound({
             cfg,
@@ -462,6 +546,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             mediaLocalRoots,
             mediaReadFile,
             accountId: accountId ?? undefined,
+            replyToId: replyToId ?? undefined,
             deps,
           }),
       },
