@@ -125,7 +125,7 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 
 ### File size cap
 
-`logging.maxFileBytes`: maximum size (in bytes) of a single daily log file. When the file exceeds this limit, further writes are silently suppressed until the next day's file rotates in. Default: `524288000` (500 MB).
+`logging.maxFileBytes`: maximum size (in bytes) of a single daily log file. When the file exceeds this limit, further writes are suppressed until the next day's file rotates in (a one-time warning is written to the log file and `stderr` when the cap is first reached). Default: `524288000` (500 MB).
 
 To raise the cap to 1 GB:
 
