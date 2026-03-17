@@ -108,6 +108,21 @@ const BUNDLED_WEB_SEARCH_PROVIDER_REGISTRY = [
     pluginId: "firecrawl",
     provider: createFirecrawlWebSearchProvider(),
   },
+  {
+    pluginId: "baidu",
+    provider: createPluginBackedWebSearchProvider({
+      id: "baidu",
+      label: "Baidu Search",
+      hint: "Structured results",
+      envVars: ["BAIDU_SEARCH_API_KEY"],
+      placeholder: "bce-...",
+      signupUrl: "https://console.bce.baidu.com/ai-search/qianfan/ais/console/apiKey",
+      docsUrl: "https://docs.openclaw.ai/tools/web",
+      getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "baidu"),
+      setCredentialValue: (searchConfigTarget, value) =>
+        setScopedCredentialValue(searchConfigTarget, "baidu", value),
+    }),
+  },
 ] as const;
 
 export function resolvePluginWebSearchProviders(params: {
