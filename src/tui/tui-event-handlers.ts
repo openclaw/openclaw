@@ -3,6 +3,9 @@ import { asString, extractTextFromMessage, isCommandMessage } from "./tui-format
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
+const SESSIONS_YIELD_CONTEXT_MARKER =
+  "[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]";
+
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
   updateToolResult: (
@@ -119,7 +122,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
-    status: "idle" | "error";
+    status: "idle" | "error" | "awaiting follow-up";
   }) => {
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
@@ -262,6 +265,8 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.showThinking,
         evt.errorMessage,
       );
+      const yieldedForFollowUp =
+        typeof finalText === "string" && finalText.includes(SESSIONS_YIELD_CONTEXT_MARKER);
       const suppressEmptyExternalPlaceholder =
         finalText === "(no output)" && !isLocalRunId?.(evt.runId);
       if (suppressEmptyExternalPlaceholder) {
@@ -272,7 +277,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       finalizeRun({
         runId: evt.runId,
         wasActiveRun,
-        status: stopReason === "error" ? "error" : "idle",
+        status:
+          stopReason === "error" ? "error" : yieldedForFollowUp ? "awaiting follow-up" : "idle",
       });
     }
     if (evt.state === "aborted") {

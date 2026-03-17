@@ -575,6 +575,28 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
   });
 
+  it("shows awaiting follow-up when a final assistant message contains the sessions_yield marker", () => {
+    const { state, setActivityStatus, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-yield" },
+    });
+
+    handleChatEvent({
+      runId: "run-yield",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: {
+        content: [
+          {
+            type: "text",
+            text: "Waiting for child completion.\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]",
+          },
+        ],
+      },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("awaiting follow-up");
+  });
+
   it("reloads history when a local run ends without a displayable final message", () => {
     const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-local-silent" },

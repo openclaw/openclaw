@@ -10,6 +10,16 @@ import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
+const SESSIONS_YIELD_CONTEXT_MARKER =
+  "[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]";
+const BUSY_ACTIVITY_STATUSES = new Set([
+  "sending",
+  "waiting",
+  "streaming",
+  "running",
+  "awaiting follow-up",
+]);
+
 type SessionActionBtwPresenter = {
   clear: () => void;
 };
@@ -303,6 +313,7 @@ export function createSessionActions(context: SessionActionContext) {
       state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
+      let lastAssistantText = "";
       chatLog.clearAll();
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
@@ -330,6 +341,7 @@ export function createSessionActions(context: SessionActionContext) {
             includeThinking: state.showThinking,
           });
           if (text) {
+            lastAssistantText = text;
             chatLog.finalizeAssistant(text);
           }
           continue;
@@ -354,6 +366,13 @@ export function createSessionActions(context: SessionActionContext) {
             { isError: Boolean(message.isError) },
           );
         }
+      }
+      if (lastAssistantText.includes(SESSIONS_YIELD_CONTEXT_MARKER)) {
+        if (!BUSY_ACTIVITY_STATUSES.has(state.activityStatus)) {
+          setActivityStatus("awaiting follow-up");
+        }
+      } else if (state.activityStatus === "awaiting follow-up") {
+        setActivityStatus("idle");
       }
       state.historyLoaded = true;
     } catch (err) {

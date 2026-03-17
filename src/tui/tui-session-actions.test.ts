@@ -281,4 +281,145 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.updatedAt).toBe(50);
     expect(btw.clear).toHaveBeenCalled();
   });
+
+  it("restores awaiting follow-up from history when the last assistant message contains the sessions_yield marker", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [],
+    });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-3",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Waiting for child completion.\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]",
+            },
+          ],
+        },
+      ],
+    });
+    const setActivityStatus = vi.fn();
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "idle",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { loadHistory: runLoadHistory } = createSessionActions({
+      client: { listSessions, loadHistory } as unknown as GatewayChatClient,
+      chatLog: {
+        addSystem: vi.fn(),
+        clearAll: vi.fn(),
+        addUser: vi.fn(),
+        finalizeAssistant: vi.fn(),
+        startTool: vi.fn(() => ({ setResult: vi.fn() })),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus,
+    });
+
+    await runLoadHistory();
+
+    expect(setActivityStatus).toHaveBeenCalledWith("awaiting follow-up");
+  });
+
+  it("clears stale awaiting follow-up status when history no longer contains the marker", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [],
+    });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-4",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "All done." }],
+        },
+      ],
+    });
+    const setActivityStatus = vi.fn();
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "awaiting follow-up",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { loadHistory: runLoadHistory } = createSessionActions({
+      client: { listSessions, loadHistory } as unknown as GatewayChatClient,
+      chatLog: {
+        addSystem: vi.fn(),
+        clearAll: vi.fn(),
+        addUser: vi.fn(),
+        finalizeAssistant: vi.fn(),
+        startTool: vi.fn(() => ({ setResult: vi.fn() })),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus,
+    });
+
+    await runLoadHistory();
+
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
 });
