@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
 import { __testing as providerTesting } from "../providers.js";
 import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
-import { providerContractRegistry, webSearchProviderContractRegistry } from "./registry.js";
+import {
+  providerContractPluginIds,
+  webSearchProviderContractRegistry,
+} from "./registry.js";
 
 function uniqueSortedPluginIds(values: string[]) {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
@@ -19,7 +22,7 @@ describe("plugin loader contract", () => {
 
   it("keeps bundled provider compatibility wired to the provider registry", () => {
     const providerPluginIds = uniqueSortedPluginIds(
-      providerContractRegistry.map((entry) => normalizeProviderContractPluginId(entry.pluginId)),
+      providerContractPluginIds.map(normalizeProviderContractPluginId),
     );
     const compatPluginIds = providerTesting.resolveBundledProviderCompatPluginIds({
       config: {
@@ -46,7 +49,7 @@ describe("plugin loader contract", () => {
 
   it("keeps vitest bundled provider enablement wired to the provider registry", () => {
     const providerPluginIds = uniqueSortedPluginIds(
-      providerContractRegistry.map((entry) => normalizeProviderContractPluginId(entry.pluginId)),
+      providerContractPluginIds.map(normalizeProviderContractPluginId),
     );
     const compatConfig = providerTesting.withBundledProviderVitestCompat({
       config: undefined,
