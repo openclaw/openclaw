@@ -17,6 +17,8 @@ function createMockHost(overrides: { tab?: string; sessionKey?: string } = {}) {
     chatLoading: false,
     lastError: null,
     chatMessages: [],
+    chatRunId: null,
+    chatStreamStartedAt: null,
   } as never;
 }
 
@@ -84,6 +86,8 @@ describe("chat.inbound UI event handler", () => {
 
   it("should debounce multiple rapid chat.inbound events", () => {
     const host = createMockHost();
+    const requestSpy = (host as unknown as { client: { request: ReturnType<typeof vi.fn> } }).client
+      .request;
     const evt = {
       type: "event" as const,
       event: "chat.inbound",
@@ -100,13 +104,14 @@ describe("chat.inbound UI event handler", () => {
       vi.advanceTimersByTime(100); // 100ms apart
     }
 
-    // At this point the debounce timer hasn't fired yet (500ms from last event)
-    // Advance past the debounce window
+    // Advance past the fast debounce window (500ms from last event)
     vi.advanceTimersByTime(500);
 
-    // The debounced function should have fired, but we can't easily check
-    // loadChatHistory without deeper mocking. The key assertion is that
-    // the handler processed without errors and the debounce prevented
-    // multiple calls.
+    // Debounce should have merged 5 events into a single loadChatHistory call
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+
+    // Advance past the slow timer (3000ms) to verify two-phase debounce
+    vi.advanceTimersByTime(3000);
+    expect(requestSpy).toHaveBeenCalledTimes(2);
   });
 });
