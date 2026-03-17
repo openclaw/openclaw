@@ -174,7 +174,7 @@ describe("promptCustomApiConfig", () => {
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
   });
 
-  it("uses expanded max_tokens for openai verification probes", async () => {
+  it("uses max_completion_tokens for openai verification probes (newer models)", async () => {
     const prompter = createTestPrompter({
       text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
       select: ["plaintext", "openai"],
@@ -185,7 +185,27 @@ describe("promptCustomApiConfig", () => {
 
     const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
     expect(firstCall?.body).toBeDefined();
-    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
+    const parsedBody = JSON.parse(firstCall?.body ?? "{}");
+    expect(parsedBody).toMatchObject({ max_completion_tokens: 1 });
+    expect(parsedBody).not.toHaveProperty("max_tokens");
+  });
+
+  it("falls back to max_tokens for openai verification probes when max_completion_tokens is rejected", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "openai"],
+    });
+    // First call (max_completion_tokens) returns 400, second call (max_tokens) succeeds
+    const fetchMock = stubFetchSequence([{ ok: false, status: 400 }, { ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
+    expect(secondCall?.body).toBeDefined();
+    const parsedBody = JSON.parse(secondCall?.body ?? "{}");
+    expect(parsedBody).toMatchObject({ max_tokens: 1 });
+    expect(parsedBody).not.toHaveProperty("max_completion_tokens");
   });
 
   it("uses azure-specific headers and body for openai verification probes", async () => {

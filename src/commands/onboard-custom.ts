@@ -340,6 +340,23 @@ async function requestOpenAiVerification(params: {
       },
     });
   } else {
+    // Newer OpenAI models (gpt-5.x and others) require max_completion_tokens instead of
+    // max_tokens. Try max_completion_tokens first; fall back to max_tokens for providers
+    // that only support the legacy parameter.
+    const resultWithMaxCompletionTokens = await requestVerification({
+      endpoint,
+      headers,
+      body: {
+        model: params.modelId,
+        messages: [{ role: "user", content: "Hi" }],
+        max_completion_tokens: 1,
+        stream: false,
+      },
+    });
+    if (resultWithMaxCompletionTokens.ok || resultWithMaxCompletionTokens.status === 401) {
+      return resultWithMaxCompletionTokens;
+    }
+    // Fall back to max_tokens for older OpenAI-compatible providers
     return await requestVerification({
       endpoint,
       headers,
