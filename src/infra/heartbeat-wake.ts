@@ -217,17 +217,26 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
     }
     if (pendingBatch.length === 0) {
       // All wakes were dropped by the breaker. Keep pendingWakes intact so
-      // the half-open probe timer fires with a non-empty batch; clearing
-      // them here would leave the re-scheduled timer with nothing to
-      // process, permanently stalling heartbeats in interval-only
-      // deployments.
+      // the half-open probe timer fires with a non-empty batch.
       if (Number.isFinite(minBreakerRemainingMs)) {
         schedule(minBreakerRemainingMs, "normal");
       }
       return;
     }
-    pendingWakes.clear();
+    // Only remove entries that made it into the batch; breaker-filtered
+    // wakes stay in pendingWakes so their half-open probe fires on
+    // schedule even when the batch is only partially dropped.
+    for (const wake of pendingBatch) {
+      pendingWakes.delete(getWakeTargetKey(wake));
+    }
+    // Re-schedule for breaker-filtered targets if any remain.
+    if (pendingWakes.size > 0 && Number.isFinite(minBreakerRemainingMs)) {
+      schedule(minBreakerRemainingMs, "normal");
+    }
     running = true;
+    // Track processed targets so the catch block only penalizes
+    // targets that were not yet handled when the handler threw.
+    const processedTargets = new Set<string>();
     try {
       for (const pendingWake of pendingBatch) {
         const targetKey = getWakeTargetKey(pendingWake);
@@ -238,6 +247,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
         };
         const res = await active(wakeOpts);
+        processedTargets.add(targetKey);
         if (res.status === "failed") {
           breaker.failures += 1;
           if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
@@ -266,11 +276,14 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
         }
       }
     } catch {
-      // Error is already logged by the heartbeat runner; apply backoff
-      // to all targets in the batch since we don't know which one threw.
+      // Error is already logged by the heartbeat runner; only penalize
+      // targets that were NOT already processed before the throw.
       let maxBackoffMs = 0;
       for (const pendingWake of pendingBatch) {
         const targetKey = getWakeTargetKey(pendingWake);
+        if (processedTargets.has(targetKey)) {
+          continue;
+        }
         const breaker = getBreakerState(targetKey);
         breaker.failures += 1;
         if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
