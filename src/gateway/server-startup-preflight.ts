@@ -21,6 +21,7 @@ export type GatewayStartupPreflightPhase =
   | "transport_bootstrap"
   | "sidecar_startup"
   | "discovery_startup"
+  | "tailscale_exposure"
   | "runtime_config_resolution"
   | "control_ui_root_resolution";
 
@@ -66,6 +67,7 @@ function isGatewayStartupPreflightPhase(value: unknown): value is GatewayStartup
     value === "transport_bootstrap" ||
     value === "sidecar_startup" ||
     value === "discovery_startup" ||
+    value === "tailscale_exposure" ||
     value === "runtime_config_resolution" ||
     value === "control_ui_root_resolution"
   );
@@ -271,6 +273,10 @@ type GatewayStartupSidecarPhaseDeps<TSidecarRuntime> = {
 
 type GatewayStartupDiscoveryPhaseDeps<TDiscoveryRuntime> = {
   startDiscovery: () => Promise<TDiscoveryRuntime> | TDiscoveryRuntime;
+};
+
+type GatewayStartupTailscaleExposurePhaseDeps<TTailscaleCleanup> = {
+  startTailscaleExposure: () => Promise<TTailscaleCleanup> | TTailscaleCleanup;
 };
 
 type GatewayStartupRuntimeConfigPhaseDeps = {
@@ -495,6 +501,23 @@ export async function runGatewayStartupDiscoveryPhase<TDiscoveryRuntime>(
     throw new GatewayStartupPreflightError(
       "discovery_startup",
       formatStartupPhaseErrorMessage(err, "Failed to start gateway discovery."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: start optional Tailscale exposure after discovery/runtime initialization.
+ */
+export async function runGatewayStartupTailscaleExposurePhase<TTailscaleCleanup>(
+  deps: GatewayStartupTailscaleExposurePhaseDeps<TTailscaleCleanup>,
+): Promise<TTailscaleCleanup> {
+  try {
+    return await deps.startTailscaleExposure();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "tailscale_exposure",
+      formatStartupPhaseErrorMessage(err, "Failed to start gateway Tailscale exposure."),
       { cause: err },
     );
   }

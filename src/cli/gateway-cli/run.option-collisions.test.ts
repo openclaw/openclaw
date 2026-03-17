@@ -261,6 +261,22 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("surfaces tailscale exposure phase classification on startup failure", async () => {
+    startGatewayServer.mockRejectedValueOnce({
+      name: "GatewayStartupPreflightError",
+      phase: "tailscale_exposure",
+      message: "tailscale serve failed",
+    });
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toContain(
+      "Gateway startup phase failed (tailscale_exposure): tailscale serve failed",
+    );
+  });
+
   it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
     await runGatewayCli(["gateway", "run", "--auth", mode, "--allow-unconfigured"]);
 

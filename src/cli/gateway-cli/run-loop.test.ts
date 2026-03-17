@@ -574,6 +574,42 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("keeps process alive and logs tailscale exposure failures after restart", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const closeFirst = vi.fn(async () => {});
+      const start = vi.fn().mockResolvedValueOnce({ close: closeFirst }).mockRejectedValueOnce({
+        name: "GatewayStartupPreflightError",
+        phase: "tailscale_exposure",
+        message: "tailscale serve failed",
+      });
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Gateway startup phase failed (tailscale_exposure): tailscale serve failed.",
+        ),
+      );
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
   it("keeps process alive and logs generic startup failures after restart", async () => {
     vi.clearAllMocks();
 
