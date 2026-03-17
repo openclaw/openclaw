@@ -86,7 +86,7 @@ vi.mock("./unhandled-rejections.js", () => {
   };
 });
 
-const { startGatewayBonjourAdvertiser } = await import("./bonjour.js");
+const { startGatewayBonjourAdvertiser, sanitizeForBonjour } = await import("./bonjour.js");
 
 describe("gateway bonjour advertiser", () => {
   type ServiceCall = {
@@ -401,5 +401,92 @@ describe("gateway bonjour advertiser", () => {
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("openclaw.local");
 
     await started.stop();
+  });
+});
+
+describe("sanitizeForBonjour (DNS label truncation – RFC 1035)", () => {
+  const encoder = new TextEncoder();
+
+  it("returns short names unchanged", () => {
+    expect(sanitizeForBonjour("short")).toBe("short");
+  });
+
+  it("returns a name that is exactly 63 bytes unchanged", () => {
+    const name = "a".repeat(63);
+    expect(sanitizeForBonjour(name)).toBe(name);
+  });
+
+  it("truncates a 64-byte pure-ASCII name to 63 bytes", () => {
+    expect(sanitizeForBonjour("a".repeat(64))).toBe("a".repeat(63));
+  });
+
+  it("truncates a 100-byte pure-ASCII name to 63 bytes", () => {
+    expect(sanitizeForBonjour("a".repeat(100))).toBe("a".repeat(63));
+  });
+
+  it("falls back to \"OpenClaw\" for an empty string", () => {
+    expect(sanitizeForBonjour("")).toBe("OpenClaw");
+  });
+
+  it("falls back to \"OpenClaw\" for a whitespace-only string", () => {
+    expect(sanitizeForBonjour("   ")).toBe("OpenClaw");
+  });
+
+  it("never exceeds 63 bytes in the result – 2-byte UTF-8 character at boundary", () => {
+    // "a".repeat(62) + "é"  →  62 + 2 = 64 bytes → truncates to 62 × "a"
+    const input = "a".repeat(62) + "é";
+    const result = sanitizeForBonjour(input);
+    expect(encoder.encode(result).length).toBeLessThanOrEqual(63);
+    // The 2-byte char must be dropped entirely to preserve valid UTF-8
+    expect(result).toBe("a".repeat(62));
+  });
+
+  it("never exceeds 63 bytes in the result – 3-byte UTF-8 character at boundary", () => {
+    // "a".repeat(61) + "界" + "x"  →  61 + 3 + 1 = 65 bytes
+    // sliceEnd walks back to leading byte of "界" (index 61) → slice(0,61) = 61 × "a"
+    const input = "a".repeat(61) + "界" + "x";
+    const result = sanitizeForBonjour(input);
+    expect(encoder.encode(result).length).toBeLessThanOrEqual(63);
+    expect(result).toBe("a".repeat(61));
+  });
+
+  it("never exceeds 63 bytes in the result – 4-byte UTF-8 character (emoji) at boundary", () => {
+    // "a".repeat(60) + "🎉" + "xx"  →  60 + 4 + 2 = 66 bytes
+    // sliceEnd walks back to leading byte of "🎉" (index 60) → slice(0,60) = 60 × "a"
+    const input = "a".repeat(60) + "🎉" + "xx";
+    const result = sanitizeForBonjour(input);
+    expect(encoder.encode(result).length).toBeLessThanOrEqual(63);
+    expect(result).toBe("a".repeat(60));
+  });
+
+  it("result is always valid UTF-8 (roundtrip encode→decode is lossless)", () => {
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const inputs = [
+      "a".repeat(62) + "é",
+      "a".repeat(61) + "界" + "x",
+      "a".repeat(60) + "🎉" + "xx",
+      "中文名称".repeat(20),          // pure CJK, well over 63 bytes
+      "Hello 世界 🌍 ".repeat(10),
+    ];
+    for (const input of inputs) {
+      const result = sanitizeForBonjour(input);
+      const bytes = encoder.encode(result);
+      expect(bytes.length).toBeLessThanOrEqual(63);
+      // fatal:true decoder throws on invalid UTF-8; if it doesn't throw, it's valid
+      expect(() => decoder.decode(bytes)).not.toThrow();
+    }
+  });
+
+  it("logs a warning when truncation occurs", () => {
+    // logWarn is already mocked at module scope in this file
+    logWarn.mockClear();
+    sanitizeForBonjour("a".repeat(64));
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("truncated"));
+  });
+
+  it("does not log a warning when no truncation occurs", () => {
+    logWarn.mockClear();
+    sanitizeForBonjour("short");
+    expect(logWarn).not.toHaveBeenCalled();
   });
 });
