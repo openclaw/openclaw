@@ -855,8 +855,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   }
 
   // Clear previously registered plugin commands before reloading.
-  // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
-  if (shouldActivate) {
+  // Skip for non-activating (snapshot) loads and for loads that opt out of hook-runner
+  // activation to avoid wiping commands while hooks still reference the previous registry.
+  if (shouldActivate && shouldActivateGlobalHookRunner) {
     clearPluginCommands();
     clearPluginInteractiveHandlers();
   }
