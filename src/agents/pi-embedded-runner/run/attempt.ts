@@ -1801,6 +1801,7 @@ export async function runEmbeddedAttempt(
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
       const extensionFactories = buildEmbeddedExtensionFactories({
+        sessionKey: params.sessionKey,
         cfg: params.config,
         sessionManager,
         provider: params.provider,
