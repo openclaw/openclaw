@@ -9,6 +9,7 @@ import type {
   SessionBindingCapabilities,
   SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { createNonExitingRuntime } from "../../../runtime.js";
 import { normalizeChatType } from "../../chat-type.js";
 import { resolveConversationLabel } from "../../conversation-label.js";
 import { validateSenderIdentity } from "../../sender-identity.js";
@@ -31,6 +32,7 @@ function sortStrings(values: readonly string[]) {
   return [...values].toSorted((left, right) => left.localeCompare(right));
 }
 
+const contractRuntime = createNonExitingRuntime();
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
   expect(typeof entry.id).toBe("string");
@@ -404,6 +406,7 @@ export function installChannelDirectoryContractSuite(params: {
     const self = await directory?.self?.({
       cfg: {} as OpenClawConfig,
       accountId: "default",
+      runtime: contractRuntime,
     });
     if (self) {
       expectDirectoryEntryShape(self);
@@ -415,6 +418,7 @@ export function installChannelDirectoryContractSuite(params: {
         accountId: "default",
         query: "",
         limit: 5,
+        runtime: contractRuntime,
       })) ?? [];
     expect(Array.isArray(peers)).toBe(true);
     for (const peer of peers) {
@@ -427,6 +431,7 @@ export function installChannelDirectoryContractSuite(params: {
         accountId: "default",
         query: "",
         limit: 5,
+        runtime: contractRuntime,
       })) ?? [];
     expect(Array.isArray(groups)).toBe(true);
     for (const group of groups) {
@@ -438,8 +443,8 @@ export function installChannelDirectoryContractSuite(params: {
         cfg: {} as OpenClawConfig,
         accountId: "default",
         groupId: groups[0].id,
-        query: "",
         limit: 5,
+        runtime: contractRuntime,
       });
       expect(Array.isArray(members)).toBe(true);
       for (const member of members) {

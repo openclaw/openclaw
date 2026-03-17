@@ -77,6 +77,113 @@ describe("stageBundledPluginRuntime", () => {
     expect(runtimeModule.value).toBe(1);
   });
 
+  it("keeps plugin command registration on the canonical dist graph when loaded from dist-runtime", async () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-commands-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "demo");
+    const distCommandsDir = path.join(repoRoot, "dist", "plugins");
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.mkdirSync(distCommandsDir, { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, "package.json"), '{ "type": "module" }\n', "utf8");
+    fs.writeFileSync(
+      path.join(distCommandsDir, "commands.js"),
+      [
+        "const registry = globalThis.__openclawTestPluginCommands ??= new Map();",
+        "export function registerPluginCommand(pluginId, command) {",
+        "  registry.set(`/${command.name.toLowerCase()}`, { ...command, pluginId });",
+        "}",
+        "export function clearPluginCommands() {",
+        "  registry.clear();",
+        "}",
+        "export function getPluginCommandSpecs(provider) {",
+        "  if (provider && provider !== 'telegram' && provider !== 'discord') return [];",
+        "  return Array.from(registry.values()).map((command) => ({",
+        "    name: command.nativeNames?.[provider] ?? command.nativeNames?.default ?? command.name,",
+        "    description: command.description,",
+        "    acceptsArgs: command.acceptsArgs ?? false,",
+        "  }));",
+        "}",
+        "export function matchPluginCommand(commandBody) {",
+        "  const [commandName, ...rest] = commandBody.trim().split(/\\s+/u);",
+        "  const command = registry.get(commandName.toLowerCase());",
+        "  if (!command) return null;",
+        "  return { command, args: rest.length > 0 ? rest.join(' ') : undefined };",
+        "}",
+        "export async function executePluginCommand(params) {",
+        "  return params.command.handler({ args: params.args });",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(distPluginDir, "index.js"),
+      [
+        "import { registerPluginCommand } from '../../plugins/commands.js';",
+        "",
+        "export function registerDemoCommand() {",
+        "  registerPluginCommand('demo-plugin', {",
+        "    name: 'pair',",
+        "    description: 'Pair a device',",
+        "    acceptsArgs: true,",
+        "    nativeNames: { telegram: 'pair', discord: 'pair' },",
+        "    handler: async ({ args }) => ({ text: `paired:${args ?? ''}` }),",
+        "  });",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const runtimeEntryPath = path.join(repoRoot, "dist-runtime", "extensions", "demo", "index.js");
+    const canonicalCommandsPath = path.join(repoRoot, "dist", "plugins", "commands.js");
+
+    expect(fs.existsSync(path.join(repoRoot, "dist-runtime", "plugins", "commands.js"))).toBe(
+      false,
+    );
+
+    const runtimeModule = await import(`${pathToFileURL(runtimeEntryPath).href}?t=${Date.now()}`);
+    const commandsModule = (await import(
+      `${pathToFileURL(canonicalCommandsPath).href}?t=${Date.now()}`
+    )) as {
+      clearPluginCommands: () => void;
+      getPluginCommandSpecs: (provider?: string) => Array<{
+        name: string;
+        description: string;
+        acceptsArgs: boolean;
+      }>;
+      matchPluginCommand: (commandBody: string) => {
+        command: { handler: ({ args }: { args?: string }) => Promise<{ text: string }> };
+        args?: string;
+      } | null;
+      executePluginCommand: (params: {
+        command: { handler: ({ args }: { args?: string }) => Promise<{ text: string }> };
+        args?: string;
+      }) => Promise<{ text: string }>;
+    };
+
+    commandsModule.clearPluginCommands();
+    runtimeModule.registerDemoCommand();
+
+    expect(commandsModule.getPluginCommandSpecs("telegram")).toEqual([
+      { name: "pair", description: "Pair a device", acceptsArgs: true },
+    ]);
+    expect(commandsModule.getPluginCommandSpecs("discord")).toEqual([
+      { name: "pair", description: "Pair a device", acceptsArgs: true },
+    ]);
+
+    const match = commandsModule.matchPluginCommand("/pair now");
+    expect(match).not.toBeNull();
+    expect(match?.args).toBe("now");
+    await expect(
+      commandsModule.executePluginCommand({
+        command: match!.command,
+        args: match?.args,
+      }),
+    ).resolves.toEqual({ text: "paired:now" });
+  });
+
   it("copies package metadata files but symlinks other non-js plugin artifacts into the runtime overlay", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-assets-");
     const distPluginDir = path.join(repoRoot, "dist", "extensions", "diffs");
