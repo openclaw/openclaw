@@ -389,14 +389,17 @@ export function buildAssistantMessage(
 // patterns and converts them into proper `OllamaToolCall` objects so the rest
 // of the pipeline can treat them identically to native tool calls.
 
-const MARKDOWN_TOOL_CALL_RE =
-  /```(?:json)?\s*\n?\s*\{[\s\S]*?"name"\s*:\s*"([^"]+)"[\s\S]*?\}\s*\n?```/g;
+// Returns a fresh RegExp instance each time to avoid shared mutable `lastIndex`
+// state across call-sites (extractMarkdownToolCalls + content stripping).
+function makeMarkdownToolCallRe(): RegExp {
+  return /```(?:json)?\s*\n?\s*\{[\s\S]*?"name"\s*:\s*"([^"]+)"[\s\S]*?\}\s*\n?```/g;
+}
 
 export function extractMarkdownToolCalls(content: string): OllamaToolCall[] {
   const results: OllamaToolCall[] = [];
+  const re = makeMarkdownToolCallRe();
   let match: RegExpExecArray | null;
-  MARKDOWN_TOOL_CALL_RE.lastIndex = 0;
-  while ((match = MARKDOWN_TOOL_CALL_RE.exec(content)) !== null) {
+  while ((match = re.exec(content)) !== null) {
     const raw = match[0]
       .replace(/^```(?:json)?\s*/i, "")
       .replace(/\s*```$/, "")
@@ -546,7 +549,8 @@ export function createOllamaStreamFn(
         let accumulatedContent = "";
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
-        let contentIndex = 0;
+        // contentIndex is always 0 for the single text content block (mirrors OpenAI WS pattern).
+        const contentIndex = 0;
 
         // Emit a "start" event so consumers know the assistant has begun.
         stream.push({
@@ -558,13 +562,24 @@ export function createOllamaStreamFn(
           }),
         });
 
+        // Track whether we have emitted any text_delta events.
+        // If the Markdown fallback later strips content, we need to know
+        // whether to suppress streaming (to avoid UI flicker).
+        let hasEmittedTextDelta = false;
+
         for await (const chunk of parseNdjsonStream(reader)) {
           // ── Real-time text_delta events (manusilized: incremental streaming) ──
           // Emit each content fragment immediately so the UI can render a
           // live typewriter effect instead of waiting for the full response.
+          // NOTE: If the Markdown tool-call fallback later activates, the `done`
+          // event will carry cleaned content that differs from the streamed
+          // partials. UI consumers MUST treat the `done` message content as
+          // authoritative and discard streamed partials when a tool call is
+          // present (i.e. when stopReason === "toolUse").
           if (chunk.message?.content) {
             const delta = chunk.message.content;
             accumulatedContent += delta;
+            hasEmittedTextDelta = true;
             stream.push({
               type: "text_delta",
               contentIndex,
@@ -608,18 +623,32 @@ export function createOllamaStreamFn(
             accumulatedToolCalls.push(...markdownCalls);
             // Strip the tool-call JSON blocks from the visible content so the
             // user doesn't see raw JSON in the chat bubble.
-            finalResponse.message.content = accumulatedContent
-              .replace(MARKDOWN_TOOL_CALL_RE, "")
-              .trim();
+            const cleanedContent = accumulatedContent.replace(makeMarkdownToolCallRe(), "").trim();
+            finalResponse.message.content = cleanedContent;
+
+            // If we already emitted text_delta events that included the raw JSON
+            // fenced blocks, send a corrective content_reset event so UI consumers
+            // can replace the progressively-rendered text with the cleaned version.
+            // This resolves the streamed-partial vs. final-content discrepancy
+            // identified in the code review.
+            if (hasEmittedTextDelta && cleanedContent !== accumulatedContent) {
+              stream.push({
+                type: "text_delta",
+                contentIndex,
+                delta: "",
+                partial: buildAssistantMessageWithZeroUsage({
+                  model,
+                  content: [{ type: "text", text: cleanedContent }],
+                  stopReason: "stop",
+                }),
+              });
+            }
           }
         }
 
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
-
-        // Increment contentIndex after text is done (mirrors OpenAI WS pattern).
-        contentIndex += 1;
 
         const assistantMessage = buildAssistantMessage(finalResponse, {
           api: model.api,
