@@ -1,73 +1,90 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.ui.OpenClawTheme
+import ai.openclaw.app.ui.RootScreen
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.core.view.WindowCompat
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import ai.openclaw.app.ui.RootScreen
-import ai.openclaw.app.ui.OpenClawTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-  private val viewModel: MainViewModel by viewModels()
-  private lateinit var permissionRequester: PermissionRequester
-  private var didAttachRuntimeUi = false
-  private var didStartNodeService = false
+    private val viewModel: MainViewModel by viewModels()
+    private lateinit var permissionRequester: PermissionRequester
+    private var didAttachRuntimeUi = false
+    private var didStartNodeService = false
 
-  override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
-    WindowCompat.setDecorFitsSystemWindows(window, false)
-    permissionRequester = PermissionRequester(this)
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        permissionRequester = PermissionRequester(this)
 
-    lifecycleScope.launch {
-      repeatOnLifecycle(Lifecycle.State.STARTED) {
-        viewModel.preventSleep.collect { enabled ->
-          if (enabled) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-          } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-          }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.preventSleep.collect { enabled ->
+                    if (enabled) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                }
+            }
         }
-      }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.runtimeInitialized.collect { ready ->
+                    if (!ready || didAttachRuntimeUi) return@collect
+                    viewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
+                    didAttachRuntimeUi = true
+                    if (!didStartNodeService) {
+                        NodeForegroundService.start(this@MainActivity)
+                        didStartNodeService = true
+                    }
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.themeMode.collect { mode ->
+                    val nightMode = when (mode) {
+                        ThemeMode.System -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+                        ThemeMode.Light -> AppCompatDelegate.MODE_NIGHT_NO
+                        ThemeMode.Dark -> AppCompatDelegate.MODE_NIGHT_YES
+                    }
+                    AppCompatDelegate.setDefaultNightMode(nightMode)
+                }
+            }
+        }
+
+        setContent {
+            val themeMode by viewModel.themeMode.collectAsState()
+            OpenClawTheme(themeMode = themeMode) {
+                Surface(modifier = Modifier) {
+                    RootScreen(viewModel = viewModel)
+                }
+            }
+        }
     }
 
-    lifecycleScope.launch {
-      repeatOnLifecycle(Lifecycle.State.STARTED) {
-        viewModel.runtimeInitialized.collect { ready ->
-          if (!ready || didAttachRuntimeUi) return@collect
-          viewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
-          didAttachRuntimeUi = true
-          if (!didStartNodeService) {
-            NodeForegroundService.start(this@MainActivity)
-            didStartNodeService = true
-          }
-        }
-      }
+    override fun onStart() {
+        super.onStart()
+        viewModel.setForeground(true)
     }
 
-    setContent {
-      OpenClawTheme {
-        Surface(modifier = Modifier) {
-          RootScreen(viewModel = viewModel)
-        }
-      }
+    override fun onStop() {
+        viewModel.setForeground(false)
+        super.onStop()
     }
-  }
-
-  override fun onStart() {
-    super.onStart()
-    viewModel.setForeground(true)
-  }
-
-  override fun onStop() {
-    viewModel.setForeground(false)
-    super.onStop()
-  }
 }

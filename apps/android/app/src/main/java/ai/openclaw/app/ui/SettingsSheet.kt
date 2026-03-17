@@ -1,5 +1,10 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.LocationMode
+import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.ThemeMode
+import ai.openclaw.app.node.DeviceNotificationListenerService
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -13,16 +18,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -31,16 +36,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
@@ -54,21 +56,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import ai.openclaw.app.BuildConfig
-import ai.openclaw.app.LocationMode
-import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.node.DeviceNotificationListenerService
 
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
@@ -80,6 +77,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val locationMode by viewModel.locationMode.collectAsState()
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
+  val themeMode by viewModel.themeMode.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
 
   val listState = rememberLazyListState()
@@ -360,7 +358,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
       contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      // ── Node ──
       item {
         Text(
           "DEVICE",
@@ -393,7 +390,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
       }
 
-      // ── Media ──
       item {
         Text(
           "MEDIA",
@@ -443,7 +439,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
       }
 
-      // ── Notifications & Messaging ──
       item {
         Text(
           "NOTIFICATIONS",
@@ -532,7 +527,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
       }
 
-      // ── Data Access ──
       item {
         Text(
           "DATA ACCESS",
@@ -674,7 +668,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
       }
 
-      // ── Location ──
       item {
         Text(
           "LOCATION",
@@ -726,7 +719,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
         }
       }
 
-      // ── Preferences ──
       item {
         Text(
           "PREFERENCES",
@@ -736,6 +728,36 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
       item {
         Column(modifier = Modifier.settingsRowModifier()) {
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Appearance", style = mobileHeadline) },
+            supportingContent = {
+              Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+              ) {
+                ThemeMode.entries.forEach { mode ->
+                  Button(
+                    onClick = { viewModel.setThemeMode(mode) },
+                    colors = if (themeMode == mode) settingsPrimaryButtonColors()
+                    else ButtonDefaults.buttonColors(
+                      containerColor = mobileSurfaceStrong,
+                      contentColor = mobileText,
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f),
+                  ) {
+                    Text(
+                      mode.name,
+                      style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+                    )
+                  }
+                }
+              }
+            },
+          )
+          HorizontalDivider(color = mobileBorder)
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
