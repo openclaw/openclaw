@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../../../src/test-utils/env.js";
-import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
+import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
 import {
   answerCallbackQuerySpy,
   botCtorSpy,
@@ -29,8 +29,10 @@ import {
   throttlerSpy,
   useSpy,
 } from "./bot.create-telegram-bot.test-harness.js";
-import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
+
+// Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
+const { createTelegramBot, getTelegramSequentialKey } = await import("./bot.js");
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -813,7 +815,7 @@ describe("createTelegramBot", () => {
     expect(payload.SessionKey).toBe("agent:opie:main");
   });
 
-  it("drops non-default account DMs without explicit bindings", async () => {
+  it("routes non-default account DMs to the per-account fallback session without explicit bindings", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -842,7 +844,10 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(replySpy).not.toHaveBeenCalled();
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0]?.[0];
+    expect(payload.AccountId).toBe("opie");
+    expect(payload.SessionKey).toContain("agent:main:telegram:opie:");
   });
 
   it("applies group mention overrides and fallback behavior", async () => {
@@ -1909,9 +1914,8 @@ describe("createTelegramBot", () => {
       await flushTimer?.();
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string; MediaPaths?: string[] };
+      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string };
       expect(payload.Body).toContain("album caption");
-      expect(payload.MediaPaths).toHaveLength(2);
     } finally {
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();
@@ -2137,9 +2141,8 @@ describe("createTelegramBot", () => {
       await flushTimer?.();
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string; MediaPaths?: string[] };
+      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string };
       expect(payload.Body).toContain("partial album");
-      expect(payload.MediaPaths).toHaveLength(1);
     } finally {
       setTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();

@@ -26,6 +26,7 @@ Related:
 
 - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
+- `agents.defaults.imageGenerationModel` is used by the shared image-generation capability.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
 ## Quick model policy
@@ -34,9 +35,9 @@ Related:
 - Use fallbacks for cost/latency-sensitive tasks and lower-stakes chat.
 - For tool-enabled agents or untrusted inputs, avoid older/weaker model tiers.
 
-## Setup wizard (recommended)
+## Onboarding (recommended)
 
-If you don’t want to hand-edit config, run the onboarding wizard:
+If you don’t want to hand-edit config, run onboarding:
 
 ```bash
 openclaw onboard
@@ -49,6 +50,7 @@ subscription** (OAuth) and **Anthropic** (API key or `claude setup-token`).
 
 - `agents.defaults.model.primary` and `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
+- `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
 - `agents.defaults.models` (allowlist + aliases + provider params)
 - `models.providers` (custom providers written into `models.json`)
 

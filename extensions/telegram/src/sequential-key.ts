@@ -1,5 +1,6 @@
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
-import { isAbortRequestText } from "../../../src/auto-reply/reply/abort.js";
+import { isAbortRequestText } from "openclaw/plugin-sdk/reply-runtime";
+import { isBtwRequestText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 
 export type TelegramSequentialKeyContext = {
@@ -40,6 +41,16 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
       return `telegram:${chatId}:control`;
     }
     return "telegram:control";
+  }
+  if (isBtwRequestText(rawText, botUsername ? { botUsername } : undefined)) {
+    const messageId = msg?.message_id;
+    if (typeof chatId === "number" && typeof messageId === "number") {
+      return `telegram:${chatId}:btw:${messageId}`;
+    }
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:btw`;
+    }
+    return "telegram:btw";
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
   const messageThreadId = msg?.message_thread_id;

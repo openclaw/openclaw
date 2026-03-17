@@ -13,6 +13,25 @@ export type PluginRuntimeCore = {
     loadConfig: typeof import("../../config/config.js").loadConfig;
     writeConfigFile: typeof import("../../config/config.js").writeConfigFile;
   };
+  agent: {
+    defaults: {
+      model: typeof import("../../agents/defaults.js").DEFAULT_MODEL;
+      provider: typeof import("../../agents/defaults.js").DEFAULT_PROVIDER;
+    };
+    resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
+    resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
+    resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
+    resolveThinkingDefault: typeof import("../../agents/model-selection.js").resolveThinkingDefault;
+    runEmbeddedPiAgent: typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent;
+    resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
+    ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
+    session: {
+      resolveStorePath: typeof import("../../config/sessions.js").resolveStorePath;
+      loadSessionStore: typeof import("../../config/sessions.js").loadSessionStore;
+      saveSessionStore: typeof import("../../config/sessions.js").saveSessionStore;
+      resolveSessionFilePath: typeof import("../../config/sessions.js").resolveSessionFilePath;
+    };
+  };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
     requestHeartbeatNow: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
@@ -28,7 +47,24 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
-    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
+    textToSpeech: typeof import("../../tts/runtime.js").textToSpeech;
+    textToSpeechTelephony: typeof import("../../tts/runtime.js").textToSpeechTelephony;
+    listVoices: typeof import("../../tts/runtime.js").listSpeechVoices;
+  };
+  mediaUnderstanding: {
+    runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
+    describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
+    describeImageFileWithModel: typeof import("../../media-understanding/runtime.js").describeImageFileWithModel;
+    describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
+    transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
+  };
+  imageGeneration: {
+    generate: typeof import("../../image-generation/runtime.js").generateImage;
+    listProviders: typeof import("../../image-generation/runtime.js").listRuntimeImageGenerationProviders;
+  };
+  webSearch: {
+    listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
+    search: typeof import("../../web-search/runtime.js").runWebSearch;
   };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;

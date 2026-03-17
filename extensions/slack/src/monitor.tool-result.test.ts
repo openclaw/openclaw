@@ -1,7 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { HISTORY_CONTEXT_MARKER } from "../../../src/auto-reply/reply/history.js";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
-import { CURRENT_MESSAGE_MARKER } from "../../../src/auto-reply/reply/mentions.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
@@ -15,6 +12,9 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
+const { resetInboundDedupe } = await import("../../../src/auto-reply/reply/inbound-dedupe.js");
+const { HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js");
+const { CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js");
 const { monitorSlackProvider } = await import("./monitor.js");
 
 const slackTestState = getSlackTestState();
@@ -209,7 +209,9 @@ describe("monitorSlackProvider tool results", () => {
 
   function expectSingleSendWithThread(threadTs: string | undefined) {
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs });
+    expect((sendMock.mock.calls[0]?.[2] as { threadTs?: string } | undefined)?.threadTs).toBe(
+      threadTs,
+    );
   }
 
   async function runDefaultMessageAndExpectSentText(expectedText: string) {
