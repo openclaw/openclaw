@@ -843,39 +843,51 @@ description: test skill
     );
   });
 
-  it("evaluates sandbox browser container findings", async () => {
+  it("evaluates sandbox browser findings", async () => {
     const cases = [
       {
         name: "warns when sandbox browser containers have missing or stale hash labels",
-        fixtureLabel: "browser-hash-labels",
-        execDockerRawFn: (async (args: string[]) => {
-          if (args[0] === "ps") {
-            return {
-              stdout: Buffer.from("openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-old") {
-            return {
-              stdout: Buffer.from("abc123\tepoch-v0\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-missing-hash") {
-            return {
-              stdout: Buffer.from("<no value>\t<no value>\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          return {
-            stdout: Buffer.alloc(0),
-            stderr: Buffer.from("not found"),
-            code: 1,
-          };
-        }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
+        run: async () => {
+          const { stateDir, configPath } =
+            await createFilesystemAuditFixture("browser-hash-labels");
+          return runSecurityAudit({
+            config: {},
+            includeFilesystem: true,
+            includeChannelSecurity: false,
+            stateDir,
+            configPath,
+            execDockerRawFn: (async (args: string[]) => {
+              if (args[0] === "ps") {
+                return {
+                  stdout: Buffer.from(
+                    "openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n",
+                  ),
+                  stderr: Buffer.alloc(0),
+                  code: 0,
+                };
+              }
+              if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-old") {
+                return {
+                  stdout: Buffer.from("abc123\tepoch-v0\n"),
+                  stderr: Buffer.alloc(0),
+                  code: 0,
+                };
+              }
+              if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-missing-hash") {
+                return {
+                  stdout: Buffer.from("<no value>\t<no value>\n"),
+                  stderr: Buffer.alloc(0),
+                  code: 0,
+                };
+              }
+              return {
+                stdout: Buffer.alloc(0),
+                stderr: Buffer.from("not found"),
+                code: 1,
+              };
+            }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
+          });
+        },
         assert: (res: SecurityAuditReport) => {
           expect(hasFinding(res, "sandbox.browser_container.hash_label_missing", "warn")).toBe(
             true,
@@ -889,10 +901,21 @@ description: test skill
       },
       {
         name: "skips sandbox browser hash label checks when docker inspect is unavailable",
-        fixtureLabel: "browser-hash-labels-skip",
-        execDockerRawFn: (async () => {
-          throw new Error("spawn docker ENOENT");
-        }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
+        run: async () => {
+          const { stateDir, configPath } = await createFilesystemAuditFixture(
+            "browser-hash-labels-skip",
+          );
+          return runSecurityAudit({
+            config: {},
+            includeFilesystem: true,
+            includeChannelSecurity: false,
+            stateDir,
+            configPath,
+            execDockerRawFn: (async () => {
+              throw new Error("spawn docker ENOENT");
+            }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
+          });
+        },
         assert: (res: SecurityAuditReport) => {
           expect(hasFinding(res, "sandbox.browser_container.hash_label_missing")).toBe(false);
           expect(hasFinding(res, "sandbox.browser_container.hash_epoch_stale")).toBe(false);
@@ -900,54 +923,95 @@ description: test skill
       },
       {
         name: "flags sandbox browser containers with non-loopback published ports",
-        fixtureLabel: "browser-non-loopback-publish",
-        execDockerRawFn: (async (args: string[]) => {
-          if (args[0] === "ps") {
-            return {
-              stdout: Buffer.from("openclaw-sbx-browser-exposed\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-exposed") {
-            return {
-              stdout: Buffer.from("hash123\t2026-02-21-novnc-auth-default\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          if (args[0] === "port" && args.at(-1) === "openclaw-sbx-browser-exposed") {
-            return {
-              stdout: Buffer.from("6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"),
-              stderr: Buffer.alloc(0),
-              code: 0,
-            };
-          }
-          return {
-            stdout: Buffer.alloc(0),
-            stderr: Buffer.from("not found"),
-            code: 1,
-          };
-        }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
+        run: async () => {
+          const { stateDir, configPath } = await createFilesystemAuditFixture(
+            "browser-non-loopback-publish",
+          );
+          return runSecurityAudit({
+            config: {},
+            includeFilesystem: true,
+            includeChannelSecurity: false,
+            stateDir,
+            configPath,
+            execDockerRawFn: (async (args: string[]) => {
+              if (args[0] === "ps") {
+                return {
+                  stdout: Buffer.from("openclaw-sbx-browser-exposed\n"),
+                  stderr: Buffer.alloc(0),
+                  code: 0,
+                };
+              }
+              if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+                return {
+                  stdout: Buffer.from("hash123\t2026-02-21-novnc-auth-default\n"),
+                  stderr: Buffer.alloc(0),
+                  code: 0,
+                };
+              }
+              if (args[0] === "port" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+                return {
+                  stdout: Buffer.from("6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"),
+                  stderr: Buffer.alloc(0),
+                  code: 0,
+                };
+              }
+              return {
+                stdout: Buffer.alloc(0),
+                stderr: Buffer.from("not found"),
+                code: 1,
+              };
+            }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
+          });
+        },
         assert: (res: SecurityAuditReport) => {
           expect(
             hasFinding(res, "sandbox.browser_container.non_loopback_publish", "critical"),
           ).toBe(true);
         },
       },
+      {
+        name: "warns when bridge network omits cdpSourceRange",
+        run: async () =>
+          audit({
+            agents: {
+              defaults: {
+                sandbox: {
+                  mode: "all",
+                  browser: { enabled: true, network: "bridge" },
+                },
+              },
+            },
+          }),
+        assert: (res: SecurityAuditReport) => {
+          const finding = res.findings.find(
+            (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
+          );
+          expect(finding?.severity).toBe("warn");
+          expect(finding?.detail).toContain("agents.defaults.sandbox.browser");
+        },
+      },
+      {
+        name: "does not warn for dedicated default browser network",
+        run: async () =>
+          audit({
+            agents: {
+              defaults: {
+                sandbox: {
+                  mode: "all",
+                  browser: { enabled: true },
+                },
+              },
+            },
+          }),
+        assert: (res: SecurityAuditReport) => {
+          expect(hasFinding(res, "sandbox.browser_cdp_bridge_unrestricted")).toBe(false);
+        },
+      },
     ] as const;
 
     await Promise.all(
       cases.map(async (testCase) => {
-        const { stateDir, configPath } = await createFilesystemAuditFixture(testCase.fixtureLabel);
-        const res = await runSecurityAudit({
-          config: {},
-          includeFilesystem: true,
-          includeChannelSecurity: false,
-          stateDir,
-          configPath,
-          execDockerRawFn: testCase.execDockerRawFn,
-        });
+        const res = await testCase.run();
         testCase.assert(res);
       }),
     );
@@ -1196,62 +1260,6 @@ description: test skill
         }
         for (const checkId of testCase.expectedAbsent ?? []) {
           expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
-        }
-      }),
-    );
-  });
-
-  it("checks sandbox browser bridge-network restrictions", async () => {
-    const cases: Array<{
-      name: string;
-      cfg: OpenClawConfig;
-      expectedPresent: boolean;
-      expectedSeverity?: "warn";
-      detailIncludes?: string;
-    }> = [
-      {
-        name: "bridge without cdpSourceRange",
-        cfg: {
-          agents: {
-            defaults: {
-              sandbox: {
-                mode: "all",
-                browser: { enabled: true, network: "bridge" },
-              },
-            },
-          },
-        },
-        expectedPresent: true,
-        expectedSeverity: "warn",
-        detailIncludes: "agents.defaults.sandbox.browser",
-      },
-      {
-        name: "dedicated default network",
-        cfg: {
-          agents: {
-            defaults: {
-              sandbox: {
-                mode: "all",
-                browser: { enabled: true },
-              },
-            },
-          },
-        },
-        expectedPresent: false,
-      },
-    ];
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        const finding = res.findings.find(
-          (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
-        );
-        expect(Boolean(finding), testCase.name).toBe(testCase.expectedPresent);
-        if (testCase.expectedPresent) {
-          expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
-          if (testCase.detailIncludes) {
-            expect(finding?.detail, testCase.name).toContain(testCase.detailIncludes);
-          }
         }
       }),
     );
