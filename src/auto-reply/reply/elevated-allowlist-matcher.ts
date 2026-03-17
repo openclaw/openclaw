@@ -1,5 +1,17 @@
-import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 import { normalizeAtHashSlug } from "../../shared/string-normalization.js";
+
+// Keep this local so matcher initialization does not depend on channel registry load order.
+const CORE_CHAT_CHANNEL_PREFIXES = [
+  "telegram",
+  "whatsapp",
+  "discord",
+  "irc",
+  "googlechat",
+  "slack",
+  "signal",
+  "imessage",
+  "line",
+] as const;
 
 export type ExplicitElevatedAllowField = "id" | "from" | "e164" | "name" | "username" | "tag";
 const INTERNAL_ALLOWLIST_CHANNEL = "webchat";
@@ -14,7 +26,7 @@ const EXPLICIT_ELEVATED_ALLOW_FIELDS = new Set<ExplicitElevatedAllowField>([
 ]);
 
 const SENDER_PREFIXES = [
-  ...CHAT_CHANNEL_ORDER,
+  ...CORE_CHAT_CHANNEL_PREFIXES,
   INTERNAL_ALLOWLIST_CHANNEL,
   "user",
   "group",
@@ -89,8 +101,8 @@ export function addFormattedTokens(params: {
 export function matchesFormattedTokens(params: {
   formatAllowFrom: AllowFromFormatter;
   value: string;
-  includeStripped?: boolean;
-  tokens: Set<string>;
+    ...CORE_CHAT_CHANNEL_PREFIXES,
+    INTERNAL_ALLOWLIST_CHANNEL,
 }): boolean {
   const probeTokens = new Set<string>();
   const values = params.includeStripped
