@@ -759,11 +759,14 @@ export async function ensureCompositeWorkspace(params: {
   // Create or update symlinks.
   for (const { linkName, target } of linkEntries) {
     const linkPath = path.join(compositeDir, linkName);
+    const targetExists = await fs
+      .access(target)
+      .then(() => true)
+      .catch(() => false);
+    const symlinkType = process.platform === "win32" ? "dir" : undefined;
 
     // Warn on missing targets but still create the symlink.
-    try {
-      await fs.access(target);
-    } catch {
+    if (!targetExists) {
       compositeLog.warn(`Workspace target does not exist: ${target}`);
     }
 
@@ -771,9 +774,23 @@ export async function ensureCompositeWorkspace(params: {
     try {
       const existingTarget = await fs.readlink(linkPath);
       if (path.resolve(existingTarget) === path.resolve(target)) {
-        continue;
+        // On Windows, a missing target created without an explicit "dir" type can leave
+        // behind a file-typed symlink that resolves to the right target string but is not
+        // usable as a directory once the target appears. When the target exists, verify the
+        // resolved link is traversable as a directory before keeping it.
+        if (!(process.platform === "win32" && targetExists)) {
+          continue;
+        }
+        try {
+          const stats = await fs.stat(linkPath);
+          if (stats.isDirectory()) {
+            continue;
+          }
+        } catch {
+          // Recreate the symlink with the explicit directory type below.
+        }
       }
-      // Target changed — remove old symlink.
+      // Target changed or existing Windows link is unusable — remove old symlink.
       await fs.unlink(linkPath);
     } catch {
       // Symlink doesn't exist or isn't a symlink — try to remove whatever is there.
@@ -785,7 +802,7 @@ export async function ensureCompositeWorkspace(params: {
       }
     }
 
-    await fs.symlink(target, linkPath);
+    await fs.symlink(target, linkPath, symlinkType);
     compositeLog.info(`Symlinked ${linkName} -> ${target}`);
   }
 }
