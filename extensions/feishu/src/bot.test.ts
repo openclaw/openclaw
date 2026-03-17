@@ -77,12 +77,9 @@ vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
 }));
 
-vi.mock("../../../src/acp/persistent-bindings.route.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolveConfiguredAcpRoute: (params: unknown) => mockResolveConfiguredAcpRoute(params),
   ensureConfiguredAcpRouteReady: (params: unknown) => mockEnsureConfiguredAcpRouteReady(params),
-}));
-
-vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => ({
     resolveByConversation: mockResolveBoundConversation,
     touch: mockTouchBinding,
