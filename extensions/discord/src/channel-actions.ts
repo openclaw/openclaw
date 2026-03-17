@@ -1,4 +1,5 @@
 import {
+  createDiscordMessageToolComponentsSchema,
   createUnionActionGate,
   listTokenSourcedAccounts,
 } from "openclaw/plugin-sdk/channel-runtime";
@@ -110,6 +111,14 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg)).length > 0
       ? (["interactive", "components"] as const)
       : [],
+  getToolSchema: ({ cfg }) =>
+    listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg)).length > 0
+      ? {
+          properties: {
+            components: createDiscordMessageToolComponentsSchema(),
+          },
+        }
+      : null,
   extractToolSend: ({ args }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action === "sendMessage") {

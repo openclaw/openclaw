@@ -81,6 +81,8 @@ const discordMessageActions: ChannelMessageActionAdapter = {
     getDiscordRuntime().channel.discord.messageActions?.listActions?.(ctx) ?? [],
   getCapabilities: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.getCapabilities?.(ctx) ?? [],
+  getToolSchema: (ctx) =>
+    getDiscordRuntime().channel.discord.messageActions?.getToolSchema?.(ctx) ?? null,
   extractToolSend: (ctx) =>
     getDiscordRuntime().channel.discord.messageActions?.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
