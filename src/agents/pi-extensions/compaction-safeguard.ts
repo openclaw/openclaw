@@ -702,11 +702,32 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
-    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
-      log.warn(
-        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
+    const hasRealSummarizable = preparation.messagesToSummarize.some(isRealConversationMessage);
+    const hasRealTurnPrefix = preparation.turnPrefixMessages.some(isRealConversationMessage);
+    if (!hasRealSummarizable && !hasRealTurnPrefix) {
+      // When there are no summarizable messages AND no real turn-prefix content,
+      // cancelling compaction leaves context unchanged but the SDK re-triggers
+      // _checkCompaction after every assistant response — creating a cancel loop
+      // that blocks cron lanes (#41981).
+      //
+      // Strategy: always return a minimal compaction result so the SDK writes a
+      // boundary entry. The SDK's prepareCompaction() returns undefined when the
+      // last entry is a compaction, which blocks immediate re-triggering within
+      // the same turn. After a new assistant message arrives, if the SDK triggers
+      // compaction again with an empty preparation, we write another boundary —
+      // this is bounded to at most one boundary per LLM round-trip, not a tight
+      // loop.
+      log.info(
+        "Compaction safeguard: no real conversation messages to summarize; writing compaction boundary to suppress re-trigger loop.",
       );
-      return { cancel: true };
+      const fallbackSummary = buildStructuredFallbackSummary(preparation.previousSummary);
+      return {
+        compaction: {
+          summary: fallbackSummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+        },
+      };
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);

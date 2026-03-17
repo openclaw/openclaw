@@ -389,7 +389,6 @@ describe("preflightDiscordMessage", () => {
       id: "m-webhook-hydrated-1",
       channelId: threadId,
       content: "",
-      webhookId: undefined,
       author: {
         id: "relay-bot-1",
         bot: true,
