@@ -27,17 +27,22 @@ import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
  *
  * ownerOverride is true when the client holds the operator.admin scope, meaning
  * it can read and mutate any cron job regardless of ownership metadata.
+ *
+ * callerSessionKey is intentionally NOT derived from request params — it must
+ * come from the authenticated client context only. Since ConnectParams does not
+ * carry a sessionKey field, this is left undefined for non-admin callers and
+ * the backward-compat path in callerOwnsJob (no identity → allow all) applies.
  */
-function resolveCronCallerOptions(
-  client: GatewayClient | null,
-  callerSessionKey?: string,
-): { callerSessionKey?: string; ownerOverride: boolean } {
+function resolveCronCallerOptions(client: GatewayClient | null): {
+  callerSessionKey?: string;
+  ownerOverride: boolean;
+} {
   const scopes: readonly string[] = Array.isArray(client?.connect?.scopes)
     ? (client.connect.scopes as string[])
     : [];
   const ownerOverride = scopes.includes(ADMIN_SCOPE);
   return {
-    callerSessionKey: callerSessionKey ?? undefined,
+    callerSessionKey: undefined,
     ownerOverride,
   };
 }
@@ -259,7 +264,6 @@ export const cronHandlers: GatewayRequestHandlers = {
       scope?: "job" | "all";
       id?: string;
       jobId?: string;
-      sessionKey?: string;
       limit?: number;
       offset?: number;
       statuses?: Array<"ok" | "error" | "skipped">;
@@ -281,14 +285,26 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     if (scope === "all") {
-      const callerOpts = resolveCronCallerOptions(client, p.sessionKey);
-      const jobsPage = await context.cron.listPage({
-        includeDisabled: true,
-        callerSessionKey: callerOpts.callerSessionKey,
-        ownerOverride: callerOpts.ownerOverride,
-      });
+      // sessionKey is derived from authenticated client context only — never from
+      // request params — to prevent callers from spoofing ownership identity.
+      const callerOpts = resolveCronCallerOptions(client);
+      let allJobs: Awaited<ReturnType<typeof context.cron.listPage>>["jobs"] = [];
+      let pageOffset = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const page = await context.cron.listPage({
+          includeDisabled: true,
+          callerSessionKey: callerOpts.callerSessionKey,
+          ownerOverride: callerOpts.ownerOverride,
+          limit: 200,
+          offset: pageOffset,
+        });
+        allJobs = allJobs.concat(page.jobs);
+        hasMore = page.hasMore;
+        pageOffset += page.jobs.length;
+      }
       const jobNameById = Object.fromEntries(
-        jobsPage.jobs
+        allJobs
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")
           .map((job) => [job.id, job.name]),
       );
