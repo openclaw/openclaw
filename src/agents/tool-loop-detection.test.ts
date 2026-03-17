@@ -96,8 +96,14 @@ function createPingPongFixture() {
   };
 }
 
-function createBrowserSearchFixture(query: string, host = "www.google.com") {
-  const url = `https://${host}/search?q=${encodeURIComponent(query)}`;
+function createBrowserSearchFixture(
+  query: string,
+  host = "www.google.com",
+  options?: { path?: string; queryParam?: string },
+) {
+  const path = options?.path ?? "/search";
+  const queryParam = options?.queryParam ?? "q";
+  const url = `https://${host}${path}?${queryParam}=${encodeURIComponent(query)}`;
   return {
     toolName: "browser",
     params: { action: "open", url },
@@ -469,7 +475,7 @@ describe("tool-loop-detection", () => {
       recordSuccessfulBrowserSearchCalls({
         state,
         queries: Array.from(
-          { length: BROWSER_SEARCH_WARNING_THRESHOLD },
+          { length: BROWSER_SEARCH_WARNING_THRESHOLD - 1 },
           (_, index) => `openclaw issue ${index}`,
         ),
       });
@@ -496,7 +502,7 @@ describe("tool-loop-detection", () => {
       recordSuccessfulBrowserSearchCalls({
         state,
         queries: Array.from(
-          { length: BROWSER_SEARCH_CRITICAL_THRESHOLD },
+          { length: BROWSER_SEARCH_CRITICAL_THRESHOLD - 1 },
           (_, index) => `openclaw loop detection ${index}`,
         ),
         hostAtIndex: (index) => (index % 2 === 0 ? "www.google.com" : "www.bing.com"),
@@ -516,6 +522,34 @@ describe("tool-loop-detection", () => {
         expect(loopResult.detector).toBe("browser_search_storm");
         expect(loopResult.count).toBe(BROWSER_SEARCH_CRITICAL_THRESHOLD);
         expect(loopResult.message).toContain("CRITICAL");
+      }
+    });
+
+    it("matches Yandex search pages with a trailing slash", () => {
+      const state = createState();
+      for (let i = 0; i < BROWSER_SEARCH_WARNING_THRESHOLD - 1; i += 1) {
+        const fixture = createBrowserSearchFixture(`yandex issue ${i}`, "yandex.com", {
+          path: "/search/",
+          queryParam: "text",
+        });
+        recordSuccessfulCall(state, fixture.toolName, fixture.params, fixture.result, i);
+      }
+
+      const current = createBrowserSearchFixture("yandex issue next", "yandex.com", {
+        path: "/search/",
+        queryParam: "text",
+      });
+      const loopResult = detectToolCallLoop(
+        state,
+        current.toolName,
+        current.params,
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.detector).toBe("browser_search_storm");
+        expect(loopResult.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
       }
     });
 

@@ -186,7 +186,7 @@ const BROWSER_SEARCH_MATCHERS: BrowserSearchMatcher[] = [
   { hostPattern: /(^|\.)duckduckgo\.com$/, pathPattern: /^\/(?:html)?\/?$/, queryParam: "q" },
   { hostPattern: /(^|\.)baidu\.com$/, pathPattern: /^\/s$/, queryParam: "wd" },
   { hostPattern: /(^|\.)yahoo\.com$/, pathPattern: /^\/search$/, queryParam: "p" },
-  { hostPattern: /(^|\.)yandex\./, pathPattern: /^\/search$/, queryParam: "text" },
+  { hostPattern: /(^|\.)yandex\./, pathPattern: /^\/search\/?$/, queryParam: "text" },
 ];
 
 function normalizeHostname(hostname: string): string {
@@ -494,7 +494,7 @@ function getBrowserSearchStormStats(
   uniqueQueries.add(currentSearch.queryHash);
 
   return {
-    count: recentSearches.length,
+    count: recentSearches.length + 1,
     uniqueHosts: uniqueHosts.size,
     uniqueQueries: uniqueQueries.size,
   };

@@ -460,6 +460,7 @@ const ToolLoopDetectionDetectorSchema = z
     genericRepeat: z.boolean().optional(),
     knownPollNoProgress: z.boolean().optional(),
     pingPong: z.boolean().optional(),
+    browserSearchStorm: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -470,6 +471,8 @@ const ToolLoopDetectionSchema = z
     historySize: z.number().int().positive().optional(),
     warningThreshold: z.number().int().positive().optional(),
     criticalThreshold: z.number().int().positive().optional(),
+    browserSearchWarningThreshold: z.number().int().positive().optional(),
+    browserSearchCriticalThreshold: z.number().int().positive().optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
   })

@@ -246,6 +246,28 @@ describe("config schema", () => {
     ).toThrow();
   });
 
+  it("accepts browser search loop detection config in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      loopDetection: {
+        enabled: true,
+        browserSearchWarningThreshold: 4,
+        browserSearchCriticalThreshold: 8,
+        detectors: {
+          browserSearchStorm: true,
+        },
+      },
+    });
+
+    expect(parsed?.loopDetection).toMatchObject({
+      enabled: true,
+      browserSearchWarningThreshold: 4,
+      browserSearchCriticalThreshold: 8,
+      detectors: {
+        browserSearchStorm: true,
+      },
+    });
+  });
+
   it("keeps tags in the allowed taxonomy", () => {
     const withTags = applyDerivedTags({
       "gateway.auth.token": {},
