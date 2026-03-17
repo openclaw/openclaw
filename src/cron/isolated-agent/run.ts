@@ -365,15 +365,14 @@ export async function runCronIsolatedAgentTurn(params: {
     const sessionModelOverride = cronSession.sessionEntry.modelOverride?.trim();
     if (sessionModelOverride) {
       const sessionProviderOverride = cronSession.sessionEntry.providerOverride?.trim();
-      // When the session has an explicit provider override that differs from
-      // the default, prepend it to the raw model string so the resolver looks
-      // up the correct provider. Keep defaultProvider/defaultModel aligned with
-      // resolvedDefault so buildAllowedModelSet does not auto-whitelist an
-      // unintended provider/model pair.  #18556
-      const raw =
-        sessionProviderOverride && sessionProviderOverride !== resolvedDefault.provider
-          ? `${sessionProviderOverride}/${sessionModelOverride}`
-          : sessionModelOverride;
+      // Always prepend the session provider when one is set, even when it
+      // matches resolvedDefault.provider. Model IDs can themselves contain
+      // slashes (e.g. OpenRouter's "anthropic/claude-sonnet-4-5"), so passing
+      // the raw override without a provider prefix causes parseModelRef to
+      // split on the wrong delimiter and route to the wrong provider.  #18556
+      const raw = sessionProviderOverride
+        ? `${sessionProviderOverride}/${sessionModelOverride}`
+        : sessionModelOverride;
       const resolvedSessionOverride = resolveAllowedModelRef({
         cfg: cfgWithAgentDefaults,
         catalog: await loadCatalog(),
