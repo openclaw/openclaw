@@ -157,32 +157,137 @@ class MemoryDB {
 }
 
 // ============================================================================
-// OpenAI Embeddings
 // ============================================================================
 
-class Embeddings {
+// Embeddings Providers
+
+// ============================================================================
+
+
+
+interface IEmbeddings {
+
+  embed(text: string): Promise<number[]>;
+
+}
+
+
+
+class OpenAIEmbeddings implements IEmbeddings {
+
   private client: OpenAI;
 
+
+
   constructor(
+
     apiKey: string,
+
     private model: string,
+
     baseUrl?: string,
+
     private dimensions?: number,
+
   ) {
+
     this.client = new OpenAI({ apiKey, baseURL: baseUrl });
+
   }
 
+
+
   async embed(text: string): Promise<number[]> {
+
     const params: { model: string; input: string; dimensions?: number } = {
+
       model: this.model,
+
       input: text,
+
     };
+
     if (this.dimensions) {
+
       params.dimensions = this.dimensions;
+
     }
+
     const response = await this.client.embeddings.create(params);
+
     return response.data[0].embedding;
+
   }
+
+}
+
+
+
+class GoogleEmbeddings implements IEmbeddings {
+
+  private apiKey: string;
+
+  private model: string;
+
+
+
+  constructor(apiKey: string, model: string) {
+
+    this.apiKey = apiKey;
+
+    this.model = model.startsWith("models/") ? model : `models/${model}`;
+
+  }
+
+
+
+  async embed(text: string): Promise<number[]> {
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/${this.model}:embedContent?key=${this.apiKey}`;
+
+    const response = await fetch(url, {
+
+      method: "POST",
+
+      headers: { "Content-Type": "application/json" },
+
+      body: JSON.stringify({
+
+        model: this.model,
+
+        content: { parts: [{ text }] },
+
+      }),
+
+    });
+
+
+
+    if (!response.ok) {
+
+      const errorText = await response.text();
+
+      throw new Error(`Google Embeddings API error: ${response.status} ${response.statusText} - ${errorText}`);
+
+    }
+
+
+
+    const data = await (response.json() as Promise<any>);
+
+    if (!data.embedding || !data.embedding.values) {
+
+      throw new Error(`Google Embeddings API returned invalid response format: ${JSON.stringify(data)}`);
+
+    }
+
+
+
+    return data.embedding.values;
+
+  }
+
+}
 }
 
 // ============================================================================
@@ -303,7 +408,7 @@ const memoryPlugin = {
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim);
-    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
+    const embeddings: IEmbeddings = cfg.embedding.provider === "google" ? new GoogleEmbeddings(apiKey, model) : new OpenAIEmbeddings(apiKey, model, baseUrl, dimensions);
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 

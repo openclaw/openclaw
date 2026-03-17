@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 export type MemoryConfig = {
   embedding: {
-    provider: "openai";
+    provider: "openai" | "google";
     model: string;
     apiKey: string;
     baseUrl?: string;
@@ -53,6 +53,10 @@ const DEFAULT_DB_PATH = resolveDefaultDbPath();
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
+  "text-embedding-004": 768,
+  "models/text-embedding-004": 768,
+  "gemini-embedding-001": 768,
+  "models/gemini-embedding-001": 768,
 };
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
@@ -105,9 +109,15 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimensions"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimensions", "provider"], "embedding config");
 
     const model = resolveEmbeddingModel(embedding);
+    
+    // Auto-detect Google provider if model is a known Google model and provider isn't explicitly set
+    let provider = typeof embedding.provider === "string" ? embedding.provider : "openai";
+    if (model.includes("text-embedding-004") || model.includes("gemini-embedding-001") || model.startsWith("models/")) {
+      provider = "google";
+    }
 
     const captureMaxChars =
       typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
@@ -120,7 +130,7 @@ export const memoryConfigSchema = {
 
     return {
       embedding: {
-        provider: "openai",
+        provider: provider as "openai" | "google",
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
         baseUrl:
@@ -135,10 +145,10 @@ export const memoryConfigSchema = {
   },
   uiHints: {
     "embedding.apiKey": {
-      label: "OpenAI API Key",
+      label: "API Key",
       sensitive: true,
       placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+      help: "API key for OpenAI or Gemini embeddings (or use ${OPENAI_API_KEY} / ${GOOGLE_API_KEY})",
     },
     "embedding.baseUrl": {
       label: "Base URL",
@@ -155,7 +165,13 @@ export const memoryConfigSchema = {
     "embedding.model": {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
-      help: "OpenAI embedding model to use",
+      help: "OpenAI or Google embedding model to use",
+    },
+    "embedding.provider": {
+      label: "Provider",
+      placeholder: "openai",
+      help: "API Provider (openai or google). Auto-detected for known models.",
+      advanced: true,
     },
     dbPath: {
       label: "Database Path",
