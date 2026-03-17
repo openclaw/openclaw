@@ -342,6 +342,47 @@ describe("readScheduledTaskCommand", () => {
     });
   });
 
+  it("prefers the registered task script when the derived default path is stale", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: ["@echo off", "node gateway.js --from-stale-default"],
+      },
+      async (env) => {
+        const queriedScriptPath = path.join(env.USERPROFILE ?? "", "custom-state", "gateway.cmd");
+        await fs.mkdir(path.dirname(queriedScriptPath), { recursive: true });
+        await fs.writeFile(
+          queriedScriptPath,
+          ["@echo off", "node gateway.js --from-query"].join("\r\n"),
+        );
+        execSchtasksMock.mockResolvedValue({
+          code: 0,
+          stdout: [
+            '<?xml version="1.0" encoding="UTF-16"?>',
+            "<Task>",
+            "  <Actions>",
+            `    <Exec><Command>${queriedScriptPath}</Command></Exec>`,
+            "  </Actions>",
+            "</Task>",
+          ].join("\r\n"),
+          stderr: "",
+        });
+
+        const result = await readScheduledTaskCommand(env);
+
+        expect(execSchtasksMock).toHaveBeenCalledWith([
+          "/Query",
+          "/TN",
+          "OpenClaw Gateway",
+          "/XML",
+        ]);
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--from-query"],
+          sourcePath: queriedScriptPath,
+        });
+      },
+    );
+  });
+
   it("parses quoted set assignments with escaped metacharacters", async () => {
     await withScheduledTaskScript(
       {

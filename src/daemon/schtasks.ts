@@ -149,29 +149,43 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
   return username;
 }
 
+async function resolveRegisteredTaskScriptPath(env: GatewayServiceEnv): Promise<string | null> {
+  const taskName = resolveTaskName(env);
+  const query = await execSchtasks(["/Query", "/TN", taskName, "/XML"]).catch(() => null);
+  if (query?.code !== 0) {
+    return null;
+  }
+  return parseScheduledTaskRunTargetFromXml(query.stdout);
+}
+
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
-  let scriptPath = resolveTaskScriptPath(env);
-  let content: string;
-  try {
-    content = await fs.readFile(scriptPath, "utf8");
-  } catch {
-    const taskName = resolveTaskName(env);
-    const query = await execSchtasks(["/Query", "/TN", taskName, "/XML"]).catch(() => null);
-    if (query?.code !== 0) {
-      return null;
-    }
-    const queriedScriptPath = parseScheduledTaskRunTargetFromXml(query.stdout);
-    if (!queriedScriptPath || queriedScriptPath === scriptPath) {
-      return null;
-    }
+  const derivedScriptPath = resolveTaskScriptPath(env);
+  const explicitScriptPath = env.OPENCLAW_TASK_SCRIPT?.trim() || env.OPENCLAW_STATE_DIR?.trim();
+  const registeredScriptPath = explicitScriptPath
+    ? null
+    : await resolveRegisteredTaskScriptPath(env).catch(() => null);
+  const candidatePaths = [
+    ...(registeredScriptPath && registeredScriptPath !== derivedScriptPath
+      ? [registeredScriptPath]
+      : []),
+    derivedScriptPath,
+  ];
+
+  let scriptPath: string | null = null;
+  let content: string | null = null;
+  for (const candidatePath of candidatePaths) {
     try {
-      scriptPath = queriedScriptPath;
-      content = await fs.readFile(scriptPath, "utf8");
+      content = await fs.readFile(candidatePath, "utf8");
+      scriptPath = candidatePath;
+      break;
     } catch {
-      return null;
+      continue;
     }
+  }
+  if (content == null || scriptPath == null) {
+    return null;
   }
   let workingDirectory = "";
   let commandLine = "";
