@@ -12,8 +12,8 @@ export type { ChannelSetupWizard } from "../channels/plugins/setup-wizard.js";
 
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { formatCliCommand } from "../cli/command-format.js";
-export { detectBinary } from "../commands/onboard-helpers.js";
-export { installSignalCli } from "../commands/signal-install.js";
+export { detectBinary } from "../plugins/setup-binary.js";
+export { installSignalCli } from "../plugins/signal-cli-install.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 export { normalizeE164, pathExists } from "../utils.js";
