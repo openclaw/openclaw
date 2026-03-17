@@ -214,8 +214,12 @@ vi.mock("grammy", () => ({
 }));
 
 const runnerHoisted = vi.hoisted(() => ({
-  sequentializeMiddleware: vi.fn(),
-  sequentializeSpy: vi.fn(),
+  sequentializeMiddleware: vi.fn(async (_ctx: unknown, next?: () => Promise<void>) => {
+    if (typeof next === "function") {
+      await next();
+    }
+  }),
+  sequentializeSpy: vi.fn(() => runnerHoisted.sequentializeMiddleware),
   throttlerSpy: vi.fn(() => "throttler"),
 }));
 export const sequentializeSpy: AnyMock = runnerHoisted.sequentializeSpy;
@@ -355,7 +359,14 @@ beforeEach(() => {
   listSkillCommandsForAgents.mockReset();
   listSkillCommandsForAgents.mockReturnValue([]);
   middlewareUseSpy.mockReset();
+  runnerHoisted.sequentializeMiddleware.mockReset();
+  runnerHoisted.sequentializeMiddleware.mockImplementation(async (_ctx, next) => {
+    if (typeof next === "function") {
+      await next();
+    }
+  });
   sequentializeSpy.mockReset();
+  sequentializeSpy.mockImplementation(() => runnerHoisted.sequentializeMiddleware);
   botCtorSpy.mockReset();
   sequentializeKey = undefined;
 });
