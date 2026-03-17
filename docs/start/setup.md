@@ -10,7 +10,7 @@ title: "Setup"
 
 <Note>
 If you are setting up for the first time, start with [Getting Started](/start/getting-started).
-For wizard details, see [Onboarding Wizard](/start/wizard).
+For onboarding details, see [Onboarding (CLI)](/start/wizard).
 </Note>
 
 Last updated: 2026-01-01

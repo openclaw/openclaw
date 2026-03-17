@@ -26,7 +26,7 @@ x-i18n:
 - [入门指南](/start/getting-started)
 - [快速开始](/start/quickstart)
 - [新手引导](/start/onboarding)
-- [向导](/start/wizard)
+- [CLI 新手引导](/start/wizard)
 - [安装配置](/start/setup)
 - [仪表盘（本地 Gateway 网关）](http://127.0.0.1:18789/)
 - [帮助](/help)

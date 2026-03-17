@@ -49,7 +49,7 @@ openclaw models status
 openclaw doctor
 ```
 
-If you’d rather not manage env vars yourself, the setup wizard can store
+If you’d rather not manage env vars yourself, onboarding can store
 API keys for daemon use: `openclaw onboard`.
 
 See [Help](/help) for details on env inheritance (`env.shellEnv`,

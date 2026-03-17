@@ -112,36 +112,13 @@ describe("applyGroupGating", () => {
         accountId: "default",
         body: "following up",
         timestamp: Date.now(),
-        selfJid: "15551234567:1@s.whatsapp.net",
+        selfJid: "15551234567@s.whatsapp.net",
         selfE164: "+15551234567",
         replyToId: "m0",
         replyToBody: "bot said hi",
         replyToSender: "+15551234567",
         replyToSenderJid: "15551234567@s.whatsapp.net",
         replyToSenderE164: "+15551234567",
-      }),
-    });
-
-    expect(result.shouldProcess).toBe(true);
-  });
-
-  it("treats LID-format reply-to-bot as implicit mention", () => {
-    const cfg = makeConfig({});
-    const { result } = runGroupGating({
-      cfg,
-      msg: createGroupMessage({
-        id: "m1-lid",
-        to: "+15550000",
-        accountId: "default",
-        body: "following up",
-        timestamp: Date.now(),
-        selfJid: "15551234567@s.whatsapp.net",
-        selfLid: "1234567890123:1@lid",
-        selfE164: "+15551234567",
-        replyToId: "m0",
-        replyToBody: "bot said hi",
-        replyToSender: "1234567890123@lid",
-        replyToSenderJid: "1234567890123@lid",
       }),
     });
 

@@ -12,18 +12,18 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   },
   {
     name: "onboard",
-    description: "Interactive setup wizard for gateway, workspace, and skills",
+    description: "Interactive onboarding for gateway, workspace, and skills",
     hasSubcommands: false,
   },
   {
     name: "configure",
-    description: "Interactive setup wizard for credentials, channels, gateway, and agent defaults",
+    description: "Interactive configuration for credentials, channels, gateway, and agent defaults",
     hasSubcommands: false,
   },
   {
     name: "config",
     description:
-      "Non-interactive config helpers (get/set/unset/file/validate). Default: starts setup wizard.",
+      "Non-interactive config helpers (get/set/unset/file/validate). Default: starts guided setup.",
     hasSubcommands: true,
   },
   {

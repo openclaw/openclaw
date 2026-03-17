@@ -126,7 +126,7 @@ launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
 
 ## Onboarding
 
-BlueBubbles is available in the interactive setup wizard:
+BlueBubbles is available in interactive onboarding:
 
 ```
 openclaw onboard
