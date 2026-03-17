@@ -44,7 +44,7 @@ type TelegramSendTestMocks = {
   maybePersistResolvedTelegramTarget: MockFn;
 };
 
-vi.mock("../../whatsapp/src/media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 

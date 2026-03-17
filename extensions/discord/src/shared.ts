@@ -3,7 +3,12 @@ import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
+import {
+  buildChannelConfigSchema,
+  DiscordConfigSchema,
+  getChatChannelMeta,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/discord-core";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
@@ -40,7 +45,6 @@ export const discordConfigBase = createScopedChannelConfigBase<ResolvedDiscordAc
 });
 
 export function createDiscordPluginBase(params: {
-  configSchema: Pick<ChannelPlugin<ResolvedDiscordAccount>, "configSchema">["configSchema"];
   setup: NonNullable<ChannelPlugin<ResolvedDiscordAccount>["setup"]>;
 }): Pick<
   ChannelPlugin<ResolvedDiscordAccount>,
@@ -72,7 +76,7 @@ export function createDiscordPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.discord"] },
-    configSchema: params.configSchema,
+    configSchema: buildChannelConfigSchema(DiscordConfigSchema),
     config: {
       ...discordConfigBase,
       isConfigured: (account) => Boolean(account.token?.trim()),
