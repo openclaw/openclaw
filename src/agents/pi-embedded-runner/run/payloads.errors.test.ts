@@ -248,46 +248,35 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "browser", error: "url required" },
     });
-
-    // Recoverable errors should not be sent to the user
-    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses recoverable tool errors containing 'missing' for non-mutating tools", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "browser", error: "url missing" },
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses recoverable tool errors containing 'invalid' for non-mutating tools", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "browser", error: "invalid parameter: url" },
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
       config: { messages: { suppressToolErrors: true } },
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command not found" },
       suppressToolErrorWarnings: true,
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it.each([
