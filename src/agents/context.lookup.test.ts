@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-function mockContextModuleDeps(loadConfigImpl: () => unknown) {
+type DiscoveredModel = { id: string; contextWindow: number };
+
+function mockContextDeps(params: {
+  loadConfig: () => unknown;
+  discoveredModels?: DiscoveredModel[];
+}) {
   vi.doMock("../config/config.js", () => ({
-    loadConfig: loadConfigImpl,
+    loadConfig: params.loadConfig,
   }));
   vi.doMock("./models-config.js", () => ({
     ensureOpenClawModelsJson: vi.fn(async () => {}),
@@ -13,29 +18,46 @@ function mockContextModuleDeps(loadConfigImpl: () => unknown) {
   vi.doMock("./pi-model-discovery.js", () => ({
     discoverAuthStorage: vi.fn(() => ({})),
     discoverModels: vi.fn(() => ({
-      getAll: () => [],
+      getAll: () => params.discoveredModels ?? [],
     })),
   }));
 }
 
+function mockContextModuleDeps(loadConfigImpl: () => unknown) {
+  mockContextDeps({ loadConfig: loadConfigImpl });
+}
+
 // Shared mock setup used by multiple tests.
 function mockDiscoveryDeps(
-  models: Array<{ id: string; contextWindow: number }>,
+  models: DiscoveredModel[],
   configModels?: Record<string, { models: Array<{ id: string; contextWindow: number }> }>,
 ) {
-  vi.doMock("../config/config.js", () => ({
+  mockContextDeps({
     loadConfig: () => ({ models: configModels ? { providers: configModels } : {} }),
-  }));
-  vi.doMock("./models-config.js", () => ({
-    ensureOpenClawModelsJson: vi.fn(async () => {}),
-  }));
-  vi.doMock("./agent-paths.js", () => ({
-    resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
-  }));
-  vi.doMock("./pi-model-discovery.js", () => ({
-    discoverAuthStorage: vi.fn(() => ({})),
-    discoverModels: vi.fn(() => ({ getAll: () => models })),
-  }));
+    discoveredModels: models,
+  });
+}
+
+function createContextOverrideConfig(provider: string, model: string, contextWindow: number) {
+  return {
+    models: {
+      providers: {
+        [provider]: {
+          models: [{ id: model, contextWindow }],
+        },
+      },
+    },
+  };
+}
+
+async function flushAsyncWarmup() {
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+async function importResolveContextTokensForModel() {
+  const { resolveContextTokensForModel } = await import("./context.js");
+  await flushAsyncWarmup();
+  return resolveContextTokensForModel;
 }
 
 describe("lookupContextTokens", () => {
@@ -58,15 +80,34 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
-  it("does not skip eager warmup when --profile is followed by -- terminator", async () => {
-    const loadConfigMock = vi.fn(() => ({ models: {} }));
-    mockContextModuleDeps(loadConfigMock);
-
+  it("only warms eagerly for startup commands that need model metadata", async () => {
     const argvSnapshot = process.argv;
-    process.argv = ["node", "openclaw", "--profile", "--", "config", "validate"];
     try {
-      await import("./context.js");
-      expect(loadConfigMock).toHaveBeenCalledTimes(1);
+      for (const scenario of [
+        {
+          argv: ["node", "openclaw", "--profile", "--", "config", "validate"],
+          expectedCalls: 1,
+        },
+        {
+          argv: ["node", "openclaw", "logs", "--limit", "5"],
+          expectedCalls: 0,
+        },
+        {
+          argv: ["node", "openclaw", "status", "--json"],
+          expectedCalls: 0,
+        },
+        {
+          argv: ["node", "openclaw", "gateway", "status", "--json"],
+          expectedCalls: 0,
+        },
+      ]) {
+        vi.resetModules();
+        const loadConfigMock = vi.fn(() => ({ models: {} }));
+        mockContextModuleDeps(loadConfigMock);
+        process.argv = scenario.argv;
+        await import("./context.js");
+        expect(loadConfigMock).toHaveBeenCalledTimes(scenario.expectedCalls);
+      }
     } finally {
       process.argv = argvSnapshot;
     }
@@ -116,7 +157,7 @@ describe("lookupContextTokens", () => {
 
     const { lookupContextTokens } = await import("./context.js");
     // Trigger async cache population.
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsyncWarmup();
     // Conservative minimum: bare-id cache feeds runtime flush/compaction paths.
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
   });
@@ -131,7 +172,7 @@ describe("lookupContextTokens", () => {
     ]);
 
     const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsyncWarmup();
 
     // With provider specified and no config override, bare lookup finds the
     // provider-qualified discovery entry.
@@ -150,18 +191,8 @@ describe("lookupContextTokens", () => {
       { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
     ]);
 
-    const cfg = {
-      models: {
-        providers: {
-          "google-gemini-cli": {
-            models: [{ id: "gemini-3.1-pro-preview", contextWindow: 200_000 }],
-          },
-        },
-      },
-    };
-
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    const cfg = createContextOverrideConfig("google-gemini-cli", "gemini-3.1-pro-preview", 200_000);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
 
     const result = resolveContextTokensForModel({
       cfg: cfg as never,
@@ -174,18 +205,8 @@ describe("lookupContextTokens", () => {
   it("resolveContextTokensForModel honors configured overrides when provider keys use mixed case", async () => {
     mockDiscoveryDeps([{ id: "openrouter/anthropic/claude-sonnet-4-5", contextWindow: 1_048_576 }]);
 
-    const cfg = {
-      models: {
-        providers: {
-          " OpenRouter ": {
-            models: [{ id: "anthropic/claude-sonnet-4-5", contextWindow: 200_000 }],
-          },
-        },
-      },
-    };
-
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    const cfg = createContextOverrideConfig(" OpenRouter ", "anthropic/claude-sonnet-4-5", 200_000);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
 
     const result = resolveContextTokensForModel({
       cfg: cfg as never,
@@ -202,16 +223,8 @@ describe("lookupContextTokens", () => {
     // Real callers (status.summary.ts) always pass cfg when provider is explicit.
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
-    const cfg = {
-      models: {
-        providers: {
-          google: { models: [{ id: "gemini-2.5-pro", contextWindow: 2_000_000 }] },
-        },
-      },
-    };
-
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
 
     // Google with explicit cfg: config direct scan wins before any cache lookup.
     const googleResult = resolveContextTokensForModel({
@@ -245,7 +258,7 @@ describe("lookupContextTokens", () => {
     };
 
     const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    await flushAsyncWarmup();
 
     // Exact key "qwen" wins over the alias-normalized match "qwen-portal".
     const qwenResult = resolveContextTokensForModel({
@@ -272,16 +285,8 @@ describe("lookupContextTokens", () => {
     // window and misreport context limits for the OpenRouter session.
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
-    const cfg = {
-      models: {
-        providers: {
-          google: { models: [{ id: "gemini-2.5-pro", contextWindow: 2_000_000 }] },
-        },
-      },
-    };
-
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await new Promise((r) => setTimeout(r, 0));
+    const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
 
     // model-only call (no explicit provider) must NOT apply config direct scan.
     // Falls through to bare cache lookup: "google/gemini-2.5-pro" → 999k ✓.
