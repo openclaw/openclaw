@@ -22,10 +22,10 @@ export function truncateText(text: string, maxChars = 160): string {
 function renderMemoryBadge(memory: MemoriaMemoryRecord): string {
   const parts: string[] = [];
   if (memory.memory_type) {
-    parts.push(memory.memory_type);
+    parts.push(escapePromptText(memory.memory_type));
   }
   if (memory.trust_tier) {
-    parts.push(memory.trust_tier);
+    parts.push(escapePromptText(memory.trust_tier));
   }
   if (typeof memory.confidence === "number") {
     parts.push(`${Math.round(memory.confidence * 100)}%`);

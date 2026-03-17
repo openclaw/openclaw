@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MemoriaMemoryRecord } from "./client.js";
 import { parseMemoriaPluginConfig, safeParseMemoriaPluginConfig } from "./config.js";
+import { formatMemoryList, formatRelevantMemoriesContext } from "./format.js";
 import plugin from "./index.js";
 
 type ToolContext = {
@@ -115,6 +117,25 @@ afterEach(() => {
 });
 
 describe("memory-memoria plugin", () => {
+  it("escapes untrusted memory metadata in formatted outputs", () => {
+    const memories: MemoriaMemoryRecord[] = [
+      {
+        memory_id: "mem-1",
+        content: "<raw content>",
+        memory_type: "profile<admin>",
+        trust_tier: "high & urgent",
+        confidence: 0.5,
+      },
+    ];
+
+    const expectedBadge = "[profile&lt;admin&gt; | high &amp; urgent | 50%]";
+    const context = formatRelevantMemoriesContext(memories);
+    const list = formatMemoryList(memories);
+
+    expect(context).toContain(expectedBadge);
+    expect(list).toContain(expectedBadge);
+  });
+
   it("parses config defaults", () => {
     const config = parseMemoriaPluginConfig({
       apiUrl: "http://127.0.0.1:8100",

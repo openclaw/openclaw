@@ -462,18 +462,18 @@ jobs:
           set -euo pipefail
 
           BASE="$(
-            python - <<'PY'
-            import json
-            import os
+          python - <<'PY'
+          import json
+          import os
 
-            with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as fh:
-                event = json.load(fh)
+          with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as fh:
+              event = json.load(fh)
 
-            if os.environ["GITHUB_EVENT_NAME"] == "push":
-                print(event["before"])
-            else:
-                print(event["pull_request"]["base"]["sha"])
-            PY
+          if os.environ["GITHUB_EVENT_NAME"] == "push":
+              print(event["before"])
+          else:
+              print(event["pull_request"]["base"]["sha"])
+          PY
           )"
 
           mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
