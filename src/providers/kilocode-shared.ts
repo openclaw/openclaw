@@ -11,7 +11,7 @@ export type KilocodeModelCatalogEntry = {
   maxTokens?: number;
 };
 /**
- * Static fallback catalog — used by the sync onboarding path and as a
+ * Static fallback catalog — used by the sync setup path and as a
  * fallback when dynamic model discovery from the gateway API fails.
  * The full model list is fetched dynamically by {@link discoverKilocodeModels}
  * in `src/agents/kilocode-models.ts`.

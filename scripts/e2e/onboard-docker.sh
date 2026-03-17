@@ -74,8 +74,14 @@ TRASH
           try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
           // Clack/script output can include lots of control sequences; keep a larger tail and strip ANSI more robustly.
           if (text.length > 120000) text = text.slice(-120000);
-          const stripAnsi = (value) =>
+          const normalizeScriptOutput = (value) =>
             value
+              // util-linux script can emit each byte on its own CRLF-delimited line.
+              // Collapse those first so ANSI/control stripping works on real sequences.
+              .replace(/\\r?\\n/g, \"\")
+              .replace(/\\r/g, \"\");
+          const stripAnsi = (value) =>
+            normalizeScriptOutput(value)
               // OSC: ESC ] ... BEL or ESC \\
               .replace(/\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)/g, \"\")
               // CSI: ESC [ ... cmd
@@ -269,23 +275,24 @@ TRASH
   }
 
   send_channels_flow() {
-    # Configure channels via configure wizard.
-    # Prompts are interactive; notes are not. Use conservative delays to stay in sync.
-    # Where will the Gateway run? -> Local (default)
-    send $'"'"'\r'"'"' 1.2
-    # Channels mode -> Configure/link (default)
-    send $'"'"'\r'"'"' 1.5
+    # Configure channels via configure wizard. Sync on prompt text so
+    # keystrokes do not drift into the wrong screen when render timing changes.
+    wait_for_log "Where will the Gateway run?" 120
+    send $'"'"'\r'"'"' 0.6
+    wait_for_log "Channels" 120
+    send $'"'"'\r'"'"' 0.6
     # Select a channel -> Finished (last option; clack wraps on Up)
-    send $'"'"'\e[A\r'"'"' 2.0
+    wait_for_log "Select a channel" 120
+    send $'"'"'\e[A\r'"'"' 0.8
     # Keep stdin open until wizard exits.
-    send "" 2.5
+    send "" 2.0
   }
 
   send_skills_flow() {
-    # configure --section skills still runs the configure wizard; the first prompt is gateway location.
-    # Avoid log-based synchronization here; clack output can fragment ANSI sequences and break matching.
-    send $'"'"'\r'"'"' 3.0
-    wait_for_log "Configure skills now?" 120 true || true
+    # configure --section skills still runs the configure wizard.
+    wait_for_log "Where will the Gateway run?" 120
+    send $'"'"'\r'"'"' 0.6
+    wait_for_log "Configure skills now?" 120
     send $'"'"'n\r'"'"' 0.8
     send "" 2.0
   }

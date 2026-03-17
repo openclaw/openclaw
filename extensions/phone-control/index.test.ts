@@ -7,7 +7,7 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk/phone-control";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../test-utils/plugin-api.js";
+import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import registerPhoneControl from "./index.js";
 
 function createApi(params: {
@@ -42,6 +42,12 @@ function createCommandContext(args: string): PluginCommandContext {
     commandBody: `/phone ${args}`,
     args,
     config: {},
+    requestConversationBinding: async () => ({
+      status: "error",
+      message: "unsupported",
+    }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
   };
 }
 
@@ -62,7 +68,7 @@ describe("phone-control plugin", () => {
       });
 
       let command: OpenClawPluginCommandDefinition | undefined;
-      registerPhoneControl(
+      registerPhoneControl.register(
         createApi({
           stateDir,
           getConfig: () => config,

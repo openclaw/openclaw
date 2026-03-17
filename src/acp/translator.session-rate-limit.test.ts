@@ -5,9 +5,10 @@ import type {
   SetSessionConfigOptionRequest,
   SetSessionModeRequest,
 } from "@agentclientprotocol/sdk";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
+import { resetProviderRuntimeHookCacheForTest } from "../plugins/provider-runtime.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
@@ -118,6 +119,10 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
 
   sessionStore.clearAllSessionsForTest();
 }
+
+beforeEach(() => {
+  resetProviderRuntimeHookCacheForTest();
+});
 
 describe("acp session creation rate limit", () => {
   it("rate limits excessive newSession bursts", async () => {
@@ -297,7 +302,15 @@ describe("acp session UX bridge behavior", () => {
     const result = await agent.loadSession(createLoadSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("high");
-    expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("xhigh");
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+    ]);
     expect(result.configOptions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
