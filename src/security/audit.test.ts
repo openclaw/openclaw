@@ -1360,97 +1360,93 @@ description: test skill
     expectFinding(res, "tools.elevated.allowFrom.whatsapp.wildcard", "critical");
   });
 
-  it("flags browser control without auth when browser is enabled", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        controlUi: { enabled: false },
-        auth: {},
-      },
-      browser: {
-        enabled: true,
-      },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expectFinding(res, "browser.control_no_auth", "critical");
-  });
-
-  it("does not flag browser control auth when gateway token is configured", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        controlUi: { enabled: false },
-        auth: { token: "very-long-browser-token-0123456789" },
-      },
-      browser: {
-        enabled: true,
-      },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expectNoFinding(res, "browser.control_no_auth");
-  });
-
-  it("does not flag browser control auth when gateway password uses SecretRef", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        controlUi: { enabled: false },
-        auth: {
-          password: {
-            source: "env",
-            provider: "default",
-            id: "OPENCLAW_GATEWAY_PASSWORD",
+  it.each([
+    {
+      name: "flags browser control without auth when browser is enabled",
+      cfg: {
+        gateway: {
+          controlUi: { enabled: false },
+          auth: {},
+        },
+        browser: {
+          enabled: true,
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: { checkId: "browser.control_no_auth", severity: "critical" },
+    },
+    {
+      name: "does not flag browser control auth when gateway token is configured",
+      cfg: {
+        gateway: {
+          controlUi: { enabled: false },
+          auth: { token: "very-long-browser-token-0123456789" },
+        },
+        browser: {
+          enabled: true,
+        },
+      } satisfies OpenClawConfig,
+      expectedNoFinding: "browser.control_no_auth",
+    },
+    {
+      name: "does not flag browser control auth when gateway password uses SecretRef",
+      cfg: {
+        gateway: {
+          controlUi: { enabled: false },
+          auth: {
+            password: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+            },
           },
         },
-      },
-      browser: {
-        enabled: true,
-      },
-    };
-
-    const res = await audit(cfg, { env: {} });
-    expectNoFinding(res, "browser.control_no_auth");
-  });
-
-  it("warns when remote CDP uses HTTP", async () => {
-    const cfg: OpenClawConfig = {
-      browser: {
-        profiles: {
-          remote: { cdpUrl: "http://example.com:9222", color: "#0066CC" },
+        browser: {
+          enabled: true,
         },
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expectFinding(res, "browser.remote_cdp_http", "warn");
-  });
-
-  it("warns when remote CDP targets a private/internal host", async () => {
-    const cfg: OpenClawConfig = {
-      browser: {
-        profiles: {
-          remote: {
-            cdpUrl:
-              "http://169.254.169.254:9222/json/version?token=supersecrettokenvalue1234567890",
-            color: "#0066CC",
+      } satisfies OpenClawConfig,
+      expectedNoFinding: "browser.control_no_auth",
+    },
+    {
+      name: "warns when remote CDP uses HTTP",
+      cfg: {
+        browser: {
+          profiles: {
+            remote: { cdpUrl: "http://example.com:9222", color: "#0066CC" },
           },
         },
+      } satisfies OpenClawConfig,
+      expectedFinding: { checkId: "browser.remote_cdp_http", severity: "warn" },
+    },
+    {
+      name: "warns when remote CDP targets a private/internal host",
+      cfg: {
+        browser: {
+          profiles: {
+            remote: {
+              cdpUrl:
+                "http://169.254.169.254:9222/json/version?token=supersecrettokenvalue1234567890",
+              color: "#0066CC",
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: {
+        checkId: "browser.remote_cdp_private_host",
+        severity: "warn",
+        detail: expect.stringContaining("token=supers…7890"),
       },
-    };
+    },
+  ])("$name", async (testCase) => {
+    const res = await audit(testCase.cfg, { env: {} });
 
-    const res = await audit(cfg);
-
-    expectFinding(res, "browser.remote_cdp_private_host", "warn");
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "browser.remote_cdp_private_host",
-          detail: expect.stringContaining("token=supers…7890"),
-        }),
-      ]),
-    );
+    if (testCase.expectedFinding) {
+      expect(res.findings).toEqual(
+        expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+      );
+    }
+    if (testCase.expectedNoFinding) {
+      expectNoFinding(res, testCase.expectedNoFinding);
+    }
   });
 
   it("warns when control UI allows insecure auth", async () => {
