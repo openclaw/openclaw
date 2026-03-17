@@ -24,6 +24,16 @@ function buildSafeguardFactories(cfg: OpenClawConfig) {
   return { factories, sessionManager };
 }
 
+function expectSafeguardRuntime(
+  cfg: OpenClawConfig,
+  expectedRuntime: { qualityGuardEnabled: boolean; qualityGuardMaxRetries?: number },
+) {
+  const { factories, sessionManager } = buildSafeguardFactories(cfg);
+
+  expect(factories).toContain(compactionSafeguardExtension);
+  expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject(expectedRuntime);
+}
+
 describe("buildEmbeddedExtensionFactories", () => {
   it("does not opt safeguard mode into quality-guard retries", () => {
     const cfg = {
@@ -35,10 +45,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         },
       },
     } as OpenClawConfig;
-    const { factories, sessionManager } = buildSafeguardFactories(cfg);
-
-    expect(factories).toContain(compactionSafeguardExtension);
-    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
+    expectSafeguardRuntime(cfg, {
       qualityGuardEnabled: false,
     });
   });
@@ -57,10 +64,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         },
       },
     } as OpenClawConfig;
-    const { factories, sessionManager } = buildSafeguardFactories(cfg);
-
-    expect(factories).toContain(compactionSafeguardExtension);
-    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
+    expectSafeguardRuntime(cfg, {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
