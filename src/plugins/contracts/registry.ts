@@ -177,6 +177,19 @@ export function requireProviderContractProvider(providerId: string): ProviderPlu
   return provider;
 }
 
+export function resolveProviderContractPluginIdsForProvider(
+  providerId: string,
+): string[] | undefined {
+  const pluginIds = [
+    ...new Set(
+      providerContractRegistry
+        .filter((entry) => entry.provider.id === providerId)
+        .map((entry) => entry.pluginId),
+    ),
+  ];
+  return pluginIds.length > 0 ? pluginIds : undefined;
+}
+
 export function resolveProviderContractProvidersForPluginIds(
   pluginIds: readonly string[],
 ): ProviderPlugin[] {
