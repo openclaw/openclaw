@@ -949,12 +949,14 @@ authoring plugins:
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/lazy-runtime`,
   `openclaw/plugin-sdk/reply-history`,
   `openclaw/plugin-sdk/routing`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
 - `openclaw/plugin-sdk/compat` remains as a legacy migration surface for older
-  external plugins. Bundled plugins should not use it.
+  external plugins. Bundled plugins should not use it, and non-test imports emit
+  a one-time deprecation warning outside test environments.
 - `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.

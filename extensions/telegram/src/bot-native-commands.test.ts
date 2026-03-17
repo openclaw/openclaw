@@ -8,7 +8,7 @@ import type { RuntimeEnv } from "../../../src/runtime.js";
 import {
   pluginCommandMocks,
   resetPluginCommandMocks,
-} from "./bot-native-commands.plugin-command-test-support.js";
+} from "../../../test/helpers/extensions/telegram-plugin-command.js";
 const skillCommandMocks = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
 }));

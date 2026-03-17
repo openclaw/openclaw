@@ -11,18 +11,16 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
 } from "openclaw/plugin-sdk/bluebubbles";
-import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
 import type { BlueBubblesSendTarget } from "./types.js";
 
-type BlueBubblesActionsRuntime = typeof import("./actions.runtime.js").blueBubblesActionsRuntime;
-
-const loadBlueBubblesActionsRuntime = createLazyRuntimeSurface(
+const loadBlueBubblesActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
-  ({ blueBubblesActionsRuntime }) => blueBubblesActionsRuntime,
+  "blueBubblesActionsRuntime",
 );
 
 const providerId = "bluebubbles";
