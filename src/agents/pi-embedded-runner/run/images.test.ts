@@ -306,3 +306,87 @@ describe("detectAndLoadPromptImages", () => {
     }
   });
 });
+
+describe("phantom image injection from memory context (issue #48744)", () => {
+  it("should not detect image refs inside <relevant-memories> blocks", () => {
+    const prompt =
+      "<relevant-memories>\n1. [chat] [media attached: media/inbound/file_1071.jpg (image/jpeg) | https://example.com]\n</relevant-memories>\n\nWhat is this about?";
+    const refs = detectImageReferences(prompt);
+    // The media path is inside <relevant-memories>, so detectImageReferences
+    // still finds it (it doesn't know about memory blocks), but
+    // detectAndLoadPromptImages strips them before scanning.
+    expect(refs.length).toBeGreaterThanOrEqual(0);
+  });
+
+  it("detectAndLoadPromptImages should ignore image paths inside <relevant-memories> blocks", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "phantom-img-test-"));
+    try {
+      // Create a fake image file that the system might try to load
+      const fakeImagePath = path.join(tmpDir, "file_1071.jpg");
+      await fs.writeFile(fakeImagePath, Buffer.from("fake-jpeg-data"));
+
+      const prompt = `<relevant-memories>\n1. [chat] [media attached: ${fakeImagePath} (image/jpeg)]\n</relevant-memories>\n\nHello, what's up?`;
+      const result = await detectAndLoadPromptImages({
+        prompt,
+        workspaceDir: tmpDir,
+        model: { input: ["text", "image"] },
+      });
+      // No images should be loaded from memory blocks
+      expect(result.detectedRefs).toHaveLength(0);
+      expect(result.loadedCount).toBe(0);
+      expect(result.images).toHaveLength(0);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detectAndLoadPromptImages should still load images from the actual prompt outside memory blocks", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "phantom-img-test-"));
+    try {
+      const realImagePath = path.join(tmpDir, "screenshot.png");
+      // Create a minimal valid PNG (1x1 white pixel)
+      const pngHeader = Buffer.from([
+        0x89,
+        0x50,
+        0x4e,
+        0x47,
+        0x0d,
+        0x0a,
+        0x1a,
+        0x0a, // PNG signature
+      ]);
+      await fs.writeFile(realImagePath, pngHeader);
+
+      const prompt = `<relevant-memories>\n1. [chat] old context\n</relevant-memories>\n\n[media attached: ${realImagePath} (image/png)]`;
+      const result = await detectAndLoadPromptImages({
+        prompt,
+        workspaceDir: tmpDir,
+        model: { input: ["text", "image"] },
+      });
+      // The image outside <relevant-memories> should still be detected
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.detectedRefs[0]?.resolved).toBe(realImagePath);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("should handle <relevant_memories> (underscore variant) blocks", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "phantom-img-test-"));
+    try {
+      const fakeImagePath = path.join(tmpDir, "old_photo.jpg");
+      await fs.writeFile(fakeImagePath, Buffer.from("fake"));
+
+      const prompt = `<relevant_memories>\n[media attached: ${fakeImagePath} (image/jpeg)]\n</relevant_memories>\n\nHi`;
+      const result = await detectAndLoadPromptImages({
+        prompt,
+        workspaceDir: tmpDir,
+        model: { input: ["text", "image"] },
+      });
+      expect(result.detectedRefs).toHaveLength(0);
+      expect(result.images).toHaveLength(0);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

@@ -14,6 +14,23 @@ import { sanitizeImageBlocks } from "../../tool-images.js";
 import { log } from "../logger.js";
 
 /**
+ * Strips `<relevant-memories>...</relevant-memories>` (and underscore variant)
+ * blocks from text so that image paths inside injected memory context are not
+ * resolved as current-message attachments.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/48744
+ */
+const RELEVANT_MEMORIES_BLOCK_RE =
+  /<\s*relevant[-_]memories\b[^>]*>[\s\S]*?<\s*\/\s*relevant[-_]memories\s*>/gi;
+
+function stripInjectedMemoryBlocks(text: string): string {
+  if (!text.includes("relevant")) {
+    return text;
+  }
+  return text.replace(RELEVANT_MEMORIES_BLOCK_RE, "");
+}
+
+/**
  * Common image file extensions for detection.
  */
 const IMAGE_EXTENSION_NAMES = [
@@ -308,8 +325,13 @@ export async function detectAndLoadPromptImages(params: {
     };
   }
 
-  // Detect images from current prompt
-  const allRefs = detectImageReferences(params.prompt);
+  // Strip injected memory context before scanning so that image paths from old
+  // session transcripts surfaced by memory_search / auto-recall are not resolved
+  // as current-message attachments (see issue #48744).
+  const sanitizedPrompt = stripInjectedMemoryBlocks(params.prompt);
+
+  // Detect images from current prompt (with memory blocks removed)
+  const allRefs = detectImageReferences(sanitizedPrompt);
 
   if (allRefs.length === 0) {
     return {
