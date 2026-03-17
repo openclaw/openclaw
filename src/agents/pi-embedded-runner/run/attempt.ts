@@ -16,6 +16,12 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import {
+  buildImplicitMemoryWriteback,
+  isAutoMemoryEnabled,
+  retrieveImplicitContext,
+  saveImplicitExperience,
+} from "../../../memory/implicit-memory.runtime.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -2293,6 +2299,7 @@ export async function runEmbeddedAttempt(
         getUsageTotals,
         getCompactionCount,
       } = subscription;
+      const autoMemoryEnabled = isAutoMemoryEnabled(params.config);
 
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
@@ -2396,6 +2403,7 @@ export async function runEmbeddedAttempt(
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
       const prePromptMessageCount = activeSession.messages.length;
+      const implicitMemoryUserInput = params.prompt.trim();
       try {
         const promptStartedAt = Date.now();
 
@@ -2450,6 +2458,30 @@ export async function runEmbeddedAttempt(
             systemPromptText = prependedOrAppendedSystemPrompt;
             log.debug(
               `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
+            );
+          }
+        }
+
+        if (autoMemoryEnabled && implicitMemoryUserInput) {
+          try {
+            const implicitContext = await retrieveImplicitContext(implicitMemoryUserInput);
+            if (implicitContext) {
+              const implicitSystemContext = `Implicit user context: ${implicitContext}`;
+              const nextSystemPrompt = composeSystemPromptWithHookContext({
+                baseSystemPrompt: systemPromptText,
+                appendSystemContext: implicitSystemContext,
+              });
+              if (nextSystemPrompt) {
+                applySystemPromptOverrideToSession(activeSession, nextSystemPrompt);
+                systemPromptText = nextSystemPrompt;
+                log.debug(
+                  `implicit memory: appended system context (${implicitSystemContext.length} chars)`,
+                );
+              }
+            }
+          } catch (err) {
+            log.warn(
+              `implicit memory retrieval failed, continuing without context: ${String(err)}`,
             );
           }
         }
@@ -2865,6 +2897,20 @@ export async function runEmbeddedAttempt(
           .catch((err) => {
             log.warn(`llm_output hook failed: ${String(err)}`);
           });
+      }
+
+      if (autoMemoryEnabled) {
+        const writeback = buildImplicitMemoryWriteback({
+          userInput: implicitMemoryUserInput,
+          assistantTexts,
+          success: !aborted && !promptError,
+          error: promptError ? describeUnknownError(promptError) : undefined,
+        });
+        if (writeback) {
+          void saveImplicitExperience(writeback).catch((err) => {
+            log.warn(`implicit memory writeback failed: ${String(err)}`);
+          });
+        }
       }
 
       return {

@@ -7,7 +7,12 @@ export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
+  implicit?: MemoryImplicitConfig;
   qmd?: MemoryQmdConfig;
+};
+
+export type MemoryImplicitConfig = {
+  enabled?: boolean;
 };
 
 export type MemoryQmdConfig = {

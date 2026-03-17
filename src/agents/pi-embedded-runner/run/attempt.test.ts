@@ -156,6 +156,15 @@ describe("composeSystemPromptWithHookContext", () => {
     ).toBe("prepend\n\nbase system\n\nappend");
   });
 
+  it("appends implicit memory context after the base system prompt", () => {
+    expect(
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: "base system",
+        appendSystemContext: "Implicit user context: retrieved context",
+      }),
+    ).toBe("base system\n\nImplicit user context: retrieved context");
+  });
+
   it("avoids blank separators when base system prompt is empty", () => {
     expect(
       composeSystemPromptWithHookContext({

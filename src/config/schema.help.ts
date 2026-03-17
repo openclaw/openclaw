@@ -851,6 +851,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
   "memory.citations":
     'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
+  "memory.implicit":
+    "Controls the experimental implicit-memory path that retrieves prior user habits before prompt execution and writes conservative turn summaries back into a local store.",
+  "memory.implicit.enabled":
+    "Enables the opt-in implicit-memory path. Keep this disabled unless you explicitly want silent prompt augmentation and background seed-writeback for recurring user context.",
   "memory.qmd.command":
     "Sets the executable path for the `qmd` binary used by the QMD backend (default: resolved from PATH). Use an explicit absolute path when multiple qmd installs exist or PATH differs across environments.",
   "memory.qmd.mcporter":
