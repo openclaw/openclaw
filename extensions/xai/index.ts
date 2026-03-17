@@ -4,10 +4,10 @@ import {
   getScopedCredentialValue,
   setScopedCredentialValue,
 } from "../../src/agents/tools/web-search-plugin-factory.js";
-import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.js";
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "xai";
 const XAI_MODERN_MODEL_PREFIXES = ["grok-4"] as const;
