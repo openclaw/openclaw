@@ -98,7 +98,7 @@ func darkMobileColors() -> MobileColors {
 }
 
 private struct MobileColorsKey: EnvironmentKey {
-    static let defaultValue: MobileColors = darkMobileColors()
+    static let defaultValue: MobileColors = lightMobileColors()
 }
 
 extension EnvironmentValues {

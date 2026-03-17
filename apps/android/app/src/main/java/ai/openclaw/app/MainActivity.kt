@@ -7,7 +7,6 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -51,19 +50,6 @@ class MainActivity : ComponentActivity() {
                         NodeForegroundService.start(this@MainActivity)
                         didStartNodeService = true
                     }
-                }
-            }
-        }
-
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                viewModel.themeMode.collect { mode ->
-                    val nightMode = when (mode) {
-                        ThemeMode.System -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
-                        ThemeMode.Light -> AppCompatDelegate.MODE_NIGHT_NO
-                        ThemeMode.Dark -> AppCompatDelegate.MODE_NIGHT_YES
-                    }
-                    AppCompatDelegate.setDefaultNightMode(nightMode)
                 }
             }
         }

@@ -124,16 +124,22 @@ struct RootCanvas: View {
                     .environment(self.appModel)
                     .environment(self.appModel.voiceWake)
                     .environment(self.gatewayController)
+                    .environment(\.mobileColors, self.resolvedColors)
+                    .preferredColorScheme(self.appTheme.colorScheme)
             case .chat:
                 ChatSheet(
                     gateway: self.appModel.operatorSession,
                     sessionKey: self.appModel.chatSessionKey,
                     agentName: self.appModel.activeAgentName,
                     userAccent: self.appModel.seamColor)
+                    .environment(\.mobileColors, self.resolvedColors)
+                    .preferredColorScheme(self.appTheme.colorScheme)
             case .quickSetup:
                 GatewayQuickSetupSheet()
                     .environment(self.appModel)
                     .environment(self.gatewayController)
+                    .environment(\.mobileColors, self.resolvedColors)
+                    .preferredColorScheme(self.appTheme.colorScheme)
             }
         }
         .fullScreenCover(isPresented: self.$showOnboarding) {
@@ -145,6 +151,8 @@ struct RootCanvas: View {
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
+                .environment(\.mobileColors, self.resolvedColors)
+                .preferredColorScheme(self.appTheme.colorScheme)
         }
         .onAppear { self.updateIdleTimer() }
         .onAppear { self.updateHomeCanvasState() }
