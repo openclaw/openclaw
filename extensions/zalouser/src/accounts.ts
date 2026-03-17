@@ -24,7 +24,12 @@ function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): Zal
   const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  const merged = { ...base, ...account };
+  return {
+    ...merged,
+    // Match Telegram's safe default: groups stay allowlisted unless explicitly opened.
+    groupPolicy: merged.groupPolicy ?? "allowlist",
+  };
 }
 
 function resolveProfile(config: ZalouserAccountConfig, accountId: string): string {
