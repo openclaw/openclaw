@@ -330,6 +330,38 @@ describe("provider runtime contract", () => {
       });
     });
 
+    it("owns openai gpt-5.4 mini forward-compat resolution", () => {
+      const provider = requireProviderContractProvider("openai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-5.4-mini",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5-mini"
+              ? createModel({
+                  id,
+                  provider: "openai",
+                  api: "openai-responses",
+                  baseUrl: "https://api.openai.com/v1",
+                  input: ["text", "image"],
+                  reasoning: true,
+                  contextWindow: 400_000,
+                  maxTokens: 128_000,
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.4-mini",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 400_000,
+        maxTokens: 128_000,
+      });
+    });
+
     it("owns direct openai transport normalization", () => {
       const provider = requireProviderContractProvider("openai");
       expect(
