@@ -146,6 +146,17 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(second).toBe(first);
   });
 
+  it("falls back to plain text for many unclosed code fences (#49021)", () => {
+    // Reproduces the markedjs freeze: many ``` fences in escaped JSON content
+    const fences = Array.from({ length: 45 }, (_, i) => `\`\`\`shell\n--param=${i}\n\`\`\``);
+    // Drop the last closing fence to make count odd (unclosed)
+    const input = fences.join("\n").replace(/```$/, "");
+    const html = toSanitizedMarkdownHtml(input);
+    // Should render as plain text fallback, not hang
+    expect(html).toContain("markdown-plain-text-fallback");
+    expect(html).toContain("--param=0");
+  });
+
   it("falls back to escaped plain text if marked.parse throws (#36213)", () => {
     const parseSpy = vi.spyOn(marked, "parse").mockImplementation(() => {
       throw new Error("forced parse failure");

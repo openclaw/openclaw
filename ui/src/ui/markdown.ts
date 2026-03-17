@@ -123,6 +123,19 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   const suffix = truncated.truncated
     ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
     : "";
+  // Guard against pathological inputs with many unclosed code fences that
+  // cause marked.parse() to hang (exponential backtracking). Count fenced
+  // code block markers (```) and bail to plain text when there are too many
+  // unclosed fences. See #49021.
+  const fenceCount = (truncated.text.match(/^`{3,}/gm) || []).length;
+  if (fenceCount > 40 && fenceCount % 2 !== 0) {
+    const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
+    const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
+    if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
+      setCachedMarkdown(input, sanitized);
+    }
+    return sanitized;
+  }
   if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
