@@ -7,6 +7,7 @@ import {
   resolveSlackChannelId,
   handleSlackMessageAction,
 } from "../../plugin-sdk/slack.js";
+import { createSlackMessageToolBlocksSchema } from "./message-tool-schema.js";
 import type { ChannelMessageActionAdapter } from "./types.js";
 
 type SlackActionInvoke = (
@@ -31,6 +32,14 @@ export function createSlackActions(
       }
       return Array.from(capabilities);
     },
+    getToolSchema: ({ cfg }) =>
+      listSlackMessageActions(cfg).includes("send")
+        ? {
+            properties: {
+              blocks: createSlackMessageToolBlocksSchema(),
+            },
+          }
+        : null,
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({
