@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebInboundMsg } from "./types.js";
 
 const logVerboseMock = vi.fn();
-const sleepMock = vi.fn(async () => {});
+const sleepMock = vi.fn(async (_ms: number) => {});
 const loadWebMediaMock = vi.fn();
 
 async function loadSubject() {
