@@ -24,10 +24,25 @@ export class GatewayDrainingError extends Error {
   }
 }
 
+/**
+ * Dedicated error type thrown when an active task exceeds its execution
+ * timeout.  The lane is unblocked so queued work behind the timed-out
+ * task can proceed.
+ */
+export class CommandLaneTaskTimeoutError extends Error {
+  constructor(lane: string, timeoutMs: number) {
+    super(`Task in lane "${lane}" timed out after ${timeoutMs}ms`);
+    this.name = "CommandLaneTaskTimeoutError";
+  }
+}
+
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
 // the main auto-reply workflow.
+
+/** Default task execution timeout (5 minutes). */
+const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 
 type QueueEntry = {
   task: () => Promise<unknown>;
@@ -36,6 +51,7 @@ type QueueEntry = {
   enqueuedAt: number;
   warnAfterMs: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  taskTimeoutMs?: number;
 };
 
 type LaneState = {
@@ -117,8 +133,27 @@ function drainLane(lane: string) {
         state.activeTaskIds.add(taskId);
         void (async () => {
           const startTime = Date.now();
+          const effectiveTimeout = entry.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
           try {
-            const result = await entry.task();
+            let result: unknown;
+            if (effectiveTimeout > 0 && effectiveTimeout < Infinity) {
+              const timeoutPromise = new Promise<never>((_, reject) => {
+                timeoutHandle = setTimeout(() => {
+                  reject(new CommandLaneTaskTimeoutError(lane, effectiveTimeout));
+                }, effectiveTimeout);
+                // Allow GC / clean process exit if the task completes first.
+                if (timeoutHandle.unref) {
+                  timeoutHandle.unref();
+                }
+              });
+              result = await Promise.race([entry.task(), timeoutPromise]);
+            } else {
+              result = await entry.task();
+            }
+            if (timeoutHandle !== undefined) {
+              clearTimeout(timeoutHandle);
+            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               diag.debug(
@@ -128,9 +163,16 @@ function drainLane(lane: string) {
             }
             entry.resolve(result);
           } catch (err) {
+            if (timeoutHandle !== undefined) {
+              clearTimeout(timeoutHandle);
+            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-            if (!isProbeLane) {
+            if (err instanceof CommandLaneTaskTimeoutError) {
+              diag.warn(
+                `lane task timed out: lane=${lane} timeoutMs=${effectiveTimeout} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+              );
+            } else if (!isProbeLane) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
               );
@@ -171,6 +213,8 @@ export function enqueueCommandInLane<T>(
   opts?: {
     warnAfterMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
+    /** Max execution time in ms. 0 or Infinity disables the timeout. */
+    taskTimeoutMs?: number;
   },
 ): Promise<T> {
   if (queueState.gatewayDraining) {
@@ -187,6 +231,7 @@ export function enqueueCommandInLane<T>(
       enqueuedAt: Date.now(),
       warnAfterMs,
       onWait: opts?.onWait,
+      taskTimeoutMs: opts?.taskTimeoutMs,
     });
     logLaneEnqueue(cleaned, state.queue.length + state.activeTaskIds.size);
     drainLane(cleaned);

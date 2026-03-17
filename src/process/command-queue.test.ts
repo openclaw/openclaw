@@ -20,6 +20,7 @@ vi.mock("../logging/diagnostic.js", () => ({
 import {
   clearCommandLane,
   CommandLaneClearedError,
+  CommandLaneTaskTimeoutError,
   enqueueCommand,
   enqueueCommandInLane,
   GatewayDrainingError,
@@ -334,6 +335,179 @@ describe("command queue", () => {
     markGatewayDraining();
     resetAllLanes();
     await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
+  });
+
+  // -- Task timeout tests ------------------------------------------------
+
+  it("times out a stuck task and unblocks the lane for queued work", async () => {
+    const lane = `timeout-unblock-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      // Enqueue a task that never settles, with a short timeout.
+      const stuck = enqueueCommandInLane(lane, () => new Promise<void>(() => {}), {
+        taskTimeoutMs: 100,
+      });
+      // Attach handler before advancing timers to avoid unhandled rejection.
+      const stuckErr = stuck.catch((err) => err);
+
+      // Enqueue a normal task behind it.
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "ok";
+      });
+
+      // Advance past the timeout.
+      await vi.advanceTimersByTimeAsync(150);
+
+      expect(await stuckErr).toBeInstanceOf(CommandLaneTaskTimeoutError);
+      await expect(second).resolves.toBe("ok");
+      expect(secondRan).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not time out a task that completes before the deadline", async () => {
+    const lane = `timeout-fast-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    const result = await enqueueCommandInLane(lane, async () => "fast", {
+      taskTimeoutMs: 5000,
+    });
+
+    expect(result).toBe("fast");
+    expect(diagnosticMocks.diag.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("timed out"),
+    );
+  });
+
+  it("respects per-task custom timeout values", async () => {
+    const lane = `timeout-custom-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const short = enqueueCommandInLane(lane, () => new Promise<void>(() => {}), {
+        taskTimeoutMs: 50,
+      });
+      const shortErr = short.catch((err) => err);
+
+      const long = enqueueCommandInLane(lane, () => new Promise<void>(() => {}), {
+        taskTimeoutMs: 200,
+      });
+      const longErr = long.catch((err) => err);
+
+      await vi.advanceTimersByTimeAsync(60);
+      expect(await shortErr).toBeInstanceOf(CommandLaneTaskTimeoutError);
+
+      // Second task is now active but hasn't timed out yet.
+      expect(getActiveTaskCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(await longErr).toBeInstanceOf(CommandLaneTaskTimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disables timeout when taskTimeoutMs is 0", async () => {
+    const lane = `timeout-disabled-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const deferred = createDeferred();
+      const task = enqueueCommandInLane(
+        lane,
+        async () => {
+          await deferred.promise;
+          return "done";
+        },
+        { taskTimeoutMs: 0 },
+      );
+
+      // Advance well past the default 5-minute timeout.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+      // Task should still be active — not timed out.
+      expect(getActiveTaskCount()).toBe(1);
+
+      deferred.resolve();
+      await expect(task).resolves.toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs a diagnostic warning when a task times out", async () => {
+    const lane = `timeout-diag-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const stuck = enqueueCommandInLane(lane, () => new Promise<void>(() => {}), {
+        taskTimeoutMs: 50,
+      });
+      const stuckErr = stuck.catch((err) => err);
+
+      await vi.advanceTimersByTimeAsync(60);
+      expect(await stuckErr).toBeInstanceOf(CommandLaneTaskTimeoutError);
+
+      expect(diagnosticMocks.diag.warn).toHaveBeenCalledWith(
+        expect.stringContaining("lane task timed out"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("timeout interacts safely with resetAllLanes generation bump", async () => {
+    const lane = `timeout-reset-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      // Enqueue a never-settling task with a timeout.
+      const stuck = enqueueCommandInLane(lane, () => new Promise<void>(() => {}), {
+        taskTimeoutMs: 200,
+      });
+
+      // Attach the rejection handler early to avoid unhandled-rejection noise
+      // when the stale timeout fires after resetAllLanes.
+      const stuckResult = stuck.catch((err) => err);
+
+      // Enqueue work behind it.
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "recovered";
+      });
+
+      // Reset lanes before the timeout fires — simulates SIGUSR1 restart.
+      resetAllLanes();
+
+      // The queued task should drain immediately after reset.
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(second).resolves.toBe("recovered");
+      expect(secondRan).toBe(true);
+
+      // Let the stale timeout fire — should not crash or double-pump.
+      await vi.advanceTimersByTimeAsync(300);
+
+      // The stuck task's promise rejects with the timeout error.
+      const err = await stuckResult;
+      expect(err).toBeInstanceOf(CommandLaneTaskTimeoutError);
+
+      // Verify lane still works after all of this.
+      const fresh = enqueueCommandInLane(lane, async () => "still works");
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(fresh).resolves.toBe("still works");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shares lane state across distinct module instances", async () => {
