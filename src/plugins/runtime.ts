@@ -83,7 +83,9 @@ export function requireActivePluginChannelRegistry(): PluginRegistry {
     return existing;
   }
   const created = requireActivePluginRegistry();
-  state.channelRegistry = created;
+  if (!state.channelRegistryPinned) {
+    state.channelRegistry = created;
+  }
   return created;
 }
 
@@ -110,7 +112,9 @@ export function requireActivePluginHttpRouteRegistry(): PluginRegistry {
     return existing;
   }
   const created = requireActivePluginRegistry();
-  state.httpRouteRegistry = created;
+  if (!state.httpRouteRegistryPinned) {
+    state.httpRouteRegistry = created;
+  }
   return created;
 }
 
