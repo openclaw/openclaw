@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -256,25 +256,6 @@ function scopesWithinApprovedDeviceBaseline(params: {
   });
 }
 
-function resolveMissingRequestedScope(params: {
-  role: string;
-  requestedScopes: readonly string[];
-  callerScopes: readonly string[];
-}): string | null {
-  for (const scope of params.requestedScopes) {
-    if (
-      !roleScopesAllow({
-        role: params.role,
-        requestedScopes: [scope],
-        allowedScopes: params.callerScopes,
-      })
-    ) {
-      return scope;
-    }
-  }
-  return null;
-}
-
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
   const state = await loadState(baseDir);
   const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
@@ -377,7 +358,7 @@ export async function approveDevicePairing(
       const missingScope = resolveMissingRequestedScope({
         role: pending.role,
         requestedScopes: normalizeDeviceAuthScopes(pending.scopes),
-        callerScopes: options.callerScopes,
+        allowedScopes: options.callerScopes,
       });
       if (missingScope) {
         return { status: "forbidden", missingScope };
