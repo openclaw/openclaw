@@ -1,10 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildModelScopeProvider } from "../../src/agents/models-config.providers.discovery.js";
-import {
-  applyModelScopeConfig,
-  MODELSCOPE_DEFAULT_MODEL_REF,
-} from "../../src/commands/onboard-auth.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { applyModelScopeConfig, MODELSCOPE_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildModelScopeProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "modelscope";
 

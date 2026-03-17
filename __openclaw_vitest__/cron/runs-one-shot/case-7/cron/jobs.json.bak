@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "a52315da-387b-4800-9ee3-9f7f20559eb2",
+      "name": "weekly attempted",
+      "enabled": true,
+      "deleteAfterRun": true,
+      "createdAtMs": 1765584000000,
+      "updatedAtMs": 1765584000000,
+      "schedule": {
+        "kind": "at",
+        "at": "2025-12-13T00:00:01.000Z"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "do it"
+      },
+      "delivery": {
+        "mode": "announce"
+      },
+      "state": {
+        "nextRunAtMs": 1765584001000,
+        "runningAtMs": 1765584002000
+      }
+    }
+  ]
+}

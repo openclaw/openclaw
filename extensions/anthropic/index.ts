@@ -1,3 +1,5 @@
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { parseDurationMs } from "openclaw/plugin-sdk/cli-runtime";
 import {
   emptyPluginConfigSchema,
   type OpenClawPluginApi,
@@ -7,25 +9,26 @@ import {
 } from "openclaw/plugin-sdk/core";
 import {
   CLAUDE_CLI_PROFILE_ID,
+  applyAuthProfileConfig,
+  buildTokenProfileId,
+  createProviderApiKeyAuthMethod,
+  ensureApiKeyFromOptionEnvOrPrompt,
   listProfilesForProvider,
-  upsertAuthProfile,
-} from "../../src/agents/auth-profiles.js";
-import { suggestOAuthProfileIdForLegacyDefault } from "../../src/agents/auth-profiles/repair.js";
-import type { AuthProfileStore } from "../../src/agents/auth-profiles/types.js";
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
-import { formatCliCommand } from "../../src/cli/command-format.js";
-import { parseDurationMs } from "../../src/cli/parse-duration.js";
-import {
+  normalizeApiKeyInput,
+  suggestOAuthProfileIdForLegacyDefault,
+  type AuthProfileStore,
+  type ProviderAuthResult,
+  normalizeSecretInput,
   normalizeSecretInputModeInput,
   promptSecretRefForSetup,
   resolveSecretInputModeForEnvSelection,
-} from "../../src/commands/auth-choice.apply-helpers.js";
-import { buildTokenProfileId, validateAnthropicSetupToken } from "../../src/commands/auth-token.js";
-import { applyAuthProfileConfig } from "../../src/commands/onboard-auth.js";
-import { fetchClaudeUsage } from "../../src/infra/provider-usage.fetch.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import type { ProviderAuthResult } from "../../src/plugins/types.js";
-import { normalizeSecretInput } from "../../src/utils/normalize-secret-input.js";
+  upsertAuthProfile,
+  validateAnthropicSetupToken,
+  validateApiKeyInput,
+} from "openclaw/plugin-sdk/provider-auth";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
+import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
+import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const PROVIDER_ID = "anthropic";
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
@@ -394,6 +397,7 @@ const anthropicPlugin = {
           profileId: ctx.profileId,
         }),
     });
+    api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
   },
 };
 

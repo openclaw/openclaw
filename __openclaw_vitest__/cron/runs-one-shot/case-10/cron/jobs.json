@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "32ff05e5-90f7-47c9-9af2-96859c43750e",
+      "name": "isolated error test",
+      "enabled": false,
+      "deleteAfterRun": true,
+      "createdAtMs": 1765584000000,
+      "updatedAtMs": 1765584002000,
+      "schedule": {
+        "kind": "at",
+        "at": "2025-12-13T00:00:01.000Z"
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "do it"
+      },
+      "delivery": {
+        "mode": "announce"
+      },
+      "state": {
+        "lastRunAtMs": 1765584002000,
+        "lastRunStatus": "error",
+        "lastStatus": "error",
+        "lastDurationMs": 0,
+        "lastError": "boom",
+        "lastDeliveryStatus": "unknown",
+        "consecutiveErrors": 1
+      }
+    }
+  ]
+}
