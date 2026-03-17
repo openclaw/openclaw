@@ -34,9 +34,12 @@ export type OagIncident = {
   channel?: string;
   accountId?: string;
   detail: string;
+  lastError?: string;
   count: number;
   firstAt: string;
   lastAt: string;
+  resolvedAt?: number;
+  recoveryMs?: number;
 };
 
 export type OagLifecycle = {

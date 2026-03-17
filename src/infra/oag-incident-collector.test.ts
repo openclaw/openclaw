@@ -5,7 +5,7 @@ vi.mock("./oag-event-bus.js", () => ({
   emitOagEvent: (...args: unknown[]) => mockEmitOagEvent(...args),
 }));
 
-const { recordOagIncident, collectActiveIncidents, clearActiveIncidents } =
+const { recordOagIncident, collectActiveIncidents, clearActiveIncidents, resolveIncidentOutcome } =
   await import("./oag-incident-collector.js");
 
 describe("oag-incident-collector", () => {
@@ -62,5 +62,65 @@ describe("oag-incident-collector", () => {
     }
     const incidents = collectActiveIncidents();
     expect(incidents.length).toBeLessThanOrEqual(100);
+  });
+
+  it("stores lastError field on new incident", () => {
+    recordOagIncident({
+      type: "channel_crash_loop",
+      channel: "telegram",
+      detail: "restart",
+      lastError: "ETIMEDOUT 10.0.0.1:443",
+    });
+    const incidents = collectActiveIncidents();
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0].lastError).toBe("ETIMEDOUT 10.0.0.1:443");
+  });
+
+  it("updates lastError on duplicate incident", () => {
+    recordOagIncident({
+      type: "channel_crash_loop",
+      channel: "telegram",
+      detail: "first",
+      lastError: "error-1",
+    });
+    recordOagIncident({
+      type: "channel_crash_loop",
+      channel: "telegram",
+      detail: "second",
+      lastError: "error-2",
+    });
+    const incidents = collectActiveIncidents();
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0].lastError).toBe("error-2");
+  });
+
+  it("resolveIncidentOutcome updates recovery time on existing incident", () => {
+    recordOagIncident({
+      type: "channel_crash_loop",
+      channel: "telegram",
+      detail: "restart",
+    });
+    resolveIncidentOutcome("channel_crash_loop:telegram", 1500);
+    const incidents = collectActiveIncidents();
+    expect(incidents[0].recoveryMs).toBe(1500);
+    expect(incidents[0].resolvedAt).toBeTypeOf("number");
+  });
+
+  it("resolveIncidentOutcome is a no-op for unknown keys", () => {
+    // Should not throw
+    resolveIncidentOutcome("nonexistent:key", 500);
+    expect(collectActiveIncidents()).toHaveLength(0);
+  });
+
+  it("classifies incident as false positive when recoveryMs < 30s", () => {
+    recordOagIncident({
+      type: "channel_crash_loop",
+      channel: "telegram",
+      detail: "restart",
+    });
+    resolveIncidentOutcome("channel_crash_loop:telegram", 5_000);
+    const incidents = collectActiveIncidents();
+    // recoveryMs < 30_000 means false positive
+    expect(incidents[0].recoveryMs).toBeLessThan(30_000);
   });
 });

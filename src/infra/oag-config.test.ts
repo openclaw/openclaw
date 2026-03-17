@@ -10,6 +10,7 @@ import {
   resolveOagEvolutionMaxStepPercent,
   resolveOagEvolutionMaxCumulativePercent,
   resolveOagEvolutionMaxNotificationsPerDay,
+  resolveOagEvolutionMinChannelIncidentsForAnalysis,
   resolveOagEvolutionMinCrashesForAnalysis,
   resolveOagEvolutionCooldownMs,
   resolveOagEvolutionObservationWindowMs,
@@ -179,6 +180,7 @@ describe("oag-config evolution resolvers", () => {
     expect(resolveOagEvolutionRestartRegressionThreshold()).toBe(5);
     expect(resolveOagEvolutionFailureRegressionThreshold()).toBe(3);
     expect(resolveOagEvolutionPeriodicAnalysisIntervalMs()).toBe(6 * 60 * 60_000);
+    expect(resolveOagEvolutionMinChannelIncidentsForAnalysis()).toBe(5);
   });
 
   it("returns overridden evolution values when set", () => {
@@ -227,6 +229,33 @@ describe("oag-config evolution resolvers", () => {
       gateway: { oag: { evolution: { periodicAnalysisIntervalMs: -1 } } },
     };
     expect(resolveOagEvolutionPeriodicAnalysisIntervalMs(cfg)).toBe(6 * 60 * 60_000);
+  });
+});
+
+describe("oag-config minChannelIncidentsForAnalysis resolver", () => {
+  it("returns default (5) when config is undefined", () => {
+    expect(resolveOagEvolutionMinChannelIncidentsForAnalysis()).toBe(5);
+  });
+
+  it("returns overridden value when set", () => {
+    const cfg = {
+      gateway: { oag: { evolution: { minChannelIncidentsForAnalysis: 10 } } },
+    };
+    expect(resolveOagEvolutionMinChannelIncidentsForAnalysis(cfg)).toBe(10);
+  });
+
+  it("ignores invalid value (zero) and returns default", () => {
+    const cfg = {
+      gateway: { oag: { evolution: { minChannelIncidentsForAnalysis: 0 } } },
+    };
+    expect(resolveOagEvolutionMinChannelIncidentsForAnalysis(cfg)).toBe(5);
+  });
+
+  it("ignores invalid value (negative) and returns default", () => {
+    const cfg = {
+      gateway: { oag: { evolution: { minChannelIncidentsForAnalysis: -3 } } },
+    };
+    expect(resolveOagEvolutionMinChannelIncidentsForAnalysis(cfg)).toBe(5);
   });
 });
 

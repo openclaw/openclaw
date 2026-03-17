@@ -28,6 +28,7 @@ const DEFAULTS = {
     restartRegressionThreshold: 5,
     failureRegressionThreshold: 3,
     periodicAnalysisIntervalMs: 6 * 60 * 60_000,
+    minChannelIncidentsForAnalysis: 5,
   },
   scheduler: {
     maxWaitMs: 5 * 60_000,
@@ -185,6 +186,11 @@ export function resolveOagEvolutionFailureRegressionThreshold(cfg?: OpenClawConf
 export function resolveOagEvolutionPeriodicAnalysisIntervalMs(cfg?: OpenClawConfig): number {
   const v = resolveOagSection(cfg)?.evolution?.periodicAnalysisIntervalMs;
   return typeof v === "number" && v > 0 ? v : DEFAULTS.evolution.periodicAnalysisIntervalMs;
+}
+
+export function resolveOagEvolutionMinChannelIncidentsForAnalysis(cfg?: OpenClawConfig): number {
+  const v = resolveOagSection(cfg)?.evolution?.minChannelIncidentsForAnalysis;
+  return typeof v === "number" && v > 0 ? v : DEFAULTS.evolution.minChannelIncidentsForAnalysis;
 }
 
 // --- Scheduler resolvers ---

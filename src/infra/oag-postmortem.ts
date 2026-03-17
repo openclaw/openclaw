@@ -1,6 +1,12 @@
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  type AnomalyResult,
+  type Prediction,
+  detectAnomalies,
+  predictBreach,
+} from "./oag-anomaly.js";
 import { applyOagConfigChanges } from "./oag-config-writer.js";
 import {
   resolveOagDeliveryMaxRetries,
@@ -9,8 +15,10 @@ import {
   resolveOagEvolutionMaxCumulativePercent,
   resolveOagEvolutionMaxNotificationsPerDay,
   resolveOagEvolutionMaxStepPercent,
+  resolveOagEvolutionMinChannelIncidentsForAnalysis,
   resolveOagEvolutionMinCrashesForAnalysis,
   resolveOagEvolutionPeriodicAnalysisIntervalMs,
+  resolveOagEvolutionRestartRegressionThreshold,
   resolveOagLockStaleMs,
   resolveOagStalePollFactor,
 } from "./oag-config.js";
@@ -123,21 +131,25 @@ export type EvolutionRecommendation = {
   configPath: string;
   currentValue: number;
   suggestedValue: number;
+  delta?: number;
   reason: string;
   risk: "low" | "medium" | "high";
-  source: "heuristic";
+  source: "heuristic" | "exploration";
   recommendationId?: string;
   diagnosisId?: string;
 };
 
-type PostmortemResult = {
+export type PostmortemResult = {
   analyzed: boolean;
   crashCount: number;
+  channelIncidentCount: number;
   patterns: number;
   recommendations: EvolutionRecommendation[];
   applied: EvolutionRecommendation[];
   skipped: EvolutionRecommendation[];
   trends: TrendAnalysis;
+  anomalies: AnomalyResult[];
+  predictions: Prediction[];
   userNotification?: string;
 };
 
@@ -281,9 +293,62 @@ function analyzePatterns(
         break;
       }
     }
+
+    // False positive detection: when 70%+ of incidents for a channel recovered
+    // in under 30s, the staleEventThresholdMs is likely too aggressive.
+    const incidents = pattern.incidents;
+    if (incidents.length > 0) {
+      const falsePositives = incidents.filter((i) => (i.recoveryMs ?? Infinity) < 30_000);
+      const falsePositiveRate = falsePositives.length / incidents.length;
+      if (falsePositiveRate > 0.7) {
+        const configPath = resolveChannelScopedConfigPath(
+          "gateway.oag.health.staleEventThresholdMs",
+          [pattern],
+        );
+        // Suggest doubling the current threshold as a conservative relaxation
+        const currentThreshold = 30 * 60_000; // DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS
+        const suggested = clampChange(currentThreshold, currentThreshold * 2, cfg);
+        if (suggested > currentThreshold) {
+          recommendations.push({
+            configPath,
+            currentValue: currentThreshold,
+            suggestedValue: suggested,
+            reason: `Channel ${channelLabel} false positive rate ${Math.round(falsePositiveRate * 100)}% (${falsePositives.length}/${incidents.length} recovered in <30s) — relaxing staleEventThresholdMs`,
+            risk: "low",
+            source: "heuristic",
+          });
+        }
+      }
+    }
   }
 
   return recommendations;
+}
+
+/**
+ * Apply exploratory mutation to a recommendation.
+ * 5% chance of exploring the opposite direction to discover non-obvious improvements.
+ * Auth/config root causes are excluded — they have deterministic fixes.
+ */
+export function maybeExplore(
+  recommendation: EvolutionRecommendation,
+  rootCause?: string,
+): EvolutionRecommendation {
+  // Don't explore auth/config issues — they have deterministic fixes
+  if (rootCause && ["auth_failure", "config"].includes(rootCause)) {
+    return recommendation;
+  }
+  // 5% chance of exploring the opposite direction
+  if (Math.random() > 0.05) {
+    return recommendation;
+  }
+
+  const delta = recommendation.delta ?? recommendation.suggestedValue - recommendation.currentValue;
+  return {
+    ...recommendation,
+    delta: typeof delta === "number" ? -delta * 0.3 : delta,
+    source: "exploration",
+  };
 }
 
 function hasExceededNotificationLimit(memory: OagMemory, cfg: OpenClawConfig): boolean {
@@ -307,8 +372,12 @@ function buildUserNotification(result: PostmortemResult): string | undefined {
   }
   const parts: string[] = [];
   if (result.applied.length > 0) {
+    const incidentDesc =
+      result.crashCount > 0
+        ? `${result.crashCount} recent crashes`
+        : `${result.channelIncidentCount} channel incidents`;
     parts.push(
-      `I analyzed ${result.crashCount} recent incidents and adjusted ${result.applied.length} parameter${result.applied.length > 1 ? "s" : ""}: ${result.applied.map((r) => r.reason).join("; ")}.`,
+      `I analyzed ${incidentDesc} and adjusted ${result.applied.length} parameter${result.applied.length > 1 ? "s" : ""}: ${result.applied.map((r) => r.reason).join("; ")}.`,
     );
   }
   if (result.skipped.length > 0) {
@@ -337,11 +406,14 @@ export async function runPostRecoveryAnalysis(
     return {
       analyzed: false,
       crashCount: 0,
+      channelIncidentCount: 0,
       patterns: 0,
       recommendations: [],
       applied: [],
       skipped: [],
       trends: [],
+      anomalies: [],
+      predictions: [],
     };
   }
   postmortemRunning = true;
@@ -356,20 +428,48 @@ export async function runPostRecoveryAnalysis(
     const recentCrashes = getRecentCrashes(memory, ANALYSIS_WINDOW_HOURS);
     const trends = analyzeMetricTrends(memory.metricSeries);
 
+    // Run anomaly detection against current metrics and historical series
+    const currentMetrics = getOagMetrics() as unknown as Record<string, number>;
+    const anomalies = detectAnomalies(currentMetrics, memory.metricSeries);
+
+    // Predict breaches for key thresholds
+    const regressionThreshold = resolveOagEvolutionRestartRegressionThreshold(cfg);
+    const predictions: Prediction[] = [];
+    const restartPrediction = predictBreach(
+      memory.metricSeries,
+      "channelRestarts",
+      regressionThreshold,
+    );
+    if (restartPrediction) {
+      predictions.push(restartPrediction);
+    }
+
+    // Count channel-level incidents accumulated across recent lifecycles.
+    // This allows OAG to activate on channel health-monitor restarts even
+    // when there are zero gateway-level crashes.
+    const cutoff = Date.now() - ANALYSIS_WINDOW_HOURS * 60 * 60_000;
+    const channelIncidentCount = memory.lifecycles
+      .filter((lc) => Date.parse(lc.stoppedAt) > cutoff)
+      .reduce((sum, lc) => sum + (lc.incidents?.length ?? 0), 0);
+
     const result: PostmortemResult = {
       analyzed: false,
       crashCount: recentCrashes.length,
+      channelIncidentCount,
       patterns: 0,
       recommendations: [],
       applied: [],
       skipped: [],
       trends,
+      anomalies,
+      predictions,
     };
 
     const minCrashes = resolveOagEvolutionMinCrashesForAnalysis(cfg);
-    if (recentCrashes.length < minCrashes) {
+    const minChannelIncidents = resolveOagEvolutionMinChannelIncidentsForAnalysis(cfg);
+    if (recentCrashes.length < minCrashes && channelIncidentCount < minChannelIncidents) {
       log.info(
-        `Post-recovery: ${recentCrashes.length} recent crashes (below threshold ${minCrashes}), skipping analysis`,
+        `Post-recovery: ${recentCrashes.length} crashes, ${channelIncidentCount} channel incidents (below thresholds ${minCrashes}/${minChannelIncidents}), skipping analysis`,
       );
       return result;
     }
@@ -380,7 +480,32 @@ export async function runPostRecoveryAnalysis(
     }
 
     result.analyzed = true;
-    const recommendations = analyzePatterns(memory, cfg, sentinelContext);
+
+    // When channel incidents (not crashes) triggered analysis, try the root cause
+    // classifier for more targeted recommendations. Fall back to heuristic patterns
+    // if the classifier module is not available (being created by another agent).
+    let rootCauseLabel: string | undefined;
+    if (recentCrashes.length < minCrashes && channelIncidentCount >= minChannelIncidents) {
+      try {
+        const { classifyRootCause } = await import("./oag-root-cause.js");
+        // Classify root cause from the most recent incident's lastError
+        const recentIncident = memory.lifecycles
+          .flatMap((lc) => lc.incidents ?? [])
+          .filter((i) => i.lastError)
+          .pop();
+        const rootCause = classifyRootCause(recentIncident?.lastError);
+        rootCauseLabel = rootCause?.category;
+        if (rootCauseLabel) {
+          log.info(`Post-recovery root cause classification: ${rootCauseLabel}`);
+        }
+      } catch {
+        // oag-root-cause module not available yet — fall back to heuristic patterns
+      }
+    }
+
+    // Apply exploratory mutation to each recommendation before processing
+    const rawRecommendations = analyzePatterns(memory, cfg, sentinelContext);
+    const recommendations = rawRecommendations.map((rec) => maybeExplore(rec, rootCauseLabel));
     result.recommendations = recommendations;
     result.patterns = findRecurringIncidentPattern(
       memory,
@@ -464,7 +589,10 @@ export async function runPostRecoveryAnalysis(
       await recordEvolution({
         appliedAt: new Date().toISOString(),
         source: "adaptive",
-        trigger: `post-recovery analysis (${recentCrashes.length} crashes in ${ANALYSIS_WINDOW_HOURS}h)`,
+        trigger:
+          recentCrashes.length >= minCrashes
+            ? `post-recovery analysis (${recentCrashes.length} crashes in ${ANALYSIS_WINDOW_HOURS}h)`
+            : `post-recovery analysis (${channelIncidentCount} channel incidents in ${ANALYSIS_WINDOW_HOURS}h)`,
         changes: evolutionChanges,
         outcome: "pending",
       });

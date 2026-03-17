@@ -1217,8 +1217,35 @@ export async function startGatewayServer(
       : () => {};
 
   // Recover pending outbound deliveries from previous crash/restart.
+  // Wait for at least one channel to be healthy before attempting recovery,
+  // preventing 100% message loss when recovery runs before channels are online.
   if (!minimalTestGateway) {
     startupDeliveryRecovery = (async () => {
+      const CHANNEL_READY_TIMEOUT_MS = 30_000;
+      const CHANNEL_READY_POLL_MS = 1_000;
+      const readyStart = Date.now();
+      let channelReady = false;
+      while (Date.now() - readyStart < CHANNEL_READY_TIMEOUT_MS) {
+        const snapshot = channelManager.getRuntimeSnapshot();
+        for (const [, accounts] of Object.entries(snapshot.channelAccounts ?? {})) {
+          for (const [, status] of Object.entries(accounts ?? {})) {
+            if (status?.running && status?.connected !== false) {
+              channelReady = true;
+              break;
+            }
+          }
+          if (channelReady) {
+            break;
+          }
+        }
+        if (channelReady) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, CHANNEL_READY_POLL_MS));
+      }
+      if (!channelReady) {
+        log.warn("No channels ready after 30s — proceeding with delivery recovery anyway");
+      }
       const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
       const logRecovery = log.child("delivery-recovery");
@@ -1257,6 +1284,16 @@ export async function startGatewayServer(
     periodicAnalysisHandle = schedulePeriodicAnalysis({
       idleCheck: gatewayIdleCheck,
     });
+
+    // Wire OAG diagnosis dispatch to the embedded agent runner.
+    // The embedded runner requires full session context (sessionId, sessionFile,
+    // workspaceDir, runId, timeoutMs, etc.) which is not available in the OAG
+    // diagnosis path. Deferring until a lightweight one-shot agent API exists.
+    // TODO: Implement once a one-shot embedded runner API is available that does
+    // not require a full session/thread context (sessionFile, workspaceDir, etc.).
+    log.info(
+      "OAG diagnosis dispatch: embedded runner requires session context, deferring to future implementation",
+    );
   }
 
   const execApprovalManager = new ExecApprovalManager();

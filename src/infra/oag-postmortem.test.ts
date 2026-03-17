@@ -45,6 +45,11 @@ vi.mock("./oag-memory.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./oag-anomaly.js", () => ({
+  detectAnomalies: () => [],
+  predictBreach: () => [],
+}));
+
 vi.mock("./oag-config.js", () => ({
   resolveOagDeliveryMaxRetries: () => 5,
   resolveOagDeliveryRecoveryBudgetMs: () => 60000,
@@ -55,6 +60,7 @@ vi.mock("./oag-config.js", () => ({
   resolveOagEvolutionMaxCumulativePercent: () => 200,
   resolveOagEvolutionMaxNotificationsPerDay: () => 3,
   resolveOagEvolutionMinCrashesForAnalysis: () => 2,
+  resolveOagEvolutionMinChannelIncidentsForAnalysis: () => 3,
   resolveOagEvolutionCooldownMs: () => 4 * 60 * 60_000,
   resolveOagEvolutionObservationWindowMs: () => 60 * 60_000,
   resolveOagEvolutionRestartRegressionThreshold: () => 5,
@@ -93,7 +99,7 @@ vi.mock("./oag-scheduler.js", () => ({
   createGatewayIdleCheck: () => () => true,
 }));
 
-const { runPostRecoveryAnalysis, schedulePeriodicAnalysis, analyzeMetricTrends } =
+const { runPostRecoveryAnalysis, schedulePeriodicAnalysis, analyzeMetricTrends, maybeExplore } =
   await import("./oag-postmortem.js");
 
 describe("oag-postmortem", () => {
@@ -429,6 +435,125 @@ describe("oag-postmortem", () => {
     const result = await runPostRecoveryAnalysis();
     expect(result.trends).toEqual([]);
   });
+
+  it("triggers analysis when channel incidents meet threshold with zero crashes", async () => {
+    const now = new Date().toISOString();
+    // Zero crashes but 5 channel incidents across lifecycles (threshold is 3 in mock)
+    mockMemory.current.lifecycles = Array.from({ length: 5 }, (_, i) => ({
+      id: `lc-${i}`,
+      startedAt: now,
+      stoppedAt: now,
+      stopReason: "restart" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "telegram",
+          detail: "health-monitor restart",
+          count: 1,
+          firstAt: now,
+          lastAt: now,
+        },
+      ],
+    }));
+
+    const result = await runPostRecoveryAnalysis();
+    expect(result.analyzed).toBe(true);
+    expect(result.crashCount).toBe(0);
+    expect(result.channelIncidentCount).toBe(5);
+    expect(result.recommendations.length).toBeGreaterThan(0);
+  });
+
+  it("skips analysis when channel incidents are below threshold with zero crashes", async () => {
+    const now = new Date().toISOString();
+    // 2 channel incidents -- below threshold of 3 (mock value)
+    mockMemory.current.lifecycles = Array.from({ length: 2 }, (_, i) => ({
+      id: `lc-${i}`,
+      startedAt: now,
+      stoppedAt: now,
+      stopReason: "restart" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "telegram",
+          detail: "health-monitor restart",
+          count: 1,
+          firstAt: now,
+          lastAt: now,
+        },
+      ],
+    }));
+
+    const result = await runPostRecoveryAnalysis();
+    expect(result.analyzed).toBe(false);
+    expect(result.crashCount).toBe(0);
+    expect(result.channelIncidentCount).toBe(2);
+  });
+
+  it("gateway crashes still trigger analysis (backward compat)", async () => {
+    const now = new Date().toISOString();
+    // 3 crashes with incidents -- should trigger via crash path
+    mockMemory.current.lifecycles = Array.from({ length: 3 }, (_, i) => ({
+      id: `lc-${i}`,
+      startedAt: now,
+      stoppedAt: now,
+      stopReason: "crash" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "telegram",
+          detail: "ETIMEDOUT",
+          count: 1,
+          firstAt: now,
+          lastAt: now,
+        },
+      ],
+    }));
+
+    const result = await runPostRecoveryAnalysis();
+    expect(result.analyzed).toBe(true);
+    expect(result.crashCount).toBe(3);
+    expect(result.channelIncidentCount).toBe(3);
+  });
+
+  it("generates staleEventThresholdMs relaxation when false positive rate > 70%", async () => {
+    const now = new Date().toISOString();
+    // All 4 incidents recovered in <30s (false positives)
+    mockMemory.current.lifecycles = Array.from({ length: 4 }, (_, i) => ({
+      id: `lc-${i}`,
+      startedAt: now,
+      stoppedAt: now,
+      stopReason: "crash" as const,
+      uptimeMs: 1000,
+      metricsSnapshot: {},
+      incidents: [
+        {
+          type: "channel_crash_loop" as const,
+          channel: "telegram",
+          detail: "ETIMEDOUT",
+          count: 1,
+          firstAt: now,
+          lastAt: now,
+          recoveryMs: 5_000, // recovered in 5s — false positive
+        },
+      ],
+    }));
+
+    const result = await runPostRecoveryAnalysis();
+    expect(result.analyzed).toBe(true);
+    const thresholdRec = result.recommendations.find((r) =>
+      r.configPath.includes("staleEventThresholdMs"),
+    );
+    expect(thresholdRec).toBeDefined();
+    expect(thresholdRec!.reason).toContain("false positive rate");
+    expect(thresholdRec!.reason).toContain("telegram");
+    expect(thresholdRec!.suggestedValue).toBeGreaterThan(thresholdRec!.currentValue);
+  });
 });
 
 describe("schedulePeriodicAnalysis", () => {
@@ -681,5 +806,102 @@ describe("analyzeMetricTrends", () => {
     const deliveryTrend = trends.find((t) => t.metric === "noteDeliveries");
     expect(deliveryTrend!.direction).toBe("stable");
     expect(deliveryTrend!.changePercent).toBe(-10);
+  });
+});
+
+describe("maybeExplore", () => {
+  it("mutates approximately 5% of recommendations", () => {
+    const rec = {
+      configPath: "gateway.oag.delivery.recoveryBudgetMs",
+      currentValue: 60000,
+      suggestedValue: 90000,
+      reason: "test",
+      risk: "low" as const,
+      source: "heuristic" as const,
+    };
+
+    // Mock Math.random to always trigger exploration (return 0.01 < 0.05)
+    const mockRandom = vi.spyOn(Math, "random").mockReturnValue(0.01);
+    const explored = maybeExplore(rec);
+    expect(explored.source).toBe("exploration");
+    // delta should be -(suggestedValue - currentValue) * 0.3 = -(30000) * 0.3 = -9000
+    expect(explored.delta).toBe(-9000);
+
+    mockRandom.mockRestore();
+  });
+
+  it("skips exploration for auth_failure root causes", () => {
+    const rec = {
+      configPath: "gateway.oag.delivery.recoveryBudgetMs",
+      currentValue: 60000,
+      suggestedValue: 90000,
+      reason: "test",
+      risk: "low" as const,
+      source: "heuristic" as const,
+    };
+
+    const mockRandom = vi.spyOn(Math, "random").mockReturnValue(0.01);
+    const result = maybeExplore(rec, "auth_failure");
+    // Should return original — auth_failure is excluded from exploration
+    expect(result.source).toBe("heuristic");
+    expect(result.delta).toBeUndefined();
+
+    mockRandom.mockRestore();
+  });
+
+  it("skips exploration for config root causes", () => {
+    const rec = {
+      configPath: "gateway.oag.delivery.maxRetries",
+      currentValue: 5,
+      suggestedValue: 7,
+      reason: "test",
+      risk: "low" as const,
+      source: "heuristic" as const,
+    };
+
+    const mockRandom = vi.spyOn(Math, "random").mockReturnValue(0.01);
+    const result = maybeExplore(rec, "config");
+    expect(result.source).toBe("heuristic");
+
+    mockRandom.mockRestore();
+  });
+
+  it("returns recommendation unchanged when random > 0.05", () => {
+    const rec = {
+      configPath: "gateway.oag.delivery.recoveryBudgetMs",
+      currentValue: 60000,
+      suggestedValue: 90000,
+      reason: "test",
+      risk: "low" as const,
+      source: "heuristic" as const,
+    };
+
+    const mockRandom = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const result = maybeExplore(rec);
+    expect(result.source).toBe("heuristic");
+    expect(result).toBe(rec); // exact same reference — not mutated
+
+    mockRandom.mockRestore();
+  });
+});
+
+describe("anomaly integration in postmortem", () => {
+  beforeEach(() => {
+    mockMemory.current = {
+      version: 1,
+      lifecycles: [],
+      evolutions: [],
+      diagnoses: [],
+      metricSeries: [],
+    };
+  });
+
+  it("includes anomalies and predictions in postmortem result", async () => {
+    // Even when no crashes (below threshold), the result should have anomalies/predictions arrays
+    const result = await runPostRecoveryAnalysis();
+    expect(result).toHaveProperty("anomalies");
+    expect(result).toHaveProperty("predictions");
+    expect(Array.isArray(result.anomalies)).toBe(true);
+    expect(Array.isArray(result.predictions)).toBe(true);
   });
 });

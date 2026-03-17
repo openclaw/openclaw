@@ -33,6 +33,8 @@ export type OagConfig = {
     failureRegressionThreshold?: number;
     /** Interval for periodic runtime analysis in milliseconds (default: 6h). */
     periodicAnalysisIntervalMs?: number;
+    /** Minimum channel-level incidents to trigger analysis when no gateway crashes (default: 5). */
+    minChannelIncidentsForAnalysis?: number;
   };
   scheduler?: {
     /** Maximum wait time before forcing task execution in milliseconds (default: 5min). */

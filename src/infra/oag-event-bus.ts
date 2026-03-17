@@ -15,7 +15,9 @@ export type OagEventType =
   | "evolution_reverted"
   | "evolution_confirmed"
   | "diagnosis_completed"
-  | "metrics_snapshot";
+  | "metrics_snapshot"
+  | "anomaly_detected"
+  | "prediction_alert";
 
 type OagEventPayload = {
   type: OagEventType;

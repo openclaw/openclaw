@@ -1,6 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import { getTransportProfile } from "../infra/oag-channel-profiles.js";
-import { recordOagIncident } from "../infra/oag-incident-collector.js";
+import { recordOagIncident, resolveIncidentOutcome } from "../infra/oag-incident-collector.js";
 import { incrementOagMetric } from "../infra/oag-metrics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -183,12 +183,15 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
+            const recoveryMs = Date.now() - now;
+            resolveIncidentOutcome(rKey(channelId, accountId), recoveryMs);
             incrementOagMetric("channelRestarts");
             recordOagIncident({
               type: "channel_crash_loop",
               channel: channelId,
               accountId,
               detail: `health-monitor restart (reason: ${reason})`,
+              lastError: typeof status.lastError === "string" ? status.lastError : undefined,
             });
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });

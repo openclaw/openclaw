@@ -15,6 +15,9 @@ export function recordOagIncident(
     existing.count += 1;
     existing.lastAt = now;
     existing.detail = incident.detail;
+    if (incident.lastError !== undefined) {
+      existing.lastError = incident.lastError;
+    }
   } else {
     activeIncidents.set(key, {
       ...incident,
@@ -51,4 +54,12 @@ export function collectActiveIncidents(): OagIncident[] {
 
 export function clearActiveIncidents(): void {
   activeIncidents.clear();
+}
+
+export function resolveIncidentOutcome(key: string, recoveryMs: number): void {
+  const existing = activeIncidents.get(key);
+  if (existing) {
+    existing.resolvedAt = Date.now();
+    existing.recoveryMs = recoveryMs;
+  }
 }
