@@ -109,6 +109,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Linear ticket API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh`
 - Sentinel snapshot helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-snapshot.sh`
 - Sentinel triage helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh`
+- Dune CLI wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh`
 
 ## Knowledge Surfaces
 
