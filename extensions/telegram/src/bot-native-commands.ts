@@ -184,7 +184,7 @@ async function resolveTelegramCommandAuth(params: {
     isChannelPost,
   } = params;
   const chatId = msg.chat.id;
-  const isGroup = isChannelPost || msg.chat.type === "group" || msg.chat.type === "supergroup";
+  const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
   const threadSpec = resolveTelegramThreadSpec({
@@ -294,7 +294,7 @@ async function resolveTelegramCommandAuth(params: {
     resolveGroupPolicy,
     enforcePolicy: useAccessGroups,
     useTopicAndGroupOverrides: false,
-    enforceAllowlistAuthorization: !isChannelPost && requireAuth && !commandsAllowFromConfigured,
+    enforceAllowlistAuthorization: requireAuth && !commandsAllowFromConfigured,
     allowEmptyAllowlistEntries: true,
     requireSenderForAllowlistAuthorization: true,
     checkChatAllowlist: useAccessGroups,
@@ -327,29 +327,18 @@ async function resolveTelegramCommandAuth(params: {
   const groupSenderAllowed = isGroup
     ? isSenderAllowed({ allow: effectiveGroupAllow, senderId, senderUsername })
     : false;
-  const channelPolicy = isChannelPost ? resolveGroupPolicy(chatId) : null;
-  const commandAuthorizers = isChannelPost
-    ? [
-        // Channel posts have no human sender identity, so explicit chat allow is the auth source.
-        {
-          configured: Boolean(channelPolicy?.allowlistEnabled),
-          allowed: Boolean(channelPolicy?.allowlistEnabled && channelPolicy.allowed),
-        },
-      ]
-    : [
-        { configured: dmAllow.hasEntries, allowed: senderAllowed },
-        ...(isGroup
-          ? [{ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed }]
-          : []),
-      ];
-  const commandAuthorized =
-    !isChannelPost && commandsAllowFromConfigured
-      ? Boolean(commandsAllowFromAccess?.isAuthorizedSender)
-      : resolveCommandAuthorizedFromAuthorizers({
-          useAccessGroups,
-          authorizers: commandAuthorizers,
-          modeWhenAccessGroupsOff: "configured",
-        });
+  const commandAuthorized = commandsAllowFromConfigured
+    ? Boolean(commandsAllowFromAccess?.isAuthorizedSender)
+    : resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups,
+        authorizers: [
+          { configured: dmAllow.hasEntries, allowed: senderAllowed },
+          ...(isGroup
+            ? [{ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed }]
+            : []),
+        ],
+        modeWhenAccessGroupsOff: "configured",
+      });
   if (requireAuth && !commandAuthorized) {
     return await rejectNotAuthorized();
   }
