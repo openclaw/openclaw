@@ -209,7 +209,7 @@
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
-- File size check on commit: when a commit touches a file that exceeds ~500 LOC, consider splitting it into logical modules in the same PR; when oversize is intentional, add a file-level comment at the top explaining the rationale.
+- File size check on commit: when a commit touches a file that exceeds ~500 LOC, consider splitting it into logical modules in the same PR; when oversize is intentional, add a file-level comment at the early part of the file explaining the rationale.
 - PR submission template (canonical): `.github/pull_request_template.md`
 - Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
 - Read this when submitting a PR: `docs/help/submitting-a-pr.md` ([Submitting a PR](https://docs.openclaw.ai/help/submitting-a-pr))
