@@ -169,6 +169,9 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
     message_snapshots:
       fetched.message_snapshots ??
       (base as { rawData?: { message_snapshots?: unknown } }).rawData?.message_snapshots,
+    sticker_items:
+      (fetched as { sticker_items?: unknown }).sticker_items ??
+      (base as { rawData?: { sticker_items?: unknown } }).rawData?.sticker_items,
   };
   return {
     ...base,
@@ -176,6 +179,10 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
     content: fetched.content ?? base.content,
     attachments: fetched.attachments ?? base.attachments,
     embeds: fetched.embeds ?? base.embeds,
+    stickers:
+      (fetched as { stickers?: unknown }).stickers ??
+      (fetched as { sticker_items?: unknown }).sticker_items ??
+      base.stickers,
     mentionedUsers: fetchedMentions ?? base.mentionedUsers,
     mentionedRoles: fetched.mention_roles ?? base.mentionedRoles,
     mentionedEveryone: fetched.mention_everyone ?? base.mentionedEveryone,

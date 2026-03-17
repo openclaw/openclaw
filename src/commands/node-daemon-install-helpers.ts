@@ -1,10 +1,10 @@
-import path from "node:path";
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
+  resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
@@ -59,7 +59,7 @@ export async function buildNodeInstallPlan(params: {
     env: params.env,
     // Match the gateway install path so supervised node services keep the chosen
     // node toolchain on PATH for sibling binaries like npm/pnpm when needed.
-    extraPathDirs: nodePath ? [path.dirname(nodePath)] : undefined,
+    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
   const description = formatNodeServiceDescription({
     version: environment.OPENCLAW_SERVICE_VERSION,

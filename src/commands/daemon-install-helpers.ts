@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   loadAuthProfileStoreForSecretsRuntime,
   type AuthProfileStore,
@@ -12,6 +11,7 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
+  resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -90,7 +90,7 @@ export async function buildGatewayInstallPlan(params: {
         : undefined,
     // Keep npm/pnpm available to the service when the selected daemon node comes from
     // a version-manager bin directory that isn't covered by static PATH guesses.
-    extraPathDirs: nodePath ? [path.dirname(nodePath)] : undefined,
+    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
   // Merge config env vars into the service environment (vars + inline env keys).

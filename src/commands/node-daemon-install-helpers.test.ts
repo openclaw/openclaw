@@ -61,4 +61,33 @@ describe("buildNodeInstallPlan", () => {
       extraPathDirs: ["/custom/node/bin"],
     });
   });
+
+  it("does not prepend '.' when nodePath is a bare executable name", async () => {
+    mocks.resolveNodeProgramArguments.mockResolvedValue({
+      programArguments: ["node", "node-host"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/usr/bin/node",
+      version: "22.0.0",
+      supported: true,
+    });
+    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
+    mocks.buildNodeServiceEnvironment.mockReturnValue({
+      OPENCLAW_SERVICE_VERSION: "2026.3.14",
+    });
+
+    await buildNodeInstallPlan({
+      env: {},
+      host: "127.0.0.1",
+      port: 18789,
+      runtime: "node",
+      nodePath: "node",
+    });
+
+    expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
+      env: {},
+      extraPathDirs: undefined,
+    });
+  });
 });

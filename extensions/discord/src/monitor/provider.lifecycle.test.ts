@@ -335,6 +335,51 @@ describe("runDiscordGatewayLifecycle", () => {
     });
   });
 
+  it("surfaces fatal startup gateway errors while waiting for READY", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const pendingGatewayErrors: unknown[] = [];
+      const { emitter, gateway } = createGatewayHarness();
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      const {
+        lifecycleParams,
+        start,
+        stop,
+        threadStop,
+        runtimeError,
+        releaseEarlyGatewayErrorGuard,
+      } = createLifecycleHarness({
+        gateway,
+        pendingGatewayErrors,
+      });
+
+      setTimeout(() => {
+        pendingGatewayErrors.push(new Error("Fatal Gateway error: 4001"));
+      }, 1_000);
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      lifecyclePromise.catch(() => {});
+      await vi.advanceTimersByTimeAsync(1_500);
+      await expect(lifecyclePromise).rejects.toThrow("Fatal Gateway error: 4001");
+
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("discord gateway error: Error: Fatal Gateway error: 4001"),
+      );
+      expect(gateway.disconnect).not.toHaveBeenCalled();
+      expect(gateway.connect).not.toHaveBeenCalled();
+      expectLifecycleCleanup({
+        start,
+        stop,
+        threadStop,
+        waitCalls: 0,
+        releaseEarlyGatewayErrorGuard,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries stalled HELLO with resume before forcing fresh identify", async () => {
     vi.useFakeTimers();
     try {
