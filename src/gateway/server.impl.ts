@@ -47,8 +47,13 @@ import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
-import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
+import {
+  getGlobalHookRunner,
+  initializeGlobalHookRunner,
+  runGlobalGatewayStopSafely,
+} from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -986,13 +991,53 @@ export async function startGatewayServer(
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
-    // NOTE: The second loadGatewayPlugins() call that previously lived here
-    // was removed because it re-ran register() for *every* plugin (not just
-    // the deferred channel ones), creating duplicate closures.  Plugins that
-    // bind ports (e.g. voice-call) hit EADDRINUSE on the second pass.
-    // Channel plugins that need full runtime are now loaded eagerly in the
-    // first pass above; the preferSetupRuntimeForChannelPlugins optimisation
-    // is kept for the initial load but the post-listen reload is dropped.
+    if (deferredConfiguredChannelPluginIds.length > 0) {
+      // Reload only the deferred channel plugins with full runtime.  The
+      // first loadGatewayPlugins pass loaded them in setup-runtime mode;
+      // this pass gives them their complete register() call.  Scoping via
+      // onlyPluginIds prevents non-channel plugins (e.g. voice-call) from
+      // being re-registered, which would create duplicate closures and
+      // cause EADDRINUSE for plugins that bind ports.
+      const { pluginRegistry: deferredRegistry } = loadGatewayPlugins({
+        cfg: cfgAtStart,
+        workspaceDir: defaultWorkspaceDir,
+        log,
+        coreGatewayHandlers,
+        baseMethods,
+        onlyPluginIds: deferredConfiguredChannelPluginIds,
+        logDiagnostics: false,
+      });
+      // Merge deferred channel registrations into the existing registry so
+      // non-channel plugin services/tools/hooks from the first pass are
+      // preserved for startGatewaySidecars.
+      pluginRegistry = {
+        ...pluginRegistry,
+        plugins: [...pluginRegistry.plugins, ...deferredRegistry.plugins],
+        tools: [...pluginRegistry.tools, ...deferredRegistry.tools],
+        hooks: [...pluginRegistry.hooks, ...deferredRegistry.hooks],
+        typedHooks: [...pluginRegistry.typedHooks, ...deferredRegistry.typedHooks],
+        channels: [...pluginRegistry.channels, ...deferredRegistry.channels],
+        channelSetups: [...pluginRegistry.channelSetups, ...deferredRegistry.channelSetups],
+        providers: [...pluginRegistry.providers, ...deferredRegistry.providers],
+        webSearchProviders: [
+          ...pluginRegistry.webSearchProviders,
+          ...deferredRegistry.webSearchProviders,
+        ],
+        gatewayHandlers: {
+          ...pluginRegistry.gatewayHandlers,
+          ...deferredRegistry.gatewayHandlers,
+        },
+        httpRoutes: [...pluginRegistry.httpRoutes, ...deferredRegistry.httpRoutes],
+        cliRegistrars: [...pluginRegistry.cliRegistrars, ...deferredRegistry.cliRegistrars],
+        services: [...pluginRegistry.services, ...deferredRegistry.services],
+        commands: [...pluginRegistry.commands, ...deferredRegistry.commands],
+        diagnostics: [...pluginRegistry.diagnostics, ...deferredRegistry.diagnostics],
+      };
+      // Re-activate with the merged registry so global hooks cover both
+      // the initial-pass and the deferred channel plugins.
+      setActivePluginRegistry(pluginRegistry);
+      initializeGlobalHookRunner(pluginRegistry);
+    }
     ({ browserControl, pluginServices } = await startGatewaySidecars({
       cfg: cfgAtStart,
       pluginRegistry,

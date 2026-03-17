@@ -11,7 +11,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
-import { clearPluginCommands } from "./commands.js";
+import { clearPluginCommands, clearPluginCommandsForPlugin } from "./commands.js";
 import {
   applyTestPluginDefaults,
   normalizePluginsConfig,
@@ -21,7 +21,10 @@ import {
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { clearPluginInteractiveHandlers } from "./interactive.js";
+import {
+  clearPluginInteractiveHandlers,
+  clearPluginInteractiveHandlersForPlugin,
+} from "./interactive.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
@@ -823,9 +826,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
   // Clear previously registered plugin commands before reloading.
   // Skip for non-activating (snapshot) loads to avoid wiping commands from other plugins.
+  // When scoped to specific plugins (onlyPluginIds), only clear commands/handlers for
+  // those plugins so non-scoped plugins retain their registrations.
   if (shouldActivate) {
-    clearPluginCommands();
-    clearPluginInteractiveHandlers();
+    if (onlyPluginIdSet) {
+      for (const id of onlyPluginIdSet) {
+        clearPluginCommandsForPlugin(id);
+        clearPluginInteractiveHandlersForPlugin(id);
+      }
+    } else {
+      clearPluginCommands();
+      clearPluginInteractiveHandlers();
+    }
   }
 
   // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).

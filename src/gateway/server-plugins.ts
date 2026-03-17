@@ -174,6 +174,7 @@ export function loadGatewayPlugins(params: {
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
+  onlyPluginIds?: string[];
   logDiagnostics?: boolean;
 }) {
   // Set the process-global gateway subagent runtime BEFORE loading plugins.
@@ -197,6 +198,7 @@ export function loadGatewayPlugins(params: {
       allowGatewaySubagentBinding: true,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    onlyPluginIds: params.onlyPluginIds,
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
