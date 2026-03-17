@@ -29,14 +29,20 @@ This is the difference between telling your assistant "send the weekly report" e
 
 ## How They Work
 
-Standing orders are defined in your workspace as markdown files (typically `Agent/Instructions/standing-orders.md`). Each program specifies:
+Standing orders are defined in your [agent workspace](/concepts/agent-workspace) files. The recommended approach is to include them directly in `AGENTS.md` (which is auto-injected every session) so the agent always has them in context. For larger configurations, you can also place them in a dedicated file like `standing-orders.md` and reference it from `AGENTS.md`.
+
+Each program specifies:
 
 1. **Scope** — what the agent is authorized to do
 2. **Triggers** — when to execute (schedule, event, or condition)
 3. **Approval gates** — what requires human sign-off before acting
 4. **Escalation rules** — when to stop and ask for help
 
-The agent loads these instructions every session and executes against them, combined with [cron jobs](/automation/cron-jobs) for time-based enforcement.
+The agent loads these instructions every session via the workspace bootstrap files (see [Agent Workspace](/concepts/agent-workspace) for the full list of auto-injected files) and executes against them, combined with [cron jobs](/automation/cron-jobs) for time-based enforcement.
+
+<Tip>
+Put standing orders in `AGENTS.md` to guarantee they're loaded every session. The workspace bootstrap automatically injects `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `MEMORY.md` — but not arbitrary files in subdirectories.
+</Tip>
 
 ## Anatomy of a Standing Order
 
@@ -224,5 +230,4 @@ Each program should have:
 ## Related
 
 - [Cron Jobs](/automation/cron-jobs) — Schedule enforcement for standing orders
-- [Workspace Files](/concepts/agent-workspace) — Where standing orders live
-- [Personality Files](/concepts/personality-files) — SOUL.md and AGENTS.md define the agent's identity and constraints
+- [Agent Workspace](/concepts/agent-workspace) — Where standing orders live, including the full list of auto-injected bootstrap files (AGENTS.md, SOUL.md, etc.)
