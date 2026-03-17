@@ -13,6 +13,10 @@ import {
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
+import {
+  minimaxMediaUnderstandingProvider,
+  minimaxPortalMediaUnderstandingProvider,
+} from "./media-understanding-provider.js";
 import { loginMiniMaxPortalOAuth, type MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
@@ -273,6 +277,8 @@ const minimaxPlugin = {
       ],
       isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
     });
+    api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
   },
 };
 

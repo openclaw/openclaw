@@ -9,6 +9,7 @@ import {
   getScopedCredentialValue,
   setScopedCredentialValue,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
   applyMoonshotConfig,
   applyMoonshotConfigCn,
@@ -98,6 +99,7 @@ const moonshotPlugin = {
         return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
       },
     });
+    api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "kimi",
