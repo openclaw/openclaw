@@ -62,15 +62,21 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
     };
-    const page = await context.cron.listPage({
-      includeDisabled: p.includeDisabled,
-      limit: p.limit,
-      offset: p.offset,
-      query: p.query,
-      enabled: p.enabled,
-      sortBy: p.sortBy,
-      sortDir: p.sortDir,
-    });
+    let page: unknown;
+    try {
+      page = await context.cron.listPage({
+        includeDisabled: p.includeDisabled,
+        limit: p.limit,
+        offset: p.offset,
+        query: p.query,
+        enabled: p.enabled,
+        sortBy: p.sortBy,
+        sortDir: p.sortDir,
+      });
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
     respond(true, page, undefined);
   },
   "cron.status": async ({ params, respond, context }) => {
@@ -85,7 +91,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const status = await context.cron.status();
+    let status: unknown;
+    try {
+      status = await context.cron.status();
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
     respond(true, status, undefined);
   },
   "cron.add": async ({ params, respond, context }) => {
@@ -111,8 +123,17 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(jobCreate);
-    context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
+    let job: unknown;
+    try {
+      job = await context.cron.add(jobCreate);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
+    context.logGateway.info("cron: job created", {
+      jobId: (job as { id?: string })?.id,
+      schedule: jobCreate.schedule,
+    });
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
@@ -158,7 +179,13 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const job = await context.cron.update(jobId, patch);
+    let job: unknown;
+    try {
+      job = await context.cron.update(jobId, patch);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
     context.logGateway.info("cron: job updated", { jobId });
     respond(true, job, undefined);
   },
@@ -184,8 +211,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.remove(jobId);
-    if (result.removed) {
+    let result: unknown;
+    try {
+      result = await context.cron.remove(jobId);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
+    if ((result as { removed?: boolean })?.removed) {
       context.logGateway.info("cron: job removed", { jobId });
     }
     respond(true, result, undefined);
@@ -212,7 +245,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    let result: unknown;
+    try {
+      result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {
@@ -252,24 +291,30 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     if (scope === "all") {
-      const jobs = await context.cron.list({ includeDisabled: true });
-      const jobNameById = Object.fromEntries(
-        jobs
-          .filter((job) => typeof job.id === "string" && typeof job.name === "string")
-          .map((job) => [job.id, job.name]),
-      );
-      const page = await readCronRunLogEntriesPageAll({
-        storePath: context.cronStorePath,
-        limit: p.limit,
-        offset: p.offset,
-        statuses: p.statuses,
-        status: p.status,
-        deliveryStatuses: p.deliveryStatuses,
-        deliveryStatus: p.deliveryStatus,
-        query: p.query,
-        sortDir: p.sortDir,
-        jobNameById,
-      });
+      let page: unknown;
+      try {
+        const jobs = await context.cron.list({ includeDisabled: true });
+        const jobNameById = Object.fromEntries(
+          jobs
+            .filter((job) => typeof job.id === "string" && typeof job.name === "string")
+            .map((job) => [job.id, job.name]),
+        );
+        page = await readCronRunLogEntriesPageAll({
+          storePath: context.cronStorePath,
+          limit: p.limit,
+          offset: p.offset,
+          statuses: p.statuses,
+          status: p.status,
+          deliveryStatuses: p.deliveryStatuses,
+          deliveryStatus: p.deliveryStatus,
+          query: p.query,
+          sortDir: p.sortDir,
+          jobNameById,
+        });
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+        return;
+      }
       respond(true, page, undefined);
       return;
     }
@@ -287,17 +332,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const page = await readCronRunLogEntriesPage(logPath, {
-      limit: p.limit,
-      offset: p.offset,
-      jobId: jobId as string,
-      statuses: p.statuses,
-      status: p.status,
-      deliveryStatuses: p.deliveryStatuses,
-      deliveryStatus: p.deliveryStatus,
-      query: p.query,
-      sortDir: p.sortDir,
-    });
+    let page: unknown;
+    try {
+      page = await readCronRunLogEntriesPage(logPath, {
+        limit: p.limit,
+        offset: p.offset,
+        jobId: jobId as string,
+        statuses: p.statuses,
+        status: p.status,
+        deliveryStatuses: p.deliveryStatuses,
+        deliveryStatus: p.deliveryStatus,
+        query: p.query,
+        sortDir: p.sortDir,
+      });
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
     respond(true, page, undefined);
   },
 };
