@@ -28,7 +28,7 @@ import { getMessageFeishu } from "./send.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuChatType, ResolvedFeishuAccount } from "./types.js";
 
-const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
+const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 10_000;
 
 export type FeishuReactionCreatedEvent = {
   message_id: string;
@@ -132,7 +132,7 @@ export async function resolveReactionSyntheticEvent(
       sender_type: "user",
     },
     message: {
-      message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      message_id: messageId,
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",
