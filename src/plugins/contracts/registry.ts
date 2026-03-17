@@ -34,7 +34,7 @@ import volcenginePlugin from "../../../extensions/volcengine/index.js";
 import xaiPlugin from "../../../extensions/xai/index.js";
 import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
+import { createCapturedPluginRegistration } from "../captured-registration.js";
 import type {
   MediaUnderstandingProviderPlugin,
   ProviderPlugin,
