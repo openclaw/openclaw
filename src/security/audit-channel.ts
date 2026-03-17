@@ -761,8 +761,9 @@ export async function collectChannelSecurityFindings(params: {
         target: invalidTelegramAllowFromEntries,
       });
       let anyGroupOverride = false;
+      const groupLevelWildcards: string[] = [];
       if (groups) {
-        for (const value of Object.values(groups)) {
+        for (const [groupId, value] of Object.entries(groups)) {
           if (!value || typeof value !== "object") {
             continue;
           }
@@ -770,6 +771,9 @@ export async function collectChannelSecurityFindings(params: {
           const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
           if (allowFrom.length > 0) {
             anyGroupOverride = true;
+            if (allowFrom.some((v) => String(v).trim() === "*")) {
+              groupLevelWildcards.push(`channels.telegram.groups.${groupId}.allowFrom`);
+            }
             await collectInvalidTelegramAllowFromEntries({
               entries: allowFrom,
               target: invalidTelegramAllowFromEntries,
@@ -779,7 +783,7 @@ export async function collectChannelSecurityFindings(params: {
           if (!topics || typeof topics !== "object") {
             continue;
           }
-          for (const topicValue of Object.values(topics as Record<string, unknown>)) {
+          for (const [topicId, topicValue] of Object.entries(topics as Record<string, unknown>)) {
             if (!topicValue || typeof topicValue !== "object") {
               continue;
             }
@@ -787,6 +791,9 @@ export async function collectChannelSecurityFindings(params: {
             const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
             if (topicAllow.length > 0) {
               anyGroupOverride = true;
+              if (topicAllow.some((v) => String(v).trim() === "*")) {
+                groupLevelWildcards.push(`channels.telegram.groups.${groupId}.topics.${topicId}.allowFrom`);
+              }
             }
             await collectInvalidTelegramAllowFromEntries({
               entries: topicAllow,
@@ -798,6 +805,36 @@ export async function collectChannelSecurityFindings(params: {
 
       const hasAnySenderAllowlist =
         storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
+
+      const hasTopLevelRestriction =
+        (groupAllowFrom.length > 0 && !groupAllowFromHasWildcard) ||
+        (storeAllowFrom.length > 0 && !storeHasWildcard);
+
+      if (storeHasWildcard || groupAllowFromHasWildcard) {
+        findings.push({
+          checkId: "channels.telegram.groups.allowFrom.wildcard",
+          severity: "critical",
+          title: "Telegram group allowlist contains wildcard",
+          detail:
+            'Telegram group sender allowlist contains "*", which allows any group member to run /… commands and control directives.',
+          remediation:
+            'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit numeric Telegram user IDs.',
+        });
+        continue;
+      }
+
+      if (groupLevelWildcards.length > 0 && !hasTopLevelRestriction) {
+        findings.push({
+          checkId: "channels.telegram.groups.group_allowFrom.wildcard",
+          severity: "critical",
+          title: "Telegram group allowlist contains wildcard",
+          detail:
+            `Per-group sender allowlist contains "*" at:\n${groupLevelWildcards.map((p) => `- ${p}`).join("\n")}\n` +
+            'This allows any group member to run /… commands and control directives.',
+          remediation:
+            'Remove "*" from per-group allowFrom, or set channels.telegram.groupAllowFrom to restrict access globally.',
+        });
+      }
 
       if (invalidTelegramAllowFromEntries.size > 0) {
         const examples = Array.from(invalidTelegramAllowFromEntries).slice(0, 5);
@@ -815,19 +852,6 @@ export async function collectChannelSecurityFindings(params: {
           remediation:
             "Replace @username entries with numeric Telegram user IDs (use setup to resolve), then re-run the audit.",
         });
-      }
-
-      if (storeHasWildcard || groupAllowFromHasWildcard) {
-        findings.push({
-          checkId: "channels.telegram.groups.allowFrom.wildcard",
-          severity: "critical",
-          title: "Telegram group allowlist contains wildcard",
-          detail:
-            'Telegram group sender allowlist contains "*", which allows any group member to run /… commands and control directives.',
-          remediation:
-            'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit numeric Telegram user IDs.',
-        });
-        continue;
       }
 
       if (!hasAnySenderAllowlist) {

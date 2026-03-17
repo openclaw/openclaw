@@ -2723,6 +2723,77 @@ description: test skill
     });
   });
 
+  it("does not flag Telegram group-level allowFrom wildcard when top-level groupAllowFrom is restricted", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "t",
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["123456"],
+            groups: {
+              "-100123": {
+                requireMention: true,
+                allowFrom: ["*"],
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [telegramPlugin],
+      });
+
+      expect(
+        res.findings.find(
+          (f) =>
+            f.checkId === "channels.telegram.groups.group_allowFrom.wildcard",
+        ),
+      ).toBeUndefined();
+    });
+  });
+
+  it("flags Telegram group-level allowFrom wildcard as critical when no top-level restriction", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "t",
+            groupPolicy: "allowlist",
+            groups: {
+              "-100123": {
+                requireMention: true,
+                allowFrom: ["*"],
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [telegramPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.telegram.groups.group_allowFrom.wildcard",
+            severity: "critical",
+          }),
+        ]),
+      );
+    });
+  });
+
   it("adds probe_failed warnings for deep probe failure modes", async () => {
     const cfg: OpenClawConfig = { gateway: { mode: "local" } };
     const cases: Array<{
