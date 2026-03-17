@@ -134,19 +134,19 @@ export function recordWebhookStatus(
 
 const SERVER_CLOSE_TIMEOUT_MS = 5_000;
 
-function closeHttpServer(server: http.Server): Promise<void> {
-  return Promise.race([
-    new Promise<void>((resolve) => {
-      (server.closeAllConnections as (() => void) | undefined)?.();
-      server.close(() => resolve());
-    }),
-    new Promise<void>((resolve) => {
-      setTimeout(() => {
-        console.warn("feishu: HTTP server close timed out, continuing cleanup");
-        resolve();
-      }, SERVER_CLOSE_TIMEOUT_MS);
-    }),
-  ]);
+export function closeHttpServer(server: http.Server): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn("feishu: HTTP server close timed out, continuing cleanup");
+      resolve();
+    }, SERVER_CLOSE_TIMEOUT_MS);
+
+    (server.closeAllConnections as (() => void) | undefined)?.();
+    server.close(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 export async function stopFeishuMonitorState(accountId?: string): Promise<void> {
