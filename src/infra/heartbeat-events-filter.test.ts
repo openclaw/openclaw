@@ -72,7 +72,14 @@ describe("heartbeat event classification", () => {
   it.each([
     { value: "exec finished: ok", expected: true },
     { value: "Exec Finished: failed", expected: true },
+    { value: "Exec completed (abc12345, code 0)", expected: true },
+    { value: "exec completed (abc12345, code 0) :: output", expected: true },
+    { value: "Exec failed (abc12345, signal SIGTERM)", expected: true },
+    { value: "exec failed (abc12345, code 127)", expected: true },
     { value: "cron finished", expected: false },
+    { value: "check why exec failed overnight", expected: false },
+    { value: "reminder: exec completed tasks review", expected: false },
+    { value: "debug exec finished handler", expected: false },
   ])("classifies exec completion events for %j", ({ value, expected }) => {
     expect(isExecCompletionEvent(value)).toBe(expected);
   });
@@ -87,6 +94,10 @@ describe("heartbeat event classification", () => {
     { value: "heartbeat poll: noop", expected: false },
     { value: "heartbeat wake: noop", expected: false },
     { value: "exec finished: ok", expected: false },
+    { value: "Exec completed (abc12345, code 0)", expected: false },
+    { value: "Exec failed (abc12345, code 1)", expected: false },
+    { value: "check why exec failed overnight", expected: true },
+    { value: "reminder: exec completed tasks review", expected: true },
   ])("classifies cron system events for %j", ({ value, expected }) => {
     expect(isCronSystemEvent(value)).toBe(expected);
   });

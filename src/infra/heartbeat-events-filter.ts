@@ -84,11 +84,11 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
 }
 
 export function isExecCompletionEvent(evt: string): boolean {
-  const lower = evt.toLowerCase();
+  const lower = evt.trimStart().toLowerCase();
   return (
-    lower.includes("exec finished") ||
-    lower.includes("exec completed") ||
-    lower.includes("exec failed")
+    lower.startsWith("exec finished") ||
+    lower.startsWith("exec completed") ||
+    lower.startsWith("exec failed")
   );
 }
 

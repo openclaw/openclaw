@@ -15,16 +15,6 @@ export type HeartbeatWakeHandler = (opts: {
   sessionKey?: string;
 }) => Promise<HeartbeatRunResult>;
 
-let heartbeatsEnabled = true;
-
-export function setHeartbeatsEnabled(enabled: boolean) {
-  heartbeatsEnabled = enabled;
-}
-
-export function areHeartbeatsEnabled(): boolean {
-  return heartbeatsEnabled;
-}
-
 type WakeTimerKind = "normal" | "retry";
 type PendingWakeReason = {
   reason: string;
@@ -43,6 +33,7 @@ type PendingWakeReason = {
 // on globalThis ensures every chunk reads and writes the same object.
 const SHARED_KEY = "__openclaw_heartbeat_wake__" as const;
 type SharedWakeState = {
+  heartbeatsEnabled: boolean;
   handler: HeartbeatWakeHandler | null;
   handlerGeneration: number;
   pendingWakes: Map<string, PendingWakeReason>;
@@ -53,6 +44,7 @@ type SharedWakeState = {
   timerKind: WakeTimerKind | null;
 };
 const _s: SharedWakeState = ((globalThis as Record<string, unknown>)[SHARED_KEY] ??= {
+  heartbeatsEnabled: true,
   handler: null,
   handlerGeneration: 0,
   pendingWakes: new Map<string, PendingWakeReason>(),
@@ -273,6 +265,14 @@ export function hasHeartbeatWakeHandler() {
   return _s.handler !== null;
 }
 
+export function setHeartbeatsEnabled(enabled: boolean) {
+  _s.heartbeatsEnabled = enabled;
+}
+
+export function areHeartbeatsEnabled(): boolean {
+  return _s.heartbeatsEnabled;
+}
+
 export function hasPendingHeartbeatWake() {
   return _s.pendingWakes.size > 0 || Boolean(_s.timer) || _s.scheduled;
 }
@@ -281,6 +281,7 @@ export function resetHeartbeatWakeStateForTests() {
   if (_s.timer) {
     clearTimeout(_s.timer);
   }
+  _s.heartbeatsEnabled = true;
   _s.timer = null;
   _s.timerDueAt = null;
   _s.timerKind = null;
