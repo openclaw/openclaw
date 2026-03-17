@@ -63,7 +63,9 @@ export async function handleMatrixAction(
         return jsonResult({ ok: true, removed: result.removed });
       }
       const { resolveMatrixClient } = await import("./matrix/send/client.js");
-      const { client: reactClient, stopOnDone: reactStopOnDone } = await resolveMatrixClient({ accountId });
+      const { client: reactClient, stopOnDone: reactStopOnDone } = await resolveMatrixClient({
+        accountId,
+      });
       try {
         await reactMatrixMessage(roomId, messageId, emoji, reactClient);
       } finally {
