@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
+import { MIN_HEARTBEAT_INTERVAL_MS, resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
@@ -255,6 +256,24 @@ describe("startHeartbeatRunner", () => {
     });
 
     runner.stop();
+  });
+
+  it("clamps heartbeat interval to the minimum floor (#48723)", () => {
+    // A user who sets every: "1s" should not get sub-minute heartbeats.
+    const cfg = {
+      agents: { defaults: { heartbeat: { every: "1s" } } },
+    } as OpenClawConfig;
+    const ms = resolveHeartbeatIntervalMs(cfg);
+    expect(ms).toBe(MIN_HEARTBEAT_INTERVAL_MS);
+    expect(ms).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("does not clamp intervals already above the floor", () => {
+    const cfg = {
+      agents: { defaults: { heartbeat: { every: "5m" } } },
+    } as OpenClawConfig;
+    const ms = resolveHeartbeatIntervalMs(cfg);
+    expect(ms).toBe(5 * 60_000);
   });
 
   it("does not fan out to unrelated agents for session-scoped exec wakes", async () => {

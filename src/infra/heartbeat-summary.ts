@@ -23,6 +23,13 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
 
+/**
+ * Minimum heartbeat interval (60 s). Prevents misconfiguration from causing
+ * runaway token burn — a user who sets `every: "1s"` would otherwise trigger
+ * continuous LLM calls that exhaust their API balance in minutes. (#48723)
+ */
+export const MIN_HEARTBEAT_INTERVAL_MS = 60_000;
+
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
   return list.some((entry) => Boolean(entry?.heartbeat));
@@ -66,7 +73,7 @@ export function resolveHeartbeatIntervalMs(
   if (ms <= 0) {
     return null;
   }
-  return ms;
+  return Math.max(ms, MIN_HEARTBEAT_INTERVAL_MS);
 }
 
 export function resolveHeartbeatSummaryForAgent(

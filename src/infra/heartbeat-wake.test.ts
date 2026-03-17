@@ -283,6 +283,70 @@ describe("heartbeat-wake", () => {
     });
   });
 
+  it("suppresses exec-event wakes while a heartbeat run is in progress (#48723)", async () => {
+    vi.useFakeTimers();
+
+    // Simulate a long-running heartbeat: handler takes 500ms to resolve.
+    // During that time, an exec-event wake arrives (from the heartbeat's own
+    // tool call completing). It should be silently dropped.
+    let resolveRun: () => void;
+    const runPromise = new Promise<void>((r) => {
+      resolveRun = r;
+    });
+    const handler = vi
+      .fn()
+      .mockReturnValue(runPromise.then(() => ({ status: "ran" as const, durationMs: 500 })));
+    setHeartbeatWakeHandler(handler);
+
+    // Trigger initial heartbeat
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // While the heartbeat is running, an exec-event fires (tool completion).
+    // This should be suppressed — no pending wake should be queued.
+    requestHeartbeatNow({ reason: "exec-event", coalesceMs: 0 });
+
+    // Finish the heartbeat run
+    resolveRun!();
+    await vi.advanceTimersByTimeAsync(1);
+
+    // Give plenty of time for any queued wake to fire
+    await vi.advanceTimersByTimeAsync(5000);
+
+    // Only the original heartbeat should have run — no re-entry
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("still allows non-exec wakes while heartbeat is running", async () => {
+    vi.useFakeTimers();
+
+    let resolveRun: () => void;
+    const runPromise = new Promise<void>((r) => {
+      resolveRun = r;
+    });
+    const handler = vi
+      .fn()
+      .mockReturnValueOnce(runPromise.then(() => ({ status: "ran" as const, durationMs: 500 })))
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // A cron wake during the heartbeat run should NOT be suppressed
+    requestHeartbeatNow({ reason: "cron:job-1", coalesceMs: 0 });
+
+    resolveRun!();
+    await vi.advanceTimersByTimeAsync(1);
+
+    // The cron wake should have been queued and fired after the run finished
+    await vi.advanceTimersByTimeAsync(500);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]?.[0]).toEqual({ reason: "cron:job-1" });
+  });
+
   it("executes distinct targeted wakes queued in the same coalescing window", async () => {
     vi.useFakeTimers();
     const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

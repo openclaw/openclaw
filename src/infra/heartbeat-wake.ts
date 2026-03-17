@@ -241,6 +241,16 @@ export function requestHeartbeatNow(opts?: {
   agentId?: string;
   sessionKey?: string;
 }) {
+  // When a heartbeat run is in progress, its own tool calls (exec, read, etc.)
+  // fire exec-event wakes on completion. Allowing these through creates a
+  // re-entry loop: heartbeat → tool call → exec-event wake → heartbeat → …
+  // The loop burns tokens at ~30 s intervals until the API balance is exhausted.
+  // Since no user commands run while heartbeat holds the main lane, any
+  // exec-event during `running` is guaranteed to originate from the heartbeat
+  // itself and can be safely suppressed. (#48723)
+  if (running && opts?.reason === "exec-event") {
+    return;
+  }
   queuePendingWakeReason({
     reason: opts?.reason,
     agentId: opts?.agentId,
