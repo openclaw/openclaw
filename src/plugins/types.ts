@@ -18,6 +18,8 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { ImageGenerationProvider } from "../image-generation/types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type {
@@ -1098,3 +1100,7 @@ export type SpeechProviderPlugin = {
 export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
   pluginId: string;
 };
+
+export type ImageGenerationProviderPlugin = ImageGenerationProvider;
+
+export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
