@@ -2,14 +2,15 @@ import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalog,
 } from "../../src/commands/onboard-auth.config-shared.js";
+import type { OpenClawConfig } from "../../src/config/config.js";
 import {
   buildZaiModelDefinition,
   resolveZaiBaseUrl,
   ZAI_DEFAULT_MODEL_ID,
-} from "../../src/commands/onboard-auth.models.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+  ZAI_DEFAULT_MODEL_REF,
+} from "./model-definitions.js";
 
-export const ZAI_DEFAULT_MODEL_REF = `zai/${ZAI_DEFAULT_MODEL_ID}`;
+export { ZAI_DEFAULT_MODEL_REF };
 
 const ZAI_DEFAULT_MODELS = [
   buildZaiModelDefinition({ id: "glm-5" }),

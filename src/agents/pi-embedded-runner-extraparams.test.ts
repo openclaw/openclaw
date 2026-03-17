@@ -908,7 +908,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("does not rewrite tool schema for kimi-coding (native Anthropic format)", () => {
+  it("does not rewrite tool schema for Kimi (native Anthropic format)", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -931,12 +931,12 @@ describe("applyExtraParamsToAgent", () => {
     };
     const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "kimi-coding", "k2p5", undefined, "low");
+    applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-code", undefined, "low");
 
     const model = {
       api: "anthropic-messages",
-      provider: "kimi-coding",
-      id: "k2p5",
+      provider: "kimi",
+      id: "kimi-code",
       baseUrl: "https://api.kimi.com/coding/",
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };

@@ -1129,13 +1129,13 @@ describe("resolveModel", () => {
 
   it("lets provider config override registry-found kimi user agent headers", () => {
     mockDiscoveredModel({
-      provider: "kimi-coding",
-      modelId: "k2p5",
+      provider: "kimi",
+      modelId: "kimi-code",
       templateModel: {
         ...buildForwardCompatTemplate({
-          id: "k2p5",
-          name: "Kimi for Coding",
-          provider: "kimi-coding",
+          id: "kimi-code",
+          name: "Kimi Code",
+          provider: "kimi",
           api: "anthropic-messages",
           baseUrl: "https://api.kimi.com/coding/",
         }),
@@ -1146,7 +1146,7 @@ describe("resolveModel", () => {
     const cfg = {
       models: {
         providers: {
-          "kimi-coding": {
+          kimi: {
             headers: {
               "User-Agent": "custom-kimi-client/1.0",
               "X-Kimi-Tenant": "tenant-a",
@@ -1156,8 +1156,9 @@ describe("resolveModel", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const result = resolveModel("kimi-coding", "k2p5", "/tmp/agent", cfg);
+    const result = resolveModel("kimi", "kimi-code", "/tmp/agent", cfg);
     expect(result.error).toBeUndefined();
+    expect(result.model?.id).toBe("kimi-for-coding");
     expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
       "User-Agent": "custom-kimi-client/1.0",
       "X-Kimi-Tenant": "tenant-a",

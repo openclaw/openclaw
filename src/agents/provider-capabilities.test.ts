@@ -30,7 +30,7 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
       };
-    case "kimi-coding":
+    case "kimi":
       return {
         preserveAnthropicThinkingSignatures: false,
       };
@@ -84,9 +84,7 @@ describe("resolveProviderCapabilities", () => {
   });
 
   it("normalizes kimi aliases to the same capability set", () => {
-    expect(resolveProviderCapabilities("kimi-coding")).toEqual(
-      resolveProviderCapabilities("kimi-code"),
-    );
+    expect(resolveProviderCapabilities("kimi")).toEqual(resolveProviderCapabilities("kimi-code"));
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
@@ -131,7 +129,7 @@ describe("resolveProviderCapabilities", () => {
   });
 
   it("treats kimi aliases as native anthropic tool payload providers", () => {
-    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-coding")).toBe(false);
+    expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("kimi-code")).toBe(false);
     expect(requiresOpenAiCompatibleAnthropicToolPayload("anthropic")).toBe(false);
   });

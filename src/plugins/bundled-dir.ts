@@ -19,9 +19,11 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     );
     for (const packageRoot of packageRoots) {
       // Local source checkouts stage a runtime-complete bundled plugin tree under
-      // dist-runtime/. Prefer that over release-shaped dist/extensions.
+      // dist-runtime/. Prefer that over source extensions only when the paired
+      // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
       const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
-      if (fs.existsSync(runtimeExtensionsDir)) {
+      const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
+      if (fs.existsSync(runtimeExtensionsDir) && fs.existsSync(builtExtensionsDir)) {
         return runtimeExtensionsDir;
       }
     }

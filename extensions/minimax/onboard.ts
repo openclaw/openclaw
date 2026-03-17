@@ -2,13 +2,13 @@ import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
 } from "../../src/commands/onboard-auth.config-shared.js";
+import type { OpenClawConfig } from "../../src/config/config.js";
+import type { ModelProviderConfig } from "../../src/config/types.models.js";
 import {
   buildMinimaxApiModelDefinition,
   MINIMAX_API_BASE_URL,
   MINIMAX_CN_API_BASE_URL,
-} from "../../src/commands/onboard-auth.models.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+} from "./model-definitions.js";
 
 type MinimaxApiProviderConfigParams = {
   providerId: string;
