@@ -6,13 +6,9 @@ import {
 } from "openclaw/plugin-sdk/slack";
 import { type ResolvedSlackAccount } from "./accounts.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import {
-  isSlackPluginAccountConfigured,
-  slackConfigAccessors,
-  slackConfigBase,
-  slackSetupWizard,
-} from "./plugin-shared.js";
 import { slackSetupAdapter } from "./setup-core.js";
+import { slackSetupWizard } from "./setup-surface.js";
+import { isSlackPluginAccountConfigured, slackConfigAccessors, slackConfigBase } from "./shared.js";
 
 export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
