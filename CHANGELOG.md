@@ -105,6 +105,8 @@ Docs: https://docs.openclaw.ai
 - Agents/usage tracking: stop forcing `supportsUsageInStreaming: false` on non-native OpenAI-completions providers so compatible backends report token usage and cost again instead of showing all zeros. (#46500) Fixes #46142. Thanks @ademczuk.
 - Plugins/subagents: preserve gateway-owned plugin subagent access across runtime, tool, and embedded-runner load paths so gateway plugin tools and context engines can still spawn and manage subagents after the loader cache split. (#46648) Thanks @jalehman.
 - Control UI/overview: keep the language dropdown aligned with the persisted locale during dashboard startup so refreshing the page does not fall back to English before locale hydration completes. (#48019) Thanks @git-jxj.
+- Agents/compaction: rerun transcript repair after `session.compact()` so orphaned `tool_result` blocks cannot survive compaction and break later Anthropic requests. (#16095) thanks @claw-sylphx.
+- Agents/compaction: trigger overflow recovery from the tool-result guard once post-compaction context still exceeds the safe threshold, so long tool loops compact before the next model call hard-fails. (#29371) thanks @keshav55.
 
 ## 2026.3.13
 
