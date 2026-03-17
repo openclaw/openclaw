@@ -120,7 +120,12 @@ function readJsonFileIfExists(filePath) {
   if (!fs.existsSync(filePath)) {
     return undefined;
   }
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  const raw = fs.readFileSync(filePath, "utf8");
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error(`Failed to parse manifest JSON at ${filePath}`);
+  }
 }
 
 function defaultExistingPaths(sourceDir, paths) {
