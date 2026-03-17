@@ -4,6 +4,6 @@ import { buildDispatchInboundContextCapture } from "./inbound-contract-capture.j
 
 export const inboundCtxCapture = createInboundContextCapture();
 
-vi.mock("../../src/auto-reply/dispatch.js", async (importOriginal) => {
+vi.mock("../../../auto-reply/dispatch.js", async (importOriginal) => {
   return await buildDispatchInboundContextCapture(importOriginal, inboundCtxCapture);
 });

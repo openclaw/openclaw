@@ -1,25 +1,48 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   actionContractRegistry,
+  channelPluginSurfaceKeys,
   directoryContractRegistry,
   pluginContractRegistry,
+  sessionBindingContractRegistry,
   setupContractRegistry,
   statusContractRegistry,
   surfaceContractRegistry,
   threadingContractRegistry,
-  type ChannelPluginSurface,
 } from "./registry.js";
 
-const orderedSurfaceKeys = [
-  "actions",
-  "setup",
-  "status",
-  "outbound",
-  "messaging",
-  "threading",
-  "directory",
-  "gateway",
-] as const satisfies readonly ChannelPluginSurface[];
+function listFilesRecursively(dir: string): string[] {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursively(fullPath));
+      continue;
+    }
+    files.push(fullPath);
+  }
+  return files;
+}
+
+function discoverSessionBindingChannels() {
+  const extensionsDir = path.resolve(import.meta.dirname, "../../../../extensions");
+  const channels = new Set<string>();
+  for (const filePath of listFilesRecursively(extensionsDir)) {
+    if (!filePath.endsWith(".ts") || filePath.endsWith(".test.ts")) {
+      continue;
+    }
+    const source = fs.readFileSync(filePath, "utf8");
+    for (const match of source.matchAll(
+      /registerSessionBindingAdapter\(\{[\s\S]*?channel:\s*"([^"]+)"/g,
+    )) {
+      channels.add(match[1]);
+    }
+  }
+  return [...channels].toSorted();
+}
 
 describe("channel contract registry", () => {
   it("does not duplicate channel plugin ids", () => {
@@ -35,7 +58,7 @@ describe("channel contract registry", () => {
 
   it("declares the actual owned channel plugin surfaces explicitly", () => {
     for (const entry of surfaceContractRegistry) {
-      const actual = orderedSurfaceKeys.filter((surface) => Boolean(entry.plugin[surface]));
+      const actual = channelPluginSurfaceKeys.filter((surface) => Boolean(entry.plugin[surface]));
       expect([...entry.surfaces].toSorted()).toEqual(actual.toSorted());
     }
   });
@@ -84,7 +107,7 @@ describe("channel contract registry", () => {
     }
   });
 
-  it("only installs deep directory coverage for plugins that declare directory", () => {
+  it("covers every declared directory surface with an explicit contract level", () => {
     const directorySurfaceIds = new Set(
       surfaceContractRegistry
         .filter((entry) => entry.surfaces.includes("directory"))
@@ -93,5 +116,27 @@ describe("channel contract registry", () => {
     for (const entry of directoryContractRegistry) {
       expect(directorySurfaceIds.has(entry.id)).toBe(true);
     }
+    expect(directoryContractRegistry.map((entry) => entry.id).toSorted()).toEqual(
+      [...directorySurfaceIds].toSorted(),
+    );
+  });
+
+  it("only installs lookup directory coverage for plugins that declare directory", () => {
+    const directorySurfaceIds = new Set(
+      surfaceContractRegistry
+        .filter((entry) => entry.surfaces.includes("directory"))
+        .map((entry) => entry.id),
+    );
+    for (const entry of directoryContractRegistry.filter(
+      (candidate) => candidate.coverage === "lookups",
+    )) {
+      expect(directorySurfaceIds.has(entry.id)).toBe(true);
+    }
+  });
+
+  it("keeps session binding coverage aligned with registered session binding adapters", () => {
+    expect(sessionBindingContractRegistry.map((entry) => entry.id).toSorted()).toEqual(
+      discoverSessionBindingChannels(),
+    );
   });
 });

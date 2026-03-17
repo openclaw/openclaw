@@ -10,8 +10,9 @@ import {
   setupAuthTestEnv,
 } from "../../commands/test-wizard-helpers.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
+import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
-import { providerContractRegistry } from "./registry.js";
+import { requireProviderContractProvider, uniqueProviderContractProviders } from "./registry.js";
 
 type ResolvePluginProviders =
   typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolvePluginProviders;
@@ -101,11 +102,7 @@ describe("provider auth-choice contract", () => {
 
   beforeEach(() => {
     resolvePreferredProviderPluginProvidersMock.mockReset();
-    resolvePreferredProviderPluginProvidersMock.mockReturnValue([
-      ...new Map(
-        providerContractRegistry.map((entry) => [entry.provider.id, entry.provider]),
-      ).values(),
-    ]);
+    resolvePreferredProviderPluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
   });
 
   afterEach(async () => {
@@ -121,21 +118,34 @@ describe("provider auth-choice contract", () => {
     activeStateDir = null;
   });
 
-  it("maps plugin-backed auth choices through the shared preferred-provider resolver", async () => {
-    const scenarios = [
-      { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
-      { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
-      { authChoice: "minimax-global-oauth" as const, expectedProvider: "minimax-portal" },
-      { authChoice: "modelstudio-api-key" as const, expectedProvider: "modelstudio" },
-      { authChoice: "ollama" as const, expectedProvider: "ollama" },
-      { authChoice: "unknown", expectedProvider: undefined },
-    ] as const;
+  it("maps provider-plugin choices through the shared preferred-provider fallback resolver", async () => {
+    const pluginFallbackScenarios = [
+      "github-copilot",
+      "qwen-portal",
+      "minimax-portal",
+      "modelstudio",
+      "ollama",
+    ].map((providerId) => {
+      const provider = requireProviderContractProvider(providerId);
+      return {
+        authChoice: buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default"),
+        expectedProvider: provider.id,
+      };
+    });
 
-    for (const scenario of scenarios) {
+    for (const scenario of pluginFallbackScenarios) {
+      resolvePreferredProviderPluginProvidersMock.mockClear();
       await expect(
-        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice }),
+        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice as AuthChoice }),
       ).resolves.toBe(scenario.expectedProvider);
+      expect(resolvePreferredProviderPluginProvidersMock).toHaveBeenCalled();
     }
+
+    resolvePreferredProviderPluginProvidersMock.mockClear();
+    await expect(
+      resolvePreferredProviderForAuthChoice({ choice: "unknown" as AuthChoice }),
+    ).resolves.toBe(undefined);
+    expect(resolvePreferredProviderPluginProvidersMock).toHaveBeenCalled();
   });
 
   it("applies qwen portal auth choices through the shared plugin-provider path", async () => {

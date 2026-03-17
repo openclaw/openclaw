@@ -1,13 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { providerContractRegistry } from "./registry.js";
-
-function uniqueProviders() {
-  return [
-    ...new Map(
-      providerContractRegistry.map((entry) => [entry.provider.id, entry.provider]),
-    ).values(),
-  ];
-}
+import {
+  providerContractPluginIds,
+  resolveProviderContractProvidersForPluginIds,
+  uniqueProviderContractProviders,
+} from "./registry.js";
 
 const resolvePluginProvidersMock = vi.fn();
 const resolveOwningPluginIdsForProviderMock = vi.fn();
@@ -30,12 +26,10 @@ const {
 
 describe("provider catalog contract", () => {
   beforeEach(() => {
-    const providers = uniqueProviders();
-    const providerIds = [...new Set(providerContractRegistry.map((entry) => entry.pluginId))];
     resetProviderRuntimeHookCacheForTest();
 
     resolveOwningPluginIdsForProviderMock.mockReset();
-    resolveOwningPluginIdsForProviderMock.mockReturnValue(providerIds);
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(providerContractPluginIds);
 
     resolveNonBundledProviderPluginIdsMock.mockReset();
     resolveNonBundledProviderPluginIdsMock.mockReturnValue([]);
@@ -44,12 +38,9 @@ describe("provider catalog contract", () => {
     resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) => {
       const onlyPluginIds = params?.onlyPluginIds;
       if (!onlyPluginIds || onlyPluginIds.length === 0) {
-        return providers;
+        return uniqueProviderContractProviders;
       }
-      const allowed = new Set(onlyPluginIds);
-      return providerContractRegistry
-        .filter((entry) => allowed.has(entry.pluginId))
-        .map((entry) => entry.provider);
+      return resolveProviderContractProvidersForPluginIds(onlyPluginIds);
     });
   });
 
