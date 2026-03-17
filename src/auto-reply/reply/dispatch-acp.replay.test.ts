@@ -168,9 +168,10 @@ async function seedTranscriptStore(params: {
   root: string;
   sessionKey: string;
   sessionId?: string;
+  agentId?: string;
 }) {
   process.env.OPENCLAW_STATE_DIR = params.root;
-  const storeDir = path.join(params.root, "agents", "main", "sessions");
+  const storeDir = path.join(params.root, "agents", params.agentId ?? "main", "sessions");
   await fs.mkdir(storeDir, { recursive: true });
   await fs.writeFile(
     path.join(storeDir, "sessions.json"),
@@ -1021,13 +1022,15 @@ describe("AcpDurableProjectionService", () => {
 
   it("converges after restart when the final was sent but every ACP post-send durability write was lost", async () => {
     const liveStore = await createStore();
+    const sessionKey = "agent:worker:acp:test-session";
     await seedTranscriptStore({
       root: path.dirname(path.dirname(liveStore.storePath)),
-      sessionKey: "agent:main:acp:test-session",
+      sessionKey,
+      agentId: "worker",
     });
     await seedTerminalRun({
       store: liveStore,
-      sessionKey: "agent:main:acp:test-session",
+      sessionKey,
       runId: "run-restart-prepared-final",
       channel: "telegram",
       to: "telegram:thread-restart",
@@ -1099,7 +1102,7 @@ describe("AcpDurableProjectionService", () => {
     liveService.stopAll();
     await liveProjection;
     await appendAssistantMessageToSessionTranscript({
-      sessionKey: "agent:main:acp:test-session",
+      sessionKey,
       mediaUrls: ["https://example.com/restart-prepared-final.mp3"],
       idempotencyKey: __testing.buildSyntheticFinalIdempotencyKey({
         runId: "run-restart-prepared-final",
