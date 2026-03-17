@@ -533,6 +533,48 @@ function createEnvResolvedPluginFixture(pluginId: string) {
   return { plugin, env };
 }
 
+function expectEscapingEntryRejected(params: {
+  id: string;
+  linkKind: "symlink" | "hardlink";
+  sourceBody: string;
+}) {
+  useNoBundledPlugins();
+  const { outsideEntry, linkedEntry } = createEscapingEntryFixture({
+    id: params.id,
+    sourceBody: params.sourceBody,
+  });
+  try {
+    if (params.linkKind === "symlink") {
+      fs.symlinkSync(outsideEntry, linkedEntry);
+    } else {
+      fs.linkSync(outsideEntry, linkedEntry);
+    }
+  } catch (err) {
+    if (params.linkKind === "hardlink" && (err as NodeJS.ErrnoException).code === "EXDEV") {
+      return undefined;
+    }
+    if (params.linkKind === "symlink") {
+      return undefined;
+    }
+    throw err;
+  }
+
+  const registry = loadOpenClawPlugins({
+    cache: false,
+    config: {
+      plugins: {
+        load: { paths: [linkedEntry] },
+        allow: [params.id],
+      },
+    },
+  });
+
+  const record = registry.plugins.find((entry) => entry.id === params.id);
+  expect(record?.status).not.toBe("loaded");
+  expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+  return registry;
+}
+
 afterEach(() => {
   clearPluginLoaderCache();
   if (prevBundledDir === undefined) {
@@ -2888,66 +2930,27 @@ module.exports = {
     ).toBe(false);
   });
 
-  it("rejects plugin entry files that escape plugin root via symlink", () => {
-    useNoBundledPlugins();
-    const { outsideEntry, linkedEntry } = createEscapingEntryFixture({
+  it.each([
+    {
+      name: "rejects plugin entry files that escape plugin root via symlink",
       id: "symlinked",
-      sourceBody:
-        'module.exports = { id: "symlinked", register() { throw new Error("should not run"); } };',
-    });
-    try {
-      fs.symlinkSync(outsideEntry, linkedEntry);
-    } catch {
-      return;
-    }
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [linkedEntry] },
-          allow: ["symlinked"],
-        },
-      },
-    });
-
-    const record = registry.plugins.find((entry) => entry.id === "symlinked");
-    expect(record?.status).not.toBe("loaded");
-    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
-  });
-
-  it("rejects plugin entry files that escape plugin root via hardlink", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    useNoBundledPlugins();
-    const { outsideEntry, linkedEntry } = createEscapingEntryFixture({
+      linkKind: "symlink" as const,
+    },
+    {
+      name: "rejects plugin entry files that escape plugin root via hardlink",
       id: "hardlinked",
-      sourceBody:
-        'module.exports = { id: "hardlinked", register() { throw new Error("should not run"); } };',
-    });
-    try {
-      fs.linkSync(outsideEntry, linkedEntry);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-        return;
-      }
-      throw err;
+      linkKind: "hardlink" as const,
+      skip: process.platform === "win32",
+    },
+  ])("$name", ({ id, linkKind, skip }) => {
+    if (skip) {
+      return;
     }
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [linkedEntry] },
-          allow: ["hardlinked"],
-        },
-      },
+    expectEscapingEntryRejected({
+      id,
+      linkKind,
+      sourceBody: `module.exports = { id: "${id}", register() { throw new Error("should not run"); } };`,
     });
-
-    const record = registry.plugins.find((entry) => entry.id === "hardlinked");
-    expect(record?.status).not.toBe("loaded");
-    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
   });
 
   it("allows bundled plugin entry files that are hardlinked aliases", () => {
