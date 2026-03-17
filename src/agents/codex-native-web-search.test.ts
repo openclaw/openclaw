@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCodexNativeWebSearchTool,
+  describeCodexNativeWebSearch,
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
   resolveCodexNativeWebSearchConfig,
@@ -108,6 +109,24 @@ describe("resolveCodexNativeSearchActivation", () => {
 });
 
 describe("Codex native web-search payload helpers", () => {
+  it("omits the summary when global web search is disabled", () => {
+    expect(
+      describeCodexNativeWebSearch({
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              openaiCodex: {
+                enabled: true,
+                mode: "live",
+              },
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("normalizes optional config values", () => {
     const result = resolveCodexNativeWebSearchConfig({
       tools: {
