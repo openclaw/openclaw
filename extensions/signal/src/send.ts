@@ -61,7 +61,71 @@ type SignalTarget =
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
 
-async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
+function normalizeSignalQuoteAuthorFromTarget(rawTo: string): string | undefined {
+  let value = rawTo.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (/^signal:/i.test(value)) {
+    value = value.replace(/^signal:/i, "").trim();
+  }
+  if (!value) {
+    return undefined;
+  }
+  const lower = value.toLowerCase();
+  if (lower.startsWith("group:")) {
+    return undefined;
+  }
+  if (lower.startsWith("username:")) {
+    value = value.slice("username:".length).trim();
+  } else if (lower.startsWith("u:")) {
+    value = value.slice("u:".length).trim();
+  }
+  return value || undefined;
+}
+
+export function resolveSignalQuoteParams(input: {
+  to: string;
+  replyToId?: string;
+  quoteTimestamp?: number;
+  quoteAuthor?: string;
+}): { quoteTimestamp?: number; quoteAuthor?: string } {
+  let quoteTimestamp = input.quoteTimestamp;
+  let quoteAuthor = input.quoteAuthor?.trim();
+
+  if ((typeof quoteTimestamp !== "number" || !quoteAuthor) && input.replyToId?.trim()) {
+    const parsedTs = Number(input.replyToId.trim());
+    if (Number.isFinite(parsedTs) && parsedTs > 0) {
+      if (typeof quoteTimestamp !== "number") {
+        quoteTimestamp = parsedTs;
+      }
+      quoteAuthor = quoteAuthor || normalizeSignalQuoteAuthorFromTarget(input.to);
+    }
+  }
+
+  if (
+    typeof quoteTimestamp === "number" &&
+    Number.isFinite(quoteTimestamp) &&
+    quoteTimestamp > 0 &&
+    quoteAuthor
+  ) {
+    return { quoteTimestamp, quoteAuthor };
+  }
+  return {};
+}
+
+let signalConfigRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
+  | undefined;
+
+async function loadSignalConfigRuntime() {
+  signalConfigRuntimePromise ??= import("openclaw/plugin-sdk/config-runtime");
+  return await signalConfigRuntimePromise;
+}
+
+async function resolveSignalRpcAccountInfo(
+  opts: Pick<SignalSendOpts, "cfg" | "baseUrl" | "account" | "accountId">,
+) {
   if (opts.baseUrl?.trim() && opts.account?.trim()) {
     return undefined;
   }
@@ -252,34 +316,15 @@ export async function sendMessageSignal(
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
   }
-  // Resolve quote params: prefer explicit quoteTimestamp/quoteAuthor, fall back to replyToId.
-  let resolvedQuoteTimestamp = opts.quoteTimestamp;
-  let resolvedQuoteAuthor = opts.quoteAuthor?.trim();
-  if (
-    (typeof resolvedQuoteTimestamp !== "number" || !resolvedQuoteAuthor) &&
-    opts.replyToId?.trim()
-  ) {
-    const parsedTs = Number(opts.replyToId.trim());
-    if (Number.isFinite(parsedTs) && parsedTs > 0) {
-      // Best-effort: use `to` as quote-author for DM cases; skip for groups.
-      const normalizedTo = to.replace(/^signal:/i, "").trim();
-      const isGroup = normalizedTo.toLowerCase().startsWith("group:");
-      if (!isGroup) {
-        if (typeof resolvedQuoteTimestamp !== "number") {
-          resolvedQuoteTimestamp = parsedTs;
-        }
-        resolvedQuoteAuthor = resolvedQuoteAuthor || normalizedTo;
-      }
-    }
-  }
-  if (
-    typeof resolvedQuoteTimestamp === "number" &&
-    Number.isFinite(resolvedQuoteTimestamp) &&
-    resolvedQuoteTimestamp > 0 &&
-    resolvedQuoteAuthor
-  ) {
-    params["quote-timestamp"] = resolvedQuoteTimestamp;
-    params["quote-author"] = resolvedQuoteAuthor;
+  const resolvedQuote = resolveSignalQuoteParams({
+    to,
+    replyToId: opts.replyToId,
+    quoteTimestamp: opts.quoteTimestamp,
+    quoteAuthor: opts.quoteAuthor,
+  });
+  if (typeof resolvedQuote.quoteTimestamp === "number" && resolvedQuote.quoteAuthor) {
+    params["quote-timestamp"] = resolvedQuote.quoteTimestamp;
+    params["quote-author"] = resolvedQuote.quoteAuthor;
   }
 
   const targetParams = buildTargetParams(target, {

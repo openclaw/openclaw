@@ -34,6 +34,7 @@ import {
   signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";
+import { resolveSignalQuoteParams } from "./send.js";
 
 /** Default text chunk size for Signal outbound messages (chars). */
 const SIGNAL_TEXT_CHUNK_LIMIT = 4000;
@@ -77,29 +78,6 @@ async function resolveSignalSendContext(params: {
   return { send, maxBytes };
 }
 
-function resolveSignalQuoteParams(
-  to: string,
-  replyToId: string | null | undefined,
-  accountPhone: string | undefined,
-): { quoteTimestamp?: number; quoteAuthor?: string } {
-  if (!replyToId) {
-    return {};
-  }
-  const quoteTimestamp = Number(replyToId);
-  if (!Number.isFinite(quoteTimestamp) || quoteTimestamp <= 0) {
-    return {};
-  }
-  const normalizedTo = to.replace(/^signal:/i, "").trim();
-  const isGroup = normalizedTo.toLowerCase().startsWith("group:");
-  if (isGroup) {
-    return {};
-  }
-  const quoteAuthor = normalizedTo || accountPhone;
-  if (!quoteAuthor) {
-    return {};
-  }
-  return { quoteTimestamp, quoteAuthor };
-}
 
 async function sendSignalOutbound(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
@@ -113,12 +91,10 @@ async function sendSignalOutbound(params: {
   deps?: { [channelId: string]: unknown };
 }) {
   const { send, maxBytes } = await resolveSignalSendContext(params);
-  const accountInfo = resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId });
-  const quoteParams = resolveSignalQuoteParams(
-    params.to,
-    params.replyToId,
-    accountInfo.config.account ?? undefined,
-  );
+  const quoteParams = resolveSignalQuoteParams({
+    to: params.to,
+    replyToId: params.replyToId ?? undefined,
+  });
   return await send(params.to, params.text, {
     cfg: params.cfg,
     ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
