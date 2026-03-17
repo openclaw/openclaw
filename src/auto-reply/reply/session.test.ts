@@ -1557,6 +1557,57 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(result.sessionEntry.verboseLevel).toBeUndefined();
     expect(result.sessionEntry.thinkingLevel).toBeUndefined();
   });
+
+  it("preserves modelOverride and providerOverride across daily freshness resets", async () => {
+    // Daily freshness resets (e.g. 4am boundary) have resetTriggered=false, so
+    // modelOverride/providerOverride must be preserved outside the resetTriggered guard.
+    vi.useFakeTimers();
+    try {
+      // Simulate: it is 5am, session was last active at 3am (before 4am daily boundary)
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-freshness-model-override-");
+      const sessionKey = "agent:main:telegram:dm:model-override-user";
+      const existingSessionId = "stale-session-model-override";
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          modelOverride: "claude-opus-4",
+          providerOverride: "anthropic",
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "model-override-user",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      // Model/provider overrides must survive daily freshness resets
+      expect(result.sessionEntry.modelOverride).toBe("claude-opus-4");
+      expect(result.sessionEntry.providerOverride).toBe("anthropic");
+      // Behavior overrides are NOT carried over for non-resetTriggered resets
+      expect(result.sessionEntry.verboseLevel).toBeUndefined();
+      expect(result.sessionEntry.thinkingLevel).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("drainFormattedSystemEvents", () => {
