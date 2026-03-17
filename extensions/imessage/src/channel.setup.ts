@@ -1,7 +1,7 @@
 import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
@@ -9,24 +9,19 @@ import {
   formatTrimmedAllowFromEntries,
   getChatChannelMeta,
   IMessageConfigSchema,
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
-  type ResolvedIMessageAccount,
 } from "openclaw/plugin-sdk/imessage";
-import { createIMessageSetupWizardProxy, imessageSetupAdapter } from "./setup-core.js";
-
-async function loadIMessageChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
-const imessageSetupWizard = createIMessageSetupWizardProxy(async () => ({
-  imessageSetupWizard: (await loadIMessageChannelRuntime()).imessageSetupWizard,
-}));
+import {
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+  type ResolvedIMessageAccount,
+} from "./accounts.js";
+import { imessageSetupWizard } from "./plugin-shared.js";
+import { imessageSetupAdapter } from "./setup-core.js";
 
 export const imessageSetupPlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   id: "imessage",

@@ -1,6 +1,6 @@
 import type { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk/zalouser";
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupFlowAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 
 vi.mock("./zalo-js.js", async (importOriginal) => {
@@ -50,7 +50,7 @@ function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   };
 }
 
-const zalouserConfigureAdapter = buildChannelSetupFlowAdapterFromSetupWizard({
+const zalouserConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: zalouserPlugin,
   wizard: zalouserPlugin.setupWizard!,
 });

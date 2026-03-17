@@ -1,15 +1,20 @@
-import { buildMoonshotProvider } from "../../src/agents/models-config.providers.static.js";
+import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../../src/agents/pi-embedded-runner/moonshot-stream-wrappers.js";
+} from "openclaw/plugin-sdk/provider-stream";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
   setScopedCredentialValue,
-} from "../../src/agents/tools/web-search-plugin-factory.js";
-import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/provider-web-search";
+import {
+  applyMoonshotConfig,
+  applyMoonshotConfigCn,
+  MOONSHOT_DEFAULT_MODEL_REF,
+} from "./onboard.js";
+import { buildMoonshotProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "moonshot";
 
@@ -24,7 +29,48 @@ const moonshotPlugin = {
       label: "Moonshot",
       docsPath: "/providers/moonshot",
       envVars: ["MOONSHOT_API_KEY"],
-      auth: [],
+      auth: [
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key",
+          label: "Kimi API key (.ai)",
+          hint: "Kimi K2.5 + Kimi",
+          optionKey: "moonshotApiKey",
+          flagName: "--moonshot-api-key",
+          envVar: "MOONSHOT_API_KEY",
+          promptMessage: "Enter Moonshot API key",
+          defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
+          expectedProviders: ["moonshot"],
+          applyConfig: (cfg) => applyMoonshotConfig(cfg),
+          wizard: {
+            choiceId: "moonshot-api-key",
+            choiceLabel: "Kimi API key (.ai)",
+            groupId: "moonshot",
+            groupLabel: "Moonshot AI (Kimi K2.5)",
+            groupHint: "Kimi K2.5 + Kimi",
+          },
+        }),
+        createProviderApiKeyAuthMethod({
+          providerId: PROVIDER_ID,
+          methodId: "api-key-cn",
+          label: "Kimi API key (.cn)",
+          hint: "Kimi K2.5 + Kimi",
+          optionKey: "moonshotApiKey",
+          flagName: "--moonshot-api-key",
+          envVar: "MOONSHOT_API_KEY",
+          promptMessage: "Enter Moonshot API key (.cn)",
+          defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
+          expectedProviders: ["moonshot"],
+          applyConfig: (cfg) => applyMoonshotConfigCn(cfg),
+          wizard: {
+            choiceId: "moonshot-api-key-cn",
+            choiceLabel: "Kimi API key (.cn)",
+            groupId: "moonshot",
+            groupLabel: "Moonshot AI (Kimi K2.5)",
+            groupHint: "Kimi K2.5 + Kimi",
+          },
+        }),
+      ],
       catalog: {
         order: "simple",
         run: async (ctx) => {

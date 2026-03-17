@@ -1,32 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
-const listEnabledDiscordAccountsMock = vi.hoisted(() => vi.fn());
-const isDiscordExecApprovalClientEnabledMock = vi.hoisted(() => vi.fn());
-const listEnabledTelegramAccountsMock = vi.hoisted(() => vi.fn());
-const isTelegramExecApprovalClientEnabledMock = vi.hoisted(() => vi.fn());
+const getChannelPluginMock = vi.hoisted(() => vi.fn());
+const listChannelPluginsMock = vi.hoisted(() => vi.fn());
 const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
   loadConfig: (...args: unknown[]) => loadConfigMock(...args),
 }));
 
-vi.mock("../../extensions/discord/src/accounts.js", () => ({
-  listEnabledDiscordAccounts: (...args: unknown[]) => listEnabledDiscordAccountsMock(...args),
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+  listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
 }));
 
-vi.mock("../../extensions/discord/src/exec-approvals.js", () => ({
-  isDiscordExecApprovalClientEnabled: (...args: unknown[]) =>
-    isDiscordExecApprovalClientEnabledMock(...args),
+vi.mock("../../extensions/discord/src/channel.js", () => ({
+  discordPlugin: {},
 }));
 
-vi.mock("../../extensions/telegram/src/accounts.js", () => ({
-  listEnabledTelegramAccounts: (...args: unknown[]) => listEnabledTelegramAccountsMock(...args),
+vi.mock("../../extensions/telegram/src/channel.js", () => ({
+  telegramPlugin: {},
 }));
 
-vi.mock("../../extensions/telegram/src/exec-approvals.js", () => ({
-  isTelegramExecApprovalClientEnabled: (...args: unknown[]) =>
-    isTelegramExecApprovalClientEnabledMock(...args),
+vi.mock("../../extensions/slack/src/channel.js", () => ({
+  slackPlugin: {},
+}));
+
+vi.mock("../../extensions/whatsapp/src/channel.js", () => ({
+  whatsappPlugin: {},
+}));
+
+vi.mock("../../extensions/signal/src/channel.js", () => ({
+  signalPlugin: {},
+}));
+
+vi.mock("../../extensions/imessage/src/channel.js", () => ({
+  imessagePlugin: {},
 }));
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -42,10 +51,8 @@ import {
 describe("resolveExecApprovalInitiatingSurfaceState", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
-    listEnabledDiscordAccountsMock.mockReset();
-    isDiscordExecApprovalClientEnabledMock.mockReset();
-    listEnabledTelegramAccountsMock.mockReset();
-    isTelegramExecApprovalClientEnabledMock.mockReset();
+    getChannelPluginMock.mockReset();
+    listChannelPluginsMock.mockReset();
     normalizeMessageChannelMock.mockReset();
     normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
       typeof value === "string" ? value.trim().toLowerCase() : undefined,
@@ -71,8 +78,21 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
   });
 
   it("uses the provided cfg for telegram and discord client enablement", () => {
-    isTelegramExecApprovalClientEnabledMock.mockReturnValueOnce(true);
-    isDiscordExecApprovalClientEnabledMock.mockReturnValueOnce(false);
+    getChannelPluginMock.mockImplementation((channel: string) =>
+      channel === "telegram"
+        ? {
+            execApprovals: {
+              getInitiatingSurfaceState: () => ({ kind: "enabled" }),
+            },
+          }
+        : channel === "discord"
+          ? {
+              execApprovals: {
+                getInitiatingSurfaceState: () => ({ kind: "disabled" }),
+              },
+            }
+          : undefined,
+    );
     const cfg = { channels: {} };
 
     expect(
@@ -103,7 +123,15 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
 
   it("loads config lazily when cfg is omitted and marks unsupported channels", () => {
     loadConfigMock.mockReturnValueOnce({ loaded: true });
-    isTelegramExecApprovalClientEnabledMock.mockReturnValueOnce(false);
+    getChannelPluginMock.mockImplementation((channel: string) =>
+      channel === "telegram"
+        ? {
+            execApprovals: {
+              getInitiatingSurfaceState: () => ({ kind: "disabled" }),
+            },
+          }
+        : undefined,
+    );
 
     expect(
       resolveExecApprovalInitiatingSurfaceState({
@@ -127,30 +155,19 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
 
 describe("hasConfiguredExecApprovalDmRoute", () => {
   beforeEach(() => {
-    listEnabledDiscordAccountsMock.mockReset();
-    listEnabledTelegramAccountsMock.mockReset();
+    listChannelPluginsMock.mockReset();
   });
 
   it("returns true when any enabled account routes approvals to DM or both", () => {
-    listEnabledDiscordAccountsMock.mockReturnValueOnce([
+    listChannelPluginsMock.mockReturnValueOnce([
       {
-        config: {
-          execApprovals: {
-            enabled: true,
-            approvers: ["a"],
-            target: "channel",
-          },
+        execApprovals: {
+          hasConfiguredDmRoute: () => false,
         },
       },
-    ]);
-    listEnabledTelegramAccountsMock.mockReturnValueOnce([
       {
-        config: {
-          execApprovals: {
-            enabled: true,
-            approvers: ["a"],
-            target: "both",
-          },
+        execApprovals: {
+          hasConfiguredDmRoute: () => true,
         },
       },
     ]);
@@ -158,36 +175,20 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
   });
 
-  it("returns false when exec approvals are disabled or have no DM route", () => {
-    listEnabledDiscordAccountsMock.mockReturnValueOnce([
+  it("returns false when no plugin reports a DM route", () => {
+    listChannelPluginsMock.mockReturnValueOnce([
       {
-        config: {
-          execApprovals: {
-            enabled: false,
-            approvers: ["a"],
-            target: "dm",
-          },
-        },
-      },
-    ]);
-    listEnabledTelegramAccountsMock.mockReturnValueOnce([
-      {
-        config: {
-          execApprovals: {
-            enabled: true,
-            approvers: [],
-            target: "dm",
-          },
+        execApprovals: {
+          hasConfiguredDmRoute: () => false,
         },
       },
       {
-        config: {
-          execApprovals: {
-            enabled: true,
-            approvers: ["a"],
-            target: "channel",
-          },
+        execApprovals: {
+          hasConfiguredDmRoute: () => false,
         },
+      },
+      {
+        execApprovals: undefined,
       },
     ]);
 

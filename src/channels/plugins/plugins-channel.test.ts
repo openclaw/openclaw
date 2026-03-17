@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeSignalAccountInput } from "../../../extensions/signal/src/setup-surface.js";
+import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeIMessageMessagingTarget } from "./normalize/imessage.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize/signal.js";
-import { telegramOutbound } from "./outbound/telegram.js";
-import { whatsappOutbound } from "./outbound/whatsapp.js";
 
 function expectWhatsAppTargetResolutionError(result: unknown) {
   expect(result).toEqual({

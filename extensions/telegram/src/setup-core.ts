@@ -1,15 +1,16 @@
-import {
-  patchChannelConfigForAccount,
-  splitSetupEntries,
-} from "../../../src/channels/plugins/setup-flow-helpers.js";
+import { formatCliCommand } from "../../../src/cli/command-format.js";
 import {
   applyAccountNameToChannelSection,
+  DEFAULT_ACCOUNT_ID,
   migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+  normalizeAccountId,
+  patchChannelConfigForAccount,
+  promptResolvedAllowFrom,
+  splitSetupEntries,
+  type OpenClawConfig,
+  type WizardPrompter,
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { fetchTelegramChatId } from "./api-fetch.js";
@@ -71,11 +72,7 @@ export async function resolveTelegramAllowFromEntries(params: {
 
 export async function promptTelegramAllowFromForAccount(params: {
   cfg: OpenClawConfig;
-  prompter: Parameters<
-    NonNullable<
-      import("../../../src/channels/plugins/setup-flow-types.js").ChannelSetupDmPolicy["promptAllowFrom"]
-    >
-  >[0]["prompter"];
+  prompter: WizardPrompter;
   accountId?: string;
 }) {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
@@ -87,8 +84,6 @@ export async function promptTelegramAllowFromForAccount(params: {
       "Telegram",
     );
   }
-  const { promptResolvedAllowFrom } =
-    await import("../../../src/channels/plugins/setup-flow-helpers.js");
   const unique = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolved.config.allowFrom ?? [],

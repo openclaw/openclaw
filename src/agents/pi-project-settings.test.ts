@@ -93,4 +93,34 @@ describe("buildEmbeddedPiSettingsSnapshot", () => {
     expect(snapshot.compaction?.reserveTokens).toBe(32_000);
     expect(snapshot.hideThinkingBlock).toBe(true);
   });
+
+  it("lets project Pi settings override bundle MCP defaults", () => {
+    const snapshot = buildEmbeddedPiSettingsSnapshot({
+      globalSettings,
+      pluginSettings: {
+        mcpServers: {
+          bundleProbe: {
+            command: "node",
+            args: ["/plugins/probe.mjs"],
+          },
+        },
+      },
+      projectSettings: {
+        mcpServers: {
+          bundleProbe: {
+            command: "deno",
+            args: ["/workspace/probe.ts"],
+          },
+        },
+      },
+      policy: "sanitize",
+    });
+
+    expect(snapshot.mcpServers).toEqual({
+      bundleProbe: {
+        command: "deno",
+        args: ["/workspace/probe.ts"],
+      },
+    });
+  });
 });
