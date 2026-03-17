@@ -193,6 +193,115 @@ describe("web inbound helpers", () => {
     ).toBe("<media:audio>");
   });
 
+  it("returns <media:gif> for video messages with gifPlayback", () => {
+    expect(
+      extractMediaPlaceholder({
+        videoMessage: { gifPlayback: true },
+      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+    ).toBe("<media:gif>");
+  });
+
+  it("returns <media:gif> with metadata from externalAdReply", () => {
+    expect(
+      extractMediaPlaceholder({
+        videoMessage: {
+          gifPlayback: true,
+          contextInfo: {
+            externalAdReply: {
+              title: "This Is Fine",
+              sourceUrl: "https://giphy.com/gifs/this-is-fine-3o7TK",
+            },
+          },
+        },
+      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+    ).toBe('<media:gif title="This Is Fine" source="https://giphy.com/gifs/this-is-fine-3o7TK">');
+  });
+
+  it("returns <media:video> for video messages without gifPlayback", () => {
+    expect(
+      extractMediaPlaceholder({
+        videoMessage: {},
+      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+    ).toBe("<media:video>");
+  });
+
+  it("returns <media:video> with metadata when gifPlayback is absent", () => {
+    expect(
+      extractMediaPlaceholder({
+        videoMessage: {
+          contextInfo: {
+            externalAdReply: {
+              title: "Funny Clip",
+              sourceUrl: "https://example.com/video",
+              body: "A funny video clip",
+            },
+          },
+        },
+      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+    ).toBe(
+      '<media:video title="Funny Clip" source="https://example.com/video" description="A funny video clip">',
+    );
+  });
+
+  it("returns <media:image> with metadata from externalAdReply", () => {
+    expect(
+      extractMediaPlaceholder({
+        imageMessage: {
+          contextInfo: {
+            externalAdReply: {
+              title: "Shared Link Preview",
+              sourceUrl: "https://example.com/article",
+            },
+          },
+        },
+      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+    ).toBe('<media:image title="Shared Link Preview" source="https://example.com/article">');
+  });
+
+  it("returns plain <media:image> when imageMessage has no externalAdReply", () => {
+    expect(
+      extractMediaPlaceholder({
+        imageMessage: { caption: "just a photo" },
+      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+    ).toBe("<media:image>");
+  });
+
+  it("returns <media:image> with description from externalAdReply body", () => {
+    expect(
+      extractMediaPlaceholder({
+        imageMessage: {
+          contextInfo: {
+            externalAdReply: {
+              title: "Article Title",
+              sourceUrl: "https://example.com/article",
+              body: "An article description",
+            },
+          },
+        },
+      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+    ).toBe(
+      '<media:image title="Article Title" source="https://example.com/article" description="An article description">',
+    );
+  });
+
+  it("escapes double quotes and angle brackets in adReply attributes", () => {
+    expect(
+      extractMediaPlaceholder({
+        videoMessage: {
+          gifPlayback: true,
+          contextInfo: {
+            externalAdReply: {
+              title: 'Say "Hello" To My Little Friend',
+              sourceUrl: "https://example.com/gif?a=1&b=>2",
+            },
+          },
+        },
+      } as unknown as import("@whiskeysockets/baileys").proto.IMessage),
+    ).toBe(
+      '<media:gif title="Say &quot;Hello&quot; To My Little Friend" source="https://example.com/gif?a=1&b=&gt;2">',
+    );
+  });
+
   it("extracts WhatsApp location messages", () => {
     const location = extractLocationData({
       locationMessage: {

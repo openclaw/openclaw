@@ -121,6 +121,10 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
   return undefined;
 }
 
+function escapeAttr(value: string): string {
+  return value.replace(/"/g, "&quot;").replace(/>/g, "&gt;");
+}
+
 export function extractMediaPlaceholder(
   rawMessage: proto.IMessage | undefined,
 ): string | undefined {
@@ -129,10 +133,23 @@ export function extractMediaPlaceholder(
     return undefined;
   }
   if (message.imageMessage) {
+    const adReply = message.imageMessage.contextInfo?.externalAdReply;
+    const parts: string[] = [];
+    if (adReply?.title) parts.push(`title="${escapeAttr(adReply.title)}"`);
+    if (adReply?.sourceUrl) parts.push(`source="${escapeAttr(adReply.sourceUrl)}"`);
+    if (adReply?.body) parts.push(`description="${escapeAttr(adReply.body)}"`);
+    if (parts.length > 0) return `<media:image ${parts.join(" ")}>`;
     return "<media:image>";
   }
   if (message.videoMessage) {
-    return "<media:video>";
+    const isGif = message.videoMessage.gifPlayback;
+    const adReply = message.videoMessage.contextInfo?.externalAdReply;
+    const parts: string[] = [];
+    if (adReply?.title) parts.push(`title="${escapeAttr(adReply.title)}"`);
+    if (adReply?.sourceUrl) parts.push(`source="${escapeAttr(adReply.sourceUrl)}"`);
+    if (adReply?.body) parts.push(`description="${escapeAttr(adReply.body)}"`);
+    const attrs = parts.length > 0 ? ` ${parts.join(" ")}` : "";
+    return isGif ? `<media:gif${attrs}>` : `<media:video${attrs}>`;
   }
   if (message.audioMessage) {
     return "<media:audio>";
