@@ -155,6 +155,7 @@ describe("extractGeminiCliCredentials", () => {
   }
 
   beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     originalPath = process.env.PATH;
   });
@@ -167,7 +168,8 @@ describe("extractGeminiCliCredentials", () => {
     process.env.PATH = "/nonexistent";
     mockExistsSync.mockReturnValue(false);
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    const { extractGeminiCliCredentials, clearCredentialsCache } =
+      await import("./oauth.credentials.js");
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
@@ -175,7 +177,8 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials from oauth2.js in known path", async () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    const { extractGeminiCliCredentials, clearCredentialsCache } =
+      await import("./oauth.credentials.js");
     clearCredentialsCache();
     const result = extractGeminiCliCredentials();
 
@@ -185,7 +188,8 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials when PATH entry is an npm global shim", async () => {
     installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    const { extractGeminiCliCredentials, clearCredentialsCache } =
+      await import("./oauth.credentials.js");
     clearCredentialsCache();
     const result = extractGeminiCliCredentials();
 
@@ -195,7 +199,8 @@ describe("extractGeminiCliCredentials", () => {
   it("returns null when oauth2.js cannot be found", async () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    const { extractGeminiCliCredentials, clearCredentialsCache } =
+      await import("./oauth.credentials.js");
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
@@ -203,7 +208,8 @@ describe("extractGeminiCliCredentials", () => {
   it("returns null when oauth2.js lacks credentials", async () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: "// no credentials here" });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    const { extractGeminiCliCredentials, clearCredentialsCache } =
+      await import("./oauth.credentials.js");
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
@@ -211,7 +217,8 @@ describe("extractGeminiCliCredentials", () => {
   it("caches credentials after first extraction", async () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
-    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    const { extractGeminiCliCredentials, clearCredentialsCache } =
+      await import("./oauth.credentials.js");
     clearCredentialsCache();
 
     // First call

@@ -1,3 +1,4 @@
+import type * as LarkSdk from "@larksuiteoapi/node-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
@@ -37,15 +38,13 @@ vi.mock("https-proxy-agent", () => ({
   HttpsProxyAgent: httpsProxyAgentCtorMock,
 }));
 
-import { Client as LarkClient } from "@larksuiteoapi/node-sdk";
-import {
-  createFeishuClient,
-  createFeishuWSClient,
-  clearClientCache,
-  FEISHU_HTTP_TIMEOUT_MS,
-  FEISHU_HTTP_TIMEOUT_MAX_MS,
-  FEISHU_HTTP_TIMEOUT_ENV_VAR,
-} from "./client.js";
+let LarkClient: typeof LarkSdk.Client;
+let createFeishuClient: typeof import("./client.js").createFeishuClient;
+let createFeishuWSClient: typeof import("./client.js").createFeishuWSClient;
+let clearClientCache: typeof import("./client.js").clearClientCache;
+let FEISHU_HTTP_TIMEOUT_MS: typeof import("./client.js").FEISHU_HTTP_TIMEOUT_MS;
+let FEISHU_HTTP_TIMEOUT_MAX_MS: typeof import("./client.js").FEISHU_HTTP_TIMEOUT_MAX_MS;
+let FEISHU_HTTP_TIMEOUT_ENV_VAR: typeof import("./client.js").FEISHU_HTTP_TIMEOUT_ENV_VAR;
 
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
@@ -69,7 +68,17 @@ function firstWsClientOptions(): { agent?: unknown } {
   return calls[0]?.[0] ?? {};
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ Client: LarkClient } = await import("@larksuiteoapi/node-sdk"));
+  ({
+    createFeishuClient,
+    createFeishuWSClient,
+    clearClientCache,
+    FEISHU_HTTP_TIMEOUT_MS,
+    FEISHU_HTTP_TIMEOUT_MAX_MS,
+    FEISHU_HTTP_TIMEOUT_ENV_VAR,
+  } = await import("./client.js"));
   priorProxyEnv = {};
   priorFeishuTimeoutEnv = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
   delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
