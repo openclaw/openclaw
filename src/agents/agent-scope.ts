@@ -279,7 +279,10 @@ export function resolveAgentMultipleWorkspaces(
   if (!Array.isArray(mw) || mw.length === 0) {
     return undefined;
   }
-  return mw.map((p) => stripNullBytes(resolveUserPath(p)));
+  const resolved = mw
+    .filter((p) => typeof p === "string" && p.trim().length > 0)
+    .map((p) => stripNullBytes(resolveUserPath(p)));
+  return resolved.length > 0 ? resolved : undefined;
 }
 
 export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
@@ -344,15 +347,20 @@ export function resolveAgentIdsByWorkspacePath(
       matches.push({ id, workspaceDir, order: index });
       continue;
     }
-    // Also match individual multipleWorkspaces entries.
+    // Also match individual multipleWorkspaces entries — pick the most specific (longest path).
     const multiWs = resolveAgentMultipleWorkspaces(cfg, id);
     if (multiWs) {
+      let bestMatch: string | null = null;
       for (const ws of multiWs) {
         const normalizedWs = normalizePathForComparison(ws);
         if (isPathWithinRoot(normalizedWorkspacePath, normalizedWs)) {
-          matches.push({ id, workspaceDir: normalizedWs, order: index });
-          break;
+          if (!bestMatch || normalizedWs.length > bestMatch.length) {
+            bestMatch = normalizedWs;
+          }
         }
+      }
+      if (bestMatch) {
+        matches.push({ id, workspaceDir: bestMatch, order: index });
       }
     }
   }

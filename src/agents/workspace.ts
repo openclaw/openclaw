@@ -668,6 +668,16 @@ export async function ensureCompositeWorkspace(params: {
     const base = path.basename(ws);
     nameCount.set(base, (nameCount.get(base) ?? 0) + 1);
   }
+
+  // First pass: collect all non-collision names so collision resolution can avoid them.
+  const reservedNames = new Set<string>();
+  for (const ws of workspacePaths) {
+    const base = path.basename(ws);
+    if ((nameCount.get(base) ?? 0) === 1) {
+      reservedNames.add(base);
+    }
+  }
+
   const nameUsed = new Map<string, number>();
   for (const ws of workspacePaths) {
     const base = path.basename(ws);
@@ -675,9 +685,15 @@ export async function ensureCompositeWorkspace(params: {
     if ((nameCount.get(base) ?? 0) > 1) {
       const parentName = path.basename(path.dirname(ws));
       const candidate = `${parentName}-${base}`;
-      const usedCount = nameUsed.get(candidate) ?? 0;
-      linkName = usedCount > 0 ? `${candidate}-${usedCount}` : candidate;
-      nameUsed.set(candidate, usedCount + 1);
+      let suffix = nameUsed.get(candidate) ?? 0;
+      linkName = suffix > 0 ? `${candidate}-${suffix}` : candidate;
+      // Ensure the resolved name doesn't collide with a non-collision entry or existing entry.
+      while (reservedNames.has(linkName)) {
+        suffix += 1;
+        linkName = `${candidate}-${suffix}`;
+      }
+      nameUsed.set(candidate, suffix + 1);
+      reservedNames.add(linkName);
     } else {
       linkName = base;
     }
@@ -722,8 +738,13 @@ export async function ensureCompositeWorkspace(params: {
       // Target changed — remove old symlink.
       await fs.unlink(linkPath);
     } catch {
-      // Symlink doesn't exist or isn't a symlink — remove whatever is there.
-      await fs.rm(linkPath, { force: true, recursive: false }).catch(() => {});
+      // Symlink doesn't exist or isn't a symlink — try to remove whatever is there.
+      try {
+        await fs.rm(linkPath, { force: true, recursive: false });
+      } catch (rmErr) {
+        compositeLog.warn(`Cannot replace non-symlink at ${linkPath}: ${String(rmErr)}`);
+        continue;
+      }
     }
 
     await fs.symlink(target, linkPath);
