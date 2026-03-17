@@ -1529,11 +1529,23 @@ export type PluginHookLlmOutputEvent = {
 };
 
 // agent_end hook
+export type PluginHookAgentEndFinalLlmOutcome = {
+  ok: boolean;
+  source: "provider" | "prompt" | "runner";
+  provider?: string;
+  model?: string;
+  statusCode?: number;
+  statusText?: string;
+  stopReason?: string;
+  errorMessage?: string;
+};
+
 export type PluginHookAgentEndEvent = {
   messages: unknown[];
   success: boolean;
   error?: string;
   durationMs?: number;
+  finalLlmOutcome?: PluginHookAgentEndFinalLlmOutcome;
 };
 
 // Compaction hooks
