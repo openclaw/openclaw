@@ -35,32 +35,32 @@ export function createDefaultDeps(): CliDeps {
   return {
     whatsapp: createLazySender(
       "whatsapp",
-      () => import("../channels/web/index.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/whatsapp.js") as Promise<Record<string, unknown>>,
       "sendMessageWhatsApp",
     ),
     telegram: createLazySender(
       "telegram",
-      () => import("../../extensions/telegram/src/send.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/telegram.js") as Promise<Record<string, unknown>>,
       "sendMessageTelegram",
     ),
     discord: createLazySender(
       "discord",
-      () => import("../../extensions/discord/src/send.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/discord.js") as Promise<Record<string, unknown>>,
       "sendMessageDiscord",
     ),
     slack: createLazySender(
       "slack",
-      () => import("../../extensions/slack/src/send.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/slack.js") as Promise<Record<string, unknown>>,
       "sendMessageSlack",
     ),
     signal: createLazySender(
       "signal",
-      () => import("../../extensions/signal/src/send.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/signal.js") as Promise<Record<string, unknown>>,
       "sendMessageSignal",
     ),
     imessage: createLazySender(
       "imessage",
-      () => import("../../extensions/imessage/src/send.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/imessage.js") as Promise<Record<string, unknown>>,
       "sendMessageIMessage",
     ),
   };
@@ -70,4 +70,4 @@ export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
   return createOutboundSendDepsFromCliSource(deps);
 }
 
-export { logWebSelfId } from "../../extensions/whatsapp/src/auth-store.js";
+export { logWebSelfId } from "../plugin-sdk/whatsapp.js";

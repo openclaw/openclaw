@@ -1,5 +1,5 @@
-import type { TelegramGroupConfig } from "../../../src/config/types.js";
-import type { TelegramNetworkConfig } from "../../../src/config/types.telegram.js";
+import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
 
 export type TelegramGroupMembershipAuditEntry = {
   chatId: string;

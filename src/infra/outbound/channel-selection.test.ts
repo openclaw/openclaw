@@ -1,14 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
+  resolveOutboundChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
 }));
 
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+}));
+
 import {
+  __testing,
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
@@ -33,9 +40,17 @@ function makePlugin(params: {
 }
 
 describe("listConfiguredMessageChannels", () => {
+  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+
   beforeEach(() => {
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
+      id: channel,
+    }));
+    __testing.resetLoggedChannelSelectionErrors();
+    errorSpy.mockClear();
   });
 
   it("skips unknown plugin ids and plugins without accounts", async () => {
@@ -83,6 +98,20 @@ describe("listConfiguredMessageChannels", () => {
     ]);
 
     await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual([]);
+  });
+
+  it("skips plugin accounts whose resolveAccount throws", async () => {
+    mocks.listChannelPlugins.mockReturnValue([
+      makePlugin({
+        id: "discord",
+        resolveAccount: () => {
+          throw new Error("boom");
+        },
+      }),
+    ]);
+
+    await expect(listConfiguredMessageChannels({} as never)).resolves.toEqual([]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -156,6 +185,35 @@ describe("resolveMessageChannelSelection", () => {
         fallbackChannel: "not-a-channel",
       }),
     ).rejects.toThrow("Unknown channel: channel:c123");
+  });
+
+  it("falls back when the explicit known channel is unavailable in the active plugin registry", async () => {
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
+      channel === "slack" ? { id: "slack" } : undefined,
+    );
+
+    const selection = await resolveMessageChannelSelection({
+      cfg: {} as never,
+      channel: "discord",
+      fallbackChannel: "slack",
+    });
+
+    expect(selection).toEqual({
+      channel: "slack",
+      configured: [],
+      source: "tool-context-fallback",
+    });
+  });
+
+  it("throws unavailable when a known channel has no active plugin", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
+
+    await expect(
+      resolveMessageChannelSelection({
+        cfg: {} as never,
+        channel: "discord",
+      }),
+    ).rejects.toThrow("Channel is unavailable: discord");
   });
 
   it("throws when no channel is provided and nothing is configured", async () => {
