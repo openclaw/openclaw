@@ -59,6 +59,18 @@ export type { OpenClawPluginApi } from "../plugins/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export {
+  applyAccountNameToChannelSection,
+  migrateBaseNameToDefaultAccount,
+} from "../channels/plugins/setup-helpers.js";
+export {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "../channels/plugins/config-helpers.js";
+export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { getChatChannelMeta } from "../channels/registry.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   DEFAULT_SECRET_FILE_MAX_BYTES,

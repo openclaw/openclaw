@@ -1,6 +1,6 @@
+import { formatDocsLink } from "openclaw/plugin-sdk/imessage";
 import {
   createPatchedAccountSetupAdapter,
-  formatDocsLink,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,

@@ -24,6 +24,8 @@ export type { StickerMetadata } from "../../extensions/telegram/src/bot/types.js
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { parseTelegramTopicConversation } from "../acp/conversation-id.js";
+export { formatCliCommand } from "../cli/command-format.js";
+export { formatDocsLink } from "../terminal/links.js";
 
 export {
   PAIRING_APPROVED_MESSAGE,

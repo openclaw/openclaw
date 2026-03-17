@@ -1154,7 +1154,7 @@ describe("signalMessageActions", () => {
       await runSignalAction("react", testCase.params, {
         cfg: testCase.cfg,
         accountId: testCase.accountId,
-        toolContext: testCase.toolContext,
+        toolContext: "toolContext" in testCase ? testCase.toolContext : undefined,
       });
       expect(sendReactionSignal, testCase.name).toHaveBeenCalledWith(
         testCase.expectedRecipient,
@@ -1294,7 +1294,8 @@ describe("slack actions adapter", () => {
       await runSlackAction(testCase.action, testCase.params);
       expectFirstSlackAction(testCase.expected);
       const [params] = handleSlackAction.mock.calls[0] ?? [];
-      for (const key of testCase.absentKeys ?? []) {
+      const absentKeys = "absentKeys" in testCase ? testCase.absentKeys : undefined;
+      for (const key of absentKeys ?? []) {
         expect(params).not.toHaveProperty(key);
       }
     }
