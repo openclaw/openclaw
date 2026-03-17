@@ -23,6 +23,8 @@ const mockState = {
   })),
 };
 
+const routeLogsToStderr = vi.fn();
+
 class MockGatewayClient {
   private callbacks: GatewayClientCallbacks;
 
@@ -83,6 +85,14 @@ vi.mock("../gateway/call.js", () => ({
     };
   },
 }));
+
+vi.mock("../logging.js", async () => {
+  const actual = await vi.importActual<typeof import("../logging.js")>("../logging.js");
+  return {
+    ...actual,
+    routeLogsToStderr: () => routeLogsToStderr(),
+  };
+});
 
 vi.mock("../gateway/connection-auth.js", () => ({
   resolveGatewayConnectionAuth: (params: unknown) => mockState.resolveGatewayConnectionAuth(params),
@@ -155,10 +165,27 @@ describe("serveAcpGateway startup", () => {
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentStart.mockReset();
     mockState.resolveGatewayConnectionAuth.mockReset();
+    routeLogsToStderr.mockReset();
     mockState.resolveGatewayConnectionAuth.mockResolvedValue({
       token: undefined,
       password: undefined,
     });
+  });
+
+  it("routes console logs to stderr for stdout-safe ACP JSON transport", async () => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await Promise.resolve();
+
+      expect(routeLogsToStderr).toHaveBeenCalledTimes(1);
+
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
   });
 
   it("waits for gateway hello before creating AgentSideConnection", async () => {

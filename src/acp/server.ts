@@ -11,8 +11,11 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
+import { routeLogsToStderr } from "../logging.js";
 
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
+  // Route logs to stderr so JSON-RPC on stdout remains parseable.
+  routeLogsToStderr();
   const cfg = loadConfig();
   const connection = buildGatewayConnectionDetails({
     config: cfg,

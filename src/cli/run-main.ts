@@ -5,7 +5,7 @@ import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import { enableConsoleCapture } from "../logging.js";
+import { enableConsoleCapture, routeLogsToStderr } from "../logging.js";
 import {
   getCommandPathWithRootOptions,
   getPrimaryCommand,
@@ -139,6 +139,13 @@ export async function runCli(argv: string[] = process.argv) {
       }
       const { registerSubCliByName } = await import("./program/register.subclis.js");
       await registerSubCliByName(program, primary);
+    }
+
+    const [routePathPrimary, routePathSecondary] = getCommandPathWithRootOptions(parseArgv, 2);
+
+    // Route logs to stderr for ACP gateway mode so protocol JSON on stdout is never polluted.
+    if (routePathPrimary === "acp" && routePathSecondary === undefined) {
+      routeLogsToStderr();
     }
 
     const hasBuiltinPrimary =
