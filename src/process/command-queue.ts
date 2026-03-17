@@ -41,8 +41,14 @@ export class CommandLaneTaskTimeoutError extends Error {
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
 // the main auto-reply workflow.
 
-/** Default task execution timeout (5 minutes). */
-const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * Default task execution timeout (15 minutes).  This is a last-resort
+ * safety net above the agent-level timeout (default 600s / 10 min in
+ * `src/agents/timeout.ts`).  Set high enough to avoid killing legitimate
+ * long-running tasks while still recovering stuck lanes within a
+ * reasonable window.
+ */
+const DEFAULT_TASK_TIMEOUT_MS = 15 * 60 * 1000;
 
 type QueueEntry = {
   task: () => Promise<unknown>;
@@ -166,12 +172,19 @@ function drainLane(lane: string) {
             if (timeoutHandle !== undefined) {
               clearTimeout(timeoutHandle);
             }
+            const activeBeforeComplete = state.activeTaskIds.size;
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
             if (err instanceof CommandLaneTaskTimeoutError) {
-              diag.warn(
-                `lane task timed out: lane=${lane} timeoutMs=${effectiveTimeout} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
-              );
+              if (completedCurrentGeneration) {
+                diag.warn(
+                  `lane task timed out: lane=${lane} timeoutMs=${effectiveTimeout} durationMs=${Date.now() - startTime} active=${activeBeforeComplete} queued=${state.queue.length}`,
+                );
+              } else {
+                diag.debug(
+                  `lane task timed out (stale, post-reset): lane=${lane} timeoutMs=${effectiveTimeout} durationMs=${Date.now() - startTime}`,
+                );
+              }
             } else if (!isProbeLane) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,

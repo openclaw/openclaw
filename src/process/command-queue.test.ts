@@ -429,8 +429,8 @@ describe("command queue", () => {
         { taskTimeoutMs: 0 },
       );
 
-      // Advance well past the default 5-minute timeout.
-      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      // Advance well past the default 15-minute timeout.
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
 
       // Task should still be active — not timed out.
       expect(getActiveTaskCount()).toBe(1);
@@ -500,6 +500,14 @@ describe("command queue", () => {
       // The stuck task's promise rejects with the timeout error.
       const err = await stuckResult;
       expect(err).toBeInstanceOf(CommandLaneTaskTimeoutError);
+
+      // Stale timeout should use debug, not warn.
+      expect(diagnosticMocks.diag.debug).toHaveBeenCalledWith(
+        expect.stringContaining("stale, post-reset"),
+      );
+      expect(diagnosticMocks.diag.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("lane task timed out:"),
+      );
 
       // Verify lane still works after all of this.
       const fresh = enqueueCommandInLane(lane, async () => "still works");
