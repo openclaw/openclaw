@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   DEFAULT_MEMORY_FLUSH_PROMPT,
+  ensureMemoryFlushTarget,
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushRelativePathForRun,
 } from "./memory-flush.js";
@@ -47,6 +50,44 @@ describe("resolveMemoryFlushPromptForRun", () => {
     });
 
     expect(relativePath).toBe("memory/2026-02-16.md");
+  });
+});
+
+describe("ensureMemoryFlushTarget", () => {
+  const tmpDir = path.join("/tmp", `test-memory-flush-target-${Date.now()}`);
+
+  beforeEach(() => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("creates memory/ directory and daily file when missing", async () => {
+    const nowMs = Date.UTC(2026, 2, 17, 12, 0, 0);
+    await ensureMemoryFlushTarget({ workspaceDir: tmpDir, nowMs });
+    const filePath = path.join(tmpDir, "memory", "2026-03-17.md");
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("does not overwrite an existing daily file", async () => {
+    const memoryDir = path.join(tmpDir, "memory");
+    fs.mkdirSync(memoryDir, { recursive: true });
+    const filePath = path.join(memoryDir, "2026-03-17.md");
+    fs.writeFileSync(filePath, "existing content");
+    const nowMs = Date.UTC(2026, 2, 17, 12, 0, 0);
+    await ensureMemoryFlushTarget({ workspaceDir: tmpDir, nowMs });
+    expect(fs.readFileSync(filePath, "utf-8")).toBe("existing content");
+  });
+
+  it("is a no-op when called repeatedly", async () => {
+    const nowMs = Date.UTC(2026, 2, 17, 12, 0, 0);
+    await ensureMemoryFlushTarget({ workspaceDir: tmpDir, nowMs });
+    await ensureMemoryFlushTarget({ workspaceDir: tmpDir, nowMs });
+    const filePath = path.join(tmpDir, "memory", "2026-03-17.md");
+    expect(fs.existsSync(filePath)).toBe(true);
+    expect(fs.readFileSync(filePath, "utf-8")).toBe("");
   });
 });
 

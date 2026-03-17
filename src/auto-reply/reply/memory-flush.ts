@@ -5,6 +5,7 @@ import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-sett
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
+import { appendFileWithinRoot, SafeOpenError } from "../../infra/fs-safe.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
@@ -225,4 +226,43 @@ export function hasAlreadyFlushedForCurrentCompaction(
   const compactionCount = entry.compactionCount ?? 0;
   const lastFlushAt = entry.memoryFlushCompactionCount;
   return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+}
+
+/**
+ * Ensure the daily memory file (memory/YYYY-MM-DD.md) exists in the workspace
+ * before the agent run starts. This prevents ENOENT errors when agent system
+ * instructions reference `read memory/YYYY-MM-DD.md` but no prior session has
+ * created the file yet today.
+ *
+ * Uses workspace-safe append (no-op on existing files) to avoid symlink escapes.
+ */
+export async function ensureMemoryFlushTarget(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  nowMs?: number;
+}): Promise<void> {
+  const relativePath = resolveMemoryFlushRelativePathForRun({
+    cfg: params.cfg,
+    nowMs: params.nowMs,
+  });
+  try {
+    await appendFileWithinRoot({
+      rootDir: params.workspaceDir,
+      relativePath,
+      data: "",
+      mkdir: true,
+    });
+  } catch (err) {
+    // Tolerate boundary/validation errors (e.g. workspace symlink edge cases)
+    // so that the agent run is not blocked by a pre-touch failure.
+    if (err instanceof SafeOpenError) {
+      return;
+    }
+    // EEXIST means the file was concurrently created by another agent run —
+    // that satisfies the "file must exist" postcondition, so treat as success.
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      return;
+    }
+    throw err;
+  }
 }

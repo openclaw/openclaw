@@ -352,6 +352,32 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
   });
 
+  it("suppresses duplicate warning when candidates have identical rootDir paths (global first)", () => {
+    const dir = makeTempDir();
+    const manifest = { id: "same-path-plugin", configSchema: { type: "object" } };
+    writeManifest(dir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "same-path-plugin",
+        rootDir: dir,
+        sourceName: "a.ts",
+        origin: "global",
+      }),
+      createPluginCandidate({
+        idHint: "same-path-plugin",
+        rootDir: dir,
+        sourceName: "b.ts",
+        origin: "bundled",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
+  });
+
   it("accepts provider-style id hints without warning", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "openai", configSchema: { type: "object" } });
