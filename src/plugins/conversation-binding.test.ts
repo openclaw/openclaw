@@ -143,6 +143,10 @@ async function resolveRequestedBinding(request: PluginBindingRequest) {
   throw new Error("expected pending or bound bind result");
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe("plugin conversation binding approvals", () => {
   beforeEach(() => {
     sessionBindingState.reset();
@@ -406,6 +410,7 @@ describe("plugin conversation binding approvals", () => {
     });
 
     expect(approved.status).toBe("approved");
+    await flushMicrotasks();
     expect(onResolved).toHaveBeenCalledWith({
       status: "approved",
       binding: expect.objectContaining({
@@ -464,6 +469,7 @@ describe("plugin conversation binding approvals", () => {
     });
 
     expect(denied.status).toBe("denied");
+    await flushMicrotasks();
     expect(onResolved).toHaveBeenCalledWith({
       status: "denied",
       binding: undefined,
@@ -479,6 +485,114 @@ describe("plugin conversation binding approvals", () => {
         },
       },
     });
+  });
+
+  it("does not wait for an approved bind callback before returning", async () => {
+    const registry = createEmptyPluginRegistry();
+    let releaseCallback: (() => void) | null = null;
+    const callbackGate = new Promise<void>((resolve) => {
+      releaseCallback = resolve;
+    });
+    const onResolved = vi.fn(async () => callbackGate);
+    registry.conversationBindingResolvedHandlers.push({
+      pluginId: "codex",
+      pluginRoot: "/plugins/callback-slow-approve",
+      handler: onResolved,
+      source: "/plugins/callback-slow-approve/index.ts",
+      rootDir: "/plugins/callback-slow-approve",
+    });
+    setActivePluginRegistry(registry);
+
+    const request = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/callback-slow-approve",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:slow-approve",
+      },
+      binding: { summary: "Bind this conversation to Codex thread slow-approve." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    let settled = false;
+    const resolutionPromise = resolvePluginConversationBindingApproval({
+      approvalId: request.approvalId,
+      decision: "allow-once",
+      senderId: "user-1",
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await flushMicrotasks();
+
+    expect(settled).toBe(true);
+    expect(onResolved).toHaveBeenCalledTimes(1);
+
+    releaseCallback?.();
+    const approved = await resolutionPromise;
+    expect(approved.status).toBe("approved");
+  });
+
+  it("does not wait for a denied bind callback before returning", async () => {
+    const registry = createEmptyPluginRegistry();
+    let releaseCallback: (() => void) | null = null;
+    const callbackGate = new Promise<void>((resolve) => {
+      releaseCallback = resolve;
+    });
+    const onResolved = vi.fn(async () => callbackGate);
+    registry.conversationBindingResolvedHandlers.push({
+      pluginId: "codex",
+      pluginRoot: "/plugins/callback-slow-deny",
+      handler: onResolved,
+      source: "/plugins/callback-slow-deny/index.ts",
+      rootDir: "/plugins/callback-slow-deny",
+    });
+    setActivePluginRegistry(registry);
+
+    const request = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/callback-slow-deny",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "slow-deny",
+      },
+      binding: { summary: "Bind this conversation to Codex thread slow-deny." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    let settled = false;
+    const resolutionPromise = resolvePluginConversationBindingApproval({
+      approvalId: request.approvalId,
+      decision: "deny",
+      senderId: "user-1",
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await flushMicrotasks();
+
+    expect(settled).toBe(true);
+    expect(onResolved).toHaveBeenCalledTimes(1);
+
+    releaseCallback?.();
+    const denied = await resolutionPromise;
+    expect(denied.status).toBe("denied");
   });
 
   it("returns and detaches only bindings owned by the requesting plugin root", async () => {
