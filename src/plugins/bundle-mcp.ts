@@ -254,8 +254,13 @@ function loadBundleMcpConfig(params: {
   let rootDir = params.rootDir;
   try {
     rootDir = fs.realpathSync.native(rootDir);
-  } catch {
-    // keep original if the directory doesn't exist yet
+  } catch (err) {
+    // Only swallow ENOENT (directory doesn't exist yet); re-throw permission
+    // errors, I/O failures, and other unexpected errors so they are not
+    // silently discarded.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
   }
   const manifestRelativePath = MANIFEST_PATH_BY_FORMAT[params.bundleFormat];
   const manifestLoaded = readPluginJsonObject({
