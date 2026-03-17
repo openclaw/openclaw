@@ -1,14 +1,14 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# ⚙️ Operator1 — Multi-Agent Task System
 
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="500">
+        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="Operator1" width="500">
     </picture>
 </p>
 
 <p align="center">
-  <strong>EXFOLIATE! EXFOLIATE!</strong>
+  <strong>34 AI Agents. One Corporate Hierarchy. Autonomous Task Execution.</strong>
 </p>
 
 <p align="center">
@@ -18,17 +18,17 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+**Operator1** is a _multi-agent task system_ that organizes 34 AI agents into a corporate hierarchy (CEO → COO → Department Heads → Workers) for autonomous task execution, delegation, and reporting.
 
-If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
+Built on [OpenClaw](#openclaw-foundation), Operator1 extends the personal AI assistant with enterprise-grade multi-agent orchestration. Give Operator1 a task—it routes it through the hierarchy, breaks it down, assigns work to specialists, and reports back. Each tier (Tier 1: COO, Tier 2: Department Heads, Tier 3: Workers) handles its responsibility, spawning Claude Code sessions when hands-on implementation is needed.
 
-[Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
+If you want autonomous agents that organize their work hierarchically, delegate to specialists, track progress, and execute code changes, this is it.
 
-Preferred setup: run the onboarding wizard (`openclaw onboard`) in your terminal.
-The wizard guides you step by step through setting up the gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
+[Architecture](docs/operator1/architecture.md) · [Agent Hierarchy](docs/operator1/agent-hierarchy.md) · [Task Delegation](docs/operator1/delegation.md) · [OpenClaw Docs](https://docs.openclaw.ai) · [Showcase](https://docs.openclaw.ai/start/showcase) · [Discord](https://discord.gg/clawd)
+
+**Operator1 runs on top of OpenClaw**, which provides the gateway, channels, and runtime infrastructure. Start with the onboarding wizard (`openclaw onboard`) to set up the gateway, then configure agents and projects.
+The wizard works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
-New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
 
 ## Sponsors
 
@@ -58,27 +58,42 @@ npm install -g openclaw@latest
 openclaw onboard --install-daemon
 ```
 
-The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
+The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running and allows agents to operate autonomously.
 
 ## Quick start (TL;DR)
 
 Runtime: **Node ≥22**.
 
-Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
-
 ```bash
+# 1. Set up the gateway + onboarding
 openclaw onboard --install-daemon
 
+# 2. Start the gateway (auto-starts via launchd/systemd after onboarding)
 openclaw gateway --port 18789 --verbose
 
-# Send a message
-openclaw message send --to +1234567890 --message "Hello from OpenClaw"
+# 3. Give Operator1 a task (routes through agent hierarchy)
+openclaw agent --message "Review and fix the bug in src/auth.ts" --thinking high
 
-# Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/IRC/Microsoft Teams/Matrix/Feishu/LINE/Mattermost/Nextcloud Talk/Nostr/Synology Chat/Tlon/Twitch/Zalo/Zalo Personal/WebChat)
-openclaw agent --message "Ship checklist" --thinking high
+# 4. Check agent status and task delegation
+openclaw sessions list
+
+# 5. Assign work to specific departments
+openclaw agent --message "Neo, create a performance benchmark for the new cache layer" --thinking high
 ```
 
+For more details: [Agent Hierarchy](docs/operator1/agent-hierarchy.md) · [Task Delegation](docs/operator1/delegation.md)
+
 Upgrading? [Updating guide](https://docs.openclaw.ai/install/updating) (and run `openclaw doctor`).
+
+## Operator1 Features
+
+- **[34-Agent Hierarchy](docs/operator1/agent-hierarchy.md)** — Tier 1 (COO: Operator1), Tier 2 (Department Heads: Neo/CTO, Morpheus/CMO, Trinity/CFO), Tier 3 (30 Specialist Workers).
+- **[Autonomous Task Delegation](docs/operator1/delegation.md)** — Tasks flow top-down; agents classify, break down work, and assign to specialists. Workers spawn Claude Code sessions for implementation.
+- **[Cross-Department Routing](docs/operator1/delegation.md)** — Complex tasks automatically route between departments (Engineering, Marketing, Finance) via the COO.
+- **[Project-Scoped Memory](docs/operator1/memory.md)** — Four-layer memory system: daily notes, long-term knowledge, project-scoped context, semantic search. Agents build knowledge from past work.
+- **[SQLite State Consolidation](docs/operator1/architecture.md)** — Unified database (`operator1.db`) replaces scattered JSON; supports concurrent access and dynamic RPC updates.
+- **[Agent Marketplace](docs/operator1/marketplace.md)** — Discover, install, and customize agents. Version pinning via `agents-lock.yaml`. Multi-scope installation (user, project, local).
+- **[Operator1 Hub](docs/operator1/hub.md)** — Built-in curated registry of skills, personas, and commands. Ships locally; version-controlled manifest; independent from ClawHub.
 
 ## Development channels
 
@@ -125,14 +140,39 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 
 ## Highlights
 
+### Multi-Agent Orchestration
+
+- **[Corporate Hierarchy](docs/operator1/agent-hierarchy.md)** — 34 agents organized as CEO → COO → Department Heads → Workers for structured task execution.
+- **[Autonomous Delegation](docs/operator1/delegation.md)** — Operator1 (COO) receives tasks, classifies by department, and routes to specialists automatically. No manual agent selection needed.
+- **[Parallel Execution](docs/operator1/delegation.md)** — Multiple workers execute independently across departments. Independent work happens in parallel; dependencies are tracked.
+
+### Developer-Focused Tools
+
+- **[Claude Code Integration](docs/operator1/delegation.md)** — Workers spawn Claude Code sessions for implementation, testing, and code review. Full IDE within the agent workflow.
+- **[Project Context](docs/operator1/memory.md)** — Bind sessions to projects; sub-agents inherit parent context automatically. Work stays organized and isolated.
+- **[Session Tools](https://docs.openclaw.ai/concepts/session-tool)** — `sessions_list`, `sessions_history`, `sessions_send` for cross-agent coordination without switching surfaces.
+
+### OpenClaw Foundation
+
 - **[Local-first Gateway](https://docs.openclaw.ai/gateway)** — single control plane for sessions, channels, tools, and events.
 - **[Multi-channel inbox](https://docs.openclaw.ai/channels)** — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, BlueBubbles (iMessage), iMessage (legacy), IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat, macOS, iOS/Android.
-- **[Multi-agent routing](https://docs.openclaw.ai/gateway/configuration)** — route inbound channels/accounts/peers to isolated agents (workspaces + per-agent sessions).
 - **[Voice Wake](https://docs.openclaw.ai/nodes/voicewake) + [Talk Mode](https://docs.openclaw.ai/nodes/talk)** — wake words on macOS/iOS and continuous voice on Android (ElevenLabs + system TTS fallback).
 - **[Live Canvas](https://docs.openclaw.ai/platforms/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui).
 - **[First-class tools](https://docs.openclaw.ai/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
 - **[Companion apps](https://docs.openclaw.ai/platforms/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.openclaw.ai/nodes).
 - **[Onboarding](https://docs.openclaw.ai/start/wizard) + [skills](https://docs.openclaw.ai/tools/skills)** — wizard-driven setup with bundled/managed/workspace skills.
+
+## OpenClaw Foundation
+
+Operator1 is built on **OpenClaw**, a personal AI assistant platform that provides:
+
+- **Gateway** — WebSocket control plane for sessions, channels, tools, and events.
+- **Channels** — 25+ messaging platforms (WhatsApp, Telegram, Slack, Discord, etc.) connected to a single inbox.
+- **Runtime** — Pi agent engine with tool streaming, session management, and model failover.
+- **Tools** — Browser control, Canvas, cron, webhooks, voice wake, and more.
+- **Companion Apps** — macOS menu bar + iOS/Android nodes for local device actions.
+
+**For an in-depth guide to OpenClaw fundamentals**, see [OpenClaw Docs](https://docs.openclaw.ai).
 
 ## Star History
 
@@ -182,24 +222,45 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - [Nix mode](https://docs.openclaw.ai/install/nix) for declarative config; [Docker](https://docs.openclaw.ai/install/docker)-based installs.
 - [Doctor](https://docs.openclaw.ai/gateway/doctor) migrations, [logging](https://docs.openclaw.ai/logging).
 
-## How it works (short)
+## How it works (Operator1 Task Flow)
 
 ```
-WhatsApp / Telegram / Slack / Discord / Google Chat / Signal / iMessage / BlueBubbles / IRC / Microsoft Teams / Matrix / Feishu / LINE / Mattermost / Nextcloud Talk / Nostr / Synology Chat / Tlon / Twitch / Zalo / Zalo Personal / WebChat
-               │
-               ▼
-┌───────────────────────────────┐
-│            Gateway            │
-│       (control plane)         │
-│     ws://127.0.0.1:18789      │
-└──────────────┬────────────────┘
-               │
-               ├─ Pi agent (RPC)
-               ├─ CLI (openclaw …)
-               ├─ WebChat UI
-               ├─ macOS app
-               └─ iOS / Android nodes
+You → Task Input (CLI, Chat, Web UI)
+  │
+  ▼
+┌─────────────────────────────────────────────────────────┐
+│  Operator1 (COO)                                        │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │ • Receives task                                 │   │
+│  │ • Classifies by department (Eng/Mktg/Finance) │   │
+│  │ • Routes to appropriate head                    │   │
+│  └──────────────┬──────────────────────────────────┘   │
+└─────────────────┼──────────────────────────────────────┘
+                  │
+        ┌─────────┼─────────┐
+        │         │         │
+        ▼         ▼         ▼
+    ┌────────┐ ┌────────┐ ┌────────┐
+    │  Neo   │ │Morphs │ │Trinity │
+    │ (CTO)  │ │(CMO)  │ │ (CFO)  │
+    └───┬────┘ └───┬────┘ └────┬───┘
+        │          │           │
+   ┌────┴──────────┼───────────┴────┐
+   │               │                 │
+   ▼               ▼                 ▼
+Engineering  Marketing           Finance
+Workers      Workers             Workers
+   │               │                 │
+   └───────────────┼─────────────────┘
+                   │
+                   ▼
+         Claude Code Sessions
+      (implement, test, deploy)
+
+OpenClaw Gateway (WebSocket, 25+ channels, tools, sessions)
 ```
+
+**Task flow**: CLI/Chat input → Operator1 classifies → Dept Head breaks down → Workers execute (parallel) → Claude Code for implementation → Status back to user.
 
 ## Key subsystems
 
@@ -252,14 +313,21 @@ Elevated bash (host permissions) is separate from macOS TCC:
 
 Details: [Nodes](https://docs.openclaw.ai/nodes) · [macOS app](https://docs.openclaw.ai/platforms/macos) · [Gateway protocol](https://docs.openclaw.ai/concepts/architecture)
 
-## Agent to Agent (sessions\_\* tools)
+## Agent-to-Agent Coordination (Operator1)
 
-- Use these to coordinate work across sessions without jumping between chat surfaces.
-- `sessions_list` — discover active sessions (agents) and their metadata.
-- `sessions_history` — fetch transcript logs for a session.
-- `sessions_send` — message another session; optional reply‑back ping‑pong + announce step (`REPLY_SKIP`, `ANNOUNCE_SKIP`).
+In Operator1, agents coordinate work using the `sessions_*` tools:
 
-Details: [Session tools](https://docs.openclaw.ai/concepts/session-tool)
+- `sessions_list` — discover active sessions across the agent hierarchy and their metadata.
+- `sessions_history` — fetch transcript logs from a session (e.g., a worker's progress on a task).
+- `sessions_send` — message another agent; optional reply‑back ping‑pong + announce step (`REPLY_SKIP`, `ANNOUNCE_SKIP`).
+
+These tools enable:
+
+- **Department Heads** to check status on worker sessions and provide feedback.
+- **Workers** to ask peers for help or escalate blockers to their department head.
+- **Operator1 (COO)** to track task progress across all departments and report back to the user.
+
+Details: [Session tools](https://docs.openclaw.ai/concepts/session-tool) · [Delegation](docs/operator1/delegation.md) · [Agent Hierarchy](docs/operator1/agent-hierarchy.md)
 
 ## Skills registry (ClawHub)
 
@@ -309,12 +377,22 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 - Exposes Connect/Chat/Voice tabs plus Canvas, Camera, Screen capture, and Android device command families.
 - Runbook: [Android connect](https://docs.openclaw.ai/platforms/android).
 
-## Agent workspace + skills
+## Operator1 Workspace + Skills
 
-- Workspace root: `~/.openclaw/workspace` (configurable via `agents.defaults.workspace`).
-- Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
-- Skills: `~/.openclaw/workspace/skills/<skill>/SKILL.md`.
-- State database: `~/.openclaw/operator1.db` — SQLite state database (sessions, projects, agent scopes).
+Operator1 extends OpenClaw's agent workspace with multi-agent coordination:
+
+- **Workspace root:** `~/.openclaw/workspace` (configurable via `agents.defaults.workspace`).
+- **Injected prompts:** `AGENTS.md` (agent list + hierarchy), `SOUL.md` (agent personalities), `TOOLS.md` (available tools).
+- **Skills:** `~/.openclaw/workspace/skills/<skill>/SKILL.md` — shared across all agents in the hierarchy.
+- **Projects:** Bind sessions to projects for scoped context and isolated memory (`projects.list`, `projects.active`).
+- **State database:** `~/.openclaw/operator1.db` — SQLite state database stores:
+  - Core settings + configuration overrides
+  - Projects and project-scoped memory
+  - Agent sessions + transcripts
+  - Task delegation logs + status
+  - Audit trail for compliance and debugging
+
+See: [Agent Hierarchy](docs/operator1/agent-hierarchy.md) · [Project Scoping](docs/operator1/memory.md) · [Database Schema](docs/operator1/architecture.md)
 
 ## Configuration
 
