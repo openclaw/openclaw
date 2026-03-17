@@ -54,9 +54,47 @@ describe("splitTrailingAuthProfile", () => {
     });
   });
 
-  it("keeps @YYYYMMDD version suffixes in model ids", () => {
-    expect(splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001")).toEqual({
-      model: "custom/vertex-ai_claude-haiku-4-5@20251001",
+  it("preserves numeric version suffixes (date format)", () => {
+    expect(splitTrailingAuthProfile("vertex-ai_claude-haiku-4-5@20251001")).toEqual({
+      model: "vertex-ai_claude-haiku-4-5@20251001",
+    });
+  });
+
+  it("preserves numeric version suffixes in custom provider models", () => {
+    expect(splitTrailingAuthProfile("custom-litellm/vertex-ai_claude-haiku-4-5@20251001")).toEqual({
+      model: "custom-litellm/vertex-ai_claude-haiku-4-5@20251001",
+    });
+  });
+
+  it("preserves semver-like version suffixes", () => {
+    expect(splitTrailingAuthProfile("provider/model@v1.2.3")).toEqual({
+      model: "provider/model@v1.2.3",
+    });
+  });
+
+  it("preserves numeric build number suffixes", () => {
+    expect(splitTrailingAuthProfile("provider/model@1234")).toEqual({
+      model: "provider/model@1234",
+    });
+  });
+
+  it("preserves semver with prerelease", () => {
+    expect(splitTrailingAuthProfile("provider/model@1.0.0-beta.1")).toEqual({
+      model: "provider/model@1.0.0-beta.1",
+    });
+  });
+
+  it("still splits non-version profile suffixes", () => {
+    expect(splitTrailingAuthProfile("provider/model@work")).toEqual({
+      model: "provider/model",
+      profile: "work",
+    });
+  });
+
+  it("still splits namespaced profile suffixes", () => {
+    expect(splitTrailingAuthProfile("provider/model@cf:default")).toEqual({
+      model: "provider/model",
+      profile: "cf:default",
     });
   });
 
