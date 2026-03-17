@@ -8,6 +8,8 @@ import { loadOagMemory } from "./oag-memory.js";
 
 const log = createSubsystemLogger("oag/diagnosis-dispatch");
 
+const DIAGNOSIS_TIMEOUT_MS = 60_000;
+
 type AgentDispatchFn = (params: {
   prompt: string;
   sessionKey: string;
@@ -48,11 +50,16 @@ export async function dispatchDiagnosis(
 
   try {
     log.info(`Dispatching diagnosis ${diagnosisId} to agent`);
-    const responseText = await registeredDispatch({
-      prompt,
-      sessionKey,
-      agentId: "oag",
-    });
+    const responseText = await Promise.race([
+      registeredDispatch({
+        prompt,
+        sessionKey,
+        agentId: "oag",
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("OAG diagnosis timed out")), DIAGNOSIS_TIMEOUT_MS),
+      ),
+    ]);
 
     const result = await completeDiagnosis(diagnosisId, responseText);
     if (!result) {

@@ -46,6 +46,27 @@ describe("oag-diagnosis-dispatch", () => {
     expect(result.dispatched).toBe(false);
   });
 
+  it("times out when agent dispatch hangs", async () => {
+    vi.useFakeTimers();
+    const hangingDispatch = vi.fn(
+      () => new Promise<string>(() => {}), // Never resolves
+    );
+    registerDiagnosisDispatch(hangingDispatch);
+
+    const resultPromise = dispatchDiagnosis(
+      { type: "recurring_pattern", description: "test" },
+      "diag-timeout",
+    );
+
+    // Advance past the 60s timeout
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const result = await resultPromise;
+    expect(result.dispatched).toBe(false);
+    expect(result.applied).toBe(0);
+    vi.useRealTimers();
+  });
+
   it("registers and dispatches to agent", async () => {
     const mockDispatch = vi.fn(async () =>
       JSON.stringify({

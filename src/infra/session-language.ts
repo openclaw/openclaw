@@ -10,6 +10,9 @@ import {
 
 export type SessionReplyLanguage = "zh-Hans" | "en" | "ja" | "ko";
 
+/** Maximum number of lines to scan backwards from end of transcript. */
+const MAX_SCAN_LINES = 100;
+
 function extractUserTextFromTranscriptLine(rawLine: string): string | undefined {
   const trimmed = rawLine.trim();
   if (!trimmed) {
@@ -109,7 +112,9 @@ async function inferSessionReplyLanguageFromTranscript(params: {
     });
     const content = await fs.readFile(transcriptPath, "utf-8");
     const lines = content.split("\n");
-    for (let idx = lines.length - 1; idx >= 0; idx -= 1) {
+    // Only scan the last MAX_SCAN_LINES lines to avoid slow scans on large transcripts.
+    const startIdx = Math.max(0, lines.length - MAX_SCAN_LINES);
+    for (let idx = lines.length - 1; idx >= startIdx; idx -= 1) {
       const userText = extractUserTextFromTranscriptLine(lines[idx] ?? "");
       if (!userText) {
         continue;

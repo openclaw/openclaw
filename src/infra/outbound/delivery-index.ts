@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 
@@ -23,9 +23,9 @@ function resolveIndexPath(stateDir?: string): string {
   return path.join(base, QUEUE_DIRNAME, INDEX_FILENAME);
 }
 
-function loadIndexSync(stateDir?: string): DeliveryIndex {
+async function loadIndex(stateDir?: string): Promise<DeliveryIndex> {
   try {
-    const raw = fs.readFileSync(resolveIndexPath(stateDir), "utf8");
+    const raw = await fs.readFile(resolveIndexPath(stateDir), "utf8");
     const parsed = JSON.parse(raw) as DeliveryIndex;
     if (parsed.version !== 1 || typeof parsed.entries !== "object") {
       return { version: 1, entries: {} };
@@ -36,30 +36,33 @@ function loadIndexSync(stateDir?: string): DeliveryIndex {
   }
 }
 
-function saveIndexSync(index: DeliveryIndex, stateDir?: string): void {
+async function saveIndex(index: DeliveryIndex, stateDir?: string): Promise<void> {
   const indexPath = resolveIndexPath(stateDir);
   const tmp = `${indexPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(index), "utf8");
-  fs.renameSync(tmp, indexPath);
+  await fs.writeFile(tmp, JSON.stringify(index), "utf8");
+  await fs.rename(tmp, indexPath);
 }
 
-export function addToIndex(entry: DeliveryIndexEntry, stateDir?: string): void {
-  const index = loadIndexSync(stateDir);
-  index.entries[entry.id] = entry;
-  saveIndexSync(index, stateDir);
+export async function addToIndex(entry: DeliveryIndexEntry, stateDir?: string): Promise<void> {
+  const index = await loadIndex(stateDir);
+  const updated = {
+    ...index,
+    entries: { ...index.entries, [entry.id]: entry },
+  };
+  await saveIndex(updated, stateDir);
 }
 
-export function removeFromIndex(id: string, stateDir?: string): void {
-  const index = loadIndexSync(stateDir);
-  delete index.entries[id];
-  saveIndexSync(index, stateDir);
+export async function removeFromIndex(id: string, stateDir?: string): Promise<void> {
+  const index = await loadIndex(stateDir);
+  const { [id]: _, ...rest } = index.entries;
+  await saveIndex({ ...index, entries: rest }, stateDir);
 }
 
-export function queryIndex(
+export async function queryIndex(
   filter?: { channel?: string; accountId?: string },
   stateDir?: string,
-): DeliveryIndexEntry[] {
-  const index = loadIndexSync(stateDir);
+): Promise<DeliveryIndexEntry[]> {
+  const index = await loadIndex(stateDir);
   let entries = Object.values(index.entries);
   if (filter?.channel) {
     entries = entries.filter((e) => e.channel === filter.channel);
@@ -72,24 +75,24 @@ export function queryIndex(
   return entries.toSorted((a, b) => a.enqueuedAt - b.enqueuedAt);
 }
 
-export function getIndexSize(stateDir?: string): number {
-  const index = loadIndexSync(stateDir);
+export async function getIndexSize(stateDir?: string): Promise<number> {
+  const index = await loadIndex(stateDir);
   return Object.keys(index.entries).length;
 }
 
-export function rebuildIndex(stateDir?: string): number {
+export async function rebuildIndex(stateDir?: string): Promise<number> {
   const base = stateDir ?? resolveStateDir();
   const queueDir = path.join(base, QUEUE_DIRNAME);
   const index: DeliveryIndex = { version: 1, entries: {} };
   let count = 0;
   try {
-    const files = fs.readdirSync(queueDir);
+    const files = await fs.readdir(queueDir);
     for (const file of files) {
       if (!file.endsWith(".json") || file === INDEX_FILENAME) {
         continue;
       }
       try {
-        const raw = fs.readFileSync(path.join(queueDir, file), "utf8");
+        const raw = await fs.readFile(path.join(queueDir, file), "utf8");
         const entry = JSON.parse(raw) as {
           id: string;
           channel: string;
@@ -114,6 +117,6 @@ export function rebuildIndex(stateDir?: string): number {
   } catch {
     // Queue dir doesn't exist yet
   }
-  saveIndexSync(index, stateDir);
+  await saveIndex(index, stateDir);
   return count;
 }

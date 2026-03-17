@@ -66,4 +66,29 @@ describe("inferSessionReplyLanguage", () => {
     const result = await inferSessionReplyLanguage({ sessionKey: "telegram:+1234" });
     expect(result).toBe("zh-Hans");
   });
+
+  it("limits scan to last 100 lines, ignoring earlier content", async () => {
+    // Build a 200-line transcript: line 0 has a Chinese user message,
+    // lines 1-199 are assistant messages (no detectable language from user role).
+    const lines: string[] = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "你好世界测试一下" },
+      }),
+    ];
+    for (let i = 1; i < 200; i++) {
+      lines.push(
+        JSON.stringify({
+          type: "message",
+          message: { role: "assistant", content: `response ${i}` },
+        }),
+      );
+    }
+    mockTranscript.content = lines.join("\n");
+
+    // The Chinese message is at line 0 (index 0), outside the last 100 lines
+    // (lines 100-199). The scan should not reach it and should return undefined.
+    const result = await inferSessionReplyLanguage({ sessionKey: "telegram:+1234" });
+    expect(result).toBeUndefined();
+  });
 });
