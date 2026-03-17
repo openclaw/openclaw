@@ -2,7 +2,7 @@
 //
 // Exposes a small, explicit set of low-risk actions via POST /api/setup/action.
 // The route handler in server.mjs is responsible for the HTTP response and any
-// post-send scheduling (for example wrapper-reload).
+// post-send scheduling (for example dashboard-service-restart).
 //
 // Safety boundary: no hidden writes, no automatic local config generation,
 // no broad install actions. Only the three actions below are accepted.
@@ -14,7 +14,7 @@ import { DASHBOARD_APP_ROOT } from '../config.mjs';
 import { evaluateSetupState } from './setupState.mjs';
 
 // Explicit allowlist — unknown action IDs are rejected at the dispatcher.
-const ALLOWED_ACTIONS = new Set(['setup-refresh', 'bootstrap-preview', 'wrapper-reload']);
+const ALLOWED_ACTIONS = new Set(['setup-refresh', 'bootstrap-preview', 'dashboard-service-restart']);
 
 // ---------------------------------------------------------------------------
 // setup-refresh
@@ -58,15 +58,15 @@ function handleBootstrapPreview() {
 }
 
 // ---------------------------------------------------------------------------
-// wrapper-reload
-// Schedules a launchd reload of the wrapper service after the response is sent.
+// dashboard-service-restart
+// Restarts the launchd-managed dashboard service after the response is sent.
 // The internal _reload flag tells the route handler to schedule execFile.
 // ---------------------------------------------------------------------------
 
 function handleWrapperReload() {
   return {
     ok: true,
-    action: 'wrapper-reload',
+    action: 'dashboard-service-restart',
     message: 'Dashboard service restart initiated. The service will restart in a moment.',
     _reload: true,
   };
@@ -81,7 +81,7 @@ function handleWrapperReload() {
  *
  * @param {{ action: string, bridgeConnected: boolean, claudeState: object }} opts
  * @returns {Promise<object>} Structured action result.
- *   wrapper-reload results include an internal `_reload: true` flag that the
+ *   dashboard-service-restart results include an internal `_reload: true` flag that the
  *   route handler uses to schedule the execFile call after sending the response.
  */
 export async function handleSetupAction({ action, bridgeConnected, claudeState }) {
@@ -92,5 +92,5 @@ export async function handleSetupAction({ action, bridgeConnected, claudeState }
 
   if (action === 'setup-refresh') { return handleSetupRefresh({ bridgeConnected, claudeState }); }
   if (action === 'bootstrap-preview') { return handleBootstrapPreview(); }
-  if (action === 'wrapper-reload') { return handleWrapperReload(); }
+  if (action === 'dashboard-service-restart') { return handleWrapperReload(); }
 }

@@ -530,7 +530,7 @@
         const data = await resp.json();
         showActionResult(actionId, data);
         // Refresh state after non-reload actions.
-        if (actionId !== 'wrapper-reload') { await load(); }
+        if (actionId !== 'dashboard-service-restart') { await load(); }
       } catch (err) {
         resultBox.innerHTML = `<div class="action-result-box"><div class="action-result-header">Action: ${escHtml(actionId)}</div><div class="action-result-error">Request failed: ${escHtml(String(err))}</div></div>`;
       } finally {
@@ -539,7 +539,7 @@
     }
 
     document.getElementById('btnBootstrapPreview')?.addEventListener('click', () => runAction('bootstrap-preview'));
-    document.getElementById('btnWrapperReload')?.addEventListener('click', () => runAction('wrapper-reload'));
+    document.getElementById('btnWrapperReload')?.addEventListener('click', () => runAction('dashboard-service-restart'));
 
     load();
   </script>

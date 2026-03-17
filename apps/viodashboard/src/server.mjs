@@ -579,7 +579,7 @@ const server = http.createServer((req, res) => {
           bridgeConnected: bridge.connected,
           claudeState: getClaudeState(),
         });
-        // wrapper-reload: send response first, then schedule the reload.
+        // dashboard-service-restart: send response first, then schedule the restart.
         const shouldReload = result._reload === true;
         const { _reload: _, ...safeResult } = result;
         sendJson(res, shouldReload ? 202 : 200, safeResult);
