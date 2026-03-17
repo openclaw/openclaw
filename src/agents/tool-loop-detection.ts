@@ -238,7 +238,7 @@ function extractBrowserSearchLoopHint(
     }
     const rawQuery = parsedUrl.searchParams.get(matcher.queryParam)?.trim();
     if (!rawQuery) {
-      return undefined;
+      continue;
     }
     return {
       host,

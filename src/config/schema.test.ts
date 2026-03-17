@@ -268,6 +268,28 @@ describe("config schema", () => {
     });
   });
 
+  it("rejects browser search loop detection config when warning threshold is not lower than critical", () => {
+    const parsed = ToolsSchema.safeParse({
+      loopDetection: {
+        browserSearchWarningThreshold: 8,
+        browserSearchCriticalThreshold: 4,
+      },
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["loopDetection", "browserSearchCriticalThreshold"],
+            message:
+              "tools.loopDetection.browserSearchWarningThreshold must be lower than browserSearchCriticalThreshold.",
+          }),
+        ]),
+      );
+    }
+  });
+
   it("keeps tags in the allowed taxonomy", () => {
     const withTags = applyDerivedTags({
       "gateway.auth.token": {},

@@ -490,6 +490,18 @@ const ToolLoopDetectionSchema = z
       });
     }
     if (
+      value.browserSearchWarningThreshold !== undefined &&
+      value.browserSearchCriticalThreshold !== undefined &&
+      value.browserSearchWarningThreshold >= value.browserSearchCriticalThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["browserSearchCriticalThreshold"],
+        message:
+          "tools.loopDetection.browserSearchWarningThreshold must be lower than browserSearchCriticalThreshold.",
+      });
+    }
+    if (
       value.criticalThreshold !== undefined &&
       value.globalCircuitBreakerThreshold !== undefined &&
       value.criticalThreshold >= value.globalCircuitBreakerThreshold
