@@ -1,6 +1,7 @@
 services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    user: root
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -10,9 +11,15 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      NOTION_TOKEN: ${NOTION_TOKEN:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - /usr/bin/gh:/usr/bin/gh:ro
+      - /root/ecom-platform/config:/home/node/ecom-platform/config:ro
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -49,8 +56,38 @@ services:
       retries: 5
       start_period: 20s
 
+  mcp-servers:
+    image: node:22-slim
+    network_mode: "service:openclaw-gateway"
+    environment:
+      HOME: /home/node
+      NOTION_TOKEN: ${NOTION_TOKEN:-}
+      NOTION_DATABASE_ID: ${NOTION_DATABASE_ID:-}
+    volumes:
+      - /root/ecom-platform/mcp-servers:/app/mcp-servers:ro
+      - /root/ecom-platform/config:/home/node/ecom-platform/config:ro
+    init: true
+    restart: unless-stopped
+    depends_on:
+      openclaw-gateway:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        echo "Starting MCP servers..."
+        cd /app/mcp-servers/client-context && PORT=3010 node index.js &
+        echo "  client-context on :3010"
+        cd /app/mcp-servers/theme-mapper && PORT=3011 node index.js &
+        echo "  theme-mapper on :3011"
+        cd /app/mcp-servers/notion-tool && PORT=3012 node index.js &
+        echo "  notion-tool on :3012"
+        echo "All MCP servers started."
+        wait
+
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    user: root
     network_mode: "service:openclaw-gateway"
     cap_drop:
       - NET_RAW
@@ -67,9 +104,14 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      NOTION_TOKEN: ${NOTION_TOKEN:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - /usr/bin/gh:/usr/bin/gh:ro
     stdin_open: true
     tty: true
     init: true

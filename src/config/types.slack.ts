@@ -199,6 +199,10 @@ export type SlackAccountConfig = {
   ackReaction?: string;
   /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
   typingReaction?: string;
+  /** Custom status text shown in the thread typing indicator (default: "is typing..."). */
+  typingStatus?: string;
+  /** Rotating loading messages shown while processing (max 10). Cycles through these strings as an animated loading indicator. */
+  typingLoadingMessages?: string[];
 };
 
 export type SlackConfig = {

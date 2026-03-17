@@ -911,6 +911,8 @@ export const SlackAccountSchema = z
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
     typingReaction: z.string().optional(),
+    typingStatus: z.string().optional(),
+    typingLoadingMessages: z.array(z.string()).max(10).optional(),
   })
   .strict()
   .superRefine((value) => {

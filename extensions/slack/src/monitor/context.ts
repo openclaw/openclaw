@@ -57,6 +57,8 @@ export type SlackMonitorContext = {
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;
+  typingStatus: string;
+  typingLoadingMessages: string[];
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
 
@@ -84,6 +86,7 @@ export type SlackMonitorContext = {
     channelId: string;
     threadTs?: string;
     status: string;
+    loading_messages?: string[];
   }) => Promise<void>;
 };
 
@@ -121,6 +124,8 @@ export function createSlackMonitorContext(params: {
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;
+  typingStatus: string;
+  typingLoadingMessages: string[];
   mediaMaxBytes: number;
   removeAckAfterReply: boolean;
 }): SlackMonitorContext {
@@ -255,16 +260,20 @@ export function createSlackMonitorContext(params: {
     channelId: string;
     threadTs?: string;
     status: string;
+    loading_messages?: string[];
   }) => {
     if (!p.threadTs) {
       return;
     }
-    const payload = {
+    const payload: Record<string, unknown> = {
       token: params.botToken,
       channel_id: p.channelId,
       thread_ts: p.threadTs,
       status: p.status,
     };
+    if (p.loading_messages?.length) {
+      payload.loading_messages = p.loading_messages;
+    }
     const client = params.app.client as unknown as {
       assistant?: {
         threads?: {
@@ -421,6 +430,8 @@ export function createSlackMonitorContext(params: {
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
+    typingStatus: params.typingStatus,
+    typingLoadingMessages: params.typingLoadingMessages,
     mediaMaxBytes: params.mediaMaxBytes,
     removeAckAfterReply: params.removeAckAfterReply,
     logger,

@@ -245,6 +245,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
+  const typingStatus = slackCfg.typingStatus?.trim() || "is typing...";
+  const typingLoadingMessages = Array.isArray(slackCfg.typingLoadingMessages)
+    ? slackCfg.typingLoadingMessages
+        .filter((m): m is string => typeof m === "string" && m.trim().length > 0)
+        .slice(0, 10)
+    : [];
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
 
@@ -344,6 +350,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     textLimit,
     ackReactionScope,
     typingReaction,
+    typingStatus,
+    typingLoadingMessages,
     mediaMaxBytes,
     removeAckAfterReply,
   });
