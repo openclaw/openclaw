@@ -25,8 +25,7 @@ export {
   resolveDefaultGroupPolicy,
 } from "../config/runtime-group-policy.js";
 export { evaluateSenderGroupAccessForPolicy } from "../plugin-sdk/group-access.js";
-export { signalSetupWizard } from "../../extensions/signal/src/setup-surface.js";
-export { signalSetupAdapter } from "../../extensions/signal/src/setup-core.js";
+export { signalSetupWizard } from "../../extensions/signal/src/plugin-shared.js";
 export { SignalConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { normalizeE164 } from "../utils.js";
