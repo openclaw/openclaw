@@ -148,10 +148,10 @@ export function resolvePreferredOpenClawTmpDir(
     try {
       mkdirSync(overridePath, { recursive: true, mode: 0o700 });
       chmodSync(overridePath, 0o700);
-      return overridePath;
     } catch {
-      // Fall through to default logic if override path is invalid/unwritable
+      throw new Error(`Unable to create OPENCLAW_TMP_DIR: ${overridePath}`);
     }
+    return overridePath;
   }
 
   const existingPreferredState = resolveDirState(POSIX_OPENCLAW_TMP_DIR);
