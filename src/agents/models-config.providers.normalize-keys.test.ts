@@ -83,12 +83,12 @@ describe("normalizeProviders", () => {
     // are preserved, avoiding the flip-flop cycle.
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const original = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-test-secret-value-12345"; // pragma: allowlist secret
+    process.env.OPENAI_API_KEY = "openai-test-env-value-not-a-real-key";
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
         openai: {
           baseUrl: "https://api.openai.com/v1",
-          apiKey: "sk-test-secret-value-12345", // pragma: allowlist secret; simulates resolved ${OPENAI_API_KEY}
+          apiKey: "openai-test-env-value-not-a-real-key", // simulates resolved ${OPENAI_API_KEY}
           api: "openai-completions",
           models: [
             {
@@ -105,7 +105,7 @@ describe("normalizeProviders", () => {
       };
       const normalized = normalizeProviders({ providers, agentDir });
       // Resolved values are preserved (no flip-flop)
-      expect(normalized?.openai?.apiKey).toBe("sk-test-secret-value-12345"); // pragma: allowlist secret
+      expect(normalized?.openai?.apiKey).toBe("openai-test-env-value-not-a-real-key");
     } finally {
       if (original === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -119,12 +119,12 @@ describe("normalizeProviders", () => {
   it("rewrites resolved env values when sourceProviders records the original env ref", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const original = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-test-secret-value-12345"; // pragma: allowlist secret
+    process.env.OPENAI_API_KEY = "openai-test-env-value-not-a-real-key";
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
         openai: {
           baseUrl: "https://api.openai.com/v1",
-          apiKey: "sk-test-secret-value-12345", // pragma: allowlist secret
+          apiKey: "openai-test-env-value-not-a-real-key",
           api: "openai-completions",
           models: [],
         },

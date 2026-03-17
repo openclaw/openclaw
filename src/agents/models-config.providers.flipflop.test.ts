@@ -22,7 +22,7 @@ import { normalizeProviders } from "./models-config.providers.js";
 describe("normalizeProviders flip-flop bug", () => {
   let agentDir: string;
   const TEST_ENV_VAR = "OPENAI_API_KEY";
-  const TEST_ENV_VALUE = "sk-test-openai-key-12345"; // pragma: allowlist secret
+  const TEST_ENV_VALUE = "openai-test-env-value-not-a-real-key";
 
   beforeEach(async () => {
     agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
