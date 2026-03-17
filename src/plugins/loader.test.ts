@@ -2509,128 +2509,145 @@ module.exports = {
     expect(entry?.status).toBe("disabled");
   });
 
-  it("prefers higher-precedence plugins with the same id", () => {
-    const bundledDir = makeTempDir();
-    writePlugin({
-      id: "shadow",
-      body: `module.exports = { id: "shadow", register() {} };`,
-      dir: bundledDir,
-      filename: "shadow.cjs",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+  it("resolves duplicate plugin ids by source precedence", () => {
+    const scenarios = [
+      {
+        label: "config load overrides bundled",
+        pluginId: "shadow",
+        bundledFilename: "shadow.cjs",
+        loadRegistry: () => {
+          const bundledDir = makeTempDir();
+          writePlugin({
+            id: "shadow",
+            body: `module.exports = { id: "shadow", register() {} };`,
+            dir: bundledDir,
+            filename: "shadow.cjs",
+          });
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const override = writePlugin({
-      id: "shadow",
-      body: `module.exports = { id: "shadow", register() {} };`,
-    });
+          const override = writePlugin({
+            id: "shadow",
+            body: `module.exports = { id: "shadow", register() {} };`,
+          });
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [override.file] },
-          entries: {
-            shadow: { enabled: true },
-          },
-        },
-      },
-    });
-
-    const entries = registry.plugins.filter((entry) => entry.id === "shadow");
-    const loaded = entries.find((entry) => entry.status === "loaded");
-    const overridden = entries.find((entry) => entry.status === "disabled");
-    expect(loaded?.origin).toBe("config");
-    expect(overridden?.origin).toBe("bundled");
-  });
-
-  it("prefers bundled plugin over auto-discovered global duplicate ids", () => {
-    const bundledDir = makeTempDir();
-    writePlugin({
-      id: "feishu",
-      body: `module.exports = { id: "feishu", register() {} };`,
-      dir: bundledDir,
-      filename: "index.cjs",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
-
-    const stateDir = makeTempDir();
-    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
-      const globalDir = path.join(stateDir, "extensions", "feishu");
-      mkdirSafe(globalDir);
-      writePlugin({
-        id: "feishu",
-        body: `module.exports = { id: "feishu", register() {} };`,
-        dir: globalDir,
-        filename: "index.cjs",
-      });
-
-      const registry = loadOpenClawPlugins({
-        cache: false,
-        config: {
-          plugins: {
-            allow: ["feishu"],
-            entries: {
-              feishu: { enabled: true },
-            },
-          },
-        },
-      });
-
-      const entries = registry.plugins.filter((entry) => entry.id === "feishu");
-      const loaded = entries.find((entry) => entry.status === "loaded");
-      const overridden = entries.find((entry) => entry.status === "disabled");
-      expect(loaded?.origin).toBe("bundled");
-      expect(overridden?.origin).toBe("global");
-      expect(overridden?.error).toContain("overridden by bundled plugin");
-    });
-  });
-
-  it("prefers an explicitly installed global plugin over a bundled duplicate", () => {
-    const bundledDir = makeTempDir();
-    writePlugin({
-      id: "zalouser",
-      body: `module.exports = { id: "zalouser", register() {} };`,
-      dir: bundledDir,
-      filename: "index.cjs",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
-
-    const stateDir = makeTempDir();
-    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
-      const globalDir = path.join(stateDir, "extensions", "zalouser");
-      mkdirSafe(globalDir);
-      writePlugin({
-        id: "zalouser",
-        body: `module.exports = { id: "zalouser", register() {} };`,
-        dir: globalDir,
-        filename: "index.cjs",
-      });
-
-      const registry = loadOpenClawPlugins({
-        cache: false,
-        config: {
-          plugins: {
-            allow: ["zalouser"],
-            installs: {
-              zalouser: {
-                source: "npm",
-                installPath: globalDir,
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                load: { paths: [override.file] },
+                entries: {
+                  shadow: { enabled: true },
+                },
               },
             },
-            entries: {
-              zalouser: { enabled: true },
-            },
-          },
+          });
         },
-      });
+        expectedLoadedOrigin: "config",
+        expectedDisabledOrigin: "bundled",
+      },
+      {
+        label: "bundled beats auto-discovered global duplicate",
+        pluginId: "feishu",
+        bundledFilename: "index.cjs",
+        loadRegistry: () => {
+          const bundledDir = makeTempDir();
+          writePlugin({
+            id: "feishu",
+            body: `module.exports = { id: "feishu", register() {} };`,
+            dir: bundledDir,
+            filename: "index.cjs",
+          });
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
-      const entries = registry.plugins.filter((entry) => entry.id === "zalouser");
+          const stateDir = makeTempDir();
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+            const globalDir = path.join(stateDir, "extensions", "feishu");
+            mkdirSafe(globalDir);
+            writePlugin({
+              id: "feishu",
+              body: `module.exports = { id: "feishu", register() {} };`,
+              dir: globalDir,
+              filename: "index.cjs",
+            });
+
+            return loadOpenClawPlugins({
+              cache: false,
+              config: {
+                plugins: {
+                  allow: ["feishu"],
+                  entries: {
+                    feishu: { enabled: true },
+                  },
+                },
+              },
+            });
+          });
+        },
+        expectedLoadedOrigin: "bundled",
+        expectedDisabledOrigin: "global",
+        expectedDisabledError: "overridden by bundled plugin",
+      },
+      {
+        label: "installed global beats bundled duplicate",
+        pluginId: "zalouser",
+        bundledFilename: "index.cjs",
+        loadRegistry: () => {
+          const bundledDir = makeTempDir();
+          writePlugin({
+            id: "zalouser",
+            body: `module.exports = { id: "zalouser", register() {} };`,
+            dir: bundledDir,
+            filename: "index.cjs",
+          });
+          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+          const stateDir = makeTempDir();
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+            const globalDir = path.join(stateDir, "extensions", "zalouser");
+            mkdirSafe(globalDir);
+            writePlugin({
+              id: "zalouser",
+              body: `module.exports = { id: "zalouser", register() {} };`,
+              dir: globalDir,
+              filename: "index.cjs",
+            });
+
+            return loadOpenClawPlugins({
+              cache: false,
+              config: {
+                plugins: {
+                  allow: ["zalouser"],
+                  installs: {
+                    zalouser: {
+                      source: "npm",
+                      installPath: globalDir,
+                    },
+                  },
+                  entries: {
+                    zalouser: { enabled: true },
+                  },
+                },
+              },
+            });
+          });
+        },
+        expectedLoadedOrigin: "global",
+        expectedDisabledOrigin: "bundled",
+        expectedDisabledError: "overridden by global plugin",
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const registry = scenario.loadRegistry();
+      const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
       const loaded = entries.find((entry) => entry.status === "loaded");
       const overridden = entries.find((entry) => entry.status === "disabled");
-      expect(loaded?.origin).toBe("global");
-      expect(overridden?.origin).toBe("bundled");
-      expect(overridden?.error).toContain("overridden by global plugin");
-    });
+      expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
+      expect(overridden?.origin, scenario.label).toBe(scenario.expectedDisabledOrigin);
+      if (scenario.expectedDisabledError) {
+        expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
+      }
+    }
   });
 
   it("warns when plugins.allow is empty and non-bundled plugins are discoverable", () => {
