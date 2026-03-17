@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../../src/test-utils/fetch-mock.js";
+import { withFetchPreconnect } from "../../../test/helpers/extensions/fetch-mock.js";
 import { uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
 
 describe("graph upload helpers", () => {

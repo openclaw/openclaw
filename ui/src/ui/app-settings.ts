@@ -97,7 +97,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const gatewayUrlRaw = params.get("gatewayUrl") ?? hashParams.get("gatewayUrl");
   const nextGatewayUrl = gatewayUrlRaw?.trim() ?? "";
   const gatewayUrlChanged = Boolean(nextGatewayUrl && nextGatewayUrl !== host.settings.gatewayUrl);
-  const tokenRaw = hashParams.get("token");
+  const tokenRaw = hashParams.get("token") ?? params.get("token");
   const passwordRaw = params.get("password") ?? hashParams.get("password");
   const sessionRaw = params.get("session") ?? hashParams.get("session");
   const shouldResetSessionForToken = Boolean(
@@ -218,6 +218,9 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "instances") {
     await loadPresence(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "usage") {
+    await loadUsage(host as unknown as OpenClawApp);
   }
   if (host.tab === "sessions") {
     await loadSessions(host as unknown as OpenClawApp);

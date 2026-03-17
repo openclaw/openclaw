@@ -1,21 +1,21 @@
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
   patchScopedAccountConfig,
-} from "../../../src/channels/plugins/setup-helpers.js";
+} from "openclaw/plugin-sdk/setup";
 import {
   mergeAllowFromEntries,
   resolveSetupAccountId,
   setSetupChannelEnabled,
   setTopLevelChannelDmPolicyWithAllowFrom,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import { type ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { ChannelSetupInput } from "../../../src/channels/plugins/types.core.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup";
+import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -174,7 +174,7 @@ async function promptNextcloudTalkAllowFromForAccount(params: {
   });
 }
 
-const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
+export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
   label: "Nextcloud Talk",
   channel,
   policyKey: "channels.nextcloud-talk.dmPolicy",

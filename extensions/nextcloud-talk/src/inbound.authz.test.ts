@@ -5,28 +5,42 @@ import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
+function installInboundAuthzRuntime(params: {
+  readAllowFromStore: () => Promise<string[]>;
+  buildMentionRegexes: () => RegExp[];
+}) {
+  setNextcloudTalkRuntime({
+    channel: {
+      pairing: {
+        readAllowFromStore: params.readAllowFromStore,
+      },
+      commands: {
+        shouldHandleTextCommands: () => false,
+      },
+      text: {
+        hasControlCommand: () => false,
+      },
+      mentions: {
+        buildMentionRegexes: params.buildMentionRegexes,
+        matchesMentionPatterns: () => false,
+      },
+    },
+  } as unknown as PluginRuntime);
+}
+
+function createTestRuntimeEnv(): RuntimeEnv {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+  } as unknown as RuntimeEnv;
+}
+
 describe("nextcloud-talk inbound authz", () => {
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
     const readAllowFromStore = vi.fn(async () => ["attacker"]);
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
 
-    setNextcloudTalkRuntime({
-      channel: {
-        pairing: {
-          readAllowFromStore,
-        },
-        commands: {
-          shouldHandleTextCommands: () => false,
-        },
-        text: {
-          hasControlCommand: () => false,
-        },
-        mentions: {
-          buildMentionRegexes,
-          matchesMentionPatterns: () => false,
-        },
-      },
-    } as unknown as PluginRuntime);
+    installInboundAuthzRuntime({ readAllowFromStore, buildMentionRegexes });
 
     const message: NextcloudTalkInboundMessage = {
       messageId: "m-1",
@@ -69,10 +83,7 @@ describe("nextcloud-talk inbound authz", () => {
       message,
       account,
       config,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-      } as unknown as RuntimeEnv,
+      runtime: createTestRuntimeEnv(),
     });
 
     expect(readAllowFromStore).toHaveBeenCalledWith({
@@ -86,23 +97,7 @@ describe("nextcloud-talk inbound authz", () => {
     const readAllowFromStore = vi.fn(async () => []);
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
 
-    setNextcloudTalkRuntime({
-      channel: {
-        pairing: {
-          readAllowFromStore,
-        },
-        commands: {
-          shouldHandleTextCommands: () => false,
-        },
-        text: {
-          hasControlCommand: () => false,
-        },
-        mentions: {
-          buildMentionRegexes,
-          matchesMentionPatterns: () => false,
-        },
-      },
-    } as unknown as PluginRuntime);
+    installInboundAuthzRuntime({ readAllowFromStore, buildMentionRegexes });
 
     const message: NextcloudTalkInboundMessage = {
       messageId: "m-2",
@@ -146,10 +141,7 @@ describe("nextcloud-talk inbound authz", () => {
           },
         },
       },
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-      } as unknown as RuntimeEnv,
+      runtime: createTestRuntimeEnv(),
     });
 
     expect(buildMentionRegexes).not.toHaveBeenCalled();
