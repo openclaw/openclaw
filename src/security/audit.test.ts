@@ -3314,45 +3314,52 @@ description: test skill
     expect(skillFinding?.detail).toMatch(/runner\.js:\d+/);
   });
 
-  it("flags plugin extension entry path traversal in deep audit", async () => {
-    const tmpDir = await makeTmpDir("audit-scanner-escape");
-    const pluginDir = path.join(tmpDir, "extensions", "escape-plugin");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "escape-plugin",
-        openclaw: { extensions: ["../outside.js"] },
-      }),
-    );
-    await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
+  it("evaluates plugin code-safety scanner failure modes", async () => {
+    const cases = [
+      {
+        name: "flags plugin extension entry path traversal in deep audit",
+        label: "audit-scanner-escape",
+        pluginName: "escape-plugin",
+        extensions: ["../outside.js"],
+        assert: (findings: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>>) => {
+          expect(findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);
+        },
+      },
+      {
+        name: "reports scan_failed when plugin code scanner throws during deep audit",
+        label: "audit-scanner-throws",
+        pluginName: "scanfail-plugin",
+        extensions: ["index.js"],
+        beforeRun: () =>
+          vi
+            .spyOn(skillScanner, "scanDirectoryWithSummary")
+            .mockRejectedValueOnce(new Error("boom")),
+        assert: (findings: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>>) => {
+          expect(findings.some((f) => f.checkId === "plugins.code_safety.scan_failed")).toBe(true);
+        },
+      },
+    ] as const;
 
-    const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-    expect(findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);
-  });
+    for (const testCase of cases) {
+      const scanSpy = testCase.beforeRun?.();
+      try {
+        const tmpDir = await makeTmpDir(testCase.label);
+        const pluginDir = path.join(tmpDir, "extensions", testCase.pluginName);
+        await fs.mkdir(pluginDir, { recursive: true });
+        await fs.writeFile(
+          path.join(pluginDir, "package.json"),
+          JSON.stringify({
+            name: testCase.pluginName,
+            openclaw: { extensions: testCase.extensions },
+          }),
+        );
+        await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
 
-  it("reports scan_failed when plugin code scanner throws during deep audit", async () => {
-    const scanSpy = vi
-      .spyOn(skillScanner, "scanDirectoryWithSummary")
-      .mockRejectedValueOnce(new Error("boom"));
-
-    const tmpDir = await makeTmpDir("audit-scanner-throws");
-    try {
-      const pluginDir = path.join(tmpDir, "extensions", "scanfail-plugin");
-      await fs.mkdir(pluginDir, { recursive: true });
-      await fs.writeFile(
-        path.join(pluginDir, "package.json"),
-        JSON.stringify({
-          name: "scanfail-plugin",
-          openclaw: { extensions: ["index.js"] },
-        }),
-      );
-      await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
-
-      const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-      expect(findings.some((f) => f.checkId === "plugins.code_safety.scan_failed")).toBe(true);
-    } finally {
-      scanSpy.mockRestore();
+        const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
+        testCase.assert(findings);
+      } finally {
+        scanSpy?.mockRestore();
+      }
     }
   });
 
