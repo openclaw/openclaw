@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
+import {
+  setupCronServiceSuite,
+  createMockOpenClawConfig,
+  createMockCliDeps,
+} from "./service.test-harness.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-",
@@ -24,6 +28,8 @@ describe("CronService restart catch-up", () => {
       storePath: params.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       enqueueSystemEvent: params.enqueueSystemEvent as never,
       requestHeartbeatNow: params.requestHeartbeatNow as never,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })) as never,

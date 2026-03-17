@@ -53,6 +53,7 @@ export SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 ### User Onboarding (`user-onboarding.json`)
 
 Automated workflow for new user onboarding:
+
 1. Validates user input with AI
 2. Creates user record in database
 3. Sets up default preferences
@@ -62,6 +63,7 @@ Automated workflow for new user onboarding:
 ### Data Sync (`data-sync.json`)
 
 Batch data synchronization workflow:
+
 1. Fetches pending sync records
 2. Processes each record with AI analysis
 3. Updates sync queue status
@@ -70,6 +72,7 @@ Batch data synchronization workflow:
 ### Cleanup (`cleanup.json`)
 
 Automated database maintenance:
+
 1. Deletes expired sessions
 2. Removes old audit logs (90+ days)
 3. Archives important old data
@@ -78,6 +81,7 @@ Automated database maintenance:
 ### Report Generation (`report-generation.json`)
 
 Weekly analytics report generation:
+
 1. Fetches user statistics
 2. Fetches activity logs
 3. Analyzes data with AI
@@ -229,6 +233,7 @@ export SUPABASE_SERVICE_KEY=your-key-here
 ### 4. Verify Results
 
 Check the workflow execution logs and verify:
+
 - Database operations completed successfully
 - Data was inserted/updated/deleted as expected
 - Error handling works correctly

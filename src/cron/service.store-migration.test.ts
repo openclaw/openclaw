@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
+import {
+  setupCronServiceSuite,
+  createMockOpenClawConfig,
+  createMockCliDeps,
+} from "./service.test-harness.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-",
@@ -14,6 +18,8 @@ function createStartedCron(storePath: string) {
     storePath,
     cronEnabled: true,
     log: noopLogger,
+    config: createMockOpenClawConfig(),
+    cliDeps: createMockCliDeps(),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),

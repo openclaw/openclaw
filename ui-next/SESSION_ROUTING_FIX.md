@@ -1,29 +1,35 @@
 # Session Routing Fix - 2026-03-15
 
 ## Problem
+
 Chat responses were being routed to the wrong session. When a user:
+
 1. Sends a message in Chat A
 2. Switches to Chat B before the response arrives
 3. Response from Chat A was either lost OR incorrectly shown in Chat B
 
 **Root Cause:**
+
 - `messages` state was global (single array for ALL sessions)
 - `chatStream` state was also global
 - When switching sessions, the old state was replaced with new session's history
 - Event handler filtered events by `currentSessionKey`, causing responses from background sessions to be lost
 
 ## Solution
+
 Changed from global state to **per-session state**:
 
 ### State Changes
 
 **Before:**
+
 ```typescript
 const [messages, setMessages] = useState<ChatMessage[]>([]);
 const [chatStream, setChatStream] = useState<string | null>(null);
 ```
 
 **After:**
+
 ```typescript
 const [sessionMessages, setSessionMessages] = useState<Record<string, ChatMessage[]>>({});
 const [sessionStreams, setSessionStreams] = useState<Record<string, string>>({});
@@ -32,6 +38,7 @@ const [sessionStreams, setSessionStreams] = useState<Record<string, string>>({})
 ### Key Changes
 
 1. **Event Handler** - Now accumulates messages/streams to the correct session:
+
    ```typescript
    setSessionMessages((prev) => ({
      ...prev,
@@ -40,6 +47,7 @@ const [sessionStreams, setSessionStreams] = useState<Record<string, string>>({})
    ```
 
 2. **Render Logic** - Displays messages/streams for the currently selected session:
+
    ```typescript
    const currentMessages = selectedSessionKey ? (sessionMessages[selectedSessionKey] ?? []) : [];
    const currentStream = selectedSessionKey ? sessionStreams[selectedSessionKey] : undefined;

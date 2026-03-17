@@ -4,6 +4,8 @@ import {
   createCronStoreHarness,
   createNoopLogger,
   installCronTestHooks,
+  createMockOpenClawConfig,
+  createMockCliDeps,
 } from "./service.test-harness.js";
 
 const logger = createNoopLogger();
@@ -15,6 +17,8 @@ function createCronService(storePath: string) {
     storePath,
     cronEnabled: true,
     log: logger,
+    config: createMockOpenClawConfig(),
+    cliDeps: createMockCliDeps(),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),

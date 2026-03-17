@@ -9,7 +9,6 @@ import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import {
   parseWorkflowChainFromDescription,
   executeWorkflowCronJob,
-  type WorkflowCronJob,
 } from "../../infra/cron/server-cron.js";
 import {
   ErrorCodes,
@@ -221,11 +220,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     // ✅ Check if this is a workflow job for synchronous execution
     const job = context.cron.getJob(jobId);
     if (!job) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "cron job not found"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "cron job not found"));
       return;
     }
     const workflowChain = parseWorkflowChainFromDescription(job.description);
@@ -240,7 +235,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         const result = await executeWorkflowCronJob(
           context.config,
           context.deps,
-          { ...job, workflowChain } as WorkflowCronJob,
+          { ...job, workflowChain, workflowType: "chain" as const },
           "manual",
         );
 
@@ -256,7 +251,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INTERNAL_ERROR, `Workflow execution failed: ${errorMessage}`),
+          errorShape(ErrorCodes.UNAVAILABLE, `Workflow execution failed: ${errorMessage}`),
         );
         return;
       }

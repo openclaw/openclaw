@@ -71,17 +71,18 @@ const styles = {
     background: "var(--bg)",
     borderRadius: "var(--radius-md)",
   } as React.CSSProperties,
-  fileItem: (active: boolean) => ({
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "6px 10px",
-    borderRadius: "var(--radius-sm)",
-    background: active ? "var(--accent-subtle)" : "transparent",
-    border: active ? "1px solid var(--accent)" : "1px solid transparent",
-    cursor: "pointer",
-    transition: "all 0.15s",
-  } as React.CSSProperties),
+  fileItem: (active: boolean) =>
+    ({
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "6px 10px",
+      borderRadius: "var(--radius-sm)",
+      background: active ? "var(--accent-subtle)" : "transparent",
+      border: active ? "1px solid var(--accent)" : "1px solid transparent",
+      cursor: "pointer",
+      transition: "all 0.15s",
+    }) as React.CSSProperties,
   fileIcon: {
     fontSize: 14,
   } as React.CSSProperties,
@@ -90,15 +91,16 @@ const styles = {
     fontWeight: 500,
     color: "var(--text)",
   } as React.CSSProperties,
-  fileBadge: (status: "pending" | "ready") => ({
-    fontSize: 9,
-    padding: "2px 6px",
-    borderRadius: "var(--radius-sm)",
-    background: status === "ready" ? "var(--ok-subtle)" : "var(--secondary)",
-    color: status === "ready" ? "var(--ok)" : "var(--muted)",
-    fontWeight: 600,
-    marginLeft: "auto",
-  } as React.CSSProperties),
+  fileBadge: (status: "pending" | "ready") =>
+    ({
+      fontSize: 9,
+      padding: "2px 6px",
+      borderRadius: "var(--radius-sm)",
+      background: status === "ready" ? "var(--ok-subtle)" : "var(--secondary)",
+      color: status === "ready" ? "var(--ok)" : "var(--muted)",
+      fontWeight: 600,
+      marginLeft: "auto",
+    }) as React.CSSProperties,
   progressSection: {
     padding: 12,
     background: "var(--bg)",
@@ -112,12 +114,13 @@ const styles = {
     overflow: "hidden",
     marginTop: 8,
   } as React.CSSProperties,
-  progressFill: (percent: number) => ({
-    height: "100%",
-    width: `${percent}%`,
-    background: percent === 100 ? "var(--ok)" : "var(--accent)",
-    transition: "width 0.3s",
-  } as React.CSSProperties),
+  progressFill: (percent: number) =>
+    ({
+      height: "100%",
+      width: `${percent}%`,
+      background: percent === 100 ? "var(--ok)" : "var(--accent)",
+      transition: "width 0.3s",
+    }) as React.CSSProperties,
   progressText: {
     fontSize: 11,
     color: "var(--muted)",
@@ -130,32 +133,47 @@ const styles = {
     maxHeight: 300,
     overflow: "auto",
   } as React.CSSProperties,
-  taskItem: (status: string) => ({
-    display: "flex",
-    alignItems: "flex-start",
-    gap: 8,
-    padding: "8px 10px",
-    borderRadius: "var(--radius-sm)",
-    background: status === "completed" ? "var(--ok-subtle)" : 
-                status === "processing" ? "var(--accent-subtle)" : "transparent",
-    border: "1px solid " + (status === "completed" ? "var(--ok)" : 
-                            status === "processing" ? "var(--accent)" : "var(--border)"),
-  } as React.CSSProperties),
-  taskCheckbox: (status: string) => ({
-    width: 14,
-    height: 14,
-    borderRadius: "var(--radius-sm)",
-    background: status === "completed" ? "var(--ok)" : 
-                status === "processing" ? "var(--accent)" : "var(--secondary)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: 10,
-    color: "#fff",
-    fontWeight: 700,
-    flexShrink: 0,
-    marginTop: 2,
-  } as React.CSSProperties),
+  taskItem: (status: string) =>
+    ({
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 8,
+      padding: "8px 10px",
+      borderRadius: "var(--radius-sm)",
+      background:
+        status === "completed"
+          ? "var(--ok-subtle)"
+          : status === "processing"
+            ? "var(--accent-subtle)"
+            : "transparent",
+      border:
+        "1px solid " +
+        (status === "completed"
+          ? "var(--ok)"
+          : status === "processing"
+            ? "var(--accent)"
+            : "var(--border)"),
+    }) as React.CSSProperties,
+  taskCheckbox: (status: string) =>
+    ({
+      width: 14,
+      height: 14,
+      borderRadius: "var(--radius-sm)",
+      background:
+        status === "completed"
+          ? "var(--ok)"
+          : status === "processing"
+            ? "var(--accent)"
+            : "var(--secondary)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: 10,
+      color: "#fff",
+      fontWeight: 700,
+      flexShrink: 0,
+      marginTop: 2,
+    }) as React.CSSProperties,
   taskContent: {
     flex: 1,
     minWidth: 0,
@@ -213,7 +231,13 @@ const styles = {
 // Component
 // ============================================
 
-export function SpecPanel() {
+export function SpecPanel({
+  sessionId,
+  files,
+}: {
+  sessionId?: string;
+  files?: { spec?: boolean; design?: boolean; tasks?: boolean };
+}) {
   const [data, setData] = useState<SpecPanelData | null>(null);
   const [activeTab, setActiveTab] = useState<"spec" | "design" | "tasks">("tasks");
   const [loading, setLoading] = useState(false);
@@ -223,13 +247,13 @@ export function SpecPanel() {
     const fetchData = async () => {
       try {
         // In real implementation, fetch from gateway
-        // For now, mock data
+        // For now, use props or mock data
         const mockData: SpecPanelData = {
-          sessionId: "spec-1773548400",
+          sessionId: sessionId || "spec-1773548400",
           featureName: "build-a-login",
-          specGenerated: true,
-          designGenerated: true,
-          tasksGenerated: true,
+          specGenerated: files?.spec ?? false,
+          designGenerated: files?.design ?? false,
+          tasksGenerated: files?.tasks ?? false,
           progress: {
             completed: 5,
             total: 12,
@@ -250,17 +274,15 @@ export function SpecPanel() {
       }
     };
 
-    fetchData();
+    void fetchData();
     const interval = setInterval(fetchData, 5000); // Poll every 5s
     return () => clearInterval(interval);
-  }, []);
+  }, [sessionId, files]);
 
   if (!data) {
     return (
       <div style={styles.panel}>
-        <div style={styles.emptyState}>
-          Loading session data...
-        </div>
+        <div style={styles.emptyState}>Loading session data...</div>
       </div>
     );
   }
@@ -328,9 +350,7 @@ export function SpecPanel() {
       {/* Progress */}
       {data.tasksGenerated && (
         <div style={styles.progressSection}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text)" }}>
-            📊 Progress
-          </div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text)" }}>📊 Progress</div>
           <div style={styles.progressBar}>
             <div style={styles.progressFill(data.progress.percent)} />
           </div>
@@ -355,9 +375,7 @@ export function SpecPanel() {
                 <div style={styles.taskContent}>
                   <div style={styles.taskNumber}>Task {task.number}</div>
                   <div style={styles.taskName}>{task.name}</div>
-                  {task.phase && (
-                    <div style={styles.taskPhase}>Phase: {task.phase}</div>
-                  )}
+                  {task.phase && <div style={styles.taskPhase}>Phase: {task.phase}</div>}
                 </div>
               </div>
             ))}
@@ -369,7 +387,12 @@ export function SpecPanel() {
       <div style={styles.actions}>
         <button
           style={styles.btn}
-          onClick={() => window.open(`vscode://file/${process.cwd()}/.openclaw/.tmp/sessions/${data.sessionId}/${data.featureName}`, "_blank")}
+          onClick={() =>
+            window.open(
+              `vscode://file/${process.cwd()}/.openclaw/.tmp/sessions/${data.sessionId}/${data.featureName}`,
+              "_blank",
+            )
+          }
         >
           📂 Open Folder
         </button>

@@ -22,15 +22,15 @@ metadata: { "openclaw": { "emoji": "📋", "requires": { "bins": [] } } }
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/spec clarify "<request>"` | Start clarification |
-| `/spec defaults` | Use recommended defaults |
-| `/spec answer --q0 <a> --q1 <a>` | Custom answers |
-| `/spec draft` | Generate draft spec |
-| `/spec approve` | Approve spec |
-| `/spec execute` | Execute spec |
-| `/spec status` | Show status |
+| Command                          | Description              |
+| -------------------------------- | ------------------------ |
+| `/spec clarify "<request>"`      | Start clarification      |
+| `/spec defaults`                 | Use recommended defaults |
+| `/spec answer --q0 <a> --q1 <a>` | Custom answers           |
+| `/spec draft`                    | Generate draft spec      |
+| `/spec approve`                  | Approve spec             |
+| `/spec execute`                  | Execute spec             |
+| `/spec status`                   | Show status              |
 
 ## Example
 

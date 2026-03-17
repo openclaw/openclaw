@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,

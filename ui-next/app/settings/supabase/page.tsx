@@ -16,9 +16,11 @@ export default function SupabaseSettingsPage() {
   const [instances, setInstances] = useState<SupabaseInstanceConfig[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
+  const [testResults, setTestResults] = useState<
+    Record<string, { success: boolean; message: string }>
+  >({});
   const [isLoading, setIsLoading] = useState(true);
-  
+
   const [formData, setFormData] = useState({
     name: "",
     url: "",
@@ -28,7 +30,7 @@ export default function SupabaseSettingsPage() {
 
   // Load existing instances
   useEffect(() => {
-    loadInstances();
+    void loadInstances();
   }, []);
 
   const loadInstances = async () => {
@@ -59,7 +61,7 @@ export default function SupabaseSettingsPage() {
 
       setFormData({ name: "", url: "", key: "", schema: "public" });
       setEditingId(null);
-      loadInstances();
+      void loadInstances();
     } catch (error) {
       console.error("Failed to save instance:", error);
     }
@@ -87,7 +89,7 @@ export default function SupabaseSettingsPage() {
         delete updated[id];
         return updated;
       });
-      loadInstances();
+      void loadInstances();
     } catch (error) {
       console.error("Failed to delete instance:", error);
     }
@@ -117,7 +119,7 @@ export default function SupabaseSettingsPage() {
   const handleSetDefault = async (id: string) => {
     try {
       await setDefaultSupabaseInstance(request, id);
-      loadInstances();
+      void loadInstances();
     } catch (error) {
       console.error("Failed to set default instance:", error);
     }
@@ -131,18 +133,16 @@ export default function SupabaseSettingsPage() {
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <h1 className="text-2xl font-bold mb-6">Supabase Instances</h1>
-      
+
       {/* Add/Edit Form */}
       <div className="bg-card border rounded-lg p-6 mb-6">
         <h2 className="text-lg font-semibold mb-4">
           {editingId ? "Edit Instance" : "Add New Instance"}
         </h2>
-        
+
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">
-              Profile Name *
-            </label>
+            <label className="block text-sm font-medium mb-1">Profile Name *</label>
             <input
               type="text"
               value={formData.name}
@@ -154,9 +154,7 @@ export default function SupabaseSettingsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">
-              Project URL *
-            </label>
+            <label className="block text-sm font-medium mb-1">Project URL *</label>
             <input
               type="url"
               value={formData.url}
@@ -167,9 +165,7 @@ export default function SupabaseSettingsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">
-              Service Role Key *
-            </label>
+            <label className="block text-sm font-medium mb-1">Service Role Key *</label>
             <input
               type="password"
               value={formData.key}
@@ -183,9 +179,7 @@ export default function SupabaseSettingsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">
-              Schema
-            </label>
+            <label className="block text-sm font-medium mb-1">Schema</label>
             <input
               type="text"
               value={formData.schema}
@@ -204,10 +198,7 @@ export default function SupabaseSettingsPage() {
               {editingId ? "Save Changes" : "Add Instance"}
             </button>
             {editingId && (
-              <button
-                onClick={handleCancel}
-                className="px-4 py-2 border rounded-md hover:bg-muted"
-              >
+              <button onClick={handleCancel} className="px-4 py-2 border rounded-md hover:bg-muted">
                 Cancel
               </button>
             )}
@@ -218,21 +209,14 @@ export default function SupabaseSettingsPage() {
       {/* Instances List */}
       <div className="space-y-4">
         <h2 className="text-lg font-semibold">Configured Instances</h2>
-        
+
         {isLoading ? (
-          <div className="text-center py-8 text-muted">
-            Loading instances...
-          </div>
+          <div className="text-center py-8 text-muted">Loading instances...</div>
         ) : instances.length === 0 ? (
-          <div className="text-center py-8 text-muted">
-            No Supabase instances configured yet.
-          </div>
+          <div className="text-center py-8 text-muted">No Supabase instances configured yet.</div>
         ) : (
           instances.map((instance) => (
-            <div
-              key={instance.id}
-              className="bg-card border rounded-lg p-4"
-            >
+            <div key={instance.id} className="bg-card border rounded-lg p-4">
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-2">
@@ -243,7 +227,7 @@ export default function SupabaseSettingsPage() {
                       </span>
                     )}
                   </div>
-                  
+
                   <div className="text-sm text-muted space-y-1">
                     <p>URL: {instance.url}</p>
                     <p>Schema: {instance.schema || "public"}</p>
@@ -253,9 +237,7 @@ export default function SupabaseSettingsPage() {
                   {testResults[instance.id] && (
                     <div
                       className={`mt-2 text-sm ${
-                        testResults[instance.id].success
-                          ? "text-green-600"
-                          : "text-red-600"
+                        testResults[instance.id].success ? "text-green-600" : "text-red-600"
                       }`}
                     >
                       {testResults[instance.id].success ? (
@@ -275,7 +257,7 @@ export default function SupabaseSettingsPage() {
                   >
                     {testingId === instance.id ? "Testing..." : "Test Connection"}
                   </button>
-                  
+
                   {!instance.isDefault && (
                     <button
                       onClick={() => handleSetDefault(instance.id)}
@@ -284,14 +266,14 @@ export default function SupabaseSettingsPage() {
                       Set Default
                     </button>
                   )}
-                  
+
                   <button
                     onClick={() => handleEdit(instance)}
                     className="px-3 py-1 text-sm border rounded-md hover:bg-muted"
                   >
                     Edit
                   </button>
-                  
+
                   <button
                     onClick={() => handleDelete(instance.id)}
                     className="px-3 py-1 text-sm border rounded-md hover:bg-red-100 text-red-600"

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import type { CliDeps } from "../cli/deps.js";
 import {
   createCliDeps,
   expectDirectTelegramDelivery,

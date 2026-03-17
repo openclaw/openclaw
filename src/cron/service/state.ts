@@ -1,6 +1,6 @@
-import type { CronConfig } from "../../config/types.cron.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { CliDeps } from "../../cli/deps.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type {
   CronDeliveryStatus,

@@ -1,6 +1,6 @@
 /**
  * Supabase Workflow Node Definitions
- * 
+ *
  * Defines the UI node types for Supabase operations in the workflow editor.
  * Each node has input/output schemas for structured data flow.
  */
@@ -422,7 +422,9 @@ export function getSupabaseNodeTypes(): string[] {
 /**
  * Get a specific Supabase node definition.
  */
-export function getSupabaseNode(actionType: string): (typeof SUPABASE_NODES)[keyof typeof SUPABASE_NODES] | undefined {
+export function getSupabaseNode(
+  actionType: string,
+): (typeof SUPABASE_NODES)[keyof typeof SUPABASE_NODES] | undefined {
   return Object.values(SUPABASE_NODES).find((node) => node.actionType === actionType);
 }
 

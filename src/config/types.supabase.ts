@@ -31,7 +31,12 @@ export interface SupabaseConfig {
  */
 export interface SupabaseWorkflowStep {
   /** Action type */
-  actionType: 'supabase-select' | 'supabase-insert' | 'supabase-update' | 'supabase-delete' | 'supabase-rpc';
+  actionType:
+    | "supabase-select"
+    | "supabase-insert"
+    | "supabase-update"
+    | "supabase-delete"
+    | "supabase-rpc";
   /** Instance name (uses default if not specified) */
   instance?: string;
   /** Table name (for CRUD operations) */
@@ -52,7 +57,7 @@ export interface SupabaseWorkflowStep {
   /** Data to insert/update */
   data?: Record<string, unknown> | Record<string, unknown>[];
   /** Return mode */
-  returning?: 'representation' | 'minimal';
+  returning?: "representation" | "minimal";
   /** Upsert on conflict */
   upsert?: boolean;
   /** Conflict column for upsert */

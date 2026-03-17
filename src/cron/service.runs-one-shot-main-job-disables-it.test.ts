@@ -3,7 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
-import { createDeferred, createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
+import {
+  createDeferred,
+  createNoopLogger,
+  installCronTestHooks,
+  createMockOpenClawConfig,
+  createMockCliDeps,
+} from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
 installCronTestHooks({ logger: noopLogger });
@@ -80,14 +86,14 @@ vi.mock("node:fs", async (importOriginal) => {
     mkdir: async (p: string) => {
       if (!isFixtureInMock(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.mkdir as any)(p, { recursive: true });
+        return await (actual.promises.mkdir as unknown)(p, { recursive: true });
       }
       ensureDir(p);
     },
     readFile: async (p: string) => {
       if (!isFixtureInMock(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.readFile as any)(p, "utf-8");
+        return await (actual.promises.readFile as unknown)(p, "utf-8");
       }
       const entry = fsState.entries.get(absInMock(p));
       if (!entry || entry.kind !== "file") {
@@ -98,7 +104,7 @@ vi.mock("node:fs", async (importOriginal) => {
     writeFile: async (p: string, data: string | Uint8Array) => {
       if (!isFixtureInMock(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.writeFile as any)(p, data, "utf-8");
+        return await (actual.promises.writeFile as unknown)(p, data, "utf-8");
       }
       const content = typeof data === "string" ? data : Buffer.from(data).toString("utf-8");
       setFile(p, content);
@@ -106,7 +112,7 @@ vi.mock("node:fs", async (importOriginal) => {
     rename: async (from: string, to: string) => {
       if (!isFixtureInMock(from) || !isFixtureInMock(to)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.rename as any)(from, to);
+        return await (actual.promises.rename as unknown)(from, to);
       }
       const fromAbs = absInMock(from);
       const toAbs = absInMock(to);
@@ -121,7 +127,7 @@ vi.mock("node:fs", async (importOriginal) => {
     copyFile: async (from: string, to: string) => {
       if (!isFixtureInMock(from) || !isFixtureInMock(to)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.copyFile as any)(from, to);
+        return await (actual.promises.copyFile as unknown)(from, to);
       }
       const entry = fsState.entries.get(absInMock(from));
       if (!entry || entry.kind !== "file") {
@@ -132,7 +138,7 @@ vi.mock("node:fs", async (importOriginal) => {
     stat: async (p: string) => {
       if (!isFixtureInMock(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.stat as any)(p);
+        return await (actual.promises.stat as unknown)(p);
       }
       const entry = fsState.entries.get(absInMock(p));
       if (!entry) {
@@ -147,7 +153,7 @@ vi.mock("node:fs", async (importOriginal) => {
     access: async (p: string) => {
       if (!isFixtureInMock(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.access as any)(p);
+        return await (actual.promises.access as unknown)(p);
       }
       const entry = fsState.entries.get(absInMock(p));
       if (!entry) {
@@ -157,7 +163,7 @@ vi.mock("node:fs", async (importOriginal) => {
     unlink: async (p: string) => {
       if (!isFixtureInMock(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.promises.unlink as any)(p);
+        return await (actual.promises.unlink as unknown)(p);
       }
       fsState.entries.delete(absInMock(p));
     },
@@ -174,14 +180,14 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     mkdir: async (p: string, _opts?: unknown) => {
       if (!isFixturePath(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.mkdir as any)(p, { recursive: true });
+        return await (actual.mkdir as unknown)(p, { recursive: true });
       }
       ensureDir(p);
     },
     writeFile: async (p: string, data: string, _enc?: unknown) => {
       if (!isFixturePath(p)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return await (actual.writeFile as any)(p, data, "utf-8");
+        return await (actual.writeFile as unknown)(p, data, "utf-8");
       }
       setFile(p, data);
     },
@@ -248,6 +254,8 @@ async function createCronHarness(options: CronHarnessOptions = {}) {
     storePath: store.storePath,
     cronEnabled: true,
     log: noopLogger,
+    config: createMockOpenClawConfig(),
+    cliDeps: createMockCliDeps(),
     ...(options.nowMs ? { nowMs: options.nowMs } : {}),
     ...(options.wakeNowHeartbeatBusyMaxWaitMs !== undefined
       ? { wakeNowHeartbeatBusyMaxWaitMs: options.wakeNowHeartbeatBusyMaxWaitMs }
@@ -398,6 +406,8 @@ function createStartedCronService(
     storePath,
     cronEnabled: true,
     log: noopLogger,
+    config: createMockOpenClawConfig(),
+    cliDeps: createMockCliDeps(),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const })),
@@ -800,6 +810,8 @@ describe("CronService", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob: vi.fn(async (_params: { job: unknown; message: string }) => ({

@@ -126,10 +126,7 @@ export function getGatewayClient(): GatewayClient | null {
  * @throws {GatewayRequestError} if request fails
  * @throws {Error} if gateway is not connected
  */
-export async function requestGateway<T = unknown>(
-  method: string,
-  params?: unknown,
-): Promise<T> {
+export async function requestGateway<T = unknown>(method: string, params?: unknown): Promise<T> {
   if (!singletonClient) {
     throw new Error(
       "Gateway client not initialized. Call initGatewayClient() first or use useGateway() hook in React components.",

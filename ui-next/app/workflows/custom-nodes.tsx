@@ -50,19 +50,19 @@ export interface NodeData extends Record<string, unknown> {
   label: string;
   subline?: string;
   icon?: string;
-  
+
   // Trigger node fields
   cronExpr?: string;
   targetSessionKey?: string;
   matchKeyword?: string;
-  
+
   // Session configuration (for trigger nodes)
-  sessionTarget?: 'isolated' | 'reuse' | 'main';
-  contextMode?: 'minimal' | 'full' | 'custom';
+  sessionTarget?: "isolated" | "reuse" | "main";
+  contextMode?: "minimal" | "full" | "custom";
   modelOverride?: string;
   maxTokens?: number | string;
-  thinking?: 'on' | 'off';
-  
+  thinking?: "on" | "off";
+
   // Action node fields
   agentId?: string;
   prompt?: string;
@@ -83,7 +83,14 @@ export interface NodeData extends Record<string, unknown> {
   ttsProvider?: string;
   durationMs?: string;
   jsCode?: string;
-  
+
+  // 📤 Delivery configuration (for AI Agent Prompt nodes)
+  deliveryMode?: "none" | "announce" | "webhook";
+  deliveryChannel?: string;
+  deliveryTo?: string;
+  deliveryAccountId?: string;
+  deliveryBestEffort?: boolean;
+
   // Supabase fields
   supabaseInstance?: string;
   table?: string;

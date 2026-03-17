@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
+import {
+  setupCronServiceSuite,
+  writeCronStoreSnapshot,
+  createMockOpenClawConfig,
+  createMockCliDeps,
+} from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -38,6 +43,8 @@ describe("cron main job passes heartbeat target=last", () => {
       storePath: params.storePath,
       cronEnabled: true,
       log: logger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       enqueueSystemEvent,
       requestHeartbeatNow,
       runHeartbeatOnce: params.runHeartbeatOnce,

@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import type { CliDeps } from "../cli/deps.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
@@ -22,6 +24,23 @@ export function createNoopLogger(): NoopLogger {
     warn: vi.fn(),
     error: vi.fn(),
   };
+}
+
+/** Create a minimal mock OpenClawConfig for tests */
+export function createMockOpenClawConfig(): OpenClawConfig {
+  return {} as OpenClawConfig;
+}
+
+/** Create a minimal mock CliDeps for tests */
+export function createMockCliDeps(): CliDeps {
+  return {
+    sendMessageWhatsApp: vi.fn(),
+    sendMessageTelegram: vi.fn(),
+    sendMessageDiscord: vi.fn(),
+    sendMessageSlack: vi.fn(),
+    sendMessageSignal: vi.fn(),
+    sendMessageIMessage: vi.fn(),
+  } as CliDeps;
 }
 
 export function createCronStoreHarness(options?: { prefix?: string }) {
@@ -132,6 +151,8 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     storePath: params.storePath,
     cronEnabled: true,
     log: params.logger,
+    config: createMockOpenClawConfig(),
+    cliDeps: createMockCliDeps(),
     enqueueSystemEvent,
     requestHeartbeatNow,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -160,6 +181,8 @@ export async function withCronServiceForTest(
     cronEnabled: params.cronEnabled,
     storePath: store.storePath,
     log: params.logger,
+    config: createMockOpenClawConfig(),
+    cliDeps: createMockCliDeps(),
     enqueueSystemEvent,
     requestHeartbeatNow,
     runIsolatedAgentJob:
@@ -187,6 +210,8 @@ export function createRunningCronServiceState(params: {
     storePath: params.storePath,
     log: params.log,
     nowMs: params.nowMs,
+    config: createMockOpenClawConfig(),
+    cliDeps: createMockCliDeps(),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
@@ -229,6 +254,8 @@ export function createMockCronStateForJobs(params: {
       enqueueSystemEvent: () => {},
       requestHeartbeatNow: () => {},
       runIsolatedAgentJob: async () => ({ status: "ok" }),
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       log: {
         debug: () => {},
         info: () => {},

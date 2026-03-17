@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  createMockOpenClawConfig,
+  createMockCliDeps,
+} from "./service.test-harness.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import { loadCronStore } from "./store.js";
 
@@ -19,6 +24,8 @@ async function migrateAndLoadFirstJob(storePath: string): Promise<Record<string,
     storePath,
     cronEnabled: true,
     log: noopLogger,
+    config: createMockOpenClawConfig(),
+    cliDeps: createMockCliDeps(),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),

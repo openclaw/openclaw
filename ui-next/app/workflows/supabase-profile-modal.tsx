@@ -77,7 +77,9 @@ export function SupabaseProfileModal({ isOpen, onClose, onSave }: SupabaseProfil
       onSave(formData.name);
       handleClose();
     } catch (error) {
-      alert("Failed to save profile: " + (error instanceof Error ? error.message : "Unknown error"));
+      alert(
+        "Failed to save profile: " + (error instanceof Error ? error.message : "Unknown error"),
+      );
     } finally {
       setSaving(false);
     }
@@ -118,13 +120,23 @@ export function SupabaseProfileModal({ isOpen, onClose, onSave }: SupabaseProfil
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 20, color: "var(--text-strong)" }}>
+        <h2
+          style={{ fontSize: 18, fontWeight: 600, marginBottom: 20, color: "var(--text-strong)" }}
+        >
           ➕ Add New Supabase Profile
         </h2>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 6, color: "var(--muted)" }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                fontWeight: 500,
+                marginBottom: 6,
+                color: "var(--muted)",
+              }}
+            >
               Profile Name *
             </label>
             <input
@@ -149,7 +161,15 @@ export function SupabaseProfileModal({ isOpen, onClose, onSave }: SupabaseProfil
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 6, color: "var(--muted)" }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                fontWeight: 500,
+                marginBottom: 6,
+                color: "var(--muted)",
+              }}
+            >
               Project URL *
             </label>
             <input
@@ -174,7 +194,15 @@ export function SupabaseProfileModal({ isOpen, onClose, onSave }: SupabaseProfil
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 6, color: "var(--muted)" }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                fontWeight: 500,
+                marginBottom: 6,
+                color: "var(--muted)",
+              }}
+            >
               Service Role Key *
             </label>
             <input
@@ -202,7 +230,15 @@ export function SupabaseProfileModal({ isOpen, onClose, onSave }: SupabaseProfil
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 6, color: "var(--muted)" }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                fontWeight: 500,
+                marginBottom: 6,
+                color: "var(--muted)",
+              }}
+            >
               Schema
             </label>
             <input
@@ -274,13 +310,18 @@ export function SupabaseProfileModal({ isOpen, onClose, onSave }: SupabaseProfil
                 fontWeight: 500,
                 borderWidth: 0,
                 borderRadius: "var(--radius-md)",
-                background: saving || !formData.name || !formData.url || !formData.key
-                  ? "var(--muted)"
-                  : "var(--primary)",
-                color: saving || !formData.name || !formData.url || !formData.key
-                  ? "var(--muted)"
-                  : "var(--primary-foreground)",
-                cursor: saving || !formData.name || !formData.url || !formData.key ? "not-allowed" : "pointer",
+                background:
+                  saving || !formData.name || !formData.url || !formData.key
+                    ? "var(--muted)"
+                    : "var(--primary)",
+                color:
+                  saving || !formData.name || !formData.url || !formData.key
+                    ? "var(--muted)"
+                    : "var(--primary-foreground)",
+                cursor:
+                  saving || !formData.name || !formData.url || !formData.key
+                    ? "not-allowed"
+                    : "pointer",
                 opacity: saving || !formData.name || !formData.url || !formData.key ? 0.6 : 1,
               }}
             >

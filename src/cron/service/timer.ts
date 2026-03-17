@@ -1,11 +1,11 @@
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
-import { isCronSystemEvent } from "../../infra/heartbeat-events-filter.js";
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import {
   parseWorkflowChainFromDescription,
   executeWorkflowCronJob,
   type WorkflowCronJob,
 } from "../../infra/cron/server-cron.js";
+import { isCronSystemEvent } from "../../infra/heartbeat-events-filter.js";
+import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
@@ -889,9 +889,7 @@ export async function executeJobCore(
   // ✅ Check if this is a workflow job
   const workflowChain = parseWorkflowChainFromDescription(job.description);
   if (workflowChain && workflowChain.length > 0) {
-    state.deps.log.info(
-      `[cron:${job.id}] Executing workflow with ${workflowChain.length} steps`,
-    );
+    state.deps.log.info(`[cron:${job.id}] Executing workflow with ${workflowChain.length} steps`);
 
     try {
       const workflowResult = await executeWorkflowCronJob(
@@ -905,11 +903,13 @@ export async function executeJobCore(
         return {
           status: "ok",
           summary: `Workflow completed: ${workflowResult.stepResults.length} steps executed`,
-          usage: workflowResult.tokenUsage ? {
-            input_tokens: workflowResult.tokenUsage.inputTokens,
-            output_tokens: workflowResult.tokenUsage.outputTokens,
-            total_tokens: workflowResult.tokenUsage.totalTokens,
-          } : undefined,
+          usage: workflowResult.tokenUsage
+            ? {
+                input_tokens: workflowResult.tokenUsage.inputTokens,
+                output_tokens: workflowResult.tokenUsage.outputTokens,
+                total_tokens: workflowResult.tokenUsage.totalTokens,
+              }
+            : undefined,
         };
       } else {
         return {

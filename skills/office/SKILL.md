@@ -12,27 +12,32 @@ description: Multi-agent team management for OpenClaw. Create teams, orchestrate
 ## Features
 
 ### 1. Agent Dashboard (`/office dashboard`)
+
 - List all available agents in the system
 - Show active sessions per agent
 - Display token usage, model info, and status
 - Filter by active/inactive agents
 
 ### 2. Team Creation (`/office team create <name>`)
+
 - Select multiple agents to form a team
 - Create a shared session for team collaboration
 - Assign roles (orchestrator, worker, specialist)
 
 ### 3. Team Management (`/office team list|info|kill`)
+
 - List all active teams
 - View team composition and session details
 - Kill/stop team sessions
 
 ### 4. Agent Communication (`/office send <agent|team> <message>`)
+
 - Send messages to specific agents
 - Broadcast to entire teams
 - Facilitate agent-to-agent coordination
 
 ### 5. Session Orchestration (`/office spawn <agent> <task>`)
+
 - Spawn sub-agent sessions with specific tasks
 - Support for persistent team sessions
 - Track completion and collect results
@@ -79,18 +84,18 @@ Add to `~/.openclaw/openclaw.json`:
       sessionPrefix: "office",
       autoArchive: true,
       archiveAfterMinutes: 120,
-    }
+    },
   },
   agents: {
     defaults: {
       subagents: {
-        maxSpawnDepth: 2,      // Enable orchestrator pattern
+        maxSpawnDepth: 2, // Enable orchestrator pattern
         maxChildrenPerAgent: 5,
         maxConcurrent: 8,
         runTimeoutSeconds: 1800,
-      }
-    }
-  }
+      },
+    },
+  },
 }
 ```
 
@@ -98,15 +103,15 @@ Add to `~/.openclaw/openclaw.json`:
 
 ### Tool Usage
 
-| Tool | Purpose |
-|------|---------|
-| `agents_list` | Get available agent IDs for spawning |
-| `sessions_list` | List active sessions |
-| `sessions_spawn` | Create new agent sessions (subagent or ACP) |
-| `sessions_send` | Send messages to other sessions |
-| `sessions_history` | Read context from other sessions |
-| `subagents` | Manage spawned sub-agents |
-| `message` | Deliver results to channels |
+| Tool               | Purpose                                     |
+| ------------------ | ------------------------------------------- |
+| `agents_list`      | Get available agent IDs for spawning        |
+| `sessions_list`    | List active sessions                        |
+| `sessions_spawn`   | Create new agent sessions (subagent or ACP) |
+| `sessions_send`    | Send messages to other sessions             |
+| `sessions_history` | Read context from other sessions            |
+| `subagents`        | Manage spawned sub-agents                   |
+| `message`          | Deliver results to channels                 |
 
 ### Session Key Patterns
 
@@ -149,6 +154,7 @@ Store team metadata in: `~/.openclaw/agents/<agentId>/office/teams.json`
 ```
 
 This creates:
+
 1. A new team session: `agent:main:office:team:dev-team`
 2. Spawns sub-agents for each team member
 3. Sets up communication channels
@@ -219,12 +225,12 @@ Coordinate multi-agent workflows and collect results.
 
 ## Error Handling
 
-| Error | Recovery |
-|-------|----------|
-| Agent not available | Fall back to alternative agent or notify user |
-| Session creation failed | Retry with different parameters |
+| Error                      | Recovery                                        |
+| -------------------------- | ----------------------------------------------- |
+| Agent not available        | Fall back to alternative agent or notify user   |
+| Session creation failed    | Retry with different parameters                 |
 | Team communication timeout | Mark agent as unavailable, continue with others |
-| Resource limits exceeded | Queue task or suggest scaling down |
+| Resource limits exceeded   | Queue task or suggest scaling down              |
 
 ## Future Enhancements
 

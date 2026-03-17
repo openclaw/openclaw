@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
+import {
+  createNoopLogger,
+  createCronStoreHarness,
+  createMockOpenClawConfig,
+  createMockCliDeps,
+} from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { armTimer, onTimer } from "./service/timer.js";
 import type { CronJob } from "./types.js";
@@ -55,6 +60,8 @@ describe("CronService - armTimer tight loop prevention", () => {
       storePath: params.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       nowMs: () => params.now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),

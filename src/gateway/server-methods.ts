@@ -22,6 +22,7 @@ import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
+import { supabaseHandlers } from "./server-methods/supabase.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
@@ -33,7 +34,6 @@ import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 import { workflowsHandlers } from "./server-methods/workflows.js";
-import { supabaseHandlers } from "./server-methods/supabase.js";
 
 const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {

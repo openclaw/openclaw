@@ -5,6 +5,7 @@
 ### Option 1: Local Development (Recommended for Testing)
 
 The skill is already created at:
+
 ```
 ~/Documents/openclaw/skills/office/
 ```
@@ -19,6 +20,7 @@ openclaw clawhub publish
 ```
 
 Then others can install via:
+
 ```bash
 openclaw clawhub install office
 ```
@@ -31,19 +33,19 @@ Add the following to `~/.openclaw/openclaw.json`:
 
 ```json5
 {
-  "skills": {
-    "office": {
-      "enabled": true
-    }
+  skills: {
+    office: {
+      enabled: true,
+    },
   },
-  "agents": {
-    "defaults": {
-      "subagents": {
-        "maxSpawnDepth": 2,
-        "maxChildrenPerAgent": 5
-      }
-    }
-  }
+  agents: {
+    defaults: {
+      subagents: {
+        maxSpawnDepth: 2,
+        maxChildrenPerAgent: 5,
+      },
+    },
+  },
 }
 ```
 
@@ -56,6 +58,7 @@ openclaw gateway restart
 ### Step 3: Verify Installation
 
 In chat, send:
+
 ```
 /office dashboard
 ```
@@ -65,6 +68,7 @@ You should see the dashboard output.
 ## Storage Location
 
 Office skill stores data at:
+
 ```
 ~/.openclaw/agents/<agentId>/office/
 ├── teams.json      # Team definitions
@@ -72,6 +76,7 @@ Office skill stores data at:
 ```
 
 For the main agent:
+
 ```
 ~/.openclaw/agents/main/office/
 ```
@@ -157,11 +162,11 @@ Shows all agents, active sessions, and teams.
 
 ```javascript
 // Main agent orchestrates multiple sub-agents
-const team = await createTeam('research-team', ['gemini', 'claude']);
+const team = await createTeam("research-team", ["gemini", "claude"]);
 
 // Assign different research topics
-await spawn('gemini', 'Research React best practices');
-await spawn('claude', 'Research Vue best practices');
+await spawn("gemini", "Research React best practices");
+await spawn("claude", "Research Vue best practices");
 
 // Collect and synthesize results
 const results = await collectResults(team);
@@ -256,6 +261,7 @@ rm -rf ~/.openclaw/agents/main/office/
 ## Support
 
 For issues or questions:
+
 - Check `~/Documents/openclaw/skills/office/README.md`
 - Visit https://docs.openclaw.ai
 - Join Discord: https://discord.com/invite/clawd

@@ -4,6 +4,8 @@ import {
   createCronStoreHarness,
   createNoopLogger,
   installCronTestHooks,
+  createMockOpenClawConfig,
+  createMockCliDeps,
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
@@ -24,6 +26,8 @@ describe("CronService", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob,
@@ -44,6 +48,8 @@ describe("CronService", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob,

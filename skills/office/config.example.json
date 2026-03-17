@@ -1,7 +1,7 @@
 {
   "_comment": "Office Skill Configuration Example",
   "_description": "Add these settings to ~/.openclaw/openclaw.json",
-  
+
   "skills": {
     "office": {
       "enabled": true,
@@ -12,7 +12,7 @@
       "archiveAfterMinutes": 120
     }
   },
-  
+
   "agents": {
     "defaults": {
       "subagents": {
@@ -35,7 +35,7 @@
       }
     ]
   },
-  
+
   "session": {
     "threadBindings": {
       "enabled": true,
@@ -43,12 +43,26 @@
       "maxAgeHours": 168
     }
   },
-  
+
   "tools": {
     "subagents": {
       "tools": {
         "deny": [],
-        "allow": ["read", "write", "edit", "exec", "process", "web_search", "web_fetch", "browser", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "subagents"]
+        "allow": [
+          "read",
+          "write",
+          "edit",
+          "exec",
+          "process",
+          "web_search",
+          "web_fetch",
+          "browser",
+          "sessions_list",
+          "sessions_history",
+          "sessions_send",
+          "sessions_spawn",
+          "subagents"
+        ]
       }
     }
   }

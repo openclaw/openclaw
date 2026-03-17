@@ -1,9 +1,11 @@
 # Overflow Fixes - 2026-03-15
 
 ## Problem
+
 Chat messages and skills page with long content (code blocks, long text, thinking blocks) were causing visual overflow/spillage outside their containers.
 
 ## Solution - Chat Page (`app/chat/page.tsx`)
+
 Applied comprehensive overflow handling to all relevant style objects:
 
 ### Changes Made
@@ -52,6 +54,7 @@ Applied comprehensive overflow handling to all relevant style objects:
     - Added `maxWidth: "100%"` to customStyle
 
 ## Testing
+
 - Verify chat messages with very long text don't overflow
 - Verify code blocks with long lines wrap or scroll horizontally
 - Verify thinking blocks don't cause horizontal overflow
@@ -101,6 +104,7 @@ Applied comprehensive overflow handling to all relevant style objects:
     - Added `overflow: "auto"`
 
 ## Testing - Skills Page
+
 - Verify skill names with long text wrap properly
 - Verify descriptions don't cause horizontal overflow
 - Verify modal is responsive on small screens

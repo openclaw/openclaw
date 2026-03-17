@@ -5,8 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeHelper } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import type { CronJob } from "./types.js";
 

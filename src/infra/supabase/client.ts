@@ -37,43 +37,61 @@ export async function supabaseSelect(
   },
 ): Promise<SupabaseResult<any[]>> {
   const startTime = Date.now();
-  
+
   try {
     let query = client.from(params.table).select(params.columns ?? "*");
-    
+
     if (params.schema) {
       query = (query as any).schema(params.schema);
     }
-    
+
     // Apply filters
     if (params.filters) {
       for (const [field, condition] of Object.entries(params.filters)) {
         if (condition && typeof condition === "object") {
-          if (condition.eq !== undefined) {query = query.eq(field, condition.eq);}
-          if (condition.neq !== undefined) {query = query.neq(field, condition.neq);}
-          if (condition.gt !== undefined) {query = query.gt(field, condition.gt);}
-          if (condition.gte !== undefined) {query = query.gte(field, condition.gte);}
-          if (condition.lt !== undefined) {query = query.lt(field, condition.lt);}
-          if (condition.lte !== undefined) {query = query.lte(field, condition.lte);}
-          if (condition.like !== undefined) {query = query.like(field, condition.like);}
-          if (condition.ilike !== undefined) {query = query.ilike(field, condition.ilike);}
-          if (condition.in !== undefined) {query = query.in(field, condition.in);}
+          if (condition.eq !== undefined) {
+            query = query.eq(field, condition.eq);
+          }
+          if (condition.neq !== undefined) {
+            query = query.neq(field, condition.neq);
+          }
+          if (condition.gt !== undefined) {
+            query = query.gt(field, condition.gt);
+          }
+          if (condition.gte !== undefined) {
+            query = query.gte(field, condition.gte);
+          }
+          if (condition.lt !== undefined) {
+            query = query.lt(field, condition.lt);
+          }
+          if (condition.lte !== undefined) {
+            query = query.lte(field, condition.lte);
+          }
+          if (condition.like !== undefined) {
+            query = query.like(field, condition.like);
+          }
+          if (condition.ilike !== undefined) {
+            query = query.ilike(field, condition.ilike);
+          }
+          if (condition.in !== undefined) {
+            query = query.in(field, condition.in);
+          }
         }
       }
     }
-    
+
     // Apply ordering
     if (params.orderBy) {
       query = query.order(params.orderBy.column, { ascending: params.orderBy.ascending ?? true });
     }
-    
+
     // Apply limit
     if (params.limit) {
       query = query.limit(params.limit);
     }
-    
+
     const { data, error, count } = await query;
-    
+
     if (error) {
       logWarn(`[supabase] SELECT error: ${error.message}`);
       return {
@@ -83,7 +101,7 @@ export async function supabaseSelect(
         timestamp: startTime,
       };
     }
-    
+
     logInfo(`[supabase] SELECT ${params.table}: ${(data ?? []).length} row(s)`);
     return {
       success: true,
@@ -111,20 +129,20 @@ export async function supabaseInsert(
   },
 ): Promise<SupabaseResult> {
   const startTime = Date.now();
-  
+
   try {
     if (!params.data || (Array.isArray(params.data) && params.data.length === 0)) {
       throw new Error("Insert data cannot be empty");
     }
-    
+
     let query = client.from(params.table).insert(params.data);
-    
+
     if (params.schema) {
       query = (query as any).schema(params.schema);
     }
-    
+
     const { data, error } = await query.select();
-    
+
     if (error) {
       logWarn(`[supabase] INSERT error: ${error.message}`);
       return {
@@ -134,7 +152,7 @@ export async function supabaseInsert(
         timestamp: startTime,
       };
     }
-    
+
     const result = Array.isArray(data) ? data[0] : data;
     logInfo(`[supabase] INSERT ${params.table}: 1 row(s)`);
     return {
@@ -164,38 +182,50 @@ export async function supabaseUpdate(
   },
 ): Promise<SupabaseResult<any[]>> {
   const startTime = Date.now();
-  
+
   try {
     if (!params.data || Object.keys(params.data).length === 0) {
       throw new Error("Update data cannot be empty");
     }
-    
+
     if (!params.filters || Object.keys(params.filters).length === 0) {
       throw new Error("Update filters cannot be empty");
     }
-    
+
     let query = client.from(params.table).update(params.data);
-    
+
     if (params.schema) {
       query = (query as any).schema(params.schema);
     }
-    
+
     // Apply filters
     for (const [field, condition] of Object.entries(params.filters)) {
       if (condition && typeof condition === "object") {
-        if (condition.eq !== undefined) {query = query.eq(field, condition.eq);}
-        if (condition.neq !== undefined) {query = query.neq(field, condition.neq);}
-        if (condition.gt !== undefined) {query = query.gt(field, condition.gt);}
-        if (condition.gte !== undefined) {query = query.gte(field, condition.gte);}
-        if (condition.lt !== undefined) {query = query.lt(field, condition.lt);}
-        if (condition.lte !== undefined) {query = query.lte(field, condition.lte);}
+        if (condition.eq !== undefined) {
+          query = query.eq(field, condition.eq);
+        }
+        if (condition.neq !== undefined) {
+          query = query.neq(field, condition.neq);
+        }
+        if (condition.gt !== undefined) {
+          query = query.gt(field, condition.gt);
+        }
+        if (condition.gte !== undefined) {
+          query = query.gte(field, condition.gte);
+        }
+        if (condition.lt !== undefined) {
+          query = query.lt(field, condition.lt);
+        }
+        if (condition.lte !== undefined) {
+          query = query.lte(field, condition.lte);
+        }
       } else {
         query = query.eq(field, condition);
       }
     }
-    
+
     const { data, error, count } = await query.select();
-    
+
     if (error) {
       logWarn(`[supabase] UPDATE error: ${error.message}`);
       return {
@@ -205,7 +235,7 @@ export async function supabaseUpdate(
         timestamp: startTime,
       };
     }
-    
+
     logInfo(`[supabase] UPDATE ${params.table}: ${count ?? 0} row(s)`);
     return {
       success: true,
@@ -233,34 +263,46 @@ export async function supabaseDelete(
   },
 ): Promise<SupabaseResult<any[]>> {
   const startTime = Date.now();
-  
+
   try {
     if (!params.filters || Object.keys(params.filters).length === 0) {
       throw new Error("Delete filters cannot be empty");
     }
-    
+
     let query = client.from(params.table).delete();
-    
+
     if (params.schema) {
       query = (query as any).schema(params.schema);
     }
-    
+
     // Apply filters
     for (const [field, condition] of Object.entries(params.filters)) {
       if (condition && typeof condition === "object") {
-        if (condition.eq !== undefined) {query = query.eq(field, condition.eq);}
-        if (condition.neq !== undefined) {query = query.neq(field, condition.neq);}
-        if (condition.gt !== undefined) {query = query.gt(field, condition.gt);}
-        if (condition.gte !== undefined) {query = query.gte(field, condition.gte);}
-        if (condition.lt !== undefined) {query = query.lt(field, condition.lt);}
-        if (condition.lte !== undefined) {query = query.lte(field, condition.lte);}
+        if (condition.eq !== undefined) {
+          query = query.eq(field, condition.eq);
+        }
+        if (condition.neq !== undefined) {
+          query = query.neq(field, condition.neq);
+        }
+        if (condition.gt !== undefined) {
+          query = query.gt(field, condition.gt);
+        }
+        if (condition.gte !== undefined) {
+          query = query.gte(field, condition.gte);
+        }
+        if (condition.lt !== undefined) {
+          query = query.lt(field, condition.lt);
+        }
+        if (condition.lte !== undefined) {
+          query = query.lte(field, condition.lte);
+        }
       } else {
         query = query.eq(field, condition);
       }
     }
-    
+
     const { data, error, count } = await query.select();
-    
+
     if (error) {
       logWarn(`[supabase] DELETE error: ${error.message}`);
       return {
@@ -270,7 +312,7 @@ export async function supabaseDelete(
         timestamp: startTime,
       };
     }
-    
+
     logInfo(`[supabase] DELETE from ${params.table}: ${count ?? 0} row(s)`);
     return {
       success: true,
@@ -297,10 +339,10 @@ export async function supabaseRpc(
   },
 ): Promise<SupabaseResult> {
   const startTime = Date.now();
-  
+
   try {
     const { data, error } = await client.rpc(params.function, params.params ?? {});
-    
+
     if (error) {
       logWarn(`[supabase] RPC error: ${error.message}`);
       return {
@@ -310,7 +352,7 @@ export async function supabaseRpc(
         timestamp: startTime,
       };
     }
-    
+
     logInfo(`[supabase] RPC ${params.function}: success`);
     return {
       success: true,

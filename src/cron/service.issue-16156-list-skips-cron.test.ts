@@ -5,6 +5,8 @@ import { CronService } from "./service.js";
 import {
   createStartedCronServiceWithFinishedBarrier,
   setupCronServiceSuite,
+  createMockOpenClawConfig,
+  createMockCliDeps,
 } from "./service.test-harness.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
@@ -22,6 +24,8 @@ function createCronFromStorePath(storePath: string) {
     storePath,
     cronEnabled: true,
     log: noopLogger,
+    config: createMockOpenClawConfig(),
+    cliDeps: createMockCliDeps(),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeatNow: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),

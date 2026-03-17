@@ -1,8 +1,15 @@
-import type { OpenClawConfig } from "../../config/types.js";
 import type { CliDeps } from "../../cli/deps.js";
+import type { OpenClawConfig } from "../../config/types.js";
+import type { CronSchedule, CronDelivery } from "../../cron/types.js";
 import { logInfo, logWarn, logDebug } from "../../logger.js";
-import type { CronJob, CronJobCreate, CronSchedule, CronDelivery } from "../../cron/types.js";
-import { WorkflowExecutor, type WorkflowChainStep, type SessionConfig } from "./workflow-executor.js";
+import {
+  WorkflowExecutor,
+  type WorkflowChainStep,
+  type SessionConfig,
+} from "./workflow-executor.js";
+
+// Re-export types for tests
+export type { WorkflowChainStep, SessionConfig };
 
 /** Prefix for workflow chain in description */
 const WF_CHAIN_PREFIX = "__wf_chain__:";
@@ -45,7 +52,7 @@ export interface WorkflowCronJob {
   /** Updated timestamp */
   updatedAtMs: number;
   /** Optional state */
-  state?: Partial<any>;
+  state?: Partial<unknown>;
 }
 
 /**
@@ -67,13 +74,13 @@ export function parseWorkflowChainFromDescription(
   try {
     const jsonStart = prefixIndex + WF_CHAIN_PREFIX.length;
     const jsonStr = description.substring(jsonStart).trim();
-    
+
     if (!jsonStr.startsWith("[")) {
       return null;
     }
 
     const chain = JSON.parse(jsonStr) as WorkflowChainStep[];
-    
+
     if (!Array.isArray(chain)) {
       return null;
     }
@@ -81,7 +88,9 @@ export function parseWorkflowChainFromDescription(
     logDebug(`[workflow] Parsed ${chain.length} steps from description`);
     return chain;
   } catch (error) {
-    logWarn(`[workflow] Failed to parse workflow chain from description: ${error}`);
+    logWarn(
+      `[workflow] Failed to parse workflow chain from description: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return null;
   }
 }
@@ -90,10 +99,7 @@ export function parseWorkflowChainFromDescription(
  * Parse session configuration from workflow description.
  * Supports both string shorthand and full SessionConfig objects.
  */
-export function parseSessionConfig(
-  config: unknown,
-  defaultConfig?: SessionConfig,
-): SessionConfig {
+export function parseSessionConfig(config: unknown, defaultConfig?: SessionConfig): SessionConfig {
   const baseConfig: SessionConfig = defaultConfig ?? {
     target: "isolated",
     contextMode: "minimal",
@@ -109,9 +115,10 @@ export function parseSessionConfig(
       return {
         ...baseConfig,
         target,
-        contextMode: contextMode && ["minimal", "full", "custom"].includes(contextMode)
-          ? contextMode
-          : baseConfig.contextMode,
+        contextMode:
+          contextMode && ["minimal", "full", "custom"].includes(contextMode)
+            ? contextMode
+            : baseConfig.contextMode,
       };
     }
   }
@@ -197,7 +204,7 @@ export async function executeWorkflowCronJob(
 
   logInfo(
     `[workflow-cron:${workflowId}] Starting workflow execution: ${job.name}. ` +
-    `Steps: ${job.workflowChain.length}, Trigger: ${triggerReason ?? "scheduled"}`
+      `Steps: ${job.workflowChain.length}, Trigger: ${triggerReason ?? "scheduled"}`,
   );
 
   try {
@@ -205,23 +212,32 @@ export async function executeWorkflowCronJob(
     const executor = new WorkflowExecutor(config, deps);
 
     // Prepare steps with default session config merged
+    // Workflow chains always run in isolated/reuse sessions (agentTurn required).
+    // The job's sessionTarget determines delivery: "main" → announce to main session,
+    // "isolated" → announce to delivery.to or last channel.
     const steps = job.workflowChain.map((step, index) => ({
       ...step,
-      sessionConfig: step.sessionConfig ?? job.defaultSessionConfig ?? {
-        target: "isolated",
-        contextMode: "minimal",
-      },
+      sessionConfig: step.sessionConfig ??
+        job.defaultSessionConfig ?? {
+          // First step creates isolated session, subsequent steps reuse it
+          target: index === 0 ? "isolated" : "reuse",
+          contextMode: "minimal",
+        },
+      // Ensure payload kind is agentTurn for workflow steps
+      actionType: step.actionType.startsWith("supabase-") ? step.actionType : "agent-prompt",
     }));
 
-    // Execute workflow
-    const result = await executor.executeWorkflow(workflowId, steps);
+    // Execute workflow with session key from cron job
+    const result = await executor.executeWorkflow(workflowId, steps, {
+      sessionKey: job.sessionKey,
+    });
 
     const durationMs = Date.now() - startTime;
 
     if (result.success) {
       logInfo(
         `[workflow-cron:${workflowId}] Workflow completed successfully. ` +
-        `Duration: ${durationMs}ms, Total tokens: ${result.tokenTracking?.totalTokens ?? 0}`
+          `Duration: ${durationMs}ms, Total tokens: ${result.tokenTracking?.totalTokens ?? 0}`,
       );
 
       return {
@@ -231,17 +247,19 @@ export async function executeWorkflowCronJob(
           nodeId: s.nodeId,
           success: s.success,
         })),
-        tokenUsage: result.tokenTracking ? {
-          totalTokens: result.tokenTracking.totalTokens,
-          inputTokens: result.tokenTracking.inputTokens,
-          outputTokens: result.tokenTracking.outputTokens,
-        } : undefined,
+        tokenUsage: result.tokenTracking
+          ? {
+              totalTokens: result.tokenTracking.totalTokens,
+              inputTokens: result.tokenTracking.inputTokens,
+              outputTokens: result.tokenTracking.outputTokens,
+            }
+          : undefined,
         durationMs,
       };
     } else {
       logWarn(
         `[workflow-cron:${workflowId}] Workflow failed: ${result.error}. ` +
-        `Completed steps: ${result.stepResults.filter((s) => s.success).length}/${result.stepResults.length}`
+          `Completed steps: ${result.stepResults.filter((s) => s.success).length}/${result.stepResults.length}`,
       );
 
       return {
@@ -252,11 +270,13 @@ export async function executeWorkflowCronJob(
           success: s.success,
           error: s.error,
         })),
-        tokenUsage: result.tokenTracking ? {
-          totalTokens: result.tokenTracking.totalTokens,
-          inputTokens: result.tokenTracking.inputTokens,
-          outputTokens: result.tokenTracking.outputTokens,
-        } : undefined,
+        tokenUsage: result.tokenTracking
+          ? {
+              totalTokens: result.tokenTracking.totalTokens,
+              inputTokens: result.tokenTracking.inputTokens,
+              outputTokens: result.tokenTracking.outputTokens,
+            }
+          : undefined,
         durationMs,
         error: result.error,
       };
@@ -313,7 +333,9 @@ export async function handleWorkflowSessionLifecycle(
       return {
         success: false,
         sessionsCreated: result.stepResults.length,
-        tokenUsage: result.tokenTracking ? { totalTokens: result.tokenTracking.totalTokens } : undefined,
+        tokenUsage: result.tokenTracking
+          ? { totalTokens: result.tokenTracking.totalTokens }
+          : undefined,
         error: result.error,
       };
     }
@@ -321,7 +343,9 @@ export async function handleWorkflowSessionLifecycle(
     return {
       success: true,
       sessionsCreated: result.stepResults.length,
-      tokenUsage: result.tokenTracking ? { totalTokens: result.tokenTracking.totalTokens } : undefined,
+      tokenUsage: result.tokenTracking
+        ? { totalTokens: result.tokenTracking.totalTokens }
+        : undefined,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -372,12 +396,17 @@ export function logTokenTrackingSummary(
     inputTokens: number;
     outputTokens: number;
     totalTokens: number;
-    stepBreakdown: Record<string, { inputTokens: number; outputTokens: number; totalTokens: number }>;
+    stepBreakdown: Record<
+      string,
+      { inputTokens: number; outputTokens: number; totalTokens: number }
+    >;
   },
 ): void {
   logInfo(`[workflow:${workflowId}] Token Usage Summary:`);
-  logInfo(`  Total: ${tokenTracking.totalTokens} (input: ${tokenTracking.inputTokens}, output: ${tokenTracking.outputTokens})`);
-  
+  logInfo(
+    `  Total: ${tokenTracking.totalTokens} (input: ${tokenTracking.inputTokens}, output: ${tokenTracking.outputTokens})`,
+  );
+
   const steps = Object.entries(tokenTracking.stepBreakdown);
   if (steps.length > 0) {
     logInfo(`  Per-step breakdown:`);
@@ -390,9 +419,10 @@ export function logTokenTrackingSummary(
 /**
  * Validate workflow chain configuration.
  */
-export function validateWorkflowChain(
-  chain: WorkflowChainStep[],
-): { valid: boolean; errors: string[] } {
+export function validateWorkflowChain(chain: WorkflowChainStep[]): {
+  valid: boolean;
+  errors: string[];
+} {
   const errors: string[] = [];
 
   if (!chain || chain.length === 0) {
@@ -425,11 +455,15 @@ export function validateWorkflowChain(
       const validContextModes = ["minimal", "full", "custom"];
 
       if (!validTargets.includes(step.sessionConfig.target)) {
-        errors.push(`Step ${index} (${step.nodeId}): invalid session target '${step.sessionConfig.target}'`);
+        errors.push(
+          `Step ${index} (${step.nodeId}): invalid session target '${step.sessionConfig.target}'`,
+        );
       }
 
       if (!validContextModes.includes(step.sessionConfig.contextMode)) {
-        errors.push(`Step ${index} (${step.nodeId}): invalid context mode '${step.sessionConfig.contextMode}'`);
+        errors.push(
+          `Step ${index} (${step.nodeId}): invalid context mode '${step.sessionConfig.contextMode}'`,
+        );
       }
 
       if (step.sessionConfig.maxTokens !== undefined && step.sessionConfig.maxTokens <= 0) {

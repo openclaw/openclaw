@@ -5,6 +5,8 @@ import {
   createNoopLogger,
   createCronStoreHarness,
   createRunningCronServiceState,
+  createMockOpenClawConfig,
+  createMockCliDeps,
 } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
@@ -123,6 +125,8 @@ describe("CronService - timer re-arm when running (#12025)", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),

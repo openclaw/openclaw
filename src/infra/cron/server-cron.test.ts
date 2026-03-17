@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
+import type { CronSchedule } from "../../cron/types.js";
 import {
   parseSessionConfig,
   createWorkflowCronJob,
@@ -8,7 +9,6 @@ import {
   type WorkflowChainStep,
   type SessionConfig,
 } from "./server-cron.js";
-import type { CronSchedule } from "../cron/types.js";
 
 describe("parseSessionConfig", () => {
   it("should parse string shorthand config", () => {
@@ -83,16 +83,10 @@ describe("createWorkflowCronJob", () => {
       },
     ];
 
-    const job = createWorkflowCronJob(
-      "test-workflow",
-      "Test Workflow",
-      schedule,
-      steps,
-      {
-        enabled: true,
-        description: "Test workflow",
-      }
-    );
+    const job = createWorkflowCronJob("test-workflow", "Test Workflow", schedule, steps, {
+      enabled: true,
+      description: "Test workflow",
+    });
 
     expect(job.id).toBe("test-workflow");
     expect(job.name).toBe("Test Workflow");
@@ -104,9 +98,7 @@ describe("createWorkflowCronJob", () => {
 
   it("should apply default session config to workflow", () => {
     const schedule: CronSchedule = { kind: "cron", expr: "0 * * * *" };
-    const steps: WorkflowChainStep[] = [
-      { nodeId: "step1", actionType: "test", label: "Test" },
-    ];
+    const steps: WorkflowChainStep[] = [{ nodeId: "step1", actionType: "test", label: "Test" }];
 
     const defaultSessionConfig: SessionConfig = {
       target: "isolated",
@@ -171,13 +163,11 @@ describe("validateWorkflowChain", () => {
   });
 
   it("should reject steps with missing nodeId", () => {
-    const steps: WorkflowChainStep[] = [
-      { nodeId: "", actionType: "test", label: "Test" },
-    ];
+    const steps: WorkflowChainStep[] = [{ nodeId: "", actionType: "test", label: "Test" }];
 
     const result = validateWorkflowChain(steps);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes("nodeId is required"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("nodeId is required"))).toBe(true);
   });
 
   it("should reject duplicate nodeIds", () => {
@@ -188,27 +178,23 @@ describe("validateWorkflowChain", () => {
 
     const result = validateWorkflowChain(steps);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes("duplicate nodeId"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("duplicate nodeId"))).toBe(true);
   });
 
   it("should reject steps with missing actionType", () => {
-    const steps: WorkflowChainStep[] = [
-      { nodeId: "step1", actionType: "", label: "Test" },
-    ];
+    const steps: WorkflowChainStep[] = [{ nodeId: "step1", actionType: "", label: "Test" }];
 
     const result = validateWorkflowChain(steps);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes("actionType is required"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("actionType is required"))).toBe(true);
   });
 
   it("should reject steps with missing label", () => {
-    const steps: WorkflowChainStep[] = [
-      { nodeId: "step1", actionType: "test", label: "" },
-    ];
+    const steps: WorkflowChainStep[] = [{ nodeId: "step1", actionType: "test", label: "" }];
 
     const result = validateWorkflowChain(steps);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes("label is required"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("label is required"))).toBe(true);
   });
 
   it("should validate session config", () => {
@@ -218,7 +204,7 @@ describe("validateWorkflowChain", () => {
         actionType: "test",
         label: "Test",
         sessionConfig: {
-          target: "invalid" as any,
+          target: "invalid" as unknown,
           contextMode: "minimal",
         },
       },
@@ -226,7 +212,7 @@ describe("validateWorkflowChain", () => {
 
     const result = validateWorkflowChain(steps);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes("invalid session target"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("invalid session target"))).toBe(true);
   });
 
   it("should reject invalid maxTokens", () => {
@@ -245,7 +231,7 @@ describe("validateWorkflowChain", () => {
 
     const result = validateWorkflowChain(steps);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes("maxTokens must be positive"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("maxTokens must be positive"))).toBe(true);
   });
 
   it("should reject invalid thinking value", () => {
@@ -257,14 +243,14 @@ describe("validateWorkflowChain", () => {
         sessionConfig: {
           target: "isolated",
           contextMode: "minimal",
-          thinking: "maybe" as any,
+          thinking: "maybe" as unknown,
         },
       },
     ];
 
     const result = validateWorkflowChain(steps);
     expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes("thinking must be"))).toBe(true);
+    expect(result.errors.some((e) => e.includes("thinking must be"))).toBe(true);
   });
 });
 
@@ -288,7 +274,7 @@ describe("logTokenTrackingSummary", () => {
 describe("Integration: Workflow with session configs", () => {
   it("should create workflow with mixed session configs", () => {
     const schedule: CronSchedule = { kind: "cron", expr: "0 * * * *" };
-    
+
     const steps: WorkflowChainStep[] = [
       {
         nodeId: "fetch",
@@ -311,7 +297,7 @@ describe("Integration: Workflow with session configs", () => {
     ];
 
     const job = createWorkflowCronJob("mixed-workflow", "Mixed Workflow", schedule, steps);
-    
+
     expect(job.workflowChain.length).toBe(3);
     expect(job.workflowChain[0].sessionConfig?.target).toBe("isolated");
     expect(job.workflowChain[1].sessionConfig?.target).toBe("reuse");

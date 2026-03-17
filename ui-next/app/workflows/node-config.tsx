@@ -159,7 +159,9 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
 
   const handleChange = (key: string, value: string) => {
     // Validate JSON fields
-    if (["filters", "row", "updates", "paramsStr", "outputSchema", "toolArgs", "params"].includes(key)) {
+    if (
+      ["filters", "row", "updates", "paramsStr", "outputSchema", "toolArgs", "params"].includes(key)
+    ) {
       validateJson(value, key);
     }
     onUpdateData(node.id, { ...data, [key]: value });
@@ -211,7 +213,9 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
 
             {/* Session Configuration Section */}
             <div style={{ marginTop: 8, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
-              <span style={{ ...styles.label, fontWeight: 600, marginBottom: 12, display: "block" }}>
+              <span
+                style={{ ...styles.label, fontWeight: 600, marginBottom: 12, display: "block" }}
+              >
                 ⚙️ Session Configuration
               </span>
 
@@ -312,7 +316,9 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
 
             {/* Session Configuration Section */}
             <div style={{ marginTop: 8, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
-              <span style={{ ...styles.label, fontWeight: 600, marginBottom: 12, display: "block" }}>
+              <span
+                style={{ ...styles.label, fontWeight: 600, marginBottom: 12, display: "block" }}
+              >
                 ⚙️ Session Configuration
               </span>
 
@@ -443,12 +449,119 @@ export function NodeConfigPanel({ node, onClose, onUpdateData }: NodeConfigPanel
 
             <div style={styles.infoBox}>
               <strong>💡 Template Variables:</strong>
-              <br />
-              • <code>{"{{input}}"}</code> - Output from previous step
-              <br />
-              • <code>{"{{input.fieldName}}"}</code> - Specific field
-              <br />
-              • <code>{"{{step1.name}}"}</code> - Output from step 1
+              <br />• <code>{"{{input}}"}</code> - Output from previous step
+              <br />• <code>{"{{input.fieldName}}"}</code> - Specific field from previous
+              <br />• <code>{"{{step1}}"}</code> - Output from step 1
+              <br />• <code>{"{{step2}}"}</code> - Output from step 2
+              <br />• <code>{"{{step1.field}}"}</code> - Specific field from any step
+              <br />• <code>{"{{nodeId}}"}</code> - Output from node by ID
+            </div>
+
+            {/* 📤 Delivery Configuration */}
+            <div style={{ marginTop: 8, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+              <span
+                style={{ ...styles.label, fontWeight: 600, marginBottom: 12, display: "block" }}
+              >
+                📤 Output Delivery
+              </span>
+
+              <div style={styles.field}>
+                <span style={styles.label}>Delivery Mode</span>
+                <select
+                  style={styles.select}
+                  value={(data.deliveryMode as string) || "none"}
+                  onChange={(e) => handleChange("deliveryMode", e.target.value)}
+                >
+                  <option value="none">None (Pass to next step only)</option>
+                  <option value="announce">Announce to Channel</option>
+                  <option value="webhook">Send to Webhook</option>
+                </select>
+              </div>
+
+              {((data.deliveryMode as string) === "announce" || !(data.deliveryMode as string)) && (
+                <>
+                  <div style={styles.field}>
+                    <span style={styles.label}>Channel</span>
+                    <select
+                      style={styles.select}
+                      value={(data.deliveryChannel as string) || "last"}
+                      onChange={(e) => handleChange("deliveryChannel", e.target.value)}
+                    >
+                      <option value="last">Last used channel</option>
+                      <option value="telegram">Telegram</option>
+                      <option value="discord">Discord</option>
+                      <option value="slack">Slack</option>
+                      <option value="whatsapp">WhatsApp</option>
+                    </select>
+                  </div>
+
+                  <div style={styles.field}>
+                    <span style={styles.label}>Target (Chat ID / Recipient)</span>
+                    <input
+                      style={styles.input}
+                      placeholder="Leave empty for main session"
+                      value={(data.deliveryTo as string) || ""}
+                      onChange={(e) => handleChange("deliveryTo", e.target.value)}
+                    />
+                  </div>
+
+                  <div style={styles.field}>
+                    <span style={styles.label}>Account ID (Optional)</span>
+                    <input
+                      style={styles.input}
+                      placeholder="Leave blank for default account"
+                      value={(data.deliveryAccountId as string) || ""}
+                      onChange={(e) => handleChange("deliveryAccountId", e.target.value)}
+                    />
+                  </div>
+
+                  <div style={styles.field}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                      <input
+                        type="checkbox"
+                        checked={(data.deliveryBestEffort as boolean) || false}
+                        onChange={(e) =>
+                          handleChange("deliveryBestEffort", e.target.checked ? "true" : "false")
+                        }
+                        style={{ width: 16, height: 16 }}
+                      />
+                      Best Effort (Don't fail step if delivery fails)
+                    </label>
+                  </div>
+                </>
+              )}
+
+              {(data.deliveryMode as string) === "webhook" && (
+                <>
+                  <div style={styles.field}>
+                    <span style={styles.label}>Webhook URL</span>
+                    <input
+                      style={styles.input}
+                      placeholder="https://your-server.com/webhook"
+                      value={(data.deliveryTo as string) || ""}
+                      onChange={(e) => handleChange("deliveryTo", e.target.value)}
+                    />
+                  </div>
+
+                  <div style={styles.infoBox}>
+                    <strong>🔗 Webhook Payload:</strong>
+                    <br />
+                    POST request with JSON body:
+                    <br />
+                    <code style={{ fontSize: 10 }}>
+                      {"{ workflowId, nodeId, label, output, timestamp }"}
+                    </code>
+                  </div>
+                </>
+              )}
+
+              <div style={{ ...styles.infoBox, marginTop: 12 }}>
+                <strong>💡 Delivery Tips:</strong>
+                <br />• <strong>None:</strong> Output passes to next step only
+                <br />• <strong>Announce:</strong> Send output to chat channel
+                <br />• <strong>Webhook:</strong> Send output to external URL
+                <br />• Each step can have different delivery targets
+              </div>
             </div>
           </>
         )}

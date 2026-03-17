@@ -725,7 +725,14 @@ export default function SkillsPage() {
               <div style={styles.field}>
                 <label style={styles.label}>Instructions</label>
                 <textarea
-                  style={{ ...styles.input, height: 400, maxHeight: "50vh", padding: "8px 10px", resize: "vertical", overflow: "auto" }}
+                  style={{
+                    ...styles.input,
+                    height: 400,
+                    maxHeight: "50vh",
+                    padding: "8px 10px",
+                    resize: "vertical",
+                    overflow: "auto",
+                  }}
                   value={createInstructions}
                   onChange={(e) => setCreateInstructions(e.target.value)}
                   placeholder="Markdown instructions"

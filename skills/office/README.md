@@ -20,19 +20,19 @@ Add to `~/.openclaw/openclaw.json`:
 
 ```json5
 {
-  "skills": {
-    "office": {
-      "enabled": true
-    }
+  skills: {
+    office: {
+      enabled: true,
+    },
   },
-  "agents": {
-    "defaults": {
-      "subagents": {
-        "maxSpawnDepth": 2,
-        "maxChildrenPerAgent": 5
-      }
-    }
-  }
+  agents: {
+    defaults: {
+      subagents: {
+        maxSpawnDepth: 2,
+        maxChildrenPerAgent: 5,
+      },
+    },
+  },
 }
 ```
 
@@ -56,16 +56,16 @@ node office-cli.js team info dev-team
 
 Once the skill is loaded, use these commands in your chat:
 
-| Command | Description |
-|---------|-------------|
-| `/office dashboard` | Show all agents and teams |
-| `/office team create <name> --agents <list>` | Create new team |
-| `/office team list` | List all teams |
-| `/office team info <name>` | Show team details |
-| `/office team kill <name>` | Stop a team |
-| `/office send <target> <message>` | Send message to agent/team |
-| `/office spawn <agent> <task>` | Spawn agent with task |
-| `/office sessions list` | List office sessions |
+| Command                                      | Description                |
+| -------------------------------------------- | -------------------------- |
+| `/office dashboard`                          | Show all agents and teams  |
+| `/office team create <name> --agents <list>` | Create new team            |
+| `/office team list`                          | List all teams             |
+| `/office team info <name>`                   | Show team details          |
+| `/office team kill <name>`                   | Stop a team                |
+| `/office send <target> <message>`            | Send message to agent/team |
+| `/office spawn <agent> <task>`               | Spawn agent with task      |
+| `/office sessions list`                      | List office sessions       |
 
 ## Example Workflows
 
@@ -151,7 +151,7 @@ const teamsData = loadTeams();
 Save team data to storage.
 
 ```javascript
-saveTeams({ teams: { 'dev-team': teamDefinition } });
+saveTeams({ teams: { "dev-team": teamDefinition } });
 ```
 
 ### getAgentsList()

@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
+import {
+  createNoopLogger,
+  createCronStoreHarness,
+  createMockOpenClawConfig,
+  createMockCliDeps,
+} from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
 import { resetReaperThrottle } from "./session-reaper.js";
@@ -64,6 +69,8 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
@@ -101,6 +108,8 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),
@@ -146,6 +155,8 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeatNow: vi.fn(),

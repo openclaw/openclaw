@@ -181,6 +181,20 @@ export function CreateJobModal({ onClose, onSubmit }: CreateJobModalProps) {
       return;
     }
 
+    // Validate sessionTarget + payloadType combination
+    if (sessionTarget === "main" && payloadType !== "systemEvent") {
+      setError(
+        'sessionTarget="main" requires Action Type="System Event". Change to "Isolated" for Agent Turn.',
+      );
+      return;
+    }
+    if (sessionTarget === "isolated" && payloadType !== "agentTurn") {
+      setError(
+        'sessionTarget="isolated" requires Action Type="Agent Turn". Change to "Main" for System Event.',
+      );
+      return;
+    }
+
     let schedule: CronSchedule;
     if (scheduleType === "every") {
       const mins = parseInt(everyMins, 10);
@@ -331,27 +345,42 @@ export function CreateJobModal({ onClose, onSubmit }: CreateJobModalProps) {
 
             <div style={styles.row}>
               <div style={{ ...styles.field, ...styles.col }}>
+                <label style={styles.label}>Session Target</label>
+                <select
+                  style={styles.select}
+                  value={sessionTarget}
+                  onChange={(e) => {
+                    const newTarget = e.target.value as "isolated" | "main";
+                    setSessionTarget(newTarget);
+                    // Auto-adjust payload type to match session target constraint
+                    if (newTarget === "main" && payloadType !== "systemEvent") {
+                      setPayloadType("systemEvent");
+                    } else if (newTarget === "isolated" && payloadType !== "agentTurn") {
+                      setPayloadType("agentTurn");
+                    }
+                  }}
+                >
+                  <option value="isolated">Isolated (background session)</option>
+                  <option value="main">Main (inject into chat)</option>
+                </select>
+              </div>
+
+              <div style={{ ...styles.field, ...styles.col }}>
                 <label style={styles.label}>Action Type</label>
                 <select
                   style={styles.select}
                   value={payloadType}
                   onChange={(e) => setPayloadType(e.target.value as "agentTurn" | "systemEvent")}
+                  disabled={false}
                 >
-                  <option value="agentTurn">Agent Turn</option>
-                  <option value="systemEvent">System Event</option>
+                  <option value="agentTurn">Agent Turn (isolated only)</option>
+                  <option value="systemEvent">System Event (main only)</option>
                 </select>
-              </div>
-
-              <div style={{ ...styles.field, ...styles.col }}>
-                <label style={styles.label}>Session Target</label>
-                <select
-                  style={styles.select}
-                  value={sessionTarget}
-                  onChange={(e) => setSessionTarget(e.target.value as "isolated" | "main")}
-                >
-                  <option value="isolated">Isolated (New background session)</option>
-                  <option value="main">Main (Inject into current chat)</option>
-                </select>
+                <span style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                  {sessionTarget === "main"
+                    ? "💡 Main target requires System Event"
+                    : "💡 Isolated target requires Agent Turn"}
+                </span>
               </div>
             </div>
 

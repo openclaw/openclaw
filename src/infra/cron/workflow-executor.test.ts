@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { WorkflowExecutor, type WorkflowChainStep, type SessionConfig } from "./workflow-executor.js";
-import type { OpenClawConfig } from "../../config/types.js";
 import type { CliDeps } from "../../cli/deps.js";
+import type { OpenClawConfig } from "../../config/types.js";
+import {
+  WorkflowExecutor,
+  type WorkflowChainStep,
+  type SessionConfig,
+} from "./workflow-executor.js";
 
 // Mock dependencies
 const mockConfig: OpenClawConfig = {
@@ -178,7 +182,7 @@ describe("WorkflowExecutor", () => {
     it("should reset all token tracking to zero", () => {
       // @ts-ignore
       executor.trackTokenUsage("step1", { inputTokens: 100, outputTokens: 50, totalTokens: 150 });
-      
+
       executor.resetTokenTracking();
 
       const tracking = executor.getTokenTracking();

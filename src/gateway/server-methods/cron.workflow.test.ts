@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { parseWorkflowChainFromDescription, executeWorkflowCronJob } from "../../infra/cron/server-cron.js";
+import {
+  parseWorkflowChainFromDescription,
+  executeWorkflowCronJob,
+} from "../../infra/cron/server-cron.js";
 import type { WorkflowChainStep } from "../../infra/cron/workflow-executor.js";
 
 describe("cron workflow integration", () => {
   describe("parseWorkflowChainFromDescription", () => {
     it("should parse workflow chain from description with prefix", () => {
-      const description = "__wf_chain__:[{\"nodeId\":\"step1\",\"actionType\":\"agent-prompt\",\"label\":\"Step 1\"}]";
+      const description =
+        '__wf_chain__:[{"nodeId":"step1","actionType":"agent-prompt","label":"Step 1"}]';
       const chain = parseWorkflowChainFromDescription(description);
-      
+
       expect(chain).toBeDefined();
       expect(chain).toHaveLength(1);
       expect(chain?.[0].nodeId).toBe("step1");
@@ -22,7 +26,7 @@ describe("cron workflow integration", () => {
         {"nodeId":"step3","actionType":"agent-prompt","label":"Review"}
       ]`;
       const chain = parseWorkflowChainFromDescription(description);
-      
+
       expect(chain).toBeDefined();
       expect(chain).toHaveLength(3);
       expect(chain?.[0].label).toBe("Research");
@@ -33,7 +37,7 @@ describe("cron workflow integration", () => {
     it("should return null for description without workflow prefix", () => {
       const description = "Normal cron job description";
       const chain = parseWorkflowChainFromDescription(description);
-      
+
       expect(chain).toBeNull();
     });
 
@@ -45,14 +49,14 @@ describe("cron workflow integration", () => {
     it("should return null for invalid JSON", () => {
       const description = "__wf_chain__:invalid-json";
       const chain = parseWorkflowChainFromDescription(description);
-      
+
       expect(chain).toBeNull();
     });
 
     it("should return null for non-array JSON", () => {
-      const description = "__wf_chain__:{\"nodeId\":\"step1\"}";
+      const description = '__wf_chain__:{"nodeId":"step1"}';
       const chain = parseWorkflowChainFromDescription(description);
-      
+
       expect(chain).toBeNull();
     });
 
@@ -61,7 +65,7 @@ describe("cron workflow integration", () => {
 
 __wf_chain__:[{"nodeId":"step1","actionType":"agent-prompt","label":"Step 1"}]`;
       const chain = parseWorkflowChainFromDescription(description);
-      
+
       expect(chain).toBeDefined();
       expect(chain).toHaveLength(1);
     });

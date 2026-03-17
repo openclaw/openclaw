@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { writeCronStoreSnapshot } from "./service.test-harness.js";
+import {
+  writeCronStoreSnapshot,
+  createMockOpenClawConfig,
+  createMockCliDeps,
+} from "./service.test-harness.js";
 
 const noopLogger = {
   debug: vi.fn(),
@@ -94,6 +98,8 @@ describe("CronService read ops while job is running", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
@@ -172,6 +178,8 @@ describe("CronService read ops while job is running", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
@@ -246,6 +254,8 @@ describe("CronService read ops while job is running", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       nowMs: () => nowMs,
       enqueueSystemEvent,
       requestHeartbeatNow,

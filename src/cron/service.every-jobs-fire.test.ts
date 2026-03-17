@@ -6,6 +6,8 @@ import {
   createNoopLogger,
   installCronTestHooks,
   writeCronStoreSnapshot,
+  createMockOpenClawConfig,
+  createMockCliDeps,
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
@@ -153,6 +155,8 @@ describe("CronService interval/cron jobs fire on time", () => {
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
+      config: createMockOpenClawConfig(),
+      cliDeps: createMockCliDeps(),
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),

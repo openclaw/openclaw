@@ -844,6 +844,12 @@ export default function ChatPage() {
   const [autocompleteIndex, setAutocompleteIndex] = useState(0);
   const [commandPrefix, setCommandPrefix] = useState("");
   const [specFirstEnabled, setSpecFirstEnabled] = useState(false);
+  const [specFirstFiles, setSpecFirstFiles] = useState<{
+    spec?: boolean;
+    design?: boolean;
+    tasks?: boolean;
+  }>({});
+  const [specFirstSessionId, setSpecFirstSessionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const selectedSessionKeyRef = useRef<string | null>(null);
   selectedSessionKeyRef.current = selectedSessionKey;
@@ -902,11 +908,11 @@ export default function ChatPage() {
       });
       // Only update if session hasn't changed while we were fetching
       if (selectedSessionKeyRef.current === sessionKey) {
-        setSessionMessages(prev => ({ ...prev, [sessionKey]: res.messages ?? [] }));
+        setSessionMessages((prev) => ({ ...prev, [sessionKey]: res.messages ?? [] }));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load chat history");
-      setSessionMessages(prev => ({ ...prev, [sessionKey]: [] }));
+      setSessionMessages((prev) => ({ ...prev, [sessionKey]: [] }));
     } finally {
       setLoading(false);
     }
@@ -916,20 +922,25 @@ export default function ChatPage() {
   // Command Handlers
   // ============================================
 
-  const addSystemMessage = useCallback((content: string) => {
-    if (!selectedSessionKey) {return;}
-    setSessionMessages((prev) => ({
-      ...prev,
-      [selectedSessionKey]: [
-        ...(prev[selectedSessionKey] ?? []),
-        {
-          role: "system",
-          content,
-          timestamp: Date.now(),
-        },
-      ],
-    }));
-  }, [selectedSessionKey]);
+  const addSystemMessage = useCallback(
+    (content: string) => {
+      if (!selectedSessionKey) {
+        return;
+      }
+      setSessionMessages((prev) => ({
+        ...prev,
+        [selectedSessionKey]: [
+          ...(prev[selectedSessionKey] ?? []),
+          {
+            role: "system",
+            content,
+            timestamp: Date.now(),
+          },
+        ],
+      }));
+    },
+    [selectedSessionKey],
+  );
 
   const handleCommand = useCallback(
     async (raw: string) => {
@@ -939,7 +950,9 @@ export default function ChatPage() {
       }
 
       const addSystem = (content: string) => {
-        if (!selectedSessionKey) {return;}
+        if (!selectedSessionKey) {
+          return;
+        }
         setSessionMessages((prev) => ({
           ...prev,
           [selectedSessionKey]: [
@@ -980,8 +993,8 @@ export default function ChatPage() {
             const newKey = `agent:main:${new Date().getTime()}`;
             const res = await request<{ key: string }>("sessions.reset", { key: newKey });
             if (res.key) {
-              setSessionMessages(prev => ({ ...prev, [newKey]: [] }));
-              setSessionStreams(prev => {
+              setSessionMessages((prev) => ({ ...prev, [newKey]: [] }));
+              setSessionStreams((prev) => {
                 const { [selectedSessionKey]: _, ...rest } = prev;
                 return rest;
               });
@@ -1084,7 +1097,8 @@ export default function ChatPage() {
             }
             const result = await request<SessionsPatchResult>("sessions.patch", {
               key: selectedSessionKey,
-              responseUsage: args.toLowerCase() === "off" ? null : (args.toLowerCase() as "tokens" | "full"),
+              responseUsage:
+                args.toLowerCase() === "off" ? null : (args.toLowerCase() as "tokens" | "full"),
             });
             addSystem(`Usage footer set to ${args.toLowerCase()}`);
             break;
@@ -1127,7 +1141,9 @@ export default function ChatPage() {
               }
               addSystem(lines.join("\n"));
             } catch (err) {
-              addSystem(`Status check failed: ${err instanceof Error ? err.message : "unknown error"}`);
+              addSystem(
+                `Status check failed: ${err instanceof Error ? err.message : "unknown error"}`,
+              );
             }
             break;
           }
@@ -1257,7 +1273,9 @@ export default function ChatPage() {
   }, []);
 
   const confirmClearChat = useCallback(async () => {
-    if (!selectedSessionKey) {return;}
+    if (!selectedSessionKey) {
+      return;
+    }
 
     try {
       // Clear local messages for this session only
@@ -1338,7 +1356,8 @@ export default function ChatPage() {
       if (typeof delta === "string") {
         setSessionStreams((prev) => ({
           ...prev,
-          [eventSessionKey]: delta.length >= (prev[eventSessionKey]?.length ?? 0) ? delta : prev[eventSessionKey],
+          [eventSessionKey]:
+            delta.length >= (prev[eventSessionKey]?.length ?? 0) ? delta : prev[eventSessionKey],
         }));
       }
     } else if (payload.state === "final") {
@@ -1573,6 +1592,77 @@ export default function ChatPage() {
     scrollToBottom();
   }, [sessionMessages, sessionStreams, selectedSessionKey, scrollToBottom]);
 
+  // Poll for spec-first files when enabled
+  useEffect(() => {
+    if (!specFirstEnabled) {
+      setSpecFirstFiles({});
+      setSpecFirstSessionId(null);
+      return;
+    }
+
+    const checkSpecFiles = async () => {
+      try {
+        // Get sessions to find spec-first session
+        const sessionsRes = await request<SessionsListResult>("sessions.list", {});
+        // Look for spec-first sessions (they have "spec-" prefix in their key)
+        const specSessions =
+          sessionsRes.sessions?.filter(
+            (s) =>
+              s.key.includes("spec-") ||
+              s.label?.includes("spec-first") ||
+              s.displayName?.includes("spec"),
+          ) || [];
+
+        if (specSessions.length > 0) {
+          const latestSpecSession = specSessions[0];
+          setSpecFirstSessionId(latestSpecSession.key);
+
+          // Check for file existence by attempting to load session history
+          // If history contains file references, those files exist
+          try {
+            const historyRes = await request<ChatHistoryResult>("chat.history", {
+              sessionKey: latestSpecSession.key,
+            });
+
+            const messages = historyRes.messages || [];
+            const lastMessage = messages[messages.length - 1];
+            const content = typeof lastMessage?.content === "string" ? lastMessage.content : "";
+
+            // Detect which files have been created based on chat history
+            const hasSpec = content.includes("spec.md") || content.includes("Generated spec");
+            const hasDesign = content.includes("design.md") || content.includes("Architecture");
+            const hasTasks = content.includes("tasks.md") || content.includes("Task #");
+
+            setSpecFirstFiles({
+              spec: hasSpec || messages.length > 2, // Spec is usually first
+              design: hasDesign || messages.length > 4, // Design comes after spec
+              tasks: hasTasks || messages.length > 6, // Tasks come last
+            });
+          } catch {
+            // If can't load history, assume files are being generated
+            setSpecFirstFiles({ spec: true, design: false, tasks: false });
+          }
+        } else {
+          // No spec-first session yet - files will be generated
+          setSpecFirstFiles({
+            spec: false,
+            design: false,
+            tasks: false,
+          });
+          setSpecFirstSessionId(null);
+        }
+      } catch (err) {
+        console.error("Failed to check spec-first files:", err);
+        setSpecFirstFiles({ spec: false, design: false, tasks: false });
+        setSpecFirstSessionId(null);
+      }
+    };
+
+    void checkSpecFiles();
+    const interval = setInterval(checkSpecFiles, 3000); // Poll every 3s
+    return () => clearInterval(interval);
+  }, [specFirstEnabled, request]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // First check autocomplete shortcuts
     handleAutocompleteKeyDown(e);
@@ -1605,357 +1695,389 @@ export default function ChatPage() {
         </p>
       </div>
 
-      <div
-        style={{
-          ...styles.layout,
-          gridTemplateColumns: isSidebarVisible ? "240px 1fr 380px" : "1fr 380px",
-        }}
-      >
-        {/* Sessions Sidebar */}
-        {isSidebarVisible && (
-          <div style={styles.sidebar}>
-            <div style={styles.cardTitle}>Sessions</div>
-            <button
-              style={{ ...styles.btn, ...styles.btnPrimary }}
-              disabled={isDisabled}
-              onClick={handleNewSession}
-            >
-              New Session
-            </button>
+      {/* Spec-first panel visibility: show when enabled AND at least one file exists */}
+      {(() => {
+        const hasSpecFirstFiles =
+          specFirstEnabled &&
+          (specFirstFiles.spec || specFirstFiles.design || specFirstFiles.tasks);
 
-            <div style={styles.sessionList}>
-              {sessions.length === 0 ? (
-                <div style={styles.muted}>No sessions yet.</div>
-              ) : (
-                sessions.map((session) => {
-                  const isActive = selectedSessionKey === session.key;
-                  return (
-                    <div
-                      key={session.key}
-                      style={{
-                        ...styles.sessionRow,
-                        ...(isActive ? styles.sessionRowActive : {}),
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                      }}
-                      onClick={() => setSelectedSessionKey(session.key)}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={styles.sessionTitle}>
-                          {session.label || session.displayName || session.key}
-                        </div>
-                        <div style={styles.sessionSub}>
-                          {session.updatedAt
-                            ? formatRelativeTimestamp(session.updatedAt)
-                            : "No activity"}
-                        </div>
-                      </div>
-                      <button
-                        title="Delete Session"
-                        onClick={(e) => handleDeleteSession(session.key, e)}
-                        style={{
-                          background: "transparent",
-                          borderWidth: 0,
-                          color: "var(--muted)",
-                          cursor: "pointer",
-                          padding: "4px",
-                          fontSize: "14px",
-                          lineHeight: 1,
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Chat Area */}
-        <div style={{ ...styles.card, flex: 1 }}>
-          {/* Chat Header */}
+        return (
           <div
             style={{
-              padding: "12px 16px",
-              borderBottom: "1px solid var(--border)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              background: "var(--bg-hover)",
-              borderTopLeftRadius: "var(--radius-lg)",
-              borderTopRightRadius: "var(--radius-lg)",
+              ...styles.layout,
+              gridTemplateColumns: isSidebarVisible
+                ? hasSpecFirstFiles
+                  ? "240px 1fr 380px"
+                  : "240px 1fr"
+                : hasSpecFirstFiles
+                  ? "1fr 380px"
+                  : "1fr",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <button
-                onClick={() => setIsSidebarVisible(!isSidebarVisible)}
-                style={{
-                  ...styles.btn,
-                  width: "auto",
-                  padding: "4px 8px",
-                  background: "var(--card)",
-                }}
-                title={isSidebarVisible ? "Hide Sidebar" : "Show Sidebar"}
-              >
-                {isSidebarVisible ? "◧ Hide" : "◨ Show Sidebar"}
-              </button>
-              <h2
-                style={{
-                  fontSize: 15,
-                  fontWeight: 600,
-                  margin: 0,
-                  color: "var(--text-strong)",
-                }}
-              >
-                {selectedSessionKey
-                  ? sessions.find((s) => s.key === selectedSessionKey)?.label ||
-                    sessions.find((s) => s.key === selectedSessionKey)?.displayName ||
-                    selectedSessionKey
-                  : "Select a Session"}
-              </h2>
-            </div>
-            {selectedSessionKey && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                }}
-              >
-                {/* Model Selector */}
-                <select
-                  style={{
-                    ...styles.modelSelect,
-                    opacity: modelsLoading ? 0.6 : 1,
-                  }}
-                  value={currentModel || ""}
-                  onChange={(e) => changeModel(e.target.value)}
-                  disabled={modelsLoading || state !== "connected"}
-                  title={modelsLoading ? "Loading models..." : "Select AI model"}
-                >
-                  <option value="" disabled>
-                    {modelsLoading ? "Loading..." : "none"}
-                  </option>
-                  {models.map((m) => (
-                    <option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
-                      {m.name} {m.contextWindow ? `(${Math.round(m.contextWindow / 1024)}k)` : ""}
-                      {m.reasoning ? " · Reasoning" : ""}
-                    </option>
-                  ))}
-                </select>
-
-                {/* Clear Chat Button */}
+            {/* Sessions Sidebar */}
+            {isSidebarVisible && (
+              <div style={styles.sidebar}>
+                <div style={styles.cardTitle}>Sessions</div>
                 <button
-                  onClick={handleClearChat}
-                  style={{
-                    ...styles.btn,
-                    width: "auto",
-                    padding: "4px 10px",
-                    background: "var(--card)",
-                    color: "var(--danger)",
-                    borderColor: "var(--danger)",
-                  }}
-                  title="Clear chat history (keep session)"
+                  style={{ ...styles.btn, ...styles.btnPrimary }}
+                  disabled={isDisabled}
+                  onClick={handleNewSession}
                 >
-                  🗑️ Clear Chat
+                  New Session
                 </button>
 
-                {/* Active Session Indicator */}
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "var(--ok)",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    fontWeight: 500,
-                  }}
-                >
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: 8,
-                      height: 8,
-                      background: "var(--ok)",
-                      borderRadius: "50%",
-                    }}
-                  />
-                  Active
+                <div style={styles.sessionList}>
+                  {sessions.length === 0 ? (
+                    <div style={styles.muted}>No sessions yet.</div>
+                  ) : (
+                    sessions.map((session) => {
+                      const isActive = selectedSessionKey === session.key;
+                      return (
+                        <div
+                          key={session.key}
+                          style={{
+                            ...styles.sessionRow,
+                            ...(isActive ? styles.sessionRowActive : {}),
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                          }}
+                          onClick={() => setSelectedSessionKey(session.key)}
+                        >
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={styles.sessionTitle}>
+                              {session.label || session.displayName || session.key}
+                            </div>
+                            <div style={styles.sessionSub}>
+                              {session.updatedAt
+                                ? formatRelativeTimestamp(session.updatedAt)
+                                : "No activity"}
+                            </div>
+                          </div>
+                          <button
+                            title="Delete Session"
+                            onClick={(e) => handleDeleteSession(session.key, e)}
+                            style={{
+                              background: "transparent",
+                              borderWidth: 0,
+                              color: "var(--muted)",
+                              cursor: "pointer",
+                              padding: "4px",
+                              fontSize: "14px",
+                              lineHeight: 1,
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )}
-          </div>
 
-          {error && <div style={{ ...styles.callout, ...styles.calloutDanger }}>{error}</div>}
-
-          {!selectedSessionKey ? (
-            <div style={styles.emptyState}>
-              Select a session or create a new one to start chatting.
-            </div>
-          ) : loading ? (
-            <div style={styles.emptyState}>Loading...</div>
-          ) : (
-            <>
-              <div style={styles.messagesArea}>
-                {(() => {
-                  const currentMessages = selectedSessionKey ? (sessionMessages[selectedSessionKey] ?? []) : [];
-                  const currentStream = selectedSessionKey ? sessionStreams[selectedSessionKey] : undefined;
-                  const hasStream = selectedSessionKey && currentStream !== undefined;
-                  
-                  return (
-                    <>
-                      {currentMessages.length === 0 && !hasStream ? (
-                        <div style={styles.emptyState}>No messages yet. Start the conversation!</div>
-                      ) : (
-                        currentMessages.map((msg, idx) => <Message key={idx} message={msg} />)
-                      )}
-                      {/* Streaming response — shown while AI is typing */}
-                      {hasStream && (
-                        <div
-                          style={{
-                            ...styles.messageRow,
-                            ...styles.messageRowAssistant,
-                          }}
-                        >
-                          <div
-                            style={{
-                              ...styles.bubble,
-                              ...styles.bubbleAssistant,
-                              opacity: 0.85,
-                            }}
-                          >
-                            {currentStream === "" ? (
-                              <span style={{ color: "var(--muted)", fontStyle: "italic" }}>
-                                ●●● typing…
-                              </span>
-                            ) : (
-                              currentStream
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-                <div ref={messagesEndRef} />
-              </div>
-
-              <div style={{ ...styles.compose, position: "relative" as const }}>
-                {showAutocomplete && (
-                  <div style={styles.autocomplete}>
-                    {getCommandCompletions(commandPrefix).map((cmd, idx) => (
-                      <button
-                        key={cmd.name}
-                        style={{
-                          ...styles.autocompleteItem,
-                          ...(idx === autocompleteIndex ? styles.autocompleteItemHover : {}),
-                        }}
-                        onClick={() => selectAutocomplete(idx)}
-                        onMouseEnter={() => setAutocompleteIndex(idx)}
-                      >
-                        <span>/{cmd.name}</span>
-                        <span style={styles.autocompleteDescription}>{cmd.description}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <textarea
-                  ref={textareaRef}
-                  style={styles.input}
-                  value={draft}
-                  onChange={(e) => handleDraftChange(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={
-                    isDisabled ? "Connect to gateway to chat..." : "Type a message (Enter to send)"
-                  }
-                  disabled={isDisabled || sending}
-                  rows={1}
-                />
-                <button
-                  style={{ ...styles.btn, ...styles.btnPrimary, width: "auto" }}
-                  disabled={isDisabled || sending || !draft.trim()}
-                  onClick={sendMessage}
-                >
-                  {sending ? "Sending..." : "Send"}
-                </button>
-              </div>
-
-              {/* Spec-First Mode Toggle */}
+            {/* Chat Area */}
+            <div style={{ ...styles.card, flex: 1 }}>
+              {/* Chat Header */}
               <div
                 style={{
+                  padding: "12px 16px",
+                  borderBottom: "1px solid var(--border)",
                   display: "flex",
                   alignItems: "center",
-                  gap: 8,
-                  padding: "8px 12px",
-                  background: "var(--secondary)",
-                  borderRadius: "var(--radius-md)",
-                  borderWidth: 1,
-                  borderStyle: "solid",
-                  borderColor: specFirstEnabled ? "var(--accent)" : "var(--border)",
+                  justifyContent: "space-between",
+                  background: "var(--bg-hover)",
+                  borderTopLeftRadius: "var(--radius-lg)",
+                  borderTopRightRadius: "var(--radius-lg)",
                 }}
               >
-                <input
-                  type="checkbox"
-                  id="spec-first-toggle"
-                  checked={specFirstEnabled}
-                  onChange={(e) => setSpecFirstEnabled(e.target.checked)}
-                  style={{
-                    width: 16,
-                    height: 16,
-                    cursor: "pointer",
-                  }}
-                />
-                <label
-                  htmlFor="spec-first-toggle"
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 500,
-                    color: specFirstEnabled ? "var(--accent)" : "var(--text)",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  📋 Spec-First Mode
-                  {specFirstEnabled && (
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <button
+                    onClick={() => setIsSidebarVisible(!isSidebarVisible)}
+                    style={{
+                      ...styles.btn,
+                      width: "auto",
+                      padding: "4px 8px",
+                      background: "var(--card)",
+                    }}
+                    title={isSidebarVisible ? "Hide Sidebar" : "Show Sidebar"}
+                  >
+                    {isSidebarVisible ? "◧ Hide" : "◨ Show Sidebar"}
+                  </button>
+                  <h2
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 600,
+                      margin: 0,
+                      color: "var(--text-strong)",
+                    }}
+                  >
+                    {selectedSessionKey
+                      ? sessions.find((s) => s.key === selectedSessionKey)?.label ||
+                        sessions.find((s) => s.key === selectedSessionKey)?.displayName ||
+                        selectedSessionKey
+                      : "Select a Session"}
+                  </h2>
+                </div>
+                {selectedSessionKey && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                    }}
+                  >
+                    {/* Model Selector */}
+                    <select
+                      style={{
+                        ...styles.modelSelect,
+                        opacity: modelsLoading ? 0.6 : 1,
+                      }}
+                      value={currentModel || ""}
+                      onChange={(e) => changeModel(e.target.value)}
+                      disabled={modelsLoading || state !== "connected"}
+                      title={modelsLoading ? "Loading models..." : "Select AI model"}
+                    >
+                      <option value="" disabled>
+                        {modelsLoading ? "Loading..." : "none"}
+                      </option>
+                      {models.map((m) => (
+                        <option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
+                          {m.name}{" "}
+                          {m.contextWindow ? `(${Math.round(m.contextWindow / 1024)}k)` : ""}
+                          {m.reasoning ? " · Reasoning" : ""}
+                        </option>
+                      ))}
+                    </select>
+
+                    {/* Clear Chat Button */}
+                    <button
+                      onClick={handleClearChat}
+                      style={{
+                        ...styles.btn,
+                        width: "auto",
+                        padding: "4px 10px",
+                        background: "var(--card)",
+                        color: "var(--danger)",
+                        borderColor: "var(--danger)",
+                      }}
+                      title="Clear chat history (keep session)"
+                    >
+                      🗑️ Clear Chat
+                    </button>
+
+                    {/* Active Session Indicator */}
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "var(--ok)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        fontWeight: 500,
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "inline-block",
+                          width: 8,
+                          height: 8,
+                          background: "var(--ok)",
+                          borderRadius: "50%",
+                        }}
+                      />
+                      Active
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {error && <div style={{ ...styles.callout, ...styles.calloutDanger }}>{error}</div>}
+
+              {!selectedSessionKey ? (
+                <div style={styles.emptyState}>
+                  Select a session or create a new one to start chatting.
+                </div>
+              ) : loading ? (
+                <div style={styles.emptyState}>Loading...</div>
+              ) : (
+                <>
+                  <div style={styles.messagesArea}>
+                    {(() => {
+                      const currentMessages = selectedSessionKey
+                        ? (sessionMessages[selectedSessionKey] ?? [])
+                        : [];
+                      const currentStream = selectedSessionKey
+                        ? sessionStreams[selectedSessionKey]
+                        : undefined;
+                      const hasStream = selectedSessionKey && currentStream !== undefined;
+
+                      return (
+                        <>
+                          {currentMessages.length === 0 && !hasStream ? (
+                            <div style={styles.emptyState}>
+                              No messages yet. Start the conversation!
+                            </div>
+                          ) : (
+                            currentMessages.map((msg, idx) => <Message key={idx} message={msg} />)
+                          )}
+                          {/* Streaming response — shown while AI is typing */}
+                          {hasStream && (
+                            <div
+                              style={{
+                                ...styles.messageRow,
+                                ...styles.messageRowAssistant,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  ...styles.bubble,
+                                  ...styles.bubbleAssistant,
+                                  opacity: 0.85,
+                                }}
+                              >
+                                {currentStream === "" ? (
+                                  <span style={{ color: "var(--muted)", fontStyle: "italic" }}>
+                                    ●●● typing…
+                                  </span>
+                                ) : (
+                                  currentStream
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                    <div ref={messagesEndRef} />
+                  </div>
+
+                  <div style={{ ...styles.compose, position: "relative" as const }}>
+                    {showAutocomplete && (
+                      <div style={styles.autocomplete}>
+                        {getCommandCompletions(commandPrefix).map((cmd, idx) => (
+                          <button
+                            key={cmd.name}
+                            style={{
+                              ...styles.autocompleteItem,
+                              ...(idx === autocompleteIndex ? styles.autocompleteItemHover : {}),
+                            }}
+                            onClick={() => selectAutocomplete(idx)}
+                            onMouseEnter={() => setAutocompleteIndex(idx)}
+                          >
+                            <span>/{cmd.name}</span>
+                            <span style={styles.autocompleteDescription}>{cmd.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <textarea
+                      ref={textareaRef}
+                      style={styles.input}
+                      value={draft}
+                      onChange={(e) => handleDraftChange(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={
+                        isDisabled
+                          ? "Connect to gateway to chat..."
+                          : "Type a message (Enter to send)"
+                      }
+                      disabled={isDisabled || sending}
+                      rows={1}
+                    />
+                    <button
+                      style={{ ...styles.btn, ...styles.btnPrimary, width: "auto" }}
+                      disabled={isDisabled || sending || !draft.trim()}
+                      onClick={sendMessage}
+                    >
+                      {sending ? "Sending..." : "Send"}
+                    </button>
+                  </div>
+
+                  {/* Spec-First Mode Toggle */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "8px 12px",
+                      background: "var(--secondary)",
+                      borderRadius: "var(--radius-md)",
+                      borderWidth: 1,
+                      borderStyle: "solid",
+                      borderColor: specFirstEnabled ? "var(--accent)" : "var(--border)",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      id="spec-first-toggle"
+                      checked={specFirstEnabled}
+                      onChange={(e) => setSpecFirstEnabled(e.target.checked)}
+                      style={{
+                        width: 16,
+                        height: 16,
+                        cursor: "pointer",
+                      }}
+                    />
+                    <label
+                      htmlFor="spec-first-toggle"
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 500,
+                        color: specFirstEnabled ? "var(--accent)" : "var(--text)",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      📋 Spec-First Mode
+                      {specFirstEnabled && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            padding: "2px 6px",
+                            background: "var(--accent)",
+                            color: "var(--accent-foreground)",
+                            borderRadius: "var(--radius-sm)",
+                          }}
+                        >
+                          Active
+                        </span>
+                      )}
+                    </label>
                     <span
                       style={{
                         fontSize: 10,
-                        padding: "2px 6px",
-                        background: "var(--accent)",
-                        color: "var(--accent-foreground)",
-                        borderRadius: "var(--radius-sm)",
+                        color: "var(--muted)",
+                        marginLeft: "auto",
                       }}
                     >
-                      Active
+                      Auto-generate specs for tasks
                     </span>
-                  )}
-                </label>
-                <span
-                  style={{
-                    fontSize: 10,
-                    color: "var(--muted)",
-                    marginLeft: "auto",
-                  }}
-                >
-                  Auto-generate specs for tasks
-                </span>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
+                  </div>
+                </>
+              )}
+            </div>
 
-      {/* Spec-First Panel */}
-      {specFirstEnabled && (
-        <div style={{ width: 380, flexShrink: 0 }}>
-          <SpecPanel />
-        </div>
-      )}
+            {/* Spec-First Panel - only show when enabled AND files exist */}
+            {(() => {
+              const hasSpecFirstFiles =
+                specFirstEnabled &&
+                (specFirstFiles.spec || specFirstFiles.design || specFirstFiles.tasks);
+              if (!hasSpecFirstFiles) {
+                return null;
+              }
+              return (
+                <div style={{ width: 380, flexShrink: 0 }}>
+                  <SpecPanel sessionId={specFirstSessionId || undefined} files={specFirstFiles} />
+                </div>
+              );
+            })()}
+          </div>
+        );
+      })()}
 
       {/* Clear Chat Confirmation Modal */}
       {showClearConfirm && (

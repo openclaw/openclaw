@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { getSupabaseInstances, type SupabaseInstanceConfig } from "@/lib/supabase-config";
-import { SupabaseProfileModal } from "./supabase-profile-modal";
 import { useGateway } from "@/lib/use-gateway";
+import { SupabaseProfileModal } from "./supabase-profile-modal";
 
 interface SupabaseProfileSelectorProps {
   value: string;
@@ -11,7 +11,11 @@ interface SupabaseProfileSelectorProps {
   label?: string;
 }
 
-export function SupabaseProfileSelector({ value, onChange, label = "Supabase Profile" }: SupabaseProfileSelectorProps) {
+export function SupabaseProfileSelector({
+  value,
+  onChange,
+  label = "Supabase Profile",
+}: SupabaseProfileSelectorProps) {
   const { request } = useGateway();
   const [profiles, setProfiles] = useState<SupabaseInstanceConfig[]>([]);
   const [loading, setLoading] = useState(true);
@@ -19,7 +23,7 @@ export function SupabaseProfileSelector({ value, onChange, label = "Supabase Pro
   const [isOpen, setIsOpen] = useState(false);
 
   useEffect(() => {
-    loadProfiles();
+    void loadProfiles();
   }, []);
 
   const loadProfiles = async () => {
@@ -41,7 +45,7 @@ export function SupabaseProfileSelector({ value, onChange, label = "Supabase Pro
 
   const handleProfileSaved = (profileName: string) => {
     onChange(profileName);
-    loadProfiles();
+    void loadProfiles();
   };
 
   const currentProfile = profiles.find((p) => p.id === value);
@@ -50,11 +54,19 @@ export function SupabaseProfileSelector({ value, onChange, label = "Supabase Pro
     <>
       <div style={{ position: "relative" }}>
         {label && (
-          <label style={{ display: "block", fontSize: 12, fontWeight: 500, marginBottom: 6, color: "var(--muted)" }}>
+          <label
+            style={{
+              display: "block",
+              fontSize: 12,
+              fontWeight: 500,
+              marginBottom: 6,
+              color: "var(--muted)",
+            }}
+          >
             {label}
           </label>
         )}
-        
+
         <div style={{ position: "relative" }}>
           <button
             type="button"
