@@ -2,6 +2,7 @@ export type {
   ChannelAccountSnapshot,
   ChannelGatewayContext,
   ChannelMessageActionAdapter,
+  ChannelPlugin,
 } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
