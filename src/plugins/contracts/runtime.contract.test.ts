@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderRuntimeModel } from "../types.js";
@@ -512,6 +515,33 @@ describe("provider runtime contract", () => {
       ).resolves.toEqual({
         token: "env-zai-token",
       });
+    });
+
+    it("falls back to legacy pi auth tokens for usage auth", async () => {
+      const provider = requireProvider("zai");
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-contract-"));
+      await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
+      await fs.writeFile(
+        path.join(home, ".pi", "agent", "auth.json"),
+        `${JSON.stringify({ "z-ai": { access: "legacy-zai-token" } }, null, 2)}\n`,
+        "utf8",
+      );
+
+      try {
+        await expect(
+          provider.resolveUsageAuth?.({
+            config: {} as never,
+            env: { HOME: home } as NodeJS.ProcessEnv,
+            provider: "zai",
+            resolveApiKeyFromConfigAndStore: () => undefined,
+            resolveOAuthToken: async () => null,
+          }),
+        ).resolves.toEqual({
+          token: "legacy-zai-token",
+        });
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
     });
 
     it("owns usage snapshot fetching", async () => {
