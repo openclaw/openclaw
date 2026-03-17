@@ -2751,43 +2751,50 @@ description: test skill
     );
   });
 
-  it("warns when hooks token looks short", async () => {
-    const cfg: OpenClawConfig = {
-      hooks: { enabled: true, token: "short" },
-    };
-
-    const res = await audit(cfg);
-
-    expectFinding(res, "hooks.token_too_short", "warn");
-  });
-
-  it("flags hooks token reuse of the gateway env token as critical", async () => {
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "shared-gateway-token-1234567890";
-    const cfg: OpenClawConfig = {
-      hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
-    };
-
-    try {
-      const res = await audit(cfg);
-      expectFinding(res, "hooks.token_reuse_gateway_token", "critical");
-    } finally {
-      if (prevToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-      }
-    }
-  });
-
-  it("warns when hooks.defaultSessionKey is unset", async () => {
-    const cfg: OpenClawConfig = {
-      hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
-    };
-
-    const res = await audit(cfg);
-
-    expectFinding(res, "hooks.default_session_key_unset", "warn");
+  it.each([
+    {
+      name: "warns when hooks token looks short",
+      cfg: {
+        hooks: { enabled: true, token: "short" },
+      } satisfies OpenClawConfig,
+      expectedFinding: "hooks.token_too_short",
+      expectedSeverity: "warn" as const,
+    },
+    {
+      name: "flags hooks token reuse of the gateway env token as critical",
+      cfg: {
+        hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
+      } satisfies OpenClawConfig,
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
+      },
+      expectedFinding: "hooks.token_reuse_gateway_token",
+      expectedSeverity: "critical" as const,
+    },
+    {
+      name: "warns when hooks.defaultSessionKey is unset",
+      cfg: {
+        hooks: { enabled: true, token: "shared-gateway-token-1234567890" },
+      } satisfies OpenClawConfig,
+      expectedFinding: "hooks.default_session_key_unset",
+      expectedSeverity: "warn" as const,
+    },
+    {
+      name: "treats wildcard hooks.allowedAgentIds as unrestricted routing",
+      cfg: {
+        hooks: {
+          enabled: true,
+          token: "shared-gateway-token-1234567890",
+          defaultSessionKey: "hook:ingress",
+          allowedAgentIds: ["*"],
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: "hooks.allowed_agent_ids_unrestricted",
+      expectedSeverity: "warn" as const,
+    },
+  ])("$name", async (testCase) => {
+    const res = await audit(testCase.cfg, testCase.env ? { env: testCase.env } : undefined);
+    expectFinding(res, testCase.expectedFinding, testCase.expectedSeverity);
   });
 
   it("scores unrestricted hooks.allowedAgentIds by gateway exposure", async () => {
@@ -2821,19 +2828,6 @@ description: test skill
         ).toBe(true);
       }),
     );
-  });
-
-  it("treats wildcard hooks.allowedAgentIds as unrestricted routing", async () => {
-    const res = await audit({
-      hooks: {
-        enabled: true,
-        token: "shared-gateway-token-1234567890",
-        defaultSessionKey: "hook:ingress",
-        allowedAgentIds: ["*"],
-      },
-    });
-
-    expectFinding(res, "hooks.allowed_agent_ids_unrestricted", "warn");
   });
 
   it("scores hooks request sessionKey override by gateway exposure", async () => {
