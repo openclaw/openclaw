@@ -282,6 +282,107 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   skipQueue?: boolean;
 };
 
+const DIRECT_OUTBOUND_DEDUPE_WINDOW_MS = 1_500;
+
+type RecentDeliveryEntry = { expiresAt: number; results: OutboundDeliveryResult[] };
+
+const inflightDirectOutboundDeliveries = new Map<string, Promise<OutboundDeliveryResult[]>>();
+const recentDirectOutboundDeliveries = new Map<string, RecentDeliveryEntry>();
+
+function normalizePayloadForDedupe(payload: ReplyPayload): ReplyPayload | null {
+  const normalized = normalizeReplyPayloadsForDelivery([payload])[0];
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.channelData) {
+    return normalized;
+  }
+  if (typeof normalized.text === "string" || normalized.mediaUrl || normalized.mediaUrls?.length) {
+    return normalized;
+  }
+  return null;
+}
+
+function pruneDirectOutboundDedupe(now = Date.now()): void {
+  for (const [key, entry] of recentDirectOutboundDeliveries) {
+    if (entry.expiresAt <= now) {
+      recentDirectOutboundDeliveries.delete(key);
+    }
+  }
+}
+
+function shouldDedupeDirectOutbound(params: DeliverOutboundPayloadsParams): boolean {
+  return Boolean(params.mirror?.sessionKey || params.replyToId);
+}
+
+function buildDirectOutboundDedupeKey(params: DeliverOutboundPayloadsParams): string | null {
+  if (!shouldDedupeDirectOutbound(params)) {
+    return null;
+  }
+  const normalizedPayloads = params.payloads
+    .map((payload) => normalizePayloadForDedupe(payload))
+    .filter((payload): payload is ReplyPayload => Boolean(payload))
+    .map((payload) => ({
+      text: payload.text ?? "",
+      mediaUrl: payload.mediaUrl,
+      mediaUrls: payload.mediaUrls ?? [],
+      channelData: payload.channelData,
+    }));
+  return JSON.stringify({
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId ?? null,
+    threadId: params.threadId ?? null,
+    replyToId: params.replyToId ?? null,
+    bestEffort: params.bestEffort ?? false,
+    gifPlayback: params.gifPlayback ?? false,
+    forceDocument: params.forceDocument ?? false,
+    silent: params.silent ?? false,
+    skipQueue: params.skipQueue ?? false,
+    mirrorSessionKey: params.mirror?.sessionKey ?? null,
+    payloads: normalizedPayloads,
+  });
+}
+
+async function withDirectOutboundDedupe(
+  params: DeliverOutboundPayloadsParams,
+  run: () => Promise<OutboundDeliveryResult[]>,
+): Promise<OutboundDeliveryResult[]> {
+  const dedupeKey = buildDirectOutboundDedupeKey(params);
+  if (!dedupeKey) {
+    return run();
+  }
+  const now = Date.now();
+  pruneDirectOutboundDedupe(now);
+  const recent = recentDirectOutboundDeliveries.get(dedupeKey);
+  if (recent && recent.expiresAt > now) {
+    return recent.results;
+  }
+  const inflight = inflightDirectOutboundDeliveries.get(dedupeKey);
+  if (inflight) {
+    return inflight;
+  }
+  const promise = (async () => {
+    try {
+      const results = await run();
+      recentDirectOutboundDeliveries.set(dedupeKey, {
+        results,
+        expiresAt: Date.now() + DIRECT_OUTBOUND_DEDUPE_WINDOW_MS,
+      });
+      return results;
+    } finally {
+      inflightDirectOutboundDeliveries.delete(dedupeKey);
+    }
+  })();
+  inflightDirectOutboundDeliveries.set(dedupeKey, promise);
+  return promise;
+}
+
+export function __resetOutboundDeliveryDedupeForTests(): void {
+  inflightDirectOutboundDeliveries.clear();
+  recentDirectOutboundDeliveries.clear();
+}
+
 type MessageSentEvent = {
   success: boolean;
   content: string;
@@ -483,62 +584,64 @@ async function applyMessageSendingHook(params: {
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
-  const { channel, to, payloads } = params;
+  return withDirectOutboundDedupe(params, async () => {
+    const { channel, to, payloads } = params;
 
-  // Write-ahead delivery queue: persist before sending, remove after success.
-  const queueId = params.skipQueue
-    ? null
-    : await enqueueDelivery({
-        channel,
-        to,
-        accountId: params.accountId,
-        payloads,
-        threadId: params.threadId,
-        replyToId: params.replyToId,
-        bestEffort: params.bestEffort,
-        gifPlayback: params.gifPlayback,
-        forceDocument: params.forceDocument,
-        silent: params.silent,
-        mirror: params.mirror,
-      }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
+    // Write-ahead delivery queue: persist before sending, remove after success.
+    const queueId = params.skipQueue
+      ? null
+      : await enqueueDelivery({
+          channel,
+          to,
+          accountId: params.accountId,
+          payloads,
+          threadId: params.threadId,
+          replyToId: params.replyToId,
+          bestEffort: params.bestEffort,
+          gifPlayback: params.gifPlayback,
+          forceDocument: params.forceDocument,
+          silent: params.silent,
+          mirror: params.mirror,
+        }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
-  // Wrap onError to detect partial failures under bestEffort mode.
-  // When bestEffort is true, per-payload errors are caught and passed to onError
-  // without throwing — so the outer try/catch never fires. We track whether any
-  // payload failed so we can call failDelivery instead of ackDelivery.
-  let hadPartialFailure = false;
-  const wrappedParams = params.onError
-    ? {
-        ...params,
-        onError: (err: unknown, payload: NormalizedOutboundPayload) => {
-          hadPartialFailure = true;
-          params.onError!(err, payload);
-        },
+    // Wrap onError to detect partial failures under bestEffort mode.
+    // When bestEffort is true, per-payload errors are caught and passed to onError
+    // without throwing — so the outer try/catch never fires. We track whether any
+    // payload failed so we can call failDelivery instead of ackDelivery.
+    let hadPartialFailure = false;
+    const wrappedParams = params.onError
+      ? {
+          ...params,
+          onError: (err: unknown, payload: NormalizedOutboundPayload) => {
+            hadPartialFailure = true;
+            params.onError!(err, payload);
+          },
+        }
+      : params;
+
+    try {
+      const results = await deliverOutboundPayloadsCore(wrappedParams);
+      if (queueId) {
+        if (hadPartialFailure) {
+          await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
+        } else {
+          await ackDelivery(queueId).catch(() => {}); // Best-effort cleanup.
+        }
       }
-    : params;
-
-  try {
-    const results = await deliverOutboundPayloadsCore(wrappedParams);
-    if (queueId) {
-      if (hadPartialFailure) {
-        await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
-      } else {
-        await ackDelivery(queueId).catch(() => {}); // Best-effort cleanup.
+      return results;
+    } catch (err) {
+      if (queueId) {
+        if (isAbortError(err)) {
+          await ackDelivery(queueId).catch(() => {});
+        } else {
+          await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
+            () => {},
+          );
+        }
       }
+      throw err;
     }
-    return results;
-  } catch (err) {
-    if (queueId) {
-      if (isAbortError(err)) {
-        await ackDelivery(queueId).catch(() => {});
-      } else {
-        await failDelivery(queueId, err instanceof Error ? err.message : String(err)).catch(
-          () => {},
-        );
-      }
-    }
-    throw err;
-  }
+  });
 }
 
 /** Core delivery logic (extracted for queue wrapper). */
