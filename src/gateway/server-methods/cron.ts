@@ -5,6 +5,7 @@ import {
   resolveCronRunLogPath,
 } from "../../cron/run-log.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import { validateCronDelivery } from "../../cron/validate-delivery.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import {
   ErrorCodes,
@@ -109,6 +110,22 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const jobCreate = normalized as unknown as CronJobCreate;
+
+    // Validate delivery configuration (cast to CronJob-like type for validation)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const deliveryValidation = validateCronDelivery(jobCreate as any);
+    if (deliveryValidation) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `delivery validation failed: ${deliveryValidation.message}`,
+        ),
+      );
+      return;
+    }
+
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -154,6 +171,30 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const patch = p.patch as unknown as CronJobPatch;
+
+    // Validate delivery configuration if it's being modified
+    if (patch.delivery !== undefined) {
+      // Get the existing job to check merged delivery config
+      const existingJob = context.cron.getJob(jobId);
+      if (existingJob) {
+        // Create a temporary merged job to validate
+        const mergedDelivery = patch.delivery ?? existingJob.delivery;
+        const mergedJob = { ...existingJob, delivery: mergedDelivery };
+        const deliveryValidation = validateCronDelivery(mergedJob);
+        if (deliveryValidation) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `delivery validation failed: ${deliveryValidation.message}`,
+            ),
+          );
+          return;
+        }
+      }
+    }
+
     if (patch.schedule) {
       const timestampValidation = validateScheduleTimestamp(patch.schedule);
       if (!timestampValidation.ok) {
