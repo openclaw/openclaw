@@ -469,10 +469,12 @@ description: test skill
       },
     ] as const;
 
-    for (const testCase of cases) {
-      const res = await testCase.run();
-      testCase.assert(res);
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await testCase.run();
+        testCase.assert(res);
+      }),
+    );
   });
 
   it("scores dangerous gateway.tools.allow over HTTP by exposure", async () => {
@@ -841,51 +843,39 @@ description: test skill
     );
   });
 
-  it("evaluates sandbox browser findings", async () => {
+  it("evaluates sandbox browser container findings", async () => {
     const cases = [
       {
         name: "warns when sandbox browser containers have missing or stale hash labels",
-        run: async () => {
-          const { stateDir, configPath } =
-            await createFilesystemAuditFixture("browser-hash-labels");
-          return runSecurityAudit({
-            config: {},
-            includeFilesystem: true,
-            includeChannelSecurity: false,
-            stateDir,
-            configPath,
-            execDockerRawFn: (async (args: string[]) => {
-              if (args[0] === "ps") {
-                return {
-                  stdout: Buffer.from(
-                    "openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n",
-                  ),
-                  stderr: Buffer.alloc(0),
-                  code: 0,
-                };
-              }
-              if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-old") {
-                return {
-                  stdout: Buffer.from("abc123\tepoch-v0\n"),
-                  stderr: Buffer.alloc(0),
-                  code: 0,
-                };
-              }
-              if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-missing-hash") {
-                return {
-                  stdout: Buffer.from("<no value>\t<no value>\n"),
-                  stderr: Buffer.alloc(0),
-                  code: 0,
-                };
-              }
-              return {
-                stdout: Buffer.alloc(0),
-                stderr: Buffer.from("not found"),
-                code: 1,
-              };
-            }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
-          });
-        },
+        fixtureLabel: "browser-hash-labels",
+        execDockerRawFn: (async (args: string[]) => {
+          if (args[0] === "ps") {
+            return {
+              stdout: Buffer.from("openclaw-sbx-browser-old\nopenclaw-sbx-browser-missing-hash\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-old") {
+            return {
+              stdout: Buffer.from("abc123\tepoch-v0\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-missing-hash") {
+            return {
+              stdout: Buffer.from("<no value>\t<no value>\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          return {
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.from("not found"),
+            code: 1,
+          };
+        }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
         assert: (res: SecurityAuditReport) => {
           expect(hasFinding(res, "sandbox.browser_container.hash_label_missing", "warn")).toBe(
             true,
@@ -899,21 +889,10 @@ description: test skill
       },
       {
         name: "skips sandbox browser hash label checks when docker inspect is unavailable",
-        run: async () => {
-          const { stateDir, configPath } = await createFilesystemAuditFixture(
-            "browser-hash-labels-skip",
-          );
-          return runSecurityAudit({
-            config: {},
-            includeFilesystem: true,
-            includeChannelSecurity: false,
-            stateDir,
-            configPath,
-            execDockerRawFn: (async () => {
-              throw new Error("spawn docker ENOENT");
-            }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
-          });
-        },
+        fixtureLabel: "browser-hash-labels-skip",
+        execDockerRawFn: (async () => {
+          throw new Error("spawn docker ENOENT");
+        }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
         assert: (res: SecurityAuditReport) => {
           expect(hasFinding(res, "sandbox.browser_container.hash_label_missing")).toBe(false);
           expect(hasFinding(res, "sandbox.browser_container.hash_epoch_stale")).toBe(false);
@@ -921,95 +900,54 @@ description: test skill
       },
       {
         name: "flags sandbox browser containers with non-loopback published ports",
-        run: async () => {
-          const { stateDir, configPath } = await createFilesystemAuditFixture(
-            "browser-non-loopback-publish",
-          );
-          return runSecurityAudit({
-            config: {},
-            includeFilesystem: true,
-            includeChannelSecurity: false,
-            stateDir,
-            configPath,
-            execDockerRawFn: (async (args: string[]) => {
-              if (args[0] === "ps") {
-                return {
-                  stdout: Buffer.from("openclaw-sbx-browser-exposed\n"),
-                  stderr: Buffer.alloc(0),
-                  code: 0,
-                };
-              }
-              if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-exposed") {
-                return {
-                  stdout: Buffer.from("hash123\t2026-02-21-novnc-auth-default\n"),
-                  stderr: Buffer.alloc(0),
-                  code: 0,
-                };
-              }
-              if (args[0] === "port" && args.at(-1) === "openclaw-sbx-browser-exposed") {
-                return {
-                  stdout: Buffer.from("6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"),
-                  stderr: Buffer.alloc(0),
-                  code: 0,
-                };
-              }
-              return {
-                stdout: Buffer.alloc(0),
-                stderr: Buffer.from("not found"),
-                code: 1,
-              };
-            }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
-          });
-        },
+        fixtureLabel: "browser-non-loopback-publish",
+        execDockerRawFn: (async (args: string[]) => {
+          if (args[0] === "ps") {
+            return {
+              stdout: Buffer.from("openclaw-sbx-browser-exposed\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (args[0] === "inspect" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+            return {
+              stdout: Buffer.from("hash123\t2026-02-21-novnc-auth-default\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (args[0] === "port" && args.at(-1) === "openclaw-sbx-browser-exposed") {
+            return {
+              stdout: Buffer.from("6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          return {
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.from("not found"),
+            code: 1,
+          };
+        }) as NonNullable<SecurityAuditOptions["execDockerRawFn"]>,
         assert: (res: SecurityAuditReport) => {
           expect(
             hasFinding(res, "sandbox.browser_container.non_loopback_publish", "critical"),
           ).toBe(true);
         },
       },
-      {
-        name: "warns when bridge network omits cdpSourceRange",
-        run: async () =>
-          audit({
-            agents: {
-              defaults: {
-                sandbox: {
-                  mode: "all",
-                  browser: { enabled: true, network: "bridge" },
-                },
-              },
-            },
-          }),
-        assert: (res: SecurityAuditReport) => {
-          const finding = res.findings.find(
-            (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
-          );
-          expect(finding?.severity).toBe("warn");
-          expect(finding?.detail).toContain("agents.defaults.sandbox.browser");
-        },
-      },
-      {
-        name: "does not warn for dedicated default browser network",
-        run: async () =>
-          audit({
-            agents: {
-              defaults: {
-                sandbox: {
-                  mode: "all",
-                  browser: { enabled: true },
-                },
-              },
-            },
-          }),
-        assert: (res: SecurityAuditReport) => {
-          expect(hasFinding(res, "sandbox.browser_cdp_bridge_unrestricted")).toBe(false);
-        },
-      },
     ] as const;
 
     await Promise.all(
       cases.map(async (testCase) => {
-        const res = await testCase.run();
+        const { stateDir, configPath } = await createFilesystemAuditFixture(testCase.fixtureLabel);
+        const res = await runSecurityAudit({
+          config: {},
+          includeFilesystem: true,
+          includeChannelSecurity: false,
+          stateDir,
+          configPath,
+          execDockerRawFn: testCase.execDockerRawFn,
+        });
         testCase.assert(res);
       }),
     );
@@ -1070,12 +1008,11 @@ description: test skill
         },
         assert: (
           res: SecurityAuditReport,
-          fixture: { stateDir: string; workspaceDir: string; outsideSkillPath?: string },
+          fixture: { stateDir: string; workspaceDir: string; outsideSkillPath: string },
         ) => {
           const finding = res.findings.find((f) => f.checkId === "skills.workspace.symlink_escape");
           expect(finding?.severity).toBe("warn");
-          expect(fixture.outsideSkillPath).toBeTruthy();
-          expect(finding?.detail).toContain(fixture.outsideSkillPath ?? "");
+          expect(finding?.detail).toContain(fixture.outsideSkillPath);
         },
       },
       {
@@ -1100,29 +1037,29 @@ description: test skill
       },
     ] as const;
 
-    await Promise.all(
-      cases
-        .filter((testCase) => testCase.supported)
-        .map(async (testCase) => {
-          const fixture = await testCase.setup();
-          const configPath = path.join(fixture.stateDir, "openclaw.json");
-          await fs.writeFile(configPath, "{}\n", "utf-8");
-          if (!isWindows) {
-            await fs.chmod(configPath, 0o600);
-          }
+    for (const testCase of cases) {
+      if (!testCase.supported) {
+        continue;
+      }
 
-          const res = await runSecurityAudit({
-            config: { agents: { defaults: { workspace: fixture.workspaceDir } } },
-            includeFilesystem: true,
-            includeChannelSecurity: false,
-            stateDir: fixture.stateDir,
-            configPath,
-            execDockerRawFn: execDockerRawUnavailable,
-          });
+      const fixture = await testCase.setup();
+      const configPath = path.join(fixture.stateDir, "openclaw.json");
+      await fs.writeFile(configPath, "{}\n", "utf-8");
+      if (!isWindows) {
+        await fs.chmod(configPath, 0o600);
+      }
 
-          testCase.assert(res, fixture);
-        }),
-    );
+      const res = await runSecurityAudit({
+        config: { agents: { defaults: { workspace: fixture.workspaceDir } } },
+        includeFilesystem: true,
+        includeChannelSecurity: false,
+        stateDir: fixture.stateDir,
+        configPath,
+        execDockerRawFn: execDockerRawUnavailable,
+      });
+
+      testCase.assert(res, fixture);
+    }
   });
 
   it("scores small-model risk by tool/sandbox exposure", async () => {
@@ -1257,9 +1194,64 @@ description: test skill
             ),
           );
         }
-        const expectedAbsent = "expectedAbsent" in testCase ? testCase.expectedAbsent : [];
-        for (const checkId of expectedAbsent) {
+        for (const checkId of testCase.expectedAbsent ?? []) {
           expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
+        }
+      }),
+    );
+  });
+
+  it("checks sandbox browser bridge-network restrictions", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedPresent: boolean;
+      expectedSeverity?: "warn";
+      detailIncludes?: string;
+    }> = [
+      {
+        name: "bridge without cdpSourceRange",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                browser: { enabled: true, network: "bridge" },
+              },
+            },
+          },
+        },
+        expectedPresent: true,
+        expectedSeverity: "warn",
+        detailIncludes: "agents.defaults.sandbox.browser",
+      },
+      {
+        name: "dedicated default network",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                browser: { enabled: true },
+              },
+            },
+          },
+        },
+        expectedPresent: false,
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        const finding = res.findings.find(
+          (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
+        );
+        expect(Boolean(finding), testCase.name).toBe(testCase.expectedPresent);
+        if (testCase.expectedPresent) {
+          expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+          if (testCase.detailIncludes) {
+            expect(finding?.detail, testCase.name).toContain(testCase.detailIncludes);
+          }
         }
       }),
     );
@@ -1313,16 +1305,19 @@ description: test skill
         for (const text of testCase.detailIncludes) {
           expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
         }
-        const detailExcludes = "detailExcludes" in testCase ? testCase.detailExcludes : [];
-        for (const text of detailExcludes) {
+        for (const text of testCase.detailExcludes ?? []) {
           expect(finding?.detail, `${testCase.name}:${text}`).not.toContain(text);
         }
       }),
     );
   });
 
-  it("evaluates dangerous gateway.nodes.allowCommands findings", async () => {
-    const cases = [
+  it("scores dangerous gateway.nodes.allowCommands by exposure", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+    }> = [
       {
         name: "loopback gateway",
         cfg: {
@@ -1330,8 +1325,8 @@ description: test skill
             bind: "loopback",
             nodes: { allowCommands: ["camera.snap", "screen.record"] },
           },
-        } as OpenClawConfig,
-        expectedSeverity: "warn" as const,
+        },
+        expectedSeverity: "warn",
       },
       {
         name: "lan-exposed gateway",
@@ -1340,44 +1335,36 @@ description: test skill
             bind: "lan",
             nodes: { allowCommands: ["camera.snap", "screen.record"] },
           },
-        } as OpenClawConfig,
-        expectedSeverity: "critical" as const,
+        },
+        expectedSeverity: "critical",
       },
-      {
-        name: "denied again suppresses dangerous allowCommands finding",
-        cfg: {
-          gateway: {
-            nodes: {
-              allowCommands: ["camera.snap", "screen.record"],
-              denyCommands: ["camera.snap", "screen.record"],
-            },
-          },
-        } as OpenClawConfig,
-        expectedAbsent: true,
-      },
-    ] as const;
+    ];
 
     await Promise.all(
       cases.map(async (testCase) => {
         const res = await audit(testCase.cfg);
-        if ("expectedAbsent" in testCase && testCase.expectedAbsent) {
-          expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
-          return;
-        }
-        const expectedSeverity =
-          "expectedSeverity" in testCase ? testCase.expectedSeverity : undefined;
-        if (!expectedSeverity) {
-          return;
-        }
-
         const finding = res.findings.find(
           (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
         );
-        expect(finding?.severity, testCase.name).toBe(expectedSeverity);
+        expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
         expect(finding?.detail, testCase.name).toContain("camera.snap");
         expect(finding?.detail, testCase.name).toContain("screen.record");
       }),
     );
+  });
+
+  it("does not flag dangerous allowCommands entries when denied again", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          allowCommands: ["camera.snap", "screen.record"],
+          denyCommands: ["camera.snap", "screen.record"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "gateway.nodes.allow_commands_dangerous");
   });
 
   it("flags agent profile overrides when global tools.profile is minimal", async () => {
@@ -1503,75 +1490,71 @@ description: test skill
     }
   });
 
-  it("warns on insecure or dangerous flags", async () => {
-    const cases = [
-      {
-        name: "control UI allows insecure auth",
-        cfg: {
-          gateway: {
-            controlUi: { allowInsecureAuth: true },
-          },
-        } satisfies OpenClawConfig,
-        expectedFinding: {
-          checkId: "gateway.control_ui.insecure_auth",
-          severity: "warn",
+  it.each([
+    {
+      name: "warns when control UI allows insecure auth",
+      cfg: {
+        gateway: {
+          controlUi: { allowInsecureAuth: true },
         },
-        expectedDangerousDetails: ["gateway.controlUi.allowInsecureAuth=true"],
+      } satisfies OpenClawConfig,
+      expectedFinding: {
+        checkId: "gateway.control_ui.insecure_auth",
+        severity: "warn",
       },
-      {
-        name: "control UI device auth is disabled",
-        cfg: {
-          gateway: {
-            controlUi: { dangerouslyDisableDeviceAuth: true },
-          },
-        } satisfies OpenClawConfig,
-        expectedFinding: {
-          checkId: "gateway.control_ui.device_auth_disabled",
-          severity: "critical",
+      expectedDangerousFlag: "gateway.controlUi.allowInsecureAuth=true",
+    },
+    {
+      name: "warns when control UI device auth is disabled",
+      cfg: {
+        gateway: {
+          controlUi: { dangerouslyDisableDeviceAuth: true },
         },
-        expectedDangerousDetails: ["gateway.controlUi.dangerouslyDisableDeviceAuth=true"],
+      } satisfies OpenClawConfig,
+      expectedFinding: {
+        checkId: "gateway.control_ui.device_auth_disabled",
+        severity: "critical",
       },
-      {
-        name: "generic insecure debug flags",
-        cfg: {
-          hooks: {
-            gmail: { allowUnsafeExternalContent: true },
-            mappings: [{ allowUnsafeExternalContent: true }],
-          },
-          tools: {
-            exec: {
-              applyPatch: {
-                workspaceOnly: false,
-              },
-            },
-          },
-        } satisfies OpenClawConfig,
-        expectedDangerousDetails: [
-          "hooks.gmail.allowUnsafeExternalContent=true",
-          "hooks.mappings[0].allowUnsafeExternalContent=true",
-          "tools.exec.applyPatch.workspaceOnly=false",
-        ],
-      },
-    ] as const;
+      expectedDangerousFlag: "gateway.controlUi.dangerouslyDisableDeviceAuth=true",
+    },
+  ])("$name", async (testCase) => {
+    const res = await audit(testCase.cfg);
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        if ("expectedFinding" in testCase) {
-          expect(res.findings, testCase.name).toEqual(
-            expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
-          );
-        }
-        const finding = res.findings.find(
-          (f) => f.checkId === "config.insecure_or_dangerous_flags",
-        );
-        expect(finding, testCase.name).toBeTruthy();
-        expect(finding?.severity, testCase.name).toBe("warn");
-        for (const detail of testCase.expectedDangerousDetails) {
-          expect(finding?.detail, `${testCase.name}:${detail}`).toContain(detail);
-        }
-      }),
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining(testCase.expectedFinding),
+        expect.objectContaining({
+          checkId: "config.insecure_or_dangerous_flags",
+          severity: "warn",
+          detail: expect.stringContaining(testCase.expectedDangerousFlag),
+        }),
+      ]),
     );
+  });
+
+  it("warns when insecure/dangerous debug flags are enabled", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: {
+        gmail: { allowUnsafeExternalContent: true },
+        mappings: [{ allowUnsafeExternalContent: true }],
+      },
+      tools: {
+        exec: {
+          applyPatch: {
+            workspaceOnly: false,
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+
+    expect(finding).toBeTruthy();
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain("hooks.gmail.allowUnsafeExternalContent=true");
+    expect(finding?.detail).toContain("hooks.mappings[0].allowUnsafeExternalContent=true");
+    expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
   });
 
   it.each([
@@ -2635,9 +2618,19 @@ description: test skill
         severity: "critical",
       },
     },
-    {
-      name: "warns when Telegram allowFrom entries are non-numeric (legacy @username configs)",
-      cfg: {
+  ])("$name", async (testCase) => {
+    await withChannelSecurityStateDir(async () => {
+      const res = await runChannelSecurityAudit(testCase.cfg, testCase.plugins);
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+      );
+    });
+  });
+
+  it("warns when Telegram allowFrom entries are non-numeric (legacy @username configs)", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
         channels: {
           telegram: {
             enabled: true,
@@ -2647,19 +2640,22 @@ description: test skill
             groups: { "-100123": {} },
           },
         },
-      } satisfies OpenClawConfig,
-      plugins: [telegramPlugin],
-      expectedFinding: {
-        checkId: "channels.telegram.allowFrom.invalid_entries",
-        severity: "warn",
-      },
-    },
-  ])("$name", async (testCase) => {
-    await withChannelSecurityStateDir(async () => {
-      const res = await runChannelSecurityAudit(testCase.cfg, testCase.plugins);
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [telegramPlugin],
+      });
 
       expect(res.findings).toEqual(
-        expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.telegram.allowFrom.invalid_entries",
+            severity: "warn",
+          }),
+        ]),
       );
     });
   });
@@ -2834,10 +2830,9 @@ description: test skill
 
     await Promise.all(
       cases.map(async (testCase) => {
-        const env = "env" in testCase ? testCase.env : undefined;
-        const res = await audit(testCase.cfg, env ? { env } : undefined);
+        const res = await audit(testCase.cfg, testCase.env ? { env: testCase.env } : undefined);
         expectFinding(res, testCase.expectedFinding, testCase.expectedSeverity);
-        if ("expectedExtraFinding" in testCase) {
+        if (testCase.expectedExtraFinding) {
           expectFinding(
             res,
             testCase.expectedExtraFinding.checkId,
@@ -2998,141 +2993,124 @@ description: test skill
     );
   });
 
-  it("evaluates install metadata findings", async () => {
-    const cases = [
-      {
-        name: "warns on unpinned npm install specs and missing integrity metadata",
-        run: async () =>
-          runInstallMetadataAudit(
-            {
-              plugins: {
-                installs: {
-                  "voice-call": {
-                    source: "npm",
-                    spec: "@openclaw/voice-call",
-                  },
-                },
-              },
-              hooks: {
-                internal: {
-                  installs: {
-                    "test-hooks": {
-                      source: "npm",
-                      spec: "@openclaw/test-hooks",
-                    },
-                  },
-                },
-              },
-            } satisfies OpenClawConfig,
-            sharedInstallMetadataStateDir,
-          ),
-        expectedPresent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
-          "hooks.installs_unpinned_npm_specs",
-          "hooks.installs_missing_integrity",
-        ],
-      },
-      {
-        name: "does not warn on pinned npm install specs with integrity metadata",
-        run: async () =>
-          runInstallMetadataAudit(
-            {
-              plugins: {
-                installs: {
-                  "voice-call": {
-                    source: "npm",
-                    spec: "@openclaw/voice-call@1.2.3",
-                    integrity: "sha512-plugin",
-                  },
-                },
-              },
-              hooks: {
-                internal: {
-                  installs: {
-                    "test-hooks": {
-                      source: "npm",
-                      spec: "@openclaw/test-hooks@1.2.3",
-                      integrity: "sha512-hook",
-                    },
-                  },
-                },
-              },
-            } satisfies OpenClawConfig,
-            sharedInstallMetadataStateDir,
-          ),
-        expectedAbsent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
-          "hooks.installs_unpinned_npm_specs",
-          "hooks.installs_missing_integrity",
-        ],
-      },
-      {
-        name: "warns when install records drift from installed package versions",
-        run: async () => {
-          const tmp = await makeTmpDir("install-version-drift");
-          const stateDir = path.join(tmp, "state");
-          const pluginDir = path.join(stateDir, "extensions", "voice-call");
-          const hookDir = path.join(stateDir, "hooks", "test-hooks");
-          await fs.mkdir(pluginDir, { recursive: true });
-          await fs.mkdir(hookDir, { recursive: true });
-          await fs.writeFile(
-            path.join(pluginDir, "package.json"),
-            JSON.stringify({ name: "@openclaw/voice-call", version: "9.9.9" }),
-            "utf-8",
-          );
-          await fs.writeFile(
-            path.join(hookDir, "package.json"),
-            JSON.stringify({ name: "@openclaw/test-hooks", version: "8.8.8" }),
-            "utf-8",
-          );
-
-          return runInstallMetadataAudit(
-            {
-              plugins: {
-                installs: {
-                  "voice-call": {
-                    source: "npm",
-                    spec: "@openclaw/voice-call@1.2.3",
-                    integrity: "sha512-plugin",
-                    resolvedVersion: "1.2.3",
-                  },
-                },
-              },
-              hooks: {
-                internal: {
-                  installs: {
-                    "test-hooks": {
-                      source: "npm",
-                      spec: "@openclaw/test-hooks@1.2.3",
-                      integrity: "sha512-hook",
-                      resolvedVersion: "1.2.3",
-                    },
-                  },
-                },
+  it.each([
+    {
+      name: "warns on unpinned npm install specs and missing integrity metadata",
+      cfg: {
+        plugins: {
+          installs: {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call",
+            },
+          },
+        },
+        hooks: {
+          internal: {
+            installs: {
+              "test-hooks": {
+                source: "npm",
+                spec: "@openclaw/test-hooks",
               },
             },
-            stateDir,
-          );
+          },
         },
-        expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
-      },
-    ] as const;
+      } satisfies OpenClawConfig,
+      expectedPresent: [
+        "plugins.installs_unpinned_npm_specs",
+        "plugins.installs_missing_integrity",
+        "hooks.installs_unpinned_npm_specs",
+        "hooks.installs_missing_integrity",
+      ],
+    },
+    {
+      name: "does not warn on pinned npm install specs with integrity metadata",
+      cfg: {
+        plugins: {
+          installs: {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call@1.2.3",
+              integrity: "sha512-plugin",
+            },
+          },
+        },
+        hooks: {
+          internal: {
+            installs: {
+              "test-hooks": {
+                source: "npm",
+                spec: "@openclaw/test-hooks@1.2.3",
+                integrity: "sha512-hook",
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedAbsent: [
+        "plugins.installs_unpinned_npm_specs",
+        "plugins.installs_missing_integrity",
+        "hooks.installs_unpinned_npm_specs",
+        "hooks.installs_missing_integrity",
+      ],
+    },
+  ])("$name", async (testCase) => {
+    const res = await runInstallMetadataAudit(testCase.cfg, sharedInstallMetadataStateDir);
+    for (const checkId of testCase.expectedPresent ?? []) {
+      expect(hasFinding(res, checkId, "warn"), checkId).toBe(true);
+    }
+    for (const checkId of testCase.expectedAbsent ?? []) {
+      expect(hasFinding(res, checkId), checkId).toBe(false);
+    }
+  });
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await testCase.run();
-        const expectedPresent = "expectedPresent" in testCase ? testCase.expectedPresent : [];
-        for (const checkId of expectedPresent) {
-          expect(hasFinding(res, checkId, "warn"), `${testCase.name}:${checkId}`).toBe(true);
-        }
-        const expectedAbsent = "expectedAbsent" in testCase ? testCase.expectedAbsent : [];
-        for (const checkId of expectedAbsent) {
-          expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
-        }
-      }),
+  it("warns when install records drift from installed package versions", async () => {
+    const tmp = await makeTmpDir("install-version-drift");
+    const stateDir = path.join(tmp, "state");
+    const pluginDir = path.join(stateDir, "extensions", "voice-call");
+    const hookDir = path.join(stateDir, "hooks", "test-hooks");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.mkdir(hookDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/voice-call", version: "9.9.9" }),
+      "utf-8",
     );
+    await fs.writeFile(
+      path.join(hookDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/test-hooks", version: "8.8.8" }),
+      "utf-8",
+    );
+
+    const cfg: OpenClawConfig = {
+      plugins: {
+        installs: {
+          "voice-call": {
+            source: "npm",
+            spec: "@openclaw/voice-call@1.2.3",
+            integrity: "sha512-plugin",
+            resolvedVersion: "1.2.3",
+          },
+        },
+      },
+      hooks: {
+        internal: {
+          installs: {
+            "test-hooks": {
+              source: "npm",
+              spec: "@openclaw/test-hooks@1.2.3",
+              integrity: "sha512-hook",
+              resolvedVersion: "1.2.3",
+            },
+          },
+        },
+      },
+    };
+
+    const res = await runInstallMetadataAudit(cfg, stateDir);
+
+    expect(hasFinding(res, "plugins.installs_version_drift", "warn")).toBe(true);
+    expect(hasFinding(res, "hooks.installs_version_drift", "warn")).toBe(true);
   });
 
   it("evaluates extension tool reachability findings", async () => {
@@ -3242,124 +3220,95 @@ description: test skill
     );
   });
 
-  it("evaluates code-safety findings", async () => {
+  it("does not scan plugin code safety findings when deep audit is disabled", async () => {
+    const cfg: OpenClawConfig = {};
+    const nonDeepRes = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      deep: false,
+      stateDir: sharedCodeSafetyStateDir,
+      execDockerRawFn: execDockerRawUnavailable,
+    });
+    expect(nonDeepRes.findings.some((f) => f.checkId === "plugins.code_safety")).toBe(false);
+
+    // Deep-mode positive coverage lives in the detailed plugin+skills code-safety test below.
+  });
+
+  it("reports detailed code-safety issues for both plugins and skills", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: sharedCodeSafetyWorkspaceDir } },
+    };
+    const [pluginFindings, skillFindings] = await Promise.all([
+      collectPluginsCodeSafetyFindings({ stateDir: sharedCodeSafetyStateDir }),
+      collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir: sharedCodeSafetyStateDir }),
+    ]);
+
+    const pluginFinding = pluginFindings.find(
+      (finding) => finding.checkId === "plugins.code_safety" && finding.severity === "critical",
+    );
+    expect(pluginFinding).toBeDefined();
+    expect(pluginFinding?.detail).toContain("dangerous-exec");
+    expect(pluginFinding?.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
+
+    const skillFinding = skillFindings.find(
+      (finding) => finding.checkId === "skills.code_safety" && finding.severity === "critical",
+    );
+    expect(skillFinding).toBeDefined();
+    expect(skillFinding?.detail).toContain("dangerous-exec");
+    expect(skillFinding?.detail).toMatch(/runner\.js:\d+/);
+  });
+
+  it("evaluates plugin code-safety scanner failure modes", async () => {
     const cases = [
       {
-        name: "does not scan plugin code safety findings when deep audit is disabled",
-        run: async () =>
-          runSecurityAudit({
-            config: {},
-            includeFilesystem: true,
-            includeChannelSecurity: false,
-            deep: false,
-            stateDir: sharedCodeSafetyStateDir,
-            execDockerRawFn: execDockerRawUnavailable,
-          }),
-        assert: (result: SecurityAuditReport) => {
-          expect(result.findings.some((f) => f.checkId === "plugins.code_safety")).toBe(false);
-        },
-      },
-      {
-        name: "reports detailed code-safety issues for both plugins and skills",
-        run: async () => {
-          const cfg: OpenClawConfig = {
-            agents: { defaults: { workspace: sharedCodeSafetyWorkspaceDir } },
-          };
-          const [pluginFindings, skillFindings] = await Promise.all([
-            collectPluginsCodeSafetyFindings({ stateDir: sharedCodeSafetyStateDir }),
-            collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir: sharedCodeSafetyStateDir }),
-          ]);
-          return { pluginFindings, skillFindings };
-        },
-        assert: (
-          result: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>> extends never
-            ? never
-            : {
-                pluginFindings: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>>;
-                skillFindings: Awaited<ReturnType<typeof collectInstalledSkillsCodeSafetyFindings>>;
-              },
-        ) => {
-          const pluginFinding = result.pluginFindings.find(
-            (finding) =>
-              finding.checkId === "plugins.code_safety" && finding.severity === "critical",
-          );
-          expect(pluginFinding).toBeDefined();
-          expect(pluginFinding?.detail).toContain("dangerous-exec");
-          expect(pluginFinding?.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
-
-          const skillFinding = result.skillFindings.find(
-            (finding) =>
-              finding.checkId === "skills.code_safety" && finding.severity === "critical",
-          );
-          expect(skillFinding).toBeDefined();
-          expect(skillFinding?.detail).toContain("dangerous-exec");
-          expect(skillFinding?.detail).toMatch(/runner\.js:\d+/);
-        },
-      },
-      {
         name: "flags plugin extension entry path traversal in deep audit",
-        run: async () => {
-          const tmpDir = await makeTmpDir("audit-scanner-escape");
-          const pluginDir = path.join(tmpDir, "extensions", "escape-plugin");
-          await fs.mkdir(pluginDir, { recursive: true });
-          await fs.writeFile(
-            path.join(pluginDir, "package.json"),
-            JSON.stringify({
-              name: "escape-plugin",
-              openclaw: { extensions: ["../outside.js"] },
-            }),
-          );
-          await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
-          return collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-        },
+        label: "audit-scanner-escape",
+        pluginName: "escape-plugin",
+        extensions: ["../outside.js"],
         assert: (findings: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>>) => {
           expect(findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);
         },
       },
       {
         name: "reports scan_failed when plugin code scanner throws during deep audit",
-        run: async () => {
-          const scanSpy = vi
+        label: "audit-scanner-throws",
+        pluginName: "scanfail-plugin",
+        extensions: ["index.js"],
+        beforeRun: () =>
+          vi
             .spyOn(skillScanner, "scanDirectoryWithSummary")
-            .mockRejectedValueOnce(new Error("boom"));
-          try {
-            const tmpDir = await makeTmpDir("audit-scanner-throws");
-            const pluginDir = path.join(tmpDir, "extensions", "scanfail-plugin");
-            await fs.mkdir(pluginDir, { recursive: true });
-            await fs.writeFile(
-              path.join(pluginDir, "package.json"),
-              JSON.stringify({
-                name: "scanfail-plugin",
-                openclaw: { extensions: ["index.js"] },
-              }),
-            );
-            await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
-            return await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-          } finally {
-            scanSpy.mockRestore();
-          }
-        },
+            .mockRejectedValueOnce(new Error("boom")),
         assert: (findings: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>>) => {
           expect(findings.some((f) => f.checkId === "plugins.code_safety.scan_failed")).toBe(true);
         },
       },
     ] as const;
 
-    await Promise.all(
-      cases.slice(0, -1).map(async (testCase) => {
-        const result = await testCase.run();
-        testCase.assert(result as never);
-      }),
-    );
+    for (const testCase of cases) {
+      const scanSpy = testCase.beforeRun?.();
+      try {
+        const tmpDir = await makeTmpDir(testCase.label);
+        const pluginDir = path.join(tmpDir, "extensions", testCase.pluginName);
+        await fs.mkdir(pluginDir, { recursive: true });
+        await fs.writeFile(
+          path.join(pluginDir, "package.json"),
+          JSON.stringify({
+            name: testCase.pluginName,
+            openclaw: { extensions: testCase.extensions },
+          }),
+        );
+        await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
 
-    const scanFailureCase = cases.at(-1);
-    if (scanFailureCase) {
-      const result = await scanFailureCase.run();
-      scanFailureCase.assert(result as never);
+        const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
+        testCase.assert(findings);
+      } finally {
+        scanSpy?.mockRestore();
+      }
     }
   });
 
-  it("evaluates trust-model exposure findings", async () => {
+  it("evaluates open-group exposure findings", async () => {
     const cases = [
       {
         name: "flags open groupPolicy when tools.elevated is enabled",
@@ -3436,6 +3385,18 @@ description: test skill
           ).toBe(false);
         },
       },
+    ] as const;
+
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        testCase.assert(res);
+      }),
+    );
+  });
+
+  it("evaluates multi-user trust-model heuristics", async () => {
+    const cases = [
       {
         name: "warns when config heuristics suggest a likely multi-user setup",
         cfg: {
