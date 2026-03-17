@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
@@ -20,7 +21,6 @@ type ConfigSetParseOpts = {
 
 const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
 const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
-const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 
 function isIndexSegment(raw: string): boolean {
   return /^[0-9]+$/.test(raw);
@@ -396,7 +396,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/unset/file/validate). Run without subcommand for the setup wizard.",
+      "Non-interactive config helpers (get/set/unset/file/validate). Run without subcommand for guided setup.",
     )
     .addHelpText(
       "after",
@@ -405,7 +405,7 @@ export function registerConfigCli(program: Command) {
     )
     .option(
       "--section <section>",
-      "Configure wizard sections (repeatable). Use with no subcommand.",
+      "Configuration sections for guided setup (repeatable). Use with no subcommand.",
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )

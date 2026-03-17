@@ -1,4 +1,3 @@
-import { buildMoonshotProvider } from "../../src/agents/models-config.providers.static.js";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -16,6 +15,7 @@ import { MOONSHOT_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.mode
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import { buildMoonshotProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "moonshot";
 

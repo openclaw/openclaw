@@ -238,7 +238,7 @@ export async function applyAuthChoicePluginProvider(
   const provider = resolveProviderMatch(providers, options.providerId);
   if (!provider) {
     await params.prompter.note(
-      `${options.label} auth plugin is not available. Enable it and re-run the wizard.`,
+      `${options.label} auth plugin is not available. Enable it and re-run onboarding.`,
       options.label,
     );
     return { config: nextConfig };

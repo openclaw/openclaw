@@ -80,7 +80,7 @@ const voiceCallConfigSchema = {
     "streaming.streamPath": { label: "Media Stream Path", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
-      help: "Deep-merges with messages.tts (Edge is ignored for calls).",
+      help: "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       advanced: true,
     },
     "tts.openai.model": { label: "OpenAI TTS Model", advanced: true },
@@ -180,6 +180,7 @@ const voiceCallPlugin = {
         runtimePromise = createVoiceCallRuntime({
           config,
           coreConfig: api.config as CoreConfig,
+          agentRuntime: api.runtime.agent,
           ttsRuntime: api.runtime.tts,
           logger: api.logger,
         });
