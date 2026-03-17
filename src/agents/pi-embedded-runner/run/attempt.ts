@@ -39,6 +39,7 @@ import {
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
   buildBootstrapInjectionStats,
+  prependBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -2308,7 +2309,10 @@ export async function runEmbeddedAttempt(
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = params.prompt;
+        let effectivePrompt = prependBootstrapPromptWarning(
+          params.prompt,
+          bootstrapPromptWarning.lines,
+        );
         const hookCtx = {
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
@@ -2327,7 +2331,7 @@ export async function runEmbeddedAttempt(
         });
         {
           if (hookResult?.prependContext) {
-            effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+            effectivePrompt = `${hookResult.prependContext}\n\n${effectivePrompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );

@@ -614,13 +614,10 @@ export function buildAgentSystemPrompt(params: {
   }
 
   const contextFiles = params.contextFiles ?? [];
-  const bootstrapTruncationWarningLines = (params.bootstrapTruncationWarningLines ?? []).filter(
-    (line) => line.trim().length > 0,
-  );
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0 || bootstrapTruncationWarningLines.length > 0) {
+  if (validContextFiles.length > 0) {
     lines.push("# Project Context", "");
     if (validContextFiles.length > 0) {
       const hasSoulFile = validContextFiles.some((file) => {
@@ -633,13 +630,6 @@ export function buildAgentSystemPrompt(params: {
         lines.push(
           "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
         );
-      }
-      lines.push("");
-    }
-    if (bootstrapTruncationWarningLines.length > 0) {
-      lines.push("⚠ Bootstrap truncation warning:");
-      for (const warningLine of bootstrapTruncationWarningLines) {
-        lines.push(`- ${warningLine}`);
       }
       lines.push("");
     }
