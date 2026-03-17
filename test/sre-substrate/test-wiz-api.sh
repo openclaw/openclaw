@@ -25,7 +25,7 @@ printf '=== test-wiz-api: credential loading ===\n'
 plan_env="$(
   export WIZ_API_SKIP_VAULT=1
   export WIZ_CLIENT_ID='test-client-id'
-  export WIZ_CLIENT_SECRET='test-client-secret'
+  export WIZ_CLIENT_SECRET='test-client-secret' # pragma: allowlist secret
   export WIZ_API_TOKEN_CACHE="${TMP}/token-env.json"
   "${SCRIPT_PATH}" --print-plan 2>/dev/null
 )"
@@ -67,7 +67,7 @@ plan_vault="$(
   export WIZ_API_VAULT_JWT_FILE="${TMP}/jwt"
   export WIZ_API_TOKEN_CACHE="${TMP}/token-vault.json"
   export WIZ_CLIENT_ID='stale-env-id'
-  export WIZ_CLIENT_SECRET='stale-env-secret'
+  export WIZ_CLIENT_SECRET='stale-env-secret' # pragma: allowlist secret
   "${SCRIPT_PATH}" --print-plan 2>/dev/null
 )"
 
@@ -127,7 +127,7 @@ chmod +x "${TMP}/mock-curl-auth.sh"
 probe_result="$(
   export WIZ_API_SKIP_VAULT=1
   export WIZ_CLIENT_ID='auth-test-id'
-  export WIZ_CLIENT_SECRET='auth-test-secret'
+  export WIZ_CLIENT_SECRET='auth-test-secret' # pragma: allowlist secret
   export WIZ_API_CURL_BIN="${TMP}/mock-curl-auth.sh"
   export WIZ_API_JQ_BIN='jq'
   export WIZ_API_TOKEN_CACHE="${TMP}/token-auth.json"
@@ -190,7 +190,7 @@ chmod +x "${TMP}/mock-curl-gql.sh"
 query_result="$(
   export WIZ_API_SKIP_VAULT=1
   export WIZ_CLIENT_ID='gql-test-id'
-  export WIZ_CLIENT_SECRET='gql-test-secret'
+  export WIZ_CLIENT_SECRET='gql-test-secret' # pragma: allowlist secret
   export WIZ_API_CURL_BIN="${TMP}/mock-curl-gql.sh"
   export WIZ_API_JQ_BIN='jq'
   export WIZ_API_TOKEN_CACHE="${TMP}/token-gql.json"
@@ -246,7 +246,7 @@ chmod +x "${TMP}/mock-curl-paginate.sh"
 paginated_result="$(
   export WIZ_API_SKIP_VAULT=1
   export WIZ_CLIENT_ID='pag-test-id'
-  export WIZ_CLIENT_SECRET='pag-test-secret'
+  export WIZ_CLIENT_SECRET='pag-test-secret' # pragma: allowlist secret
   export WIZ_API_CURL_BIN="${TMP}/mock-curl-paginate.sh"
   export WIZ_API_JQ_BIN='jq'
   export WIZ_API_TOKEN_CACHE="${TMP}/token-pag.json"
@@ -298,7 +298,7 @@ chmod +x "${TMP}/mock-curl-echo.sh"
 run_subcmd() {
   export WIZ_API_SKIP_VAULT=1
   export WIZ_CLIENT_ID='sub-test-id'
-  export WIZ_CLIENT_SECRET='sub-test-secret'
+  export WIZ_CLIENT_SECRET='sub-test-secret' # pragma: allowlist secret
   export WIZ_API_CURL_BIN="${TMP}/mock-curl-echo.sh"
   export WIZ_API_JQ_BIN='jq'
   export WIZ_API_TOKEN_CACHE="${TMP}/token-sub-$1.json"
@@ -366,7 +366,7 @@ rm -f "${TMP}/wiz-api-401-count"
 retry_result="$(
   export WIZ_API_SKIP_VAULT=1
   export WIZ_CLIENT_ID='retry-id'
-  export WIZ_CLIENT_SECRET='retry-secret'
+  export WIZ_CLIENT_SECRET='retry-secret' # pragma: allowlist secret
   export WIZ_API_CURL_BIN="${TMP}/mock-curl-401.sh"
   export WIZ_API_JQ_BIN='jq'
   export WIZ_API_TOKEN_CACHE="${TMP}/token-retry.json"
@@ -384,7 +384,7 @@ printf '{ fileTest(first: 1) { nodes { id } } }' >"${TMP}/test-query.graphql"
 file_result="$(
   export WIZ_API_SKIP_VAULT=1
   export WIZ_CLIENT_ID='file-test-id'
-  export WIZ_CLIENT_SECRET='file-test-secret'
+  export WIZ_CLIENT_SECRET='file-test-secret' # pragma: allowlist secret
   export WIZ_API_CURL_BIN="${TMP}/mock-curl-auth.sh"
   export WIZ_API_JQ_BIN='jq'
   export WIZ_API_TOKEN_CACHE="${TMP}/token-file.json"
@@ -400,7 +400,7 @@ printf '\n=== test-wiz-api: max-pages limit ===\n'
 maxpages_result="$(
   export WIZ_API_SKIP_VAULT=1
   export WIZ_CLIENT_ID='maxpages-id'
-  export WIZ_CLIENT_SECRET='maxpages-secret'
+  export WIZ_CLIENT_SECRET='maxpages-secret' # pragma: allowlist secret
   export WIZ_API_CURL_BIN="${TMP}/mock-curl-paginate.sh"
   export WIZ_API_JQ_BIN='jq'
   export WIZ_API_TOKEN_CACHE="${TMP}/token-maxpages.json"

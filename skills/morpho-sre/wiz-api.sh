@@ -346,10 +346,10 @@ cmd_issues() {
       --type)        issue_type="$2"; shift 2 ;;
       --entity-type) entity_type="$2"; shift 2 ;;
       --first)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a non-negative integer"
         first="$2"; shift 2 ;;
       --max-pages)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a non-negative integer"
         max_pages="$2"; shift 2 ;;
       *) die "unknown issues flag: $1" ;;
     esac
@@ -406,10 +406,10 @@ cmd_vulns() {
       --cve)       cve="$2"; shift 2 ;;
       --has-fix)   has_fix="true"; shift ;;
       --first)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a non-negative integer"
         first="$2"; shift 2 ;;
       --max-pages)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a non-negative integer"
         max_pages="$2"; shift 2 ;;
       *) die "unknown vulns flag: $1" ;;
     esac
@@ -464,10 +464,10 @@ cmd_inventory() {
       --subscription) subscription="$2"; shift 2 ;;
       --search)       search="$2"; shift 2 ;;
       --first)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a non-negative integer"
         first="$2"; shift 2 ;;
       --max-pages)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a non-negative integer"
         max_pages="$2"; shift 2 ;;
       *) die "unknown inventory flag: $1" ;;
     esac
@@ -513,10 +513,10 @@ cmd_cloud_config() {
       --rule)      rule="$2"; shift 2 ;;
       --status)    status="$2"; shift 2 ;;
       --first)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a non-negative integer"
         first="$2"; shift 2 ;;
       --max-pages)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a non-negative integer"
         max_pages="$2"; shift 2 ;;
       *) die "unknown cloud-config flag: $1" ;;
     esac
@@ -564,10 +564,10 @@ cmd_k8s() {
     case "$1" in
       --cluster)   cluster="$2"; shift 2 ;;
       --first)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a non-negative integer"
         first="$2"; shift 2 ;;
       --max-pages)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a non-negative integer"
         max_pages="$2"; shift 2 ;;
       *) die "unknown k8s flag: $1" ;;
     esac
@@ -605,10 +605,10 @@ cmd_runtime() {
     case "$1" in
       --severity)  severity="$2"; shift 2 ;;
       --first)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --first: must be a non-negative integer"
         first="$2"; shift 2 ;;
       --max-pages)
-        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a positive integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "invalid --max-pages: must be a non-negative integer"
         max_pages="$2"; shift 2 ;;
       *) die "unknown runtime flag: $1" ;;
     esac

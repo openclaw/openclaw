@@ -76,15 +76,15 @@ Executes arbitrary GraphQL. If query string starts with `@`, reads from file. No
 
 ### Pre-built Queries
 
-| Subcommand     | Wiz GraphQL operation                                                                                  | Key filters                                                               | Default `first` |
-| -------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | --------------- |
-| `vulns`        | `vulnerabilityFindings`                                                                                | `--severity`, `--image`, `--cve`, `--has-fix` (flag, no value), `--first` | 50              |
-| `issues`       | `issuesV2`                                                                                             | `--severity`, `--status`, `--type`, `--entity-type`, `--first`            | 50              |
-| `inventory`    | `graphSearch`                                                                                          | `--type`, `--subscription`, `--search`, `--first`                         | 50              |
-| `cloud-config` | `configurationFindings`                                                                                | `--severity`, `--rule`, `--status`, `--first`                             | 50              |
-| `k8s`          | `kubernetesClusterQueries`                                                                             | `--cluster`, `--first`                                                    | 20              |
-| `runtime`      | `securityEvents`                                                                                       | `--severity`, `--first`                                                   | 50              |
-| `summary`      | Aggregation via `issueAnalytics` + `vulnerabilityFindingAggregates` + `configurationFindingAggregates` | (none)                                                                    | n/a             |
+| Subcommand     | Wiz GraphQL operation                                                                    | Key filters                                                               | Default `first` |
+| -------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | --------------- |
+| `vulns`        | `vulnerabilityFindings`                                                                  | `--severity`, `--image`, `--cve`, `--has-fix` (flag, no value), `--first` | 50              |
+| `issues`       | `issuesV2`                                                                               | `--severity`, `--status`, `--type`, `--entity-type`, `--first`            | 50              |
+| `inventory`    | `graphSearch`                                                                            | `--type`, `--subscription`, `--search`, `--first`                         | 50              |
+| `cloud-config` | `configurationFindings`                                                                  | `--severity`, `--rule`, `--status`, `--first`                             | 50              |
+| `k8s`          | `kubernetesClusters`                                                                     | `--cluster`, `--first`                                                    | 20              |
+| `runtime`      | `cloudEvents`                                                                            | `--severity`, `--first`                                                   | 50              |
+| `summary`      | Aliased `issuesV2` + `vulnerabilityFindings` + `configurationFindings` with `totalCount` | (none)                                                                    | n/a             |
 
 All pre-built subcommands:
 
@@ -155,8 +155,7 @@ Add after the existing Wiz MCP launcher entry:
 
 - `wiz-api.sh` authenticates via OAuth2 client credentials and queries the Wiz
   GraphQL API directly at `https://api.eu26.app.wiz.io/graphql`.
-- Credential resolution: Vault `secret/wiz/api-token` > `WIZ_CLIENT_ID`/`WIZ_CLIENT_SECRET`.
-- Uses the same Vault secret as `wiz-mcp.sh` — no separate credentials needed.
+- Credential resolution: Vault `secret/data/wiz/api-token` (KV v2 API path) > `WIZ_CLIENT_ID`/`WIZ_CLIENT_SECRET`.
 - Token is cached at `/tmp/wiz-api-token.json` (chmod 600) and auto-refreshed.
 - Pre-built subcommands auto-paginate (default max 10 pages).
 - Raw `query` subcommand does not auto-paginate.
@@ -225,7 +224,7 @@ Add after the existing Wiz MCP launcher entry:
 
 ## Non-goals
 
-- Does not replace `wiz-mcp.sh` (MCP launcher remains for ACP use)
+- Replaces `wiz-mcp.sh` (MCP launcher removed — direct API access is preferred)
 - No write/mutation operations (read-only queries only)
 - No built-in alerting or cron — the bot invokes on demand
 - No built-in rate limiting / backoff (reports 429 errors, bot decides retry strategy)
