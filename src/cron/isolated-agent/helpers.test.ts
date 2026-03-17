@@ -31,6 +31,20 @@ describe("pickSummaryFromPayloads", () => {
     ];
     expect(pickSummaryFromPayloads(payloads)).toBe("normal text");
   });
+
+  it("filters out isReasoning payloads", () => {
+    const payloads = [
+      { text: "Final answer" },
+      { text: "Let me think through this...", isReasoning: true },
+      { text: "error", isError: true },
+    ];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Final answer");
+  });
+
+  it("falls back to reasoning payload when no real text exists", () => {
+    const payloads = [{ text: "Reasoning step", isReasoning: true }];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Reasoning step");
+  });
 });
 
 describe("pickLastNonEmptyTextFromPayloads", () => {
@@ -54,6 +68,20 @@ describe("pickLastNonEmptyTextFromPayloads", () => {
       { text: "bad", isError: true },
     ];
     expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("good");
+  });
+
+  it("filters out isReasoning payloads", () => {
+    const payloads = [
+      { text: "Real output" },
+      { text: "Thinking...", isReasoning: true },
+      { text: "Service error", isError: true },
+    ];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("Real output");
+  });
+
+  it("falls back to reasoning payload when no real text exists", () => {
+    const payloads = [{ text: "Reasoning step", isReasoning: true }];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("Reasoning step");
   });
 });
 
@@ -83,6 +111,18 @@ describe("pickLastDeliverablePayload", () => {
     const normal = { text: "ok", isError: undefined };
     const error = { text: "bad", isError: true as const };
     expect(pickLastDeliverablePayload([normal, error])).toBe(normal);
+  });
+
+  it("filters out isReasoning payloads", () => {
+    const real = { text: "Delivered content" };
+    const reasoning = { text: "Thinking...", isReasoning: true as const };
+    const error = { text: "Error warning", isError: true as const };
+    expect(pickLastDeliverablePayload([real, reasoning, error])).toBe(real);
+  });
+
+  it("falls back to reasoning payload when no real payload exists", () => {
+    const reasoning = { text: "Reasoning step", isReasoning: true as const };
+    expect(pickLastDeliverablePayload([reasoning])).toBe(reasoning);
   });
 });
 

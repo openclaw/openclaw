@@ -5,7 +5,7 @@ import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
 type DeliveryPayload = Pick<
   ReplyPayload,
-  "text" | "mediaUrl" | "mediaUrls" | "interactive" | "channelData" | "isError"
+  "text" | "mediaUrl" | "mediaUrls" | "interactive" | "channelData" | "isError" | "isReasoning"
 >;
 
 export function pickSummaryFromOutput(text: string | undefined) {
@@ -18,10 +18,10 @@ export function pickSummaryFromOutput(text: string | undefined) {
 }
 
 export function pickSummaryFromPayloads(
-  payloads: Array<{ text?: string | undefined; isError?: boolean }>,
+  payloads: Array<{ text?: string | undefined; isError?: boolean; isReasoning?: boolean }>,
 ) {
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
+    if (payloads[i]?.isError || payloads[i]?.isReasoning) {
       continue;
     }
     const summary = pickSummaryFromOutput(payloads[i]?.text);
@@ -30,6 +30,9 @@ export function pickSummaryFromPayloads(
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
+    if (payloads[i]?.isError || payloads[i]?.isReasoning) {
+      continue;
+    }
     const summary = pickSummaryFromOutput(payloads[i]?.text);
     if (summary) {
       return summary;
@@ -39,10 +42,10 @@ export function pickSummaryFromPayloads(
 }
 
 export function pickLastNonEmptyTextFromPayloads(
-  payloads: Array<{ text?: string | undefined; isError?: boolean }>,
+  payloads: Array<{ text?: string | undefined; isError?: boolean; isReasoning?: boolean }>,
 ) {
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
+    if (payloads[i]?.isError || payloads[i]?.isReasoning) {
       continue;
     }
     const clean = (payloads[i]?.text ?? "").trim();
@@ -51,6 +54,9 @@ export function pickLastNonEmptyTextFromPayloads(
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
+    if (payloads[i]?.isError || payloads[i]?.isReasoning) {
+      continue;
+    }
     const clean = (payloads[i]?.text ?? "").trim();
     if (clean) {
       return clean;
@@ -68,7 +74,7 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
     return text || hasMedia || hasInteractive || hasChannelData;
   };
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
+    if (payloads[i]?.isError || payloads[i]?.isReasoning) {
       continue;
     }
     if (isDeliverable(payloads[i])) {
@@ -76,6 +82,9 @@ export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
+    if (payloads[i]?.isError || payloads[i]?.isReasoning) {
+      continue;
+    }
     if (isDeliverable(payloads[i])) {
       return payloads[i];
     }
