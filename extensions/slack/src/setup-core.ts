@@ -1,5 +1,3 @@
-import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
-import { createAllowlistSetupWizardProxy } from "../../../src/channels/plugins/setup-wizard-proxy.js";
 import {
   applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
@@ -22,6 +20,8 @@ import {
   type ChannelSetupWizardAllowFromEntry,
 } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "../../../src/terminal/links.js";
+import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
+import { createAllowlistSetupWizardProxy } from "../../../src/channels/plugins/setup-wizard-proxy.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { listSlackAccountIds, resolveSlackAccount, type ResolvedSlackAccount } from "./accounts.js";
 import {
@@ -112,7 +112,7 @@ export const slackSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
-export function createSlackSetupWizardProxy(
+export function createSlackSetupWizardBase(
   loadWizard: () => Promise<{ slackSetupWizard: ChannelSetupWizard }>,
 ) {
   const slackDmPolicy: ChannelSetupDmPolicy = {
