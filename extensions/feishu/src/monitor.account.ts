@@ -48,12 +48,12 @@ type ResolveReactionSyntheticEventParams = {
   cfg: ClawdbotConfig;
   accountId: string;
   event: FeishuReactionCreatedEvent;
+  reactionActionType: "created" | "deleted";
   botOpenId?: string;
   fetchMessage?: typeof getMessageFeishu;
   verificationTimeoutMs?: number;
   logger?: (message: string) => void;
   uuid?: () => string;
-  action?: "created" | "deleted";
 };
 
 export async function resolveReactionSyntheticEvent(
@@ -63,12 +63,12 @@ export async function resolveReactionSyntheticEvent(
     cfg,
     accountId,
     event,
+    reactionActionType,
     botOpenId,
     fetchMessage = getMessageFeishu,
     verificationTimeoutMs = FEISHU_REACTION_VERIFY_TIMEOUT_MS,
     logger,
     uuid = () => crypto.randomUUID(),
-    action = "created",
   } = params;
 
   const emoji = event.reaction_type?.emoji_type;
@@ -126,19 +126,20 @@ export async function resolveReactionSyntheticEvent(
   const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
   const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
   const syntheticChatType: FeishuChatType = resolvedChatType;
+  const syntheticMessageId = `${messageId}:reaction:${reactionActionType}:${emoji}:${senderId}`;
   return {
     sender: {
       sender_id: { open_id: senderId },
       sender_type: "user",
     },
     message: {
-      message_id: `${messageId}:reaction:${emoji}:${senderId}:${action}`,
+      message_id: syntheticMessageId,
       chat_id: syntheticChatId,
       chat_type: syntheticChatType,
       message_type: "text",
       content: JSON.stringify({
         text:
-          action === "deleted"
+          reactionActionType === "deleted"
             ? `[removed reaction ${emoji} from message ${messageId}]`
             : `[reacted with ${emoji} to message ${messageId}]`,
       }),
@@ -461,6 +462,7 @@ function registerEventHandlers(
             cfg,
             accountId,
             event,
+            reactionActionType: "created",
             botOpenId: myBotId,
             logger: log,
           });
@@ -482,17 +484,17 @@ function registerEventHandlers(
     },
     "im.message.reaction.deleted_v1": async (data) => {
       await runFeishuHandler({
-        errorMessage: `feishu[${accountId}]: error handling reaction removal event`,
+        errorMessage: `feishu[${accountId}]: error handling reaction.deleted event`,
         task: async () => {
-          const event = data as FeishuReactionDeletedEvent;
+          const event = data as FeishuReactionCreatedEvent;
           const myBotId = botOpenIds.get(accountId);
           const syntheticEvent = await resolveReactionSyntheticEvent({
             cfg,
             accountId,
             event,
+            reactionActionType: "deleted",
             botOpenId: myBotId,
             logger: log,
-            action: "deleted",
           });
           if (!syntheticEvent) {
             return;
