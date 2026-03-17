@@ -1,5 +1,5 @@
 import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import { type OpenClawConfig } from "../../../src/config/config.js";
 import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
 import { normalizeAccountId } from "../../../src/routing/session-key.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";

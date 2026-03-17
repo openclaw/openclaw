@@ -3,10 +3,12 @@ import type {
   DiscordAccountConfig,
   DiscordActionConfig,
 } from "openclaw/plugin-sdk/discord";
-import { createAccountActionGate } from "../../../src/channels/plugins/account-action-gate.js";
-import { createAccountListHelpers } from "../../../src/channels/plugins/account-helpers.js";
-import { resolveAccountEntry } from "../../../src/routing/account-lookup.js";
-import { normalizeAccountId } from "../../../src/routing/session-key.js";
+import {
+  createAccountActionGate,
+  createAccountListHelpers,
+  normalizeAccountId,
+  resolveAccountEntry,
+} from "../../../src/plugin-sdk-internal/accounts.js";
 import { resolveDiscordToken } from "./token.js";
 
 export type ResolvedDiscordAccount = {

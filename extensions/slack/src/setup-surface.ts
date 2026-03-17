@@ -1,6 +1,11 @@
 import {
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  hasConfiguredSecretInput,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
+  normalizeAccountId,
+  type OpenClawConfig,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
@@ -8,17 +13,13 @@ import {
   setAccountGroupPolicyForChannel,
   setLegacyChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
+  type WizardPrompter,
+} from "../../../src/plugin-sdk-internal/setup.js";
 import type {
+  ChannelSetupDmPolicy,
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
-} from "../../../src/channels/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { hasConfiguredSecretInput } from "../../../src/config/types.secrets.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+} from "../../../src/plugin-sdk-internal/setup.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
