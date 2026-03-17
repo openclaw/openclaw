@@ -440,9 +440,14 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
   }
 
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, effectiveExtraParams, provider, {
-    skipCacheDefault: !hasUserParams,
-  });
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    agent.streamFn,
+    effectiveExtraParams,
+    provider,
+    {
+      skipCacheDefault: !hasUserParams,
+    },
+  );
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
