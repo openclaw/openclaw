@@ -42,6 +42,7 @@ import type {
   ConfigSetDryRunResult,
 } from "./config-set-dryrun.js";
 import {
+  hasBatchMode,
   hasProviderBuilderOptions,
   hasRefBuilderOptions,
   parseBatchSource,
@@ -593,7 +594,7 @@ function buildRefAssignmentOperation(params: {
 
 function parseProviderAliasFromTargetPath(path: PathSegment[]): string | null {
   if (
-    path.length === 3 &&
+    path.length >= 3 &&
     path[0] === SECRET_PROVIDER_PATH_PREFIX[0] &&
     path[1] === SECRET_PROVIDER_PATH_PREFIX[1]
   ) {
@@ -857,12 +858,9 @@ export async function runConfigSet(opts: {
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const hasBatchMode = Boolean(
-      (opts.cliOptions.batchJson && opts.cliOptions.batchJson.trim().length > 0) ||
-      (opts.cliOptions.batchFile && opts.cliOptions.batchFile.trim().length > 0),
-    );
+    const isBatchMode = hasBatchMode(opts.cliOptions);
     const modeResolution = resolveConfigSetMode({
-      hasBatchMode,
+      hasBatchMode: isBatchMode,
       hasRefBuilderOptions: hasRefBuilderOptions(opts.cliOptions),
       hasProviderBuilderOptions: hasProviderBuilderOptions(opts.cliOptions),
       strictJson: Boolean(opts.cliOptions.strictJson || opts.cliOptions.json),
@@ -938,6 +936,13 @@ export async function runConfigSet(opts: {
       if (opts.cliOptions.json) {
         runtime.log(JSON.stringify(dryRunResult, null, 2));
       } else {
+        if (!dryRunResult.checks.schema && !dryRunResult.checks.resolvability) {
+          runtime.log(
+            info(
+              "Dry run note: value mode does not run schema/resolvability checks. Use --strict-json, builder flags, or batch mode to enable validation checks.",
+            ),
+          );
+        }
         runtime.log(
           info(
             `Dry run successful: ${operations.length} update(s) validated against ${shortenHomePath(snapshot.path)}.`,
@@ -1126,7 +1131,11 @@ export function registerConfigCli(program: Command) {
     .argument("[value]", "Value (JSON5 or raw string)")
     .option("--strict-json", "Strict JSON5 parsing (error instead of raw string fallback)", false)
     .option("--json", "Legacy alias for --strict-json", false)
-    .option("--dry-run", "Validate changes without writing openclaw.json", false)
+    .option(
+      "--dry-run",
+      "Validate changes without writing openclaw.json (checks run in builder/json/batch modes)",
+      false,
+    )
     .option("--ref-provider <alias>", "SecretRef builder: provider alias")
     .option("--ref-source <source>", "SecretRef builder: source (env|file|exec)")
     .option("--ref-id <id>", "SecretRef builder: ref id")
