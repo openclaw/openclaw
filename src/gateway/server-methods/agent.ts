@@ -83,6 +83,7 @@ function mergeAgentWaitStructuredMetadata<T extends AgentWaitTerminalSnapshot>(
 }
 
 function isMissingAgentWaitStructuredMetadata(snapshot: AgentWaitTerminalSnapshot): boolean {
+  if (snapshot.stopReason === undefined) return true;
   return snapshot.stopReason === "tool_calls" && snapshot.pendingToolCalls === undefined;
 }
 
