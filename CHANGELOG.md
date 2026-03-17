@@ -296,6 +296,8 @@ Docs: https://docs.openclaw.ai
 - Discord/gateway startup: treat plain-text and transient `/gateway/bot` metadata fetch failures as transient startup errors so Discord gateway boot no longer crashes on unhandled rejections. (#44397) Thanks @jalehman.
 - Agents/Ollama overflow: rewrite Ollama `prompt too long` API payloads through the normal context-overflow sanitizer so embedded sessions keep the friendly overflow copy and auto-compaction trigger. (#34019) thanks @lishuaigit.
 
+- Control UI/auth: restore one-time legacy `?token=` imports for shared Control UI links while keeping `#token=` preferred, and carry pending query tokens through gateway URL confirmation so compatibility links still authenticate after confirmation. (#43979) Thanks @stim64045-spec.
+
 ## 2026.3.11
 
 ### Security
