@@ -429,6 +429,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
+          requestedEnv: params.env,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
           defaultTimeoutSec,

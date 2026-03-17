@@ -148,12 +148,14 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   providers: [],
   speechProviders: [],
   mediaUnderstandingProviders: [],
+  imageGenerationProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
   cliRegistrars: [],
   services: [],
   commands: [],
+  conversationBindingResolvedHandlers: [],
   diagnostics: [],
 });
 

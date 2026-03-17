@@ -273,7 +273,9 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Run changed extension tests
-        run: pnpm test:extension ${{ matrix.extension }}
+        env:
+          OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
+        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check.
   check:
@@ -302,8 +304,8 @@ jobs:
       - name: Enforce safe external URL opening policy
         run: pnpm lint:ui:no-raw-window-open
 
-  startup-memory:
-    name: "startup-memory"
+  build-smoke:
+    name: "build-smoke"
     needs: [docs-scope, changed-scope]
     if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
@@ -330,6 +332,34 @@ jobs:
 
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
+
+  gateway-watch-regression:
+    name: "gateway-watch-regression"
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run gateway watch regression harness
+        run: pnpm test:gateway:watch-regression
+
+      - name: Upload gateway watch regression artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-watch-regression
+          path: .local/gateway-watch-regression/
+          retention-days: 7
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
@@ -458,30 +488,30 @@ jobs:
         run: pre-commit run --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
-          BASE="$(
-            python - <<'PY'
-            import json
-            import os
+          if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base SHA detected; skipping zizmor."
+            exit 0
+          fi
 
-            with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as fh:
-                event = json.load(fh)
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} is unavailable; skipping zizmor."
+            exit 0
+          fi
 
-            if os.environ["GITHUB_EVENT_NAME"] == "push":
-                print(event["before"])
-            else:
-                print(event["pull_request"]["base"]["sha"])
-            PY
-          )"
-
-          mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          mapfile -t workflow_files < <(
+            git diff --name-only "${BASE_SHA}" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
+          )
           if [ "${#workflow_files[@]}" -eq 0 ]; then
             echo "No workflow changes detected; skipping zizmor."
             exit 0
           fi
 
+          printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
           pre-commit run zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies

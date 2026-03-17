@@ -1,20 +1,19 @@
 import {
-  buildAccountScopedDmSecurityPolicy,
-  buildChannelConfigSchema,
-  collectAllowlistProviderGroupPolicyWarnings,
-  collectOpenGroupPolicyRouteAllowlistWarnings,
-  DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
-  getChatChannelMeta,
-  normalizeE164,
   resolveWhatsAppConfigAllowFrom,
   resolveWhatsAppConfigDefaultTo,
-  resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppGroupRequireMention,
-  resolveWhatsAppGroupToolPolicy,
-  WhatsAppConfigSchema,
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  buildAccountScopedDmSecurityPolicy,
+  collectAllowlistProviderGroupPolicyWarnings,
+  collectOpenGroupPolicyRouteAllowlistWarnings,
+} from "openclaw/plugin-sdk/channel-policy";
+import {
+  DEFAULT_ACCOUNT_ID,
+  getChatChannelMeta,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/whatsapp";
+} from "openclaw/plugin-sdk/core";
+import { normalizeE164 } from "openclaw/plugin-sdk/setup";
 import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
@@ -23,6 +22,14 @@ import {
 } from "./accounts.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
+
+export async function loadWhatsAppChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
+export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(async () => ({
+  whatsappSetupWizard: (await loadWhatsAppChannelRuntime()).whatsappSetupWizard,
+}));
 
 export function createWhatsAppSetupWizardProxy(
   loadWizard: () => Promise<{
@@ -69,6 +76,8 @@ export function createWhatsAppSetupWizardProxy(
 }
 
 export function createWhatsAppPluginBase(params: {
+  configSchema: Pick<ChannelPlugin<ResolvedWhatsAppAccount>, "configSchema">["configSchema"];
+  groups: Pick<ChannelPlugin<ResolvedWhatsAppAccount>, "groups">["groups"];
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
@@ -104,7 +113,7 @@ export function createWhatsAppPluginBase(params: {
     },
     reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
     gatewayMethods: ["web.login.start", "web.login.wait"],
-    configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
+    configSchema: params.configSchema,
     config: {
       listAccountIds: (cfg) => listWhatsAppAccountIds(cfg),
       resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
@@ -203,10 +212,6 @@ export function createWhatsAppPluginBase(params: {
       },
     },
     setup: params.setup,
-    groups: {
-      resolveRequireMention: resolveWhatsAppGroupRequireMention,
-      resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
-      resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
-    },
+    groups: params.groups,
   };
 }

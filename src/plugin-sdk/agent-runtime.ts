@@ -24,5 +24,6 @@ export * from "../agents/tools/web-shared.js";
 export * from "../agents/tools/discord-actions-moderation-shared.js";
 export * from "../agents/tools/web-fetch-utils.js";
 export * from "../agents/vllm-defaults.js";
-export * from "../commands/agent.js";
+// Intentional public runtime surface: channel plugins use ingress agent helpers directly.
+export * from "../agents/agent-command.js";
 export * from "../tts/tts.js";

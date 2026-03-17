@@ -21,6 +21,7 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
+export { formatDocsLink } from "../terminal/links.js";
 
 export {
   projectCredentialSnapshotFields,
@@ -81,3 +82,5 @@ export {
 } from "../../extensions/slack/src/actions.js";
 export { recordSlackThreadParticipation } from "../../extensions/slack/src/sent-thread-cache.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
+export { createSlackActions } from "../channels/plugins/slack.actions.js";
+export type { SlackActionContext } from "../agents/tools/slack-actions.js";
