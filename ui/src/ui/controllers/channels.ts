@@ -98,7 +98,11 @@ export async function waitWhatsAppLogin(
         state.whatsappLoginQrDataUrl = null;
         break;
       }
-      await refreshActiveWhatsAppQr(state);
+      try {
+        await refreshActiveWhatsAppQr(state);
+      } catch {
+        // Best-effort: a transient refresh failure should not abort login polling.
+      }
     }
   } catch (err) {
     state.whatsappLoginMessage = String(err);

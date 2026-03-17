@@ -164,6 +164,7 @@ export async function startWebLoginWithQr(
 
   let resolveQr: ((qr: string) => void) | null = null;
   let rejectQr: ((err: Error) => void) | null = null;
+  let pendingQr: string | undefined;
   const qrPromise = new Promise<string>((resolve, reject) => {
     resolveQr = resolve;
     rejectQr = reject;
@@ -181,11 +182,7 @@ export async function startWebLoginWithQr(
     sock = await createWaSocket(false, Boolean(opts.verbose), {
       authDir: account.authDir,
       onQr: (qr: string) => {
-        const current = activeLogins.get(account.accountId);
-        if (!current) {
-          return;
-        }
-        void updateLoginQrData(current, qr);
+        pendingQr = qr;
         clearTimeout(qrTimer);
         runtime.log(info("WhatsApp QR received."));
         if (resolveQr) {
@@ -193,6 +190,11 @@ export async function startWebLoginWithQr(
           resolveQr = null;
           rejectQr = null;
         }
+        const current = activeLogins.get(account.accountId);
+        if (!current) {
+          return;
+        }
+        void updateLoginQrData(current, qr);
       },
     });
   } catch (err) {
@@ -217,6 +219,9 @@ export async function startWebLoginWithQr(
   };
   activeLogins.set(account.accountId, login);
   attachLoginWaiter(account.accountId, login);
+  if (pendingQr) {
+    void updateLoginQrData(login, pendingQr);
+  }
 
   let qr: string;
   try {

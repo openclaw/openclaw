@@ -55,4 +55,45 @@ describe("channels controller whatsapp login", () => {
     expect(state.whatsappLoginConnected).toBe(true);
     expect(requests.filter((entry) => entry.method === "web.login.start")).toHaveLength(2);
   });
+
+  it("keeps waiting when QR refresh fails transiently", async () => {
+    const requests: Array<{ method: string; params?: unknown }> = [];
+    let refreshFailed = false;
+    const state = createState(async (method, params) => {
+      requests.push({ method, params });
+      if (method === "web.login.start") {
+        const startCount = requests.filter((entry) => entry.method === "web.login.start").length;
+        if (startCount === 1) {
+          return {
+            message: "first qr",
+            qrDataUrl: "data:first",
+          };
+        }
+        if (!refreshFailed) {
+          refreshFailed = true;
+          throw new Error("transient refresh failure");
+        }
+        return {
+          message: "refreshed qr",
+          qrDataUrl: "data:second",
+        };
+      }
+      if (method === "web.login.wait") {
+        const waitCount = requests.filter((entry) => entry.method === "web.login.wait").length;
+        return {
+          message:
+            waitCount < 3 ? "Still waiting for the QR scan." : "✅ Linked! WhatsApp is ready.",
+          connected: waitCount >= 3,
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    await startWhatsAppLogin(state, false);
+    await waitWhatsAppLogin(state, { timeoutMs: 10_000, pollMs: 1_000 });
+
+    expect(state.whatsappLoginConnected).toBe(true);
+    expect(state.whatsappBusy).toBe(false);
+    expect(state.whatsappLoginMessage).toBe("✅ Linked! WhatsApp is ready.");
+  });
 });
