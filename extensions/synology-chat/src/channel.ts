@@ -4,13 +4,13 @@
  * Implements the ChannelPlugin interface following the LINE pattern.
  */
 
+import { z } from "zod";
 import {
   DEFAULT_ACCOUNT_ID,
   setAccountEnabledInConfigSection,
   registerPluginHttpRoute,
   buildChannelConfigSchema,
-} from "openclaw/plugin-sdk/synology-chat";
-import { z } from "zod";
+} from "../api.js";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
 import { getSynologyRuntime } from "./runtime.js";
