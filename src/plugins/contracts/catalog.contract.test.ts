@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
@@ -14,24 +14,21 @@ const resolvePluginProvidersMock = vi.fn();
 const resolveOwningPluginIdsForProviderMock = vi.fn();
 const resolveNonBundledProviderPluginIdsMock = vi.fn();
 
-vi.mock("../providers.js", () => ({
-  resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
-  resolveOwningPluginIdsForProvider: (...args: unknown[]) =>
-    resolveOwningPluginIdsForProviderMock(...args),
-  resolveNonBundledProviderPluginIds: (...args: unknown[]) =>
-    resolveNonBundledProviderPluginIdsMock(...args),
-}));
+async function loadProviderRuntime() {
+  vi.doMock("../providers.js", () => ({
+    resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
+    resolveOwningPluginIdsForProvider: (...args: unknown[]) =>
+      resolveOwningPluginIdsForProviderMock(...args),
+    resolveNonBundledProviderPluginIds: (...args: unknown[]) =>
+      resolveNonBundledProviderPluginIdsMock(...args),
+  }));
 
-const {
-  augmentModelCatalogWithProviderPlugins,
-  buildProviderMissingAuthMessageWithPlugin,
-  resetProviderRuntimeHookCacheForTest,
-  resolveProviderBuiltInModelSuppression,
-} = await import("../provider-runtime.js");
+  return import("../provider-runtime.js");
+}
 
 describe("provider catalog contract", () => {
   beforeEach(() => {
-    resetProviderRuntimeHookCacheForTest();
+    vi.resetModules();
 
     resolveOwningPluginIdsForProviderMock.mockReset();
     resolveOwningPluginIdsForProviderMock.mockReturnValue(providerContractPluginIds);
@@ -49,15 +46,28 @@ describe("provider catalog contract", () => {
     });
   });
 
-  it("keeps codex-only missing-auth hints wired through the provider runtime", () => {
+  afterEach(() => {
+    vi.doUnmock("../providers.js");
+  });
+
+  it("keeps codex-only missing-auth hints wired through the provider runtime", async () => {
+    const { buildProviderMissingAuthMessageWithPlugin, resetProviderRuntimeHookCacheForTest } =
+      await loadProviderRuntime();
+    resetProviderRuntimeHookCacheForTest();
     expectCodexMissingAuthHint(buildProviderMissingAuthMessageWithPlugin);
   });
 
-  it("keeps built-in model suppression wired through the provider runtime", () => {
+  it("keeps built-in model suppression wired through the provider runtime", async () => {
+    const { resetProviderRuntimeHookCacheForTest, resolveProviderBuiltInModelSuppression } =
+      await loadProviderRuntime();
+    resetProviderRuntimeHookCacheForTest();
     expectCodexBuiltInSuppression(resolveProviderBuiltInModelSuppression);
   });
 
   it("keeps bundled model augmentation wired through the provider runtime", async () => {
+    const { augmentModelCatalogWithProviderPlugins, resetProviderRuntimeHookCacheForTest } =
+      await loadProviderRuntime();
+    resetProviderRuntimeHookCacheForTest();
     await expectAugmentedCodexCatalog(augmentModelCatalogWithProviderPlugins);
   });
 });
