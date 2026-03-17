@@ -877,6 +877,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       },
       imageGenerationModel: {
         primary: "openai/gpt-image-1",
+        fallbacks: ["google/gemini-3.1-flash-image-preview"],
       },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
@@ -2370,7 +2371,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.5 via LM Studio
       nodeManager: "npm", // npm | pnpm | yarn
     },
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
       },
@@ -2611,6 +2612,8 @@ See [Plugins](/tools/plugin).
   - `gateway.http.endpoints.responses.maxUrlParts`
   - `gateway.http.endpoints.responses.files.urlAllowlist`
   - `gateway.http.endpoints.responses.images.urlAllowlist`
+    Empty allowlists are treated as unset; use `gateway.http.endpoints.responses.files.allowUrl=false`
+    and/or `gateway.http.endpoints.responses.images.allowUrl=false` to disable URL fetching.
 - Optional response hardening header:
   - `gateway.http.securityHeaders.strictTransportSecurity` (set only for HTTPS origins you control; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts))
 

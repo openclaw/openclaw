@@ -1,16 +1,15 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
   setScopedCredentialValue,
 } from "openclaw/plugin-sdk/provider-web-search";
 
-const perplexityPlugin = {
+export default definePluginEntry({
   id: "perplexity",
   name: "Perplexity Plugin",
   description: "Bundled Perplexity plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "perplexity",
@@ -27,6 +26,4 @@ const perplexityPlugin = {
       }),
     );
   },
-};
-
-export default perplexityPlugin;
+});
