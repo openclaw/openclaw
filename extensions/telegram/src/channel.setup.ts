@@ -5,15 +5,15 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/telegram";
 import { type ResolvedTelegramAccount } from "./accounts.js";
+import type { TelegramProbe } from "./probe.js";
+import { telegramSetupAdapter } from "./setup-core.js";
+import { telegramSetupWizard } from "./setup-surface.js";
 import {
   findTelegramTokenOwnerAccountId,
   formatDuplicateTelegramTokenReason,
   telegramConfigAccessors,
   telegramConfigBase,
-} from "./plugin-shared.js";
-import type { TelegramProbe } from "./probe.js";
-import { telegramSetupAdapter } from "./setup-core.js";
-import { telegramSetupWizard } from "./setup-surface.js";
+} from "./shared.js";
 
 export const telegramSetupPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   id: "telegram",
