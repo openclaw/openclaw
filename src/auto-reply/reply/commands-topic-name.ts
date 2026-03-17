@@ -34,7 +34,42 @@ function normalizeBaseLabel(raw: string): string {
   return raw.replace(/^telegram\s*·\s*/i, "").trim();
 }
 
-function buildTopicLabel(baseLabel: string, name: string): string {
+function extractIdentitySuffix(raw: string, threadId: string | number | null | undefined): string {
+  const matches = raw.match(/\b(?:id:[^\s]+|topic:[^\s]+)/g) || [];
+  const idToken = matches.find((token) => token.startsWith("id:"));
+  const topicToken = matches.find((token) => token.startsWith("topic:"));
+  const parts: string[] = [];
+  if (idToken) {
+    parts.push(idToken);
+  }
+  if (topicToken) {
+    parts.push(topicToken);
+  } else if (threadId != null) {
+    parts.push(`topic:${threadId}`);
+  }
+  return parts.join(" ").trim();
+}
+
+function stripIdentityTokens(raw: string): string {
+  return raw
+    .replace(/\s*\b(?:id:[^\s]+|topic:[^\s]+)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function fitBaseLabel(base: string, suffix: string, maxLen: number): string {
+  if (!suffix) {
+    return base.slice(0, maxLen).trim();
+  }
+  if (suffix.length >= maxLen) {
+    return suffix.slice(0, maxLen).trim();
+  }
+  const available = Math.max(0, maxLen - suffix.length - 1);
+  const trimmedBase = base.slice(0, available).trim();
+  return trimmedBase ? `${trimmedBase} ${suffix}` : suffix;
+}
+
+function buildTopicLabel(baseLabel: string, identitySuffix: string, name: string): string {
   const prefix = "telegram";
   const separator = " · ";
   let normalizedBase = baseLabel ? normalizeBaseLabel(baseLabel) : "";
@@ -42,10 +77,10 @@ function buildTopicLabel(baseLabel: string, name: string): string {
   const maxNameWithoutBase = Math.max(1, MAX_LABEL_LEN - (prefix + separator).length);
   let nextName = name.slice(0, maxNameWithoutBase).trim();
 
-  if (normalizedBase) {
+  if (normalizedBase || identitySuffix) {
     const maxBaseLen = MAX_LABEL_LEN - (prefix + separator + separator + nextName).length;
     if (maxBaseLen > 0) {
-      normalizedBase = normalizedBase.slice(0, maxBaseLen).trim();
+      normalizedBase = fitBaseLabel(normalizedBase, identitySuffix, maxBaseLen);
     } else {
       normalizedBase = "";
     }
@@ -94,15 +129,17 @@ export const handleSetTopicNameCommand: CommandHandler = async (params, allowTex
     };
   }
   // Telegram topics are thread-scoped; sessionKey already includes the thread context.
-  // threadId is only used to enforce topic usage, not to disambiguate sessions.patch.
+  // threadId is used for identity in labels, not as a sessions.patch selector.
   if (!params.sessionKey) {
     return {
       shouldContinue: false,
       reply: { text: "⚙️ Could not resolve the current session key." },
     };
   }
-  const baseLabel = resolveConversationLabel(params);
-  const label = buildTopicLabel(baseLabel, parsed.name);
+  const rawLabel = resolveConversationLabel(params);
+  const identitySuffix = extractIdentitySuffix(rawLabel, threadId);
+  const baseLabel = stripIdentityTokens(rawLabel);
+  const label = buildTopicLabel(baseLabel, identitySuffix, parsed.name);
 
   try {
     await callGateway({
