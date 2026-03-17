@@ -355,6 +355,7 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 - If the gateway itself terminates HTTPS, you can set `gateway.http.securityHeaders.strictTransportSecurity` to emit the HSTS header from OpenClaw responses.
 - Detailed deployment guidance is in [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts).
 - For non-loopback Control UI deployments, `gateway.controlUi.allowedOrigins` is required by default.
+- `gateway.controlUi.allowedOrigins: ["*"]` is an explicit allow-all browser-origin policy, not a hardened default. Avoid it outside tightly controlled local testing.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
 
@@ -568,6 +569,8 @@ tool calls. Reduce the blast radius by:
 - For OpenResponses URL inputs (`input_file` / `input_image`), set tight
   `gateway.http.endpoints.responses.files.urlAllowlist` and
   `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
+  Empty allowlists are treated as unset; use `files.allowUrl: false` / `images.allowUrl: false`
+  if you want to disable URL fetching entirely.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
@@ -738,7 +741,7 @@ In minimal mode, the Gateway still broadcasts enough for device discovery (`role
 Gateway auth is **required by default**. If no token/password is configured,
 the Gateway refuses WebSocket connections (fail‑closed).
 
-The setup wizard generates a token by default (even for loopback) so
+Onboarding generates a token by default (even for loopback) so
 local clients must authenticate.
 
 Set a token so **all** WS clients must authenticate:
@@ -990,10 +993,9 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
 - For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.
-- Keep the Gateway and node hosts tailnet-only; avoid exposing relay/control ports to LAN or public Internet.
-- The Chrome extension relay’s CDP endpoint is auth-gated; only OpenClaw clients can connect.
+- Keep the Gateway and node hosts tailnet-only; avoid exposing browser control ports to LAN or public Internet.
 - Disable browser proxy routing when you don’t need it (`gateway.nodes.browser.mode="off"`).
-- Chrome extension relay mode is **not** “safer”; it can take over your existing Chrome tabs. Assume it can act as you in whatever that tab/profile can reach.
+- Chrome MCP existing-session mode is **not** “safer”; it can act as you in whatever that host Chrome profile can reach.
 
 ### Browser SSRF policy (trusted-network default)
 

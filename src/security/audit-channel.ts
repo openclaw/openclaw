@@ -11,18 +11,15 @@ import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../con
 import type { OpenClawConfig } from "../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.js";
 import { resolveDmAllowState } from "./dm-policy-shared.js";
 
-let auditChannelRuntimeModulePromise:
-  | Promise<typeof import("./audit-channel.runtime.js")>
-  | undefined;
-
-function loadAuditChannelRuntimeModule() {
-  auditChannelRuntimeModulePromise ??= import("./audit-channel.runtime.js");
-  return auditChannelRuntimeModulePromise;
-}
+const loadAuditChannelRuntimeModule = createLazyRuntimeSurface(
+  () => import("./audit-channel.runtime.js"),
+  ({ auditChannelRuntime }) => auditChannelRuntime,
+);
 
 function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
   return normalizeStringEntries(Array.isArray(list) ? list : undefined);
@@ -816,7 +813,7 @@ export async function collectChannelSecurityFindings(params: {
             "Telegram sender authorization requires numeric Telegram user IDs. " +
             `Found non-numeric allowFrom entries: ${examples.join(", ")}${more}.`,
           remediation:
-            "Replace @username entries with numeric Telegram user IDs (use onboarding to resolve), then re-run the audit.",
+            "Replace @username entries with numeric Telegram user IDs (use setup to resolve), then re-run the audit.",
         });
       }
 

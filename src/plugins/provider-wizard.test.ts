@@ -61,6 +61,82 @@ describe("provider wizard boundaries", () => {
     ).toEqual({
       provider,
       method: provider.auth[0],
+      wizard: provider.wizard?.setup,
+    });
+  });
+
+  it("builds wizard options from method-level metadata", () => {
+    const provider = makeProvider({
+      id: "openai",
+      label: "OpenAI",
+      auth: [
+        {
+          id: "api-key",
+          label: "OpenAI API key",
+          kind: "api_key",
+          wizard: {
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            groupId: "openai",
+            groupLabel: "OpenAI",
+          },
+          run: vi.fn(),
+        },
+      ],
+    });
+    resolvePluginProviders.mockReturnValue([provider]);
+
+    expect(resolveProviderWizardOptions({})).toEqual([
+      {
+        value: "openai-api-key",
+        label: "OpenAI API key",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+      },
+    ]);
+    expect(
+      resolveProviderPluginChoice({
+        providers: [provider],
+        choice: "openai-api-key",
+      }),
+    ).toEqual({
+      provider,
+      method: provider.auth[0],
+      wizard: provider.auth[0]?.wizard,
+    });
+  });
+
+  it("returns method wizard metadata for canonical choices", () => {
+    const provider = makeProvider({
+      id: "anthropic",
+      label: "Anthropic",
+      auth: [
+        {
+          id: "setup-token",
+          label: "setup-token",
+          kind: "token",
+          wizard: {
+            choiceId: "token",
+            modelAllowlist: {
+              allowedKeys: ["anthropic/claude-sonnet-4-6"],
+              initialSelections: ["anthropic/claude-sonnet-4-6"],
+              message: "Anthropic OAuth models",
+            },
+          },
+          run: vi.fn(),
+        },
+      ],
+    });
+
+    expect(
+      resolveProviderPluginChoice({
+        providers: [provider],
+        choice: "token",
+      }),
+    ).toEqual({
+      provider,
+      method: provider.auth[0],
+      wizard: provider.auth[0]?.wizard,
     });
   });
 
