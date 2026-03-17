@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
@@ -88,13 +88,13 @@ function resolveNextcloudTalkSecret(
   }
 
   if (merged.botSecretFile) {
-    try {
-      const fileSecret = readFileSync(merged.botSecretFile, "utf-8").trim();
-      if (fileSecret) {
-        return { secret: fileSecret, source: "secretFile" };
-      }
-    } catch {
-      // File not found or unreadable, fall through.
+    const fileSecret = tryReadSecretFileSync(
+      merged.botSecretFile,
+      "Nextcloud Talk bot secret file",
+      { rejectSymlink: true },
+    );
+    if (fileSecret) {
+      return { secret: fileSecret, source: "secretFile" };
     }
   }
 

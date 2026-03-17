@@ -45,6 +45,39 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     });
   });
 
+  it("forwards gateway subagent binding opt-in to runtime plugin bootstrap", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Response 1"],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-gateway-bind",
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(runtimePluginMocks.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+      allowGatewaySubagentBinding: true,
+    });
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+  });
+
   it("forwards sender identity fields into embedded attempts", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce({
       aborted: false,
@@ -75,6 +108,36 @@ describe("runEmbeddedPiAgent usage reporting", () => {
         senderName: "Josh Lehman",
         senderUsername: "josh",
         senderE164: "+15551234567",
+      }),
+    );
+  });
+
+  it("forwards memory flush write paths into memory-triggered attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: [],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "flush",
+      timeoutMs: 30000,
+      runId: "run-memory-forwarding",
+      trigger: "memory",
+      memoryFlushWritePath: "memory/2026-03-10.md",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "memory",
+        memoryFlushWritePath: "memory/2026-03-10.md",
       }),
     );
   });

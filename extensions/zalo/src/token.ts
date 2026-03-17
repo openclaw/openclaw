@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/zalo";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
 import type { ZaloConfig } from "./types.js";
@@ -9,16 +9,7 @@ export type ZaloTokenResolution = BaseTokenResolution & {
 };
 
 function readTokenFromFile(tokenFile: string | undefined): string {
-  const trimmedPath = tokenFile?.trim();
-  if (!trimmedPath) {
-    return "";
-  }
-  try {
-    return readFileSync(trimmedPath, "utf8").trim();
-  } catch {
-    // ignore read failures
-    return "";
-  }
+  return tryReadSecretFileSync(tokenFile, "Zalo token file", { rejectSymlink: true }) ?? "";
 }
 
 export function resolveZaloToken(
