@@ -26,7 +26,7 @@ describe("getShellConfig", () => {
   const tempDirs: string[] = [];
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["SHELL", "PATH"]);
+    envSnapshot = captureEnv(["SHELL", "PATH", "CLAWDBOT_SHELL"]);
     if (!isWin) {
       process.env.SHELL = "/usr/bin/fish";
     }
@@ -73,6 +73,39 @@ describe("getShellConfig", () => {
     process.env.PATH = "";
     const { shell } = getShellConfig();
     expect(shell).toBe("sh");
+  });
+
+  it("uses nushell directly when SHELL is nu", () => {
+    process.env.SHELL = "/usr/bin/nu";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/usr/bin/nu");
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("uses CLAWDBOT_SHELL override with absolute path", () => {
+    process.env.CLAWDBOT_SHELL = "/usr/bin/nu";
+    process.env.SHELL = "/usr/bin/bash";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/usr/bin/nu");
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("resolves CLAWDBOT_SHELL name from PATH", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "nu" }]);
+    process.env.CLAWDBOT_SHELL = "nu";
+    process.env.SHELL = "/usr/bin/bash";
+    process.env.PATH = binDir;
+    const { shell } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "nu"));
+  });
+
+  it("CLAWDBOT_SHELL takes precedence over SHELL", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "zsh" }]);
+    process.env.CLAWDBOT_SHELL = "zsh";
+    process.env.SHELL = "/usr/bin/nu";
+    process.env.PATH = binDir;
+    const { shell } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "zsh"));
   });
 });
 

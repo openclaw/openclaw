@@ -52,8 +52,29 @@ export function getShellConfig(): { shell: string; args: string[] } {
     };
   }
 
+  // CLAWDBOT_SHELL override: force a specific shell for exec regardless of $SHELL.
+  // Mirrors detectRuntimeShell() which uses the same var for system prompt identification.
+  const overrideShell = process.env.CLAWDBOT_SHELL?.trim();
+  if (overrideShell) {
+    const name = normalizeShellName(overrideShell);
+    if (name) {
+      const shellPath = path.isAbsolute(overrideShell)
+        ? overrideShell
+        : (resolveShellFromPath(name) ?? name);
+      return { shell: shellPath, args: ["-c"] };
+    }
+  }
+
   const envShell = process.env.SHELL?.trim();
   const shellName = envShell ? path.basename(envShell) : "";
+
+  // Nushell: use directly — structured data output is the point.
+  // Unlike Fish (which falls back to bash because it rejects bashisms),
+  // nushell should run as-is; the agent knows it's nushell via detectRuntimeShell().
+  if (shellName === "nu") {
+    return { shell: envShell!, args: ["-c"] };
+  }
+
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
