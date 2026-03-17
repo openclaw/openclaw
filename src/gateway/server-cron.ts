@@ -11,6 +11,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import { recordCronProceduralPlaybookSignalV0 } from "../cron/procedural-playbook-memory-v0.js";
 import {
   appendCronRunLog,
   resolveCronRunLogPath,
@@ -280,6 +281,14 @@ export function buildGatewayCronService(params: {
         sessionKey,
         heartbeat: heartbeatOverride,
         deps: { ...params.deps, runtime: defaultRuntime },
+      });
+    },
+    recordProceduralPlaybookSignal: (signal) => {
+      recordCronProceduralPlaybookSignalV0({
+        signal,
+        onError: (error) => {
+          cronLogger.warn({ err: error, jobId: signal.jobId }, "cron playbook memory failed");
+        },
       });
     },
     runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
