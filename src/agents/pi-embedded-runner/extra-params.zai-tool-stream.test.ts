@@ -27,7 +27,7 @@ function runToolStreamCase(params: ToolStreamCase) {
     model: params.model,
     options: params.options,
     payload: { model: params.model.id, messages: [] },
-  }).payload;
+  }).payload as Record<string, unknown>;
 }
 
 describe("extra-params: Z.AI tool_stream support", () => {
@@ -42,7 +42,7 @@ describe("extra-params: Z.AI tool_stream support", () => {
       } as Model<"openai-completions">,
     });
 
-    expect(payload.tool_stream).toBe(true);
+    expect(payload["tool_stream"]).toBe(true);
   });
 
   it("does not inject tool_stream for non-zai providers", () => {
