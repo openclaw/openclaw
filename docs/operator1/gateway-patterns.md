@@ -18,7 +18,7 @@ Single Gateway (port 18789)
    +-- Neo (CTO)
    +-- Morpheus (CMO)
    +-- Trinity (CFO)
-   +-- Tank, Dozer, Mouse, ... (all workers)
+   +-- [Specialist Workers] (Dynamic from Registry)
 ```
 
 ### Configuration
@@ -64,9 +64,9 @@ Each department runs its own gateway process on a dedicated port.
 
 ```
 Gateway A (port 18789) — Operator1 + shared services
-Gateway B (port 19789) — Neo + Engineering workers
-Gateway C (port 20789) — Morpheus + Marketing workers
-Gateway D (port 21789) — Trinity + Finance workers
+Gateway B (port 19789) — Neo + Engineering personas
+Gateway C (port 20789) — Morpheus + Marketing personas
+Gateway D (port 21789) — Trinity + Finance personas
 ```
 
 ### Configuration
@@ -91,11 +91,7 @@ Each config defines only its agents and port:
     "bind": "loopback"
   },
   "agents": {
-    "list": [
-      { "id": "neo", "role": "CTO", "...": "..." },
-      { "id": "tank", "...": "..." },
-      { "id": "dozer", "...": "..." }
-    ]
+    "list": [{ "id": "neo", "role": "CTO", "...": "..." }]
   }
 }
 ```

@@ -287,7 +287,7 @@ See [MCP Integration](/operator1/mcp) for the full MCP configuration reference.
 
 #### `commands`
 
-CLI command configuration, native skills, and display settings.
+CLI command configuration, native skills, and display settings. See [Slash Commands](/operator1/slash-commands) for the new unified command system.
 
 ```json
 {
@@ -296,6 +296,45 @@ CLI command configuration, native skills, and display settings.
     "nativeSkills": true,
     "restart": {},
     "ownerDisplay": "..."
+  }
+}
+```
+
+## SQLite State Model
+
+Operator1 has migrated to a **SQL-first state model**. All runtime state, configuration, and audit logs are consolidated into `~/.openclaw/operator1.db`.
+
+### Domain Prefixes
+
+The schema (v1-v12) organizes tables into logical domains:
+
+| Prefix      | Domain         | Purpose                                             |
+| :---------- | :------------- | :-------------------------------------------------- |
+| `core_`     | Infrastructure | Schema versions, global settings, KV pairs.         |
+| `session_`  | Sessions       | Session metadata, channel bindings, thread maps.    |
+| `delivery_` | Outbound       | Reliable message delivery queue and retries.        |
+| `agent_`    | Agents         | Auth profiles, subagent runs, capability registry.  |
+| `channel_`  | Communication  | Telegram/Discord pairing and allowlists.            |
+| `op1_`      | Operator1      | Teams, Marketplace, Commands, and Onboarding state. |
+
+## Straico Provider
+
+Operator1 supports **Straico** as a custom provider, giving you access to 50+ models (including Claude 4.5, GPT-5, and Gemini 3) via a single API key.
+
+### Configuration
+
+1. Set `STRAICO_API_KEY` in your environment.
+2. In the **Control Panel**, select Straico as your provider.
+3. Note: Straico models currently require `streaming: false` in the agent defaults.
+
+```json
+"models": {
+  "providers": {
+    "straico": {
+      "baseUrl": "https://api.straico.com/v0",
+      "apiKey": "${STRAICO_API_KEY}",
+      "api": "openai-completions"
+    }
   }
 }
 ```

@@ -85,32 +85,37 @@ _Gateway system architecture: WebSocket API, channels, nodes, and AI providers_
 
 ## Documentation
 
-**Architecture & Design**
+**1. Core Architecture**
+| Topic | Purpose |
+| :--- | :--- |
+| **[Architecture](/operator1/architecture)** | System design and components |
+| **[Agent Hierarchy](/operator1/agent-hierarchy)** | The 4-core agents and persona registry |
+| **[Delegation](/operator1/delegation)** | How tasks flow through the system |
+| **[Gateway Patterns](/operator1/gateway-patterns)** | Deployment options |
 
-| Topic                                                       | Purpose                              |
-| ----------------------------------------------------------- | ------------------------------------ |
-| **[Architecture](/docs/architecture/overview)**             | System design and components         |
-| **[Agent Hierarchy](/docs/architecture/agent-hierarchy)**   | The core agents and persona registry |
-| **[Delegation](/docs/architecture/delegation)**             | How tasks flow through the system    |
-| **[Gateway Patterns](/docs/architecture/gateway-patterns)** | Deployment options                   |
+**2. Control Panel**
+| Topic | Purpose |
+| :--- | :--- |
+| **[Configuration](/operator1/configuration)** | SQL-first settings and SQLite schema |
+| **[Channels](/operator1/channels)** | Connect Telegram, Discord, or Slack |
+| **[Heartbeat](/operator1/heartbeat)** | System health and audit logs |
+| **[Deployment](/operator1/deployment)** | GUI setup and onboarding wizard |
 
-**Configuration & Customization**
+**3. Agent Management**
+| Topic | Purpose |
+| :--- | :--- |
+| **[Agent Hub](/operator1/hub)** | Browse the 147+ Persona Registry |
+| **[Agent Configs](/operator1/agent-configs)** | SOUL.md, AGENTS.md, and workspace files |
+| **[Spawning](/operator1/spawning)** | How managers spawn specialist workers |
 
-| Topic                                                  | Purpose                                       |
-| ------------------------------------------------------ | --------------------------------------------- |
-| **[Configuration](/docs/configuration/overview)**      | Setup and configuration files                 |
-| **[Agent Configs](/docs/configuration/agent-configs)** | SOUL.md, AGENTS.md, and other workspace files |
-| **[Memory System](/docs/configuration/memory-system)** | How memory and knowledge are stored           |
-
-**Running Operator1**
-
-| Topic                                               | Purpose                         |
-| --------------------------------------------------- | ------------------------------- |
-| **[RPC Reference](/docs/operations/rpc)**           | API methods for managing agents |
-| **[Deployment](/docs/operations/deployment)**       | Setup on a new machine          |
-| **[Channels](/docs/operations/channels)**           | Connect messaging platforms     |
-| **[MCP Integration](/docs/operations/mcp)**         | Connect external tools          |
-| **[Sub-Agent Spawning](/docs/operations/spawning)** | How agents spawn sub-agents     |
+**4. Tools & Interface**
+| Topic | Purpose |
+| :--- | :--- |
+| **[Skills](/operator1/skills)** | Manage agent capabilities and native tools |
+| **[Slash Commands](/operator1/slash-commands)** | Unified `/` user actions |
+| **[MCP Integration](/operator1/mcp)** | Connect external Model Context servers |
+| **[Visualize](/operator1/visualize)** | Real-time pixel art Matrix canvas |
+| **[Memory System](/operator1/memory-system)** | QMD and project-scoped knowledge |
 
 ## Operator1 Features
 
@@ -141,7 +146,7 @@ A built-in, curated registry of skills, agent personas, and commands. No setup n
 
 ### SQLite State Consolidation
 
-Replace scattered JSON files with a unified SQLite database (`operator1.db`). All runtime state — sessions, projects, settings, audit logs — lives in one place. Schema auto-migrates on startup.
+Operator1 has migrated to a **SQL-first state model**, replacing scattered JSON files with a unified SQLite database (`operator1.db`). All runtime state — sessions, projects, settings, audit logs — lives in one place. Schema auto-migrates on startup.
 
 **What's in the database:**
 

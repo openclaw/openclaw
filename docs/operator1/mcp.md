@@ -415,12 +415,23 @@ Import detects duplicates by URL (or command+args for stdio servers) and skips s
 
 ## Web UI
 
-MCP server management is available in the Web UI under the **MCP Servers** section in the sidebar:
+MCP server management is integrated directly into the **MCP Servers** section of the Control Panel sidebar.
 
-- **Browse** — Discover servers from configured registries, filter by category, install
-- **Installed** — Manage connected servers (test, disable, remove), view status and latency
-- **Registries** — Add, sync, and manage server registries
-- **Health** — Auto-refreshing health dashboard with per-server status and metrics
+### Management Tabs
+
+The UI provides four dedicated views for managing your Model Context integration:
+
+1.  **Browse**: Discover new servers from your configured registries. Filter by category (search, execution, data) and install with one click.
+2.  **Installed**: A list of all active servers. Each row shows:
+    - **Status**: Live indicators (Connected, Retrying, Error).
+    - **Latency**: Real-time round-trip time for tool discovery call.
+    - **Actions**: Test connectivity, disable (stop process/disconnect), or remove.
+3.  **Registries**: Manage your upstream sources. Add private GitHub registries or sync official OpenClaw manifests.
+4.  **Health**: A detailed dashboard surfacing stdio process logs, SSE connection history, and tool registration errors.
+
+### Node Monitoring
+
+Individual stdio servers appear as **Nodes** in the sidebar, allowing you to monitor the resource usage (Memory/CPU) of every running MCP process on your machine.
 
 ## Gateway RPCs
 

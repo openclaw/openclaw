@@ -66,46 +66,51 @@ Edit `~/.openclaw/openclaw.json` and add the `$include` at the top level:
 
 This merges the agent hierarchy into the main config.
 
-### Step 5: Bootstrap agent workspaces
+### Step 5: Start the Gateway
 
-Create workspace directories for all agents:
+Operator1 runs as a background process. Start it using the CLI:
 
 ```bash
+openclaw gateway run
+```
+
+### Step 6: Complete Setup via GUI Onboarding
+
+Once the gateway is running, open your browser to:
+[http://localhost:5174](http://localhost:5174)
+
+Operator1 will automatically detect the fresh installation and launch the **6-Step Onboarding Wizard**:
+
+1. **Gateway Connection**: Verifies the browser can talk to your local process.
+2. **AI Provider**: Configure your primary LLM (Anthropic, OpenAI, Straico, etc.).
+3. **Agent Hierarchy**: Activate your core agents (Neo, Morpheus, Trinity) and set workspace paths.
+4. **Channels**: Connect Telegram, Discord, or Slack for remote access.
+5. **First Task**: Send a test message to verify the end-to-end pipeline.
+6. **Finish**: Finalizes the `operator1.db` state and unlocks the dashboard.
+
+---
+
+## Technical Details (Advanced)
+
+While GUI onboarding is recommended, you can manually bootstrap the system if running in a headless environment.
+
+### SQLite State Model
+
+Operator1 uses a single `~/.openclaw/operator1.db` for all runtime state.
+
+- **Migrations**: Automatically applied on startup (v1-v12).
+- **Domains**: Data is organized into prefixes like `core_`, `session_`, and `op1_`.
+
+### Manual Workspace Creation
+
+If skipping the wizard:
+
+```bash
+# Tier 1 (coordinator)
+mkdir -p ~/.openclaw/workspace-operator1
+
 # Tier 2 (department heads)
 mkdir -p ~/.openclaw/workspace-{neo,morpheus,trinity}
-
-# Tier 3 (workers)
-mkdir -p ~/.openclaw/workspace-{tank,dozer,mouse,spark,cipher,relay,ghost,binary,kernel,prism}
-mkdir -p ~/.openclaw/workspace-{niobe,switch,rex,ink,vibe,lens,echo,nova,pulse,blaze}
-mkdir -p ~/.openclaw/workspace-{oracle,seraph,zee,ledger,vault,shield,trace,quota,merit,beacon}
-```
-
-Copy templates to each workspace:
-
-```bash
-# Copy matrix-specific templates (Tier 2)
-for agent in neo morpheus trinity; do
-  cp -r docs/reference/templates/matrix/$agent/* ~/.openclaw/workspace-$agent/
-done
-
-# Copy matrix-specific templates (Tier 3 - where available)
-for agent in tank dozer mouse spark cipher relay ghost binary kernel prism \
-             niobe switch rex ink vibe lens echo nova pulse blaze \
-             oracle seraph zee ledger vault shield trace quota merit beacon; do
-  if [ -d "docs/reference/templates/matrix/$agent" ]; then
-    cp -r docs/reference/templates/matrix/$agent/* ~/.openclaw/workspace-$agent/
-  fi
-done
-```
-
-Create memory directories:
-
-```bash
-for agent in neo morpheus trinity tank dozer mouse spark cipher relay ghost binary kernel prism \
-             niobe switch rex ink vibe lens echo nova pulse blaze \
-             oracle seraph zee ledger vault shield trace quota merit beacon; do
-  mkdir -p ~/.openclaw/workspace-$agent/memory
-done
 ```
 
 ### Step 6: Configure QMD (optional)
@@ -125,12 +130,10 @@ PATH=/path/to/bun/bin:${PATH}
 
 See [Memory System](/operator1/memory-system) for full QMD configuration.
 
-### Step 7: Create agent runtime directories
+### Step 7: Create core runtime directories
 
 ```bash
-for agent in neo morpheus trinity tank dozer mouse spark cipher relay ghost binary kernel prism \
-             niobe switch rex ink vibe lens echo nova pulse blaze \
-             oracle seraph zee ledger vault shield trace quota merit beacon; do
+for agent in operator1 neo morpheus trinity; do
   mkdir -p ~/.openclaw/agents/$agent/agent
 done
 ```
@@ -199,7 +202,7 @@ See [Gateway Patterns](/operator1/gateway-patterns) for the full comparison.
 | Project memory     | `~/.openclaw/workspace/projects/` | Per-project         |
 | QMD models         | `~/.cache/qmd/models/`            | ~2.2 GB             |
 | Config             | `~/.openclaw/openclaw.json`       | ~10 KB              |
-| Agent config       | `~/.openclaw/matrix-agents.json`  | ~15 KB              |
+| Core hierarchy     | `~/.openclaw/matrix-agents.json`  | ~2 KB               |
 
 ## Troubleshooting
 

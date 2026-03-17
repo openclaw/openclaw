@@ -298,11 +298,33 @@ Each persona defined in `_index.json` includes a `path` to its master definition
    mkdir -p ~/.openclaw/workspace-{agentId}/memory
    ```
 
-5. Add the agent to `matrix-agents.json` (see [Configuration](/operator1/configuration))
+5. If this is a new **Core Agent** (Tier 1 or 2), add it to `matrix-agents.json`. If it's a **Specialist Worker**, add its persona to the Registry in `agents/personas/`.
+
+## Agent Registry Service
+
+The **Agent Registry Service** manages the lifecycle and health of all agents in the Matrix. It performs three critical functions:
+
+1.  **Dependency Validation**: Ensures Tier 3 specialist workers are only active if their Tier 2 department head is available.
+2.  **Capability Indexing**: Maps agent skills and roles to the `routing_hints` used by Operator1 for task delegation.
+3.  **Health Checks**: Validates that agent models are reachable and tool permissions are correctly configured.
+
+### Using Health Checks
+
+You can verify the status of any agent via the CLI:
+
+```bash
+# Check all agents
+openclaw agents health --all
+
+# Check a specific agent
+openclaw agents health neo
+```
+
+In the Web UI, use the **Agents → Health** dashboard for a real-time overview of the organization's operational status.
 
 ## Related
 
 - [Agent Hierarchy](/operator1/agent-hierarchy) — all agents and their roles
 - [Memory System](/operator1/memory-system) — how memory files are managed
-- [Configuration](/operator1/configuration) — JSON config for agent definitions
+- [Configuration](/operator1/configuration) — SQL-first configuration model
 - [Deployment](/operator1/deployment) — full setup walkthrough

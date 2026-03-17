@@ -127,18 +127,7 @@ Each agent is defined in `matrix-agents.json` with these fields:
   "workspace": "~/.openclaw/workspace-neo",
   "agentDir": "~/.openclaw/agents/neo/agent",
   "identity": "~/.openclaw/workspace-neo/IDENTITY.md",
-  "subagents": [
-    "tank",
-    "dozer",
-    "mouse",
-    "spark",
-    "cipher",
-    "relay",
-    "ghost",
-    "binary",
-    "kernel",
-    "prism"
-  ]
+  "subagents": ["*"]
 }
 ```
 
