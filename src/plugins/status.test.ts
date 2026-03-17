@@ -4,6 +4,7 @@ const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
 let buildPluginStatusReport: typeof import("./status.js").buildPluginStatusReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
+let buildAllPluginInspectReports: typeof import("./status.js").buildAllPluginInspectReports;
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => loadConfigMock(),
@@ -47,7 +48,8 @@ describe("buildPluginStatusReport", () => {
       services: [],
       commands: [],
     });
-    ({ buildPluginInspectReport, buildPluginStatusReport } = await import("./status.js"));
+    ({ buildAllPluginInspectReports, buildPluginInspectReport, buildPluginStatusReport } =
+      await import("./status.js"));
   });
 
   it("forwards an explicit env to plugin loading", () => {
@@ -154,6 +156,105 @@ describe("buildPluginStatusReport", () => {
     });
     expect(inspect?.diagnostics).toEqual([
       { level: "warn", pluginId: "google", message: "watch this seam" },
+    ]);
+  });
+
+  it("builds inspect reports for every loaded plugin", () => {
+    loadOpenClawPluginsMock.mockReturnValue({
+      plugins: [
+        {
+          id: "lca",
+          name: "LCA",
+          description: "Legacy hook plugin",
+          source: "/tmp/lca/index.ts",
+          origin: "workspace",
+          enabled: true,
+          status: "loaded",
+          toolNames: [],
+          hookNames: [],
+          channelIds: [],
+          providerIds: [],
+          speechProviderIds: [],
+          mediaUnderstandingProviderIds: [],
+          imageGenerationProviderIds: [],
+          webSearchProviderIds: [],
+          gatewayMethods: [],
+          cliCommands: [],
+          services: [],
+          commands: [],
+          httpRoutes: 0,
+          hookCount: 1,
+          configSchema: false,
+        },
+        {
+          id: "microsoft",
+          name: "Microsoft",
+          description: "Hybrid capability plugin",
+          source: "/tmp/microsoft/index.ts",
+          origin: "bundled",
+          enabled: true,
+          status: "loaded",
+          toolNames: [],
+          hookNames: [],
+          channelIds: [],
+          providerIds: ["microsoft"],
+          speechProviderIds: [],
+          mediaUnderstandingProviderIds: [],
+          imageGenerationProviderIds: [],
+          webSearchProviderIds: ["microsoft"],
+          gatewayMethods: [],
+          cliCommands: [],
+          services: [],
+          commands: [],
+          httpRoutes: 0,
+          hookCount: 0,
+          configSchema: false,
+        },
+      ],
+      diagnostics: [],
+      channels: [],
+      channelSetups: [],
+      providers: [],
+      speechProviders: [],
+      mediaUnderstandingProviders: [],
+      imageGenerationProviders: [],
+      webSearchProviders: [],
+      tools: [],
+      hooks: [
+        {
+          pluginId: "lca",
+          events: ["message"],
+          entry: {
+            hook: {
+              name: "legacy",
+              handler: () => undefined,
+            },
+          },
+        },
+      ],
+      typedHooks: [
+        {
+          pluginId: "lca",
+          hookName: "before_agent_start",
+          handler: () => undefined,
+          source: "/tmp/lca/index.ts",
+        },
+      ],
+      httpRoutes: [],
+      gatewayHandlers: {},
+      cliRegistrars: [],
+      services: [],
+      commands: [],
+    });
+
+    const inspect = buildAllPluginInspectReports();
+
+    expect(inspect.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
+    expect(inspect.map((entry) => entry.shape)).toEqual(["hook-only", "hybrid-capability"]);
+    expect(inspect[0]?.usesLegacyBeforeAgentStart).toBe(true);
+    expect(inspect[1]?.capabilities.map((entry) => entry.kind)).toEqual([
+      "text-inference",
+      "web-search",
     ]);
   });
 });

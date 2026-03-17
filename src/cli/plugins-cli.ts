@@ -20,7 +20,11 @@ import {
 import type { PluginRecord } from "../plugins/registry.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { resolvePluginSourceRoots, formatPluginSourceForTable } from "../plugins/source-display.js";
-import { buildPluginInspectReport, buildPluginStatusReport } from "../plugins/status.js";
+import {
+  buildAllPluginInspectReports,
+  buildPluginInspectReport,
+  buildPluginStatusReport,
+} from "../plugins/status.js";
 import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
@@ -45,6 +49,7 @@ export type PluginsListOptions = {
 
 export type PluginInspectOptions = {
   json?: boolean;
+  all?: boolean;
 };
 
 export type PluginUpdateOptions = {
@@ -139,6 +144,37 @@ function formatInspectSection(title: string, lines: string[]): string[] {
     return [];
   }
   return ["", `${theme.muted(`${title}:`)}`, ...lines];
+}
+
+function formatCapabilityKinds(
+  capabilities: Array<{
+    kind: string;
+  }>,
+): string {
+  if (capabilities.length === 0) {
+    return "-";
+  }
+  return capabilities.map((entry) => entry.kind).join(", ");
+}
+
+function formatHookSummary(params: {
+  usesLegacyBeforeAgentStart: boolean;
+  typedHookCount: number;
+  customHookCount: number;
+}): string {
+  const parts: string[] = [];
+  if (params.usesLegacyBeforeAgentStart) {
+    parts.push("before_agent_start");
+  }
+  const nonLegacyTypedHookCount =
+    params.typedHookCount - (params.usesLegacyBeforeAgentStart ? 1 : 0);
+  if (nonLegacyTypedHookCount > 0) {
+    parts.push(`${nonLegacyTypedHookCount} typed`);
+  }
+  if (params.customHookCount > 0) {
+    parts.push(`${params.customHookCount} custom`);
+  }
+  return parts.length > 0 ? parts.join(", ") : "-";
 }
 
 function formatInstallLines(install: PluginInstallRecord | undefined): string[] {
@@ -576,11 +612,74 @@ export function registerPluginsCli(program: Command) {
     .command("inspect")
     .alias("info")
     .description("Inspect plugin details")
-    .argument("<id>", "Plugin id")
+    .argument("[id]", "Plugin id")
+    .option("--all", "Inspect all plugins")
     .option("--json", "Print JSON")
-    .action((id: string, opts: PluginInspectOptions) => {
+    .action((id: string | undefined, opts: PluginInspectOptions) => {
       const cfg = loadConfig();
       const report = buildPluginStatusReport({ config: cfg });
+      if (opts.all) {
+        if (id) {
+          defaultRuntime.error("Pass either a plugin id or --all, not both.");
+          process.exit(1);
+        }
+        const inspectAll = buildAllPluginInspectReports({
+          config: cfg,
+          report,
+        });
+        const inspectAllWithInstall = inspectAll.map((inspect) => ({
+          ...inspect,
+          install: cfg.plugins?.installs?.[inspect.plugin.id],
+        }));
+
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(inspectAllWithInstall, null, 2));
+          return;
+        }
+
+        const tableWidth = getTerminalTableWidth();
+        const rows = inspectAll.map((inspect) => ({
+          Name: inspect.plugin.name || inspect.plugin.id,
+          ID:
+            inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id
+              ? inspect.plugin.id
+              : "",
+          Status:
+            inspect.plugin.status === "loaded"
+              ? theme.success("loaded")
+              : inspect.plugin.status === "disabled"
+                ? theme.warn("disabled")
+                : theme.error("error"),
+          Shape: inspect.shape,
+          Capabilities: formatCapabilityKinds(inspect.capabilities),
+          Hooks: formatHookSummary({
+            usesLegacyBeforeAgentStart: inspect.usesLegacyBeforeAgentStart,
+            typedHookCount: inspect.typedHooks.length,
+            customHookCount: inspect.customHooks.length,
+          }),
+        }));
+        defaultRuntime.log(
+          renderTable({
+            width: tableWidth,
+            columns: [
+              { key: "Name", header: "Name", minWidth: 14, flex: true },
+              { key: "ID", header: "ID", minWidth: 10, flex: true },
+              { key: "Status", header: "Status", minWidth: 10 },
+              { key: "Shape", header: "Shape", minWidth: 18 },
+              { key: "Capabilities", header: "Capabilities", minWidth: 28, flex: true },
+              { key: "Hooks", header: "Hooks", minWidth: 20, flex: true },
+            ],
+            rows,
+          }).trimEnd(),
+        );
+        return;
+      }
+
+      if (!id) {
+        defaultRuntime.error("Provide a plugin id or use --all.");
+        process.exit(1);
+      }
+
       const inspect = buildPluginInspectReport({
         id,
         config: cfg,
