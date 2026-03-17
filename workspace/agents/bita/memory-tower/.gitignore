@@ -1,0 +1,9 @@
+# 截圖原檔（101MB+，不入 git）
+downloads/
+
+# L0 raw JSON 批次檔（5.9MB+，不入 git）
+L0/*/batch-*.json
+
+# 拉取狀態（本機用）
+state.json
+pull-all.log
