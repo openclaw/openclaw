@@ -1130,52 +1130,55 @@ describe("signalMessageActions", () => {
     );
   });
 
-  it("rejects reaction when neither messageId nor toolContext.currentMessageId is provided", async () => {
+  it("rejects invalid signal reaction inputs before dispatch", async () => {
     const cfg = {
       channels: { signal: { account: "+15550001111" } },
     } as OpenClawConfig;
-    await expectSignalActionRejected(
-      { to: "+15559999999", emoji: "✅" },
-      /messageId.*required/,
-      cfg,
-    );
-  });
-
-  it("requires targetAuthor for group reactions", async () => {
-    const cfg = {
-      channels: { signal: { account: "+15550001111" } },
-    } as OpenClawConfig;
-    await expectSignalActionRejected(
-      { to: "signal:group:group-id", messageId: "123", emoji: "✅" },
-      /targetAuthor/,
-      cfg,
-    );
+    for (const testCase of [
+      {
+        params: { to: "+15559999999", emoji: "✅" },
+        error: /messageId.*required/,
+      },
+      {
+        params: { to: "signal:group:group-id", messageId: "123", emoji: "✅" },
+        error: /targetAuthor/,
+      },
+    ] as const) {
+      await expectSignalActionRejected(testCase.params, testCase.error, cfg);
+    }
   });
 });
 
 describe("slack actions adapter", () => {
-  it("forwards threadId for read", async () => {
-    await runSlackAction("read", {
-      channelId: "C1",
-      threadId: "171234.567",
-    });
-
-    expectFirstSlackAction({
-      action: "readMessages",
-      channelId: "C1",
-      threadId: "171234.567",
-    });
-  });
-
-  it("forwards normalized limit for emoji-list", async () => {
-    await runSlackAction("emoji-list", {
-      limit: "2.9",
-    });
-
-    expectFirstSlackAction({
-      action: "emojiList",
-      limit: 2,
-    });
+  it("forwards simple slack action params", async () => {
+    for (const testCase of [
+      {
+        action: "read" as const,
+        params: {
+          channelId: "C1",
+          threadId: "171234.567",
+        },
+        expected: {
+          action: "readMessages",
+          channelId: "C1",
+          threadId: "171234.567",
+        },
+      },
+      {
+        action: "emoji-list" as const,
+        params: {
+          limit: "2.9",
+        },
+        expected: {
+          action: "emojiList",
+          limit: 2,
+        },
+      },
+    ] as const) {
+      handleSlackAction.mockClear();
+      await runSlackAction(testCase.action, testCase.params);
+      expectFirstSlackAction(testCase.expected);
+    }
   });
 
   it("forwards blocks for send/edit actions", async () => {
