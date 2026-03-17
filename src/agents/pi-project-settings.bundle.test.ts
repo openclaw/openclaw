@@ -1,205 +1,222 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { captureEnv } from "../test-utils/env.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-
-const hoisted = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
-}));
-
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => hoisted.loadPluginManifestRegistry(...args),
-}));
-
-const { loadEnabledBundlePiSettingsSnapshot } = await import("./pi-project-settings.js");
+import { loadEnabledBundlePiSettingsSnapshot } from "./pi-project-settings.js";
 
 const tempDirs = createTrackedTempDirs();
 
-function buildRegistry(params: {
-  pluginRoot: string;
-  settingsFiles?: string[];
-}): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [
-      {
-        id: "claude-bundle",
-        name: "Claude Bundle",
-        format: "bundle",
-        bundleFormat: "claude",
-        bundleCapabilities: ["settings"],
-        channels: [],
-        providers: [],
-        skills: [],
-        settingsFiles: params.settingsFiles ?? ["settings.json"],
-        hooks: [],
-        origin: "workspace",
-        rootDir: params.pluginRoot,
-        source: params.pluginRoot,
-        manifestPath: path.join(params.pluginRoot, ".claude-plugin", "plugin.json"),
-      },
-    ],
-  };
+async function createHomeAndWorkspace() {
+  const homeDir = await tempDirs.make("openclaw-bundle-home-");
+  const workspaceDir = await tempDirs.make("openclaw-workspace-");
+  return { homeDir, workspaceDir };
+}
+
+async function createClaudeBundlePlugin(params: {
+  homeDir: string;
+  pluginId: string;
+  pluginJson?: Record<string, unknown>;
+  settingsJson?: Record<string, unknown>;
+  mcpJson?: Record<string, unknown>;
+}) {
+  const pluginRoot = path.join(params.homeDir, ".openclaw", "extensions", params.pluginId);
+  await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+  await fs.writeFile(
+    path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+    `${JSON.stringify({ name: params.pluginId, ...params.pluginJson }, null, 2)}\n`,
+    "utf-8",
+  );
+  if (params.settingsJson) {
+    await fs.writeFile(
+      path.join(pluginRoot, "settings.json"),
+      `${JSON.stringify(params.settingsJson, null, 2)}\n`,
+      "utf-8",
+    );
+  }
+  if (params.mcpJson) {
+    await fs.mkdir(path.join(pluginRoot, "servers"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".mcp.json"),
+      `${JSON.stringify(params.mcpJson, null, 2)}\n`,
+      "utf-8",
+    );
+  }
+  return pluginRoot;
 }
 
 afterEach(async () => {
-  hoisted.loadPluginManifestRegistry.mockReset();
+  clearPluginManifestRegistryCache();
   await tempDirs.cleanup();
 });
 
 describe("loadEnabledBundlePiSettingsSnapshot", () => {
   it("loads sanitized settings from enabled bundle plugins", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await tempDirs.make("openclaw-bundle-");
-    await fs.writeFile(
-      path.join(pluginRoot, "settings.json"),
-      JSON.stringify({
-        hideThinkingBlock: true,
-        shellPath: "/tmp/blocked-shell",
-        compaction: { keepRecentTokens: 64_000 },
-      }),
-      "utf-8",
-    );
-    hoisted.loadPluginManifestRegistry.mockReturnValue(buildRegistry({ pluginRoot }));
+    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+    try {
+      const { homeDir, workspaceDir } = await createHomeAndWorkspace();
+      process.env.HOME = homeDir;
+      process.env.USERPROFILE = homeDir;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_STATE_DIR;
 
-    const snapshot = loadEnabledBundlePiSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: {
-        plugins: {
-          entries: {
-            "claude-bundle": { enabled: true },
-          },
+      await createClaudeBundlePlugin({
+        homeDir,
+        pluginId: "claude-bundle",
+        settingsJson: {
+          hideThinkingBlock: true,
+          shellPath: "/tmp/blocked-shell",
+          compaction: { keepRecentTokens: 64_000 },
         },
-      },
-    });
+      });
 
-    expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(snapshot.shellPath).toBeUndefined();
-    expect(snapshot.compaction?.keepRecentTokens).toBe(64_000);
-  });
-
-  it("loads enabled bundle MCP servers into the Pi settings snapshot", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await tempDirs.make("openclaw-bundle-");
-    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-    await fs.mkdir(path.join(pluginRoot, "servers"), { recursive: true });
-    await fs.writeFile(
-      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "claude-bundle",
-      }),
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(pluginRoot, ".mcp.json"),
-      JSON.stringify({
-        mcpServers: {
-          bundleProbe: {
-            command: "node",
-            args: ["./servers/probe.mjs"],
-          },
-        },
-      }),
-      "utf-8",
-    );
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      buildRegistry({ pluginRoot, settingsFiles: [] }),
-    );
-
-    const snapshot = loadEnabledBundlePiSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: {
-        plugins: {
-          entries: {
-            "claude-bundle": { enabled: true },
-          },
-        },
-      },
-    });
-
-    expect(snapshot.mcpServers).toEqual({
-      bundleProbe: {
-        command: "node",
-        args: [path.join(pluginRoot, "servers", "probe.mjs")],
-        cwd: pluginRoot,
-      },
-    });
-  });
-
-  it("lets top-level MCP config override bundle MCP defaults", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await tempDirs.make("openclaw-bundle-");
-    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-    await fs.writeFile(
-      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "claude-bundle",
-      }),
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(pluginRoot, ".mcp.json"),
-      JSON.stringify({
-        mcpServers: {
-          sharedServer: {
-            command: "node",
-            args: ["./servers/bundle.mjs"],
-          },
-        },
-      }),
-      "utf-8",
-    );
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      buildRegistry({ pluginRoot, settingsFiles: [] }),
-    );
-
-    const snapshot = loadEnabledBundlePiSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: {
-        mcp: {
-          servers: {
-            sharedServer: {
-              url: "https://example.com/mcp",
+      const snapshot = loadEnabledBundlePiSettingsSnapshot({
+        cwd: workspaceDir,
+        cfg: {
+          plugins: {
+            entries: {
+              "claude-bundle": { enabled: true },
             },
           },
         },
-        plugins: {
-          entries: {
-            "claude-bundle": { enabled: true },
+      });
+
+      expect(snapshot.hideThinkingBlock).toBe(true);
+      expect(snapshot.shellPath).toBeUndefined();
+      expect(snapshot.compaction?.keepRecentTokens).toBe(64_000);
+    } finally {
+      env.restore();
+    }
+  });
+
+  it("loads enabled bundle MCP servers into the Pi settings snapshot", async () => {
+    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+    try {
+      const { homeDir, workspaceDir } = await createHomeAndWorkspace();
+      process.env.HOME = homeDir;
+      process.env.USERPROFILE = homeDir;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_STATE_DIR;
+
+      const pluginRoot = await createClaudeBundlePlugin({
+        homeDir,
+        pluginId: "claude-bundle",
+        mcpJson: {
+          mcpServers: {
+            bundleProbe: {
+              command: "node",
+              args: ["./servers/probe.mjs"],
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(snapshot.mcpServers).toEqual({
-      sharedServer: {
-        url: "https://example.com/mcp",
-      },
-    });
+      const snapshot = loadEnabledBundlePiSettingsSnapshot({
+        cwd: workspaceDir,
+        cfg: {
+          plugins: {
+            entries: {
+              "claude-bundle": { enabled: true },
+            },
+          },
+        },
+      });
+      const resolvedPluginRoot = await fs.realpath(pluginRoot);
+
+      expect(snapshot.mcpServers).toEqual({
+        bundleProbe: {
+          command: "node",
+          args: [path.join(resolvedPluginRoot, "servers", "probe.mjs")],
+          cwd: resolvedPluginRoot,
+        },
+      });
+    } finally {
+      env.restore();
+    }
+  });
+
+  it("lets top-level MCP config override bundle MCP defaults", async () => {
+    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+    try {
+      const { homeDir, workspaceDir } = await createHomeAndWorkspace();
+      process.env.HOME = homeDir;
+      process.env.USERPROFILE = homeDir;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_STATE_DIR;
+
+      await createClaudeBundlePlugin({
+        homeDir,
+        pluginId: "claude-bundle",
+        mcpJson: {
+          mcpServers: {
+            sharedServer: {
+              command: "node",
+              args: ["./servers/bundle.mjs"],
+            },
+          },
+        },
+      });
+
+      const snapshot = loadEnabledBundlePiSettingsSnapshot({
+        cwd: workspaceDir,
+        cfg: {
+          mcp: {
+            servers: {
+              sharedServer: {
+                url: "https://example.com/mcp",
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              "claude-bundle": { enabled: true },
+            },
+          },
+        },
+      });
+
+      expect(snapshot.mcpServers).toEqual({
+        sharedServer: {
+          url: "https://example.com/mcp",
+        },
+      });
+    } finally {
+      env.restore();
+    }
   });
 
   it("ignores disabled bundle plugins", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await tempDirs.make("openclaw-bundle-");
-    await fs.writeFile(
-      path.join(pluginRoot, "settings.json"),
-      JSON.stringify({ hideThinkingBlock: true }),
-      "utf-8",
-    );
-    hoisted.loadPluginManifestRegistry.mockReturnValue(buildRegistry({ pluginRoot }));
+    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+    try {
+      const { homeDir, workspaceDir } = await createHomeAndWorkspace();
+      process.env.HOME = homeDir;
+      process.env.USERPROFILE = homeDir;
+      delete process.env.OPENCLAW_HOME;
+      delete process.env.OPENCLAW_STATE_DIR;
 
-    const snapshot = loadEnabledBundlePiSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: {
-        plugins: {
-          entries: {
-            "claude-bundle": { enabled: false },
+      await createClaudeBundlePlugin({
+        homeDir,
+        pluginId: "claude-bundle",
+        settingsJson: {
+          hideThinkingBlock: true,
+        },
+      });
+
+      const snapshot = loadEnabledBundlePiSettingsSnapshot({
+        cwd: workspaceDir,
+        cfg: {
+          plugins: {
+            entries: {
+              "claude-bundle": { enabled: false },
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(snapshot).toEqual({});
+      expect(snapshot).toEqual({});
+    } finally {
+      env.restore();
+    }
   });
 });

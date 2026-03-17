@@ -10,6 +10,7 @@ import { defaultRuntime } from "../runtime.js";
 function fail(message: string): never {
   defaultRuntime.error(message);
   defaultRuntime.exit(1);
+  throw new Error("unreachable");
 }
 
 function printJson(value: unknown): void {

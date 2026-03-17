@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { inboundCtxCapture as capture } from "../../../../src/channels/plugins/contracts/inbound-testkit.js";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
-import { inboundCtxCapture as capture } from "../../../../test/helpers/inbound-contract-dispatch-mock.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { processDiscordMessage } from "./message-handler.process.js";
 import {
@@ -8,7 +8,7 @@ import {
   createDiscordDirectMessageContextOverrides,
 } from "./message-handler.test-harness.js";
 
-describe("discord processDiscordMessage inbound contract", () => {
+describe("discord processDiscordMessage inbound context", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     capture.ctx = undefined;
     const messageCtx = await createBaseDiscordMessageContext({

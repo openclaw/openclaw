@@ -109,7 +109,7 @@ vi.mock("../deliver-reply.js", () => ({
 import { updateLastRouteInBackground } from "./last-route.js";
 import { processMessage } from "./process-message.js";
 
-describe("web processMessage inbound contract", () => {
+describe("web processMessage inbound context", () => {
   beforeEach(async () => {
     capturedCtx = undefined;
     capturedDispatchParams = undefined;
