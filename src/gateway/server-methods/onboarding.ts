@@ -183,4 +183,123 @@ export const onboardingHandlers: GatewayRequestHandlers = {
       );
     }
   },
+
+  "onboarding.healthCheck": async ({ respond, context }) => {
+    type CheckItem = {
+      id: string;
+      label: string;
+      status: "pass" | "fail" | "warn";
+      detail?: string;
+    };
+    const checks: CheckItem[] = [];
+
+    // 1. Gateway responding
+    try {
+      const health = context.getHealthCache();
+      checks.push({
+        id: "gateway",
+        label: "Gateway",
+        status: health ? "pass" : "warn",
+        detail: health ? "Running" : "Health cache empty",
+      });
+    } catch {
+      checks.push({
+        id: "gateway",
+        label: "Gateway",
+        status: "pass",
+        detail: "Responding to RPCs",
+      });
+    }
+
+    // 2. AI provider / model reachable
+    try {
+      const catalog = await context.loadGatewayModelCatalog();
+      if (catalog.length > 0) {
+        checks.push({
+          id: "provider",
+          label: "AI Provider",
+          status: "pass",
+          detail: `${catalog.length} model${catalog.length !== 1 ? "s" : ""} available`,
+        });
+      } else {
+        checks.push({
+          id: "provider",
+          label: "AI Provider",
+          status: "fail",
+          detail: "No models found",
+        });
+      }
+    } catch (err) {
+      checks.push({
+        id: "provider",
+        label: "AI Provider",
+        status: "fail",
+        detail: err instanceof Error ? err.message : "Failed to load models",
+      });
+    }
+
+    // 3. Channels configured
+    try {
+      const snapshot = context.getRuntimeSnapshot();
+      const channelIds = Object.keys(snapshot.channels ?? {});
+      const runningCount = channelIds.filter((id) => {
+        const ch = snapshot.channels[id];
+        return ch && (ch as { running?: boolean }).running;
+      }).length;
+      if (channelIds.length > 0) {
+        checks.push({
+          id: "channels",
+          label: "Channels",
+          status: runningCount > 0 ? "pass" : "warn",
+          detail: `${runningCount} running of ${channelIds.length} configured`,
+        });
+      } else {
+        checks.push({
+          id: "channels",
+          label: "Channels",
+          status: "warn",
+          detail: "No channels configured",
+        });
+      }
+    } catch {
+      checks.push({
+        id: "channels",
+        label: "Channels",
+        status: "warn",
+        detail: "Could not check channels",
+      });
+    }
+
+    // 4. Config valid
+    try {
+      const state = getOnboardingState();
+      checks.push({
+        id: "onboarding",
+        label: "Onboarding",
+        status:
+          state.status === "completed" ? "pass" : state.status === "skipped" ? "warn" : "warn",
+        detail:
+          state.status === "completed"
+            ? "Completed"
+            : state.status === "skipped"
+              ? "Skipped"
+              : "Incomplete",
+      });
+    } catch {
+      checks.push({
+        id: "onboarding",
+        label: "Onboarding",
+        status: "warn",
+        detail: "Could not check status",
+      });
+    }
+
+    const allPass = checks.every((c) => c.status === "pass");
+    const hasFailure = checks.some((c) => c.status === "fail");
+    respond(true, {
+      healthy: allPass,
+      status: hasFailure ? "unhealthy" : allPass ? "healthy" : "degraded",
+      checks,
+    });
+  },
 };

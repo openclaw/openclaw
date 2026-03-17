@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { HealthCheckCard } from "@/components/onboarding/health-check-card";
 import { ConnectionStatus } from "@/components/ui/custom/status/connection-status";
 import { StatCard } from "@/components/ui/custom/status/stat-card";
 import { useGateway } from "@/hooks/use-gateway";
@@ -160,15 +161,18 @@ export function OverviewPage() {
   const navigate = useNavigate();
 
   // Auto-redirect to onboarding wizard on fresh installs
+  const [showHealthCheck, setShowHealthCheck] = useState(false);
   useEffect(() => {
     if (!isConnected) {
       return;
     }
     const checkOnboarding = async () => {
       try {
-        const result = await sendRpc<{ status: string }>("onboarding.status");
+        const result = await sendRpc<{ status: string; completedAt?: number }>("onboarding.status");
         if (result.status === "pending" || result.status === "in_progress") {
           void navigate("/onboarding", { replace: true });
+        } else if (result.status === "completed") {
+          setShowHealthCheck(true);
         }
       } catch {
         // Gateway doesn't support onboarding — skip redirect
@@ -272,6 +276,9 @@ export function OverviewPage() {
   return (
     <div className="space-y-4 sm:space-y-6">
       <ConnectionStatus status={connectionStatus} protocol={hello?.protocol} error={lastError} />
+
+      {/* Post-onboarding health check */}
+      {showHealthCheck && <HealthCheckCard />}
 
       {/* Top row: Gateway Access + Snapshot */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
