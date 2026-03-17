@@ -41,7 +41,40 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+    issuePairingChallenge: async (params: {
+      upsertPairingRequest: (params: {
+        id: string;
+        meta?: Record<string, string | undefined>;
+      }) => Promise<{ code: string; created: boolean }>;
+      sendPairingReply: (text: string) => Promise<void>;
+      senderId: string;
+      senderIdLine: string;
+      meta?: Record<string, string | undefined>;
+    }) => {
+      const result = await params.upsertPairingRequest({
+        id: params.senderId,
+        meta: params.meta,
+      });
+      if (!result.created) {
+        return { created: false };
+      }
+      await params.sendPairingReply(
+        `OpenClaw: access not configured.\n\n${params.senderIdLine}\n\nPairing code: ${result.code}\n\nAsk the bot owner to approve with:\nopenclaw pairing approve whatsapp ${result.code}`,
+      );
+      return { created: true, code: result.code };
+    },
+  };
+});

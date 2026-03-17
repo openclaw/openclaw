@@ -4,42 +4,47 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { renderQrPngBase64 } from "./qr-image.js";
-
-vi.mock("./session.js", () => {
-  const ev = new EventEmitter();
-  const sock = {
-    ev,
-    ws: { close: vi.fn() },
-    sendPresenceUpdate: vi.fn(),
-    sendMessage: vi.fn(),
-  };
-  return {
-    createWaSocket: vi.fn().mockResolvedValue(sock),
-    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
-  };
-});
-
-import { loginWeb } from "./login.js";
 import type { waitForWaConnection } from "./session.js";
 
-const { createWaSocket } = await import("./session.js");
+const ev = new EventEmitter();
+const sock = {
+  ev,
+  ws: { close: vi.fn() },
+  sendPresenceUpdate: vi.fn(),
+  sendMessage: vi.fn(),
+};
+const createWaSocketMock = vi.fn().mockResolvedValue(sock);
+const waitForWaConnectionMock = vi.fn().mockResolvedValue(undefined);
+
+async function loadSubject() {
+  vi.doMock("./session.js", () => ({
+    createWaSocket: createWaSocketMock,
+    waitForWaConnection: waitForWaConnectionMock,
+  }));
+  return import("./login.js");
+}
 
 describe("web login", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.resetModules();
     vi.clearAllMocks();
+    sock.ws.close.mockClear();
+    createWaSocketMock.mockReset();
+    createWaSocketMock.mockResolvedValue(sock);
+    waitForWaConnectionMock.mockReset();
+    waitForWaConnectionMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     vi.useRealTimers();
     resetLogger();
     setLoggerOverride(null);
+    vi.doUnmock("./session.js");
   });
 
   it("loginWeb waits for connection and closes", async () => {
-    const sock = await (
-      createWaSocket as unknown as () => Promise<{ ws: { close: () => void } }>
-    )();
+    const { loginWeb } = await loadSubject();
     const close = vi.spyOn(sock.ws, "close");
     const waiter: typeof waitForWaConnection = vi.fn().mockResolvedValue(undefined);
     await loginWeb(false, waiter);

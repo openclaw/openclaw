@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import { monitorWebChannel } from "./auto-reply.js";
 import {
   createWebInboundDeliverySpies,
   createWebListenerFactoryCapture,
@@ -11,6 +10,8 @@ export async function monitorWebChannelWithCapture(resolver: unknown): Promise<{
   spies: ReturnType<typeof createWebInboundDeliverySpies>;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
 }> {
+  vi.resetModules();
+  const { monitorWebChannel } = await import("./auto-reply.js");
   const spies = createWebInboundDeliverySpies();
   const { listenerFactory, getOnMessage } = createWebListenerFactoryCapture();
 

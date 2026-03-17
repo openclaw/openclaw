@@ -1,30 +1,39 @@
-import { describe, expect, it, vi } from "vitest";
-import { logVerbose } from "../../../../src/globals.js";
-import { sleep } from "../../../../src/utils.js";
-import { loadWebMedia } from "../media.js";
-import { deliverWebReply } from "./deliver-reply.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebInboundMsg } from "./types.js";
 
-vi.mock("../../../../src/globals.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/globals.js")>();
-  return {
-    ...actual,
-    shouldLogVerbose: vi.fn(() => true),
-    logVerbose: vi.fn(),
-  };
-});
+const logVerboseMock = vi.fn();
+const sleepMock = vi.fn(async () => {});
+const loadWebMediaMock = vi.fn();
 
-vi.mock("../media.js", () => ({
-  loadWebMedia: vi.fn(),
-}));
-
-vi.mock("../../../../src/utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/utils.js")>();
-  return {
-    ...actual,
-    sleep: vi.fn(async () => {}),
-  };
-});
+async function loadSubject() {
+  vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+    createSubsystemLogger: () => ({
+      child: () => ({
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      }),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    }),
+    logVerbose: (...args: unknown[]) => logVerboseMock(...args),
+    shouldLogVerbose: () => true,
+  }));
+  vi.doMock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+    return {
+      ...actual,
+      sleep: (...args: unknown[]) => sleepMock(...args),
+    };
+  });
+  vi.doMock("../media.js", () => ({
+    loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
+  }));
+  return import("./deliver-reply.js");
+}
 
 function makeMsg(): WebInboundMsg {
   return {
@@ -37,9 +46,7 @@ function makeMsg(): WebInboundMsg {
 }
 
 function mockLoadedImageMedia() {
-  (
-    loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-  ).mockResolvedValueOnce({
+  loadWebMediaMock.mockResolvedValueOnce({
     buffer: Buffer.from("img"),
     contentType: "image/jpeg",
     kind: "image",
@@ -70,6 +77,7 @@ const replyLogger = {
 };
 
 async function expectReplySuppressed(replyResult: { text: string; isReasoning?: boolean }) {
+  const { deliverWebReply } = await loadSubject();
   const msg = makeMsg();
   await deliverWebReply({
     replyResult,
@@ -84,6 +92,11 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 }
 
 describe("deliverWebReply", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
   it("suppresses payloads flagged as reasoning", async () => {
     await expectReplySuppressed({ text: "Reasoning:\n_hidden_", isReasoning: true });
   });
@@ -93,6 +106,7 @@ describe("deliverWebReply", () => {
   });
 
   it("does not suppress messages that mention Reasoning: mid-text", async () => {
+    const { deliverWebReply } = await loadSubject();
     const msg = makeMsg();
 
     await deliverWebReply({
@@ -111,6 +125,7 @@ describe("deliverWebReply", () => {
   });
 
   it("sends chunked text replies and logs a summary", async () => {
+    const { deliverWebReply } = await loadSubject();
     const msg = makeMsg();
 
     await deliverWebReply({
@@ -131,6 +146,7 @@ describe("deliverWebReply", () => {
   it.each(["connection closed", "operation timed out"])(
     "retries text send on transient failure: %s",
     async (errorMessage) => {
+      const { deliverWebReply } = await loadSubject();
       const msg = makeMsg();
       mockFirstReplyFailure(msg, errorMessage);
       mockSecondReplySuccess(msg);
@@ -145,11 +161,12 @@ describe("deliverWebReply", () => {
       });
 
       expect(msg.reply).toHaveBeenCalledTimes(2);
-      expect(sleep).toHaveBeenCalledWith(500);
+      expect(sleepMock).toHaveBeenCalledWith(500);
     },
   );
 
   it("sends image media with caption and then remaining text", async () => {
+    const { deliverWebReply } = await loadSubject();
     const msg = makeMsg();
     const mediaLocalRoots = ["/tmp/workspace-work"];
     mockLoadedImageMedia();
@@ -164,7 +181,7 @@ describe("deliverWebReply", () => {
       skipLog: true,
     });
 
-    expect(loadWebMedia).toHaveBeenCalledWith("http://example.com/img.jpg", {
+    expect(loadWebMediaMock).toHaveBeenCalledWith("http://example.com/img.jpg", {
       maxBytes: 1024 * 1024,
       localRoots: mediaLocalRoots,
     });
@@ -178,10 +195,11 @@ describe("deliverWebReply", () => {
     );
     expect(msg.reply).toHaveBeenCalledWith("aaa");
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
-    expect(logVerbose).toHaveBeenCalled();
+    expect(logVerboseMock).toHaveBeenCalled();
   });
 
   it("retries media send on transient failure", async () => {
+    const { deliverWebReply } = await loadSubject();
     const msg = makeMsg();
     mockLoadedImageMedia();
     mockFirstSendMediaFailure(msg, "socket reset");
@@ -199,10 +217,11 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.sendMedia).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
+    expect(sleepMock).toHaveBeenCalledWith(500);
   });
 
   it("falls back to text-only when the first media send fails", async () => {
+    const { deliverWebReply } = await loadSubject();
     const msg = makeMsg();
     mockLoadedImageMedia();
     mockFirstSendMediaFailure(msg, "boom");
@@ -227,10 +246,9 @@ describe("deliverWebReply", () => {
   });
 
   it("sends audio media as ptt voice note", async () => {
+    const { deliverWebReply } = await loadSubject();
     const msg = makeMsg();
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
+    loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("aud"),
       contentType: "audio/ogg",
       kind: "audio",
@@ -256,10 +274,9 @@ describe("deliverWebReply", () => {
   });
 
   it("sends video media", async () => {
+    const { deliverWebReply } = await loadSubject();
     const msg = makeMsg();
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
+    loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("vid"),
       contentType: "video/mp4",
       kind: "video",
@@ -284,10 +301,9 @@ describe("deliverWebReply", () => {
   });
 
   it("sends non-audio/image/video media as document", async () => {
+    const { deliverWebReply } = await loadSubject();
     const msg = makeMsg();
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
+    loadWebMediaMock.mockResolvedValueOnce({
       buffer: Buffer.from("bin"),
       contentType: undefined,
       kind: "file",

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readAllowFromStoreMock,
   sendMessageMock,
@@ -9,9 +9,16 @@ import {
 
 setupAccessControlTestHarness();
 
-const { checkInboundAccessControl } = await import("./access-control.js");
+beforeEach(() => {
+  vi.resetModules();
+});
+
+async function loadSubject() {
+  return import("./access-control.js");
+}
 
 async function checkUnauthorizedWorkDmSender() {
+  const { checkInboundAccessControl } = await loadSubject();
   return checkInboundAccessControl({
     accountId: "work",
     from: "+15550001111",
@@ -34,6 +41,7 @@ function expectSilentlyBlocked(result: { allowed: boolean }) {
 describe("checkInboundAccessControl pairing grace", () => {
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
+    const { checkInboundAccessControl } = await loadSubject();
     return await checkInboundAccessControl({
       accountId: "default",
       from: "+15550001111",
@@ -128,10 +136,15 @@ describe("WhatsApp dmPolicy precedence", () => {
     const result = await checkUnauthorizedWorkDmSender();
 
     expectSilentlyBlocked(result);
-    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+    expect(readAllowFromStoreMock).toHaveBeenCalledWith({
+      provider: "whatsapp",
+      accountId: "work",
+      dmPolicy: "allowlist",
+    });
   });
 
   it("always allows same-phone DMs even when allowFrom is restrictive", async () => {
+    const { checkInboundAccessControl } = await loadSubject();
     setAccessControlTestConfig({
       channels: {
         whatsapp: {

@@ -1,22 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const recordChannelActivity = vi.fn();
-vi.mock("../../../../src/infra/channel-activity.js", () => ({
-  recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
-}));
 
-import { createWebSendApi } from "./send-api.js";
+async function loadSubject() {
+  vi.doMock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+    return {
+      ...actual,
+      recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
+    };
+  });
+  return import("./send-api.js");
+}
 
 describe("createWebSendApi", () => {
   const sendMessage = vi.fn(async () => ({ key: { id: "msg-1" } }));
   const sendPresenceUpdate = vi.fn(async () => {});
-  const api = createWebSendApi({
-    sock: { sendMessage, sendPresenceUpdate },
-    defaultAccountId: "main",
-  });
+  let api: Awaited<ReturnType<typeof loadSubject>>["createWebSendApi"] extends (
+    ...args: any[]
+  ) => infer T
+    ? T
+    : never;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    const { createWebSendApi } = await loadSubject();
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+    });
   });
 
   it("uses sendOptions fileName for outbound documents", async () => {

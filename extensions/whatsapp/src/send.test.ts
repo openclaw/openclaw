@@ -4,16 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { redactIdentifier } from "../../../src/logging/redact-identifier.js";
-import { setActiveWebListener } from "./active-listener.js";
 
 const loadWebMediaMock = vi.fn();
-vi.mock("./media.js", () => ({
-  loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
-}));
 
-import { sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } from "./send.js";
+async function loadSubject() {
+  vi.doMock("./media.js", () => ({
+    loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
+  }));
+  const sendModule = await import("./send.js");
+  const listenerModule = await import("./active-listener.js");
+  return { ...sendModule, ...listenerModule };
+}
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
@@ -21,8 +23,11 @@ describe("web outbound", () => {
   const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
   const sendReaction = vi.fn(async () => {});
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    loadWebMediaMock.mockReset();
+    const { setActiveWebListener } = await loadSubject();
     setActiveWebListener({
       sendComposingTo,
       sendMessage,
@@ -31,14 +36,18 @@ describe("web outbound", () => {
     });
   });
 
-  afterEach(() => {
-    resetLogger();
-    setLoggerOverride(null);
+  afterEach(async () => {
+    const logging = await import("../../../src/logging.js");
+    logging.resetLogger();
+    logging.setLoggerOverride(null);
+    const { setActiveWebListener } = await loadSubject();
     setActiveWebListener(null);
     setActiveWebListener("work", null);
+    vi.doUnmock("./media.js");
   });
 
   it("sends message via active listener", async () => {
+    const { sendMessageWhatsApp } = await loadSubject();
     const result = await sendMessageWhatsApp("+1555", "hi", { verbose: false });
     expect(result).toEqual({
       messageId: "msg123",
@@ -49,6 +58,7 @@ describe("web outbound", () => {
   });
 
   it("trims leading whitespace before sending text and captions", async () => {
+    const { sendMessageWhatsApp } = await loadSubject();
     await sendMessageWhatsApp("+1555", "\n \thello", { verbose: false });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "hello", undefined, undefined);
 
@@ -66,6 +76,7 @@ describe("web outbound", () => {
   });
 
   it("skips whitespace-only text sends without media", async () => {
+    const { sendMessageWhatsApp } = await loadSubject();
     const result = await sendMessageWhatsApp("+1555", "\n \t", { verbose: false });
 
     expect(result).toEqual({
@@ -77,6 +88,7 @@ describe("web outbound", () => {
   });
 
   it("throws a helpful error when no active listener exists", async () => {
+    const { sendMessageWhatsApp, setActiveWebListener } = await loadSubject();
     setActiveWebListener(null);
     await expect(
       sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
@@ -90,6 +102,7 @@ describe("web outbound", () => {
   });
 
   it("maps audio to PTT with opus mime when ogg", async () => {
+    const { sendMessageWhatsApp } = await loadSubject();
     const buf = Buffer.from("audio");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
@@ -109,6 +122,7 @@ describe("web outbound", () => {
   });
 
   it("maps video with caption", async () => {
+    const { sendMessageWhatsApp } = await loadSubject();
     const buf = Buffer.from("video");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
@@ -123,6 +137,7 @@ describe("web outbound", () => {
   });
 
   it("marks gif playback for video when requested", async () => {
+    const { sendMessageWhatsApp } = await loadSubject();
     const buf = Buffer.from("gifvid");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
@@ -140,6 +155,7 @@ describe("web outbound", () => {
   });
 
   it("maps image with caption", async () => {
+    const { sendMessageWhatsApp } = await loadSubject();
     const buf = Buffer.from("img");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
@@ -154,6 +170,7 @@ describe("web outbound", () => {
   });
 
   it("maps other kinds to document with filename", async () => {
+    const { sendMessageWhatsApp } = await loadSubject();
     const buf = Buffer.from("pdf");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
@@ -171,6 +188,7 @@ describe("web outbound", () => {
   });
 
   it("uses account-aware WhatsApp media caps for outbound uploads", async () => {
+    const { sendMessageWhatsApp, setActiveWebListener } = await loadSubject();
     setActiveWebListener("work", {
       sendComposingTo,
       sendMessage,
@@ -211,6 +229,7 @@ describe("web outbound", () => {
   });
 
   it("sends polls via active listener", async () => {
+    const { sendPollWhatsApp } = await loadSubject();
     const result = await sendPollWhatsApp(
       "+1555",
       { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 2 },
@@ -230,8 +249,10 @@ describe("web outbound", () => {
   });
 
   it("redacts recipients and poll text in outbound logs", async () => {
+    const { sendPollWhatsApp } = await loadSubject();
+    const logging = await import("../../../src/logging.js");
     const logPath = path.join(os.tmpdir(), `openclaw-outbound-${crypto.randomUUID()}.log`);
-    setLoggerOverride({ level: "trace", file: logPath });
+    logging.setLoggerOverride({ level: "trace", file: logPath });
 
     await sendPollWhatsApp(
       "+1555",
@@ -255,6 +276,7 @@ describe("web outbound", () => {
   });
 
   it("sends reactions via active listener", async () => {
+    const { sendReactionWhatsApp } = await loadSubject();
     await sendReactionWhatsApp("1555@s.whatsapp.net", "msg123", "✅", {
       verbose: false,
       fromMe: false,

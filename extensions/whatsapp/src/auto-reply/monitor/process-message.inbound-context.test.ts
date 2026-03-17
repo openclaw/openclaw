@@ -9,6 +9,8 @@ let capturedDispatchParams: unknown;
 let sessionDir: string | undefined;
 let sessionStorePath: string;
 let backgroundTasks: Set<Promise<unknown>>;
+let processMessage: typeof import("./process-message.js").processMessage;
+let updateLastRouteInBackground: typeof import("./last-route.js").updateLastRouteInBackground;
 const { deliverWebReplyMock } = vi.hoisted(() => ({
   deliverWebReplyMock: vi.fn(async () => {}),
 }));
@@ -83,40 +85,164 @@ function createWhatsAppDirectStreamingArgs(params?: {
   });
 }
 
-vi.mock("../../../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  // oxlint-disable-next-line typescript/no-explicit-any
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
-    capturedDispatchParams = params;
-    capturedCtx = params.ctx;
-    return { queuedFinal: false };
-  }),
-}));
+async function loadSubject() {
+  vi.doMock("openclaw/plugin-sdk/agent-runtime", () => ({
+    resolveMessagePrefix: (_cfg: unknown, _agentId: string, params: { configured?: string }) =>
+      params.configured,
+    resolveIdentityNamePrefix: (
+      cfg: {
+        agents?: { list?: Array<{ id?: string; default?: boolean; identity?: { name?: string } }> };
+      },
+      agentId: string,
+    ) => {
+      const agent =
+        cfg.agents?.list?.find((entry) => entry.id === agentId) ??
+        cfg.agents?.list?.find((entry) => entry.default);
+      const name = agent?.identity?.name?.trim();
+      return name ? `[${name}]` : undefined;
+    },
+  }));
 
-vi.mock("./last-route.js", () => ({
-  trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
-    tasks.add(task);
-    void task.finally(() => {
-      tasks.delete(task);
-    });
-  },
-  updateLastRouteInBackground: vi.fn(),
-}));
+  vi.doMock("openclaw/plugin-sdk/channel-runtime", () => ({
+    toLocationContext: (location: unknown) =>
+      location && typeof location === "object" ? location : {},
+    createReplyPrefixOptions: (params: { cfg?: { messages?: { responsePrefix?: string } } }) => ({
+      responsePrefix: params.cfg?.messages?.responsePrefix,
+      onModelSelected: undefined,
+    }),
+    resolveInboundSessionEnvelopeContext: (params: { cfg?: { session?: { store?: string } } }) => ({
+      storePath: params.cfg?.session?.store ?? "/tmp/sessions.json",
+      envelopeOptions: {},
+      previousTimestamp: undefined,
+    }),
+    shouldAckReactionForWhatsApp: () => false,
+  }));
 
-vi.mock("../deliver-reply.js", () => ({
-  deliverWebReply: deliverWebReplyMock,
-}));
+  vi.doMock("openclaw/plugin-sdk/config-runtime", () => ({
+    loadSessionStore: () => ({}),
+    resolveMarkdownTableMode: () => undefined,
+    recordSessionMetaFromInbound: vi.fn(async () => {}),
+    resolveGroupSessionKey: (params: { From?: string }) => params.From ?? "group",
+    resolveStorePath: (storePath?: string) => storePath ?? "/tmp/sessions.json",
+  }));
 
-import { updateLastRouteInBackground } from "./last-route.js";
-import { processMessage } from "./process-message.js";
+  vi.doMock("openclaw/plugin-sdk/media-runtime", () => ({
+    getAgentScopedMediaLocalRoots: () => [],
+  }));
+
+  vi.doMock("openclaw/plugin-sdk/reply-runtime", () => ({
+    resolveChunkMode: () => "length",
+    resolveTextChunkLimit: () => 4000,
+    shouldComputeCommandAuthorized: () => false,
+    formatInboundEnvelope: (params: { body?: string }) => params.body ?? "",
+    buildHistoryContextFromEntries: (params: { currentMessage: string }) => params.currentMessage,
+    finalizeInboundContext: (ctx: Record<string, unknown>) => ({
+      ...ctx,
+      BodyForCommands: ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.BodyForAgent,
+    }),
+    // oxlint-disable-next-line typescript/no-explicit-any
+    dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
+      capturedDispatchParams = params;
+      capturedCtx = params.ctx;
+      return { queuedFinal: false };
+    }),
+  }));
+
+  vi.doMock("openclaw/plugin-sdk/routing", () => ({
+    DEFAULT_ACCOUNT_ID: "default",
+    resolveInboundLastRouteSessionKey: (params: {
+      route: { lastRoutePolicy?: string; mainSessionKey: string };
+      sessionKey: string;
+    }) =>
+      params.route.lastRoutePolicy === "main" ? params.route.mainSessionKey : params.sessionKey,
+  }));
+
+  vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
+    createSubsystemLogger: () => ({
+      child: () => ({
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      }),
+    }),
+    logVerbose: () => {},
+    shouldLogVerbose: () => false,
+  }));
+
+  vi.doMock("openclaw/plugin-sdk/security-runtime", () => ({
+    readStoreAllowFromForDmPolicy: vi.fn(async () => []),
+    resolvePinnedMainDmOwnerFromAllowlist: (params: {
+      dmScope?: string | null;
+      allowFrom?: Array<string | number> | null;
+      normalizeEntry: (entry: string) => string | undefined;
+    }) => {
+      if ((params.dmScope ?? "main") !== "main") {
+        return null;
+      }
+      const rawAllowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
+      if (rawAllowFrom.some((entry) => String(entry).trim() === "*")) {
+        return null;
+      }
+      const normalized = rawAllowFrom
+        .map((entry) => params.normalizeEntry(String(entry)))
+        .filter((entry): entry is string => Boolean(entry));
+      return normalized.length === 1 ? normalized[0] : null;
+    },
+    resolveDmGroupAccessWithCommandGate: () => ({ commandAuthorized: false }),
+  }));
+
+  vi.doMock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+    return {
+      ...actual,
+      jidToE164: (jid: string) => {
+        const normalized = jid.replace(/@.*$/, "").replace(/^\+/, "");
+        return normalized ? `+${normalized}` : null;
+      },
+      normalizeE164: (value: string) => {
+        const digits = (value ?? "").replace(/[^\d]/g, "");
+        return digits ? `+${digits}` : null;
+      },
+    };
+  });
+
+  vi.doMock("./last-route.js", () => ({
+    trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
+      tasks.add(task);
+      void task.finally(() => {
+        tasks.delete(task);
+      });
+    },
+    updateLastRouteInBackground: vi.fn(),
+  }));
+
+  vi.doMock("../deliver-reply.js", () => ({
+    deliverWebReply: deliverWebReplyMock,
+  }));
+
+  vi.doMock("./ack-reaction.js", () => ({
+    maybeSendAckReaction: () => {},
+  }));
+
+  return {
+    processMessage: (await import("./process-message.js")).processMessage,
+    updateLastRouteInBackground: (await import("./last-route.js")).updateLastRouteInBackground,
+  };
+}
 
 describe("web processMessage inbound context", () => {
   beforeEach(async () => {
+    vi.resetModules();
     capturedCtx = undefined;
     capturedDispatchParams = undefined;
     backgroundTasks = new Set();
     deliverWebReplyMock.mockClear();
     sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-process-message-"));
     sessionStorePath = path.join(sessionDir, "sessions.json");
+    const loaded = await loadSubject();
+    processMessage = loaded.processMessage;
+    updateLastRouteInBackground = loaded.updateLastRouteInBackground;
   });
 
   afterEach(async () => {
@@ -343,6 +469,7 @@ describe("web processMessage inbound context", () => {
       ...args.route,
       sessionKey: "agent:main:whatsapp:direct:+1000",
       mainSessionKey: "agent:main:whatsapp:direct:+1000",
+      lastRoutePolicy: "main",
     };
 
     await processMessage(args);
@@ -370,6 +497,7 @@ describe("web processMessage inbound context", () => {
       ...args.route,
       sessionKey: "agent:main:whatsapp:dm:+1000:peer:+3000",
       mainSessionKey: "agent:main:whatsapp:direct:+1000",
+      lastRoutePolicy: "session",
     };
 
     await processMessage(args);
@@ -407,6 +535,7 @@ describe("web processMessage inbound context", () => {
       ...args.route,
       sessionKey: "agent:main:main",
       mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "main",
     };
     return args;
   }

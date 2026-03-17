@@ -1,16 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { normalizeMessageContent, downloadMediaMessage } = vi.hoisted(() => ({
   normalizeMessageContent: vi.fn((msg: unknown) => msg),
   downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
 }));
 
-vi.mock("@whiskeysockets/baileys", () => ({
-  normalizeMessageContent,
-  downloadMediaMessage,
-}));
-
-import { downloadInboundMedia } from "./media.js";
+async function loadSubject() {
+  vi.doMock("@whiskeysockets/baileys", () => ({
+    normalizeMessageContent,
+    downloadMediaMessage,
+  }));
+  return import("./media.js");
+}
 
 const mockSock = {
   updateMediaMessage: vi.fn(),
@@ -18,13 +19,20 @@ const mockSock = {
 } as never;
 
 async function expectMimetype(message: Record<string, unknown>, expected: string) {
+  const { downloadInboundMedia } = await loadSubject();
   const result = await downloadInboundMedia({ message } as never, mockSock);
   expect(result).toBeDefined();
   expect(result?.mimetype).toBe(expected);
 }
 
 describe("downloadInboundMedia", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
   it("returns undefined for messages without media", async () => {
+    const { downloadInboundMedia } = await loadSubject();
     const msg = { message: { conversation: "hello" } } as never;
     const result = await downloadInboundMedia(msg, mockSock);
     expect(result).toBeUndefined();
@@ -54,6 +62,7 @@ describe("downloadInboundMedia", () => {
   });
 
   it("preserves fileName from document messages", async () => {
+    const { downloadInboundMedia } = await loadSubject();
     const msg = {
       message: {
         documentMessage: { mimetype: "application/pdf", fileName: "report.pdf" },

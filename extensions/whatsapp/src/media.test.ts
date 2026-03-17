@@ -18,9 +18,9 @@ import {
 
 const convertHeicToJpegMock = vi.fn();
 
-vi.mock("../../../src/media/image-ops.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/media/image-ops.js")>(
-    "../../../src/media/image-ops.js",
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
   );
   return {
     ...actual,
@@ -193,9 +193,20 @@ describe("web media loading", () => {
   });
 
   it("normalizes HEIC local files to JPEG output", async () => {
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/media-runtime", async () => {
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+        "openclaw/plugin-sdk/media-runtime",
+      );
+      return {
+        ...actual,
+        convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
+      };
+    });
+    const { loadWebMedia: loadWebMediaWithHeicMock } = await import("./media.js");
     convertHeicToJpegMock.mockResolvedValueOnce(tinyPngBuffer);
 
-    const result = await loadWebMedia(fakeHeicFile, 1024 * 1024);
+    const result = await loadWebMediaWithHeicMock(fakeHeicFile, 1024 * 1024);
 
     expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
     expect(result.kind).toBe("image");
@@ -206,6 +217,7 @@ describe("web media loading", () => {
     // Confirm the output is actually JPEG (magic bytes 0xFF 0xD8)
     expect(result.buffer[0]).toBe(0xff);
     expect(result.buffer[1]).toBe(0xd8);
+    vi.doUnmock("openclaw/plugin-sdk/media-runtime");
   });
 
   it("includes URL + status in fetch errors", async () => {

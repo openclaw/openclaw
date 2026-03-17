@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
-  await import("./session.js");
-const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
+async function loadSubject() {
+  return import("./session.js");
+}
 
 async function flushCredsUpdate() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -15,7 +15,8 @@ async function flushCredsUpdate() {
 
 async function emitCredsUpdateAndReadSaveCreds() {
   const sock = getLastSocket();
-  const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
+  const saveCreds = (await vi.mocked(baileys.useMultiFileAuthState).mock.results[0]?.value)
+    ?.saveCreds;
   sock.ev.emit("creds.update", {});
   await flushCredsUpdate();
   return saveCreds;
@@ -56,6 +57,7 @@ function mockCredsJsonSpies(readContents: string) {
 
 describe("web session", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
     resetBaileysMocks();
     resetLoadConfigMock();
@@ -68,6 +70,7 @@ describe("web session", () => {
   });
 
   it("creates WA socket with QR handler", async () => {
+    const { createWaSocket } = await loadSubject();
     await createWaSocket(true, false);
     const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
     expect(makeWASocket).toHaveBeenCalledWith(
@@ -78,7 +81,8 @@ describe("web session", () => {
     expect(passedLogger?.level).toBe("silent");
     expect(typeof passedLogger?.trace).toBe("function");
     const sock = getLastSocket();
-    const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
+    const saveCreds = (await vi.mocked(baileys.useMultiFileAuthState).mock.results[0]?.value)
+      ?.saveCreds;
     // trigger creds.update listener
     sock.ev.emit("creds.update", {});
     await flushCredsUpdate();
@@ -86,6 +90,7 @@ describe("web session", () => {
   });
 
   it("waits for connection open", async () => {
+    const { waitForWaConnection } = await loadSubject();
     const ev = new EventEmitter();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<
       typeof baileys.makeWASocket
@@ -95,6 +100,7 @@ describe("web session", () => {
   });
 
   it("rejects when connection closes", async () => {
+    const { waitForWaConnection } = await loadSubject();
     const ev = new EventEmitter();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<
       typeof baileys.makeWASocket
@@ -107,53 +113,62 @@ describe("web session", () => {
   });
 
   it("logWebSelfId prints cached E.164 when creds exist", () => {
-    const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
-      if (typeof p !== "string") {
-        return false;
-      }
-      return p.endsWith("creds.json");
-    });
-    const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
-      if (typeof p === "string" && p.endsWith("creds.json")) {
-        return JSON.stringify({ me: { id: "12345@s.whatsapp.net" } });
-      }
-      throw new Error(`unexpected readFileSync path: ${String(p)}`);
-    });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
+    const run = async () => {
+      const { logWebSelfId } = await loadSubject();
+      const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
+        if (typeof p !== "string") {
+          return false;
+        }
+        return p.endsWith("creds.json");
+      });
+      const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
+        if (typeof p === "string" && p.endsWith("creds.json")) {
+          return JSON.stringify({ me: { id: "12345@s.whatsapp.net" } });
+        }
+        throw new Error(`unexpected readFileSync path: ${String(p)}`);
+      });
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      logWebSelfId("/tmp/wa-creds", runtime as never, true);
+
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net)"),
+      );
+      existsSpy.mockRestore();
+      readSpy.mockRestore();
     };
-
-    logWebSelfId("/tmp/wa-creds", runtime as never, true);
-
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net)"),
-    );
-    existsSpy.mockRestore();
-    readSpy.mockRestore();
+    return run();
   });
 
   it("formatError prints Boom-like payload message", () => {
-    const err = {
-      error: {
-        isBoom: true,
-        output: {
-          statusCode: 408,
-          payload: {
+    const run = async () => {
+      const { formatError } = await loadSubject();
+      const err = {
+        error: {
+          isBoom: true,
+          output: {
             statusCode: 408,
-            error: "Request Time-out",
-            message: "QR refs attempts ended",
+            payload: {
+              statusCode: 408,
+              error: "Request Time-out",
+              message: "QR refs attempts ended",
+            },
           },
         },
-      },
+      };
+      expect(formatError(err)).toContain("status=408");
+      expect(formatError(err)).toContain("Request Time-out");
+      expect(formatError(err)).toContain("QR refs attempts ended");
     };
-    expect(formatError(err)).toContain("status=408");
-    expect(formatError(err)).toContain("Request Time-out");
-    expect(formatError(err)).toContain("QR refs attempts ended");
+    return run();
   });
 
   it("does not clobber creds backup when creds.json is corrupted", async () => {
+    const { createWaSocket } = await loadSubject();
     const creds = mockCredsJsonSpies("{");
 
     await createWaSocket(false, false);
@@ -166,6 +181,7 @@ describe("web session", () => {
   });
 
   it("serializes creds.update saves to avoid overlapping writes", async () => {
+    const { createWaSocket } = await loadSubject();
     let inFlight = 0;
     let maxInFlight = 0;
     let release: (() => void) | null = null;
@@ -179,7 +195,7 @@ describe("web session", () => {
       await gate;
       inFlight -= 1;
     });
-    useMultiFileAuthStateMock.mockResolvedValueOnce({
+    vi.mocked(baileys.useMultiFileAuthState).mockResolvedValueOnce({
       state: { creds: {} as never, keys: {} as never },
       saveCreds,
     });
@@ -205,6 +221,7 @@ describe("web session", () => {
   });
 
   it("lets different authDir queues flush independently", async () => {
+    const { createWaSocket } = await loadSubject();
     let inFlightA = 0;
     let inFlightB = 0;
     let releaseA: (() => void) | null = null;
@@ -226,7 +243,7 @@ describe("web session", () => {
       await gateB;
       inFlightB -= 1;
     });
-    useMultiFileAuthStateMock
+    vi.mocked(baileys.useMultiFileAuthState)
       .mockResolvedValueOnce({
         state: { creds: {} as never, keys: {} as never },
         saveCreds: saveCredsA,
@@ -261,6 +278,7 @@ describe("web session", () => {
   });
 
   it("rotates creds backup when creds.json is valid JSON", async () => {
+    const { createWaSocket } = await loadSubject();
     const creds = mockCredsJsonSpies("{}");
     const backupSuffix = path.join(
       ".openclaw",

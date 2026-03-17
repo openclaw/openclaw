@@ -29,14 +29,18 @@ type MockWebListener = {
 
 export const TEST_NET_IP = "203.0.113.10";
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+  return {
+    ...actual,
+    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+    runEmbeddedPiAgent: vi.fn(),
+    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  };
+});
 
 export async function rmDirWithRetries(
   dir: string,
