@@ -660,7 +660,7 @@ export function resolveGroupToolPolicy(params: {
       ...groupLookupOptions,
     });
     const toolsConfig =
-      dock?.groups?.resolveToolPolicy?.({
+      plugin?.groups?.resolveToolPolicy?.({
         cfg: config,
         groupId: candidate.groupId,
         groupChannel: params.groupChannel,
@@ -698,7 +698,6 @@ export function resolveGroupToolPolicy(params: {
         continue;
       }
       seenGroupCandidates.add(key);
-<<<<<<< HEAD
       const { policy } = resolveGroupCandidatePolicy(candidate);
       if (policy) {
         return policy;
