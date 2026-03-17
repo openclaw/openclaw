@@ -1,33 +1,27 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/telegram";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+
+type RegisterTelegramNativeCommandsParams = Parameters<
+  typeof import("./bot-native-commands.js").registerTelegramNativeCommands
+>[0];
 
 export type NativeCommandTestParams = {
-  bot: {
-    api: {
-      setMyCommands: ReturnType<typeof vi.fn>;
-      sendMessage: ReturnType<typeof vi.fn>;
-    };
-    command: ReturnType<typeof vi.fn>;
-  };
+  bot: RegisterTelegramNativeCommandsParams["bot"];
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   accountId: string;
   telegramCfg: TelegramAccountConfig;
   allowFrom: string[];
   groupAllowFrom: string[];
-  replyToMode: string;
+  replyToMode: RegisterTelegramNativeCommandsParams["replyToMode"];
   textLimit: number;
   useAccessGroups: boolean;
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
   nativeDisabledExplicit: boolean;
   resolveGroupPolicy: () => { allowlistEnabled: boolean; allowed: boolean };
-  resolveTelegramGroupConfig: () => {
-    groupConfig: undefined;
-    topicConfig: undefined;
-  };
+  resolveTelegramGroupConfig: RegisterTelegramNativeCommandsParams["resolveTelegramGroupConfig"];
   shouldSkipUpdate: () => boolean;
   opts: { token: string };
 };
@@ -53,9 +47,15 @@ export function createNativeCommandTestParams(
           sendMessage: vi.fn().mockResolvedValue(undefined),
         },
         command: vi.fn(),
-      } as NativeCommandTestParams["bot"]),
+      } as unknown as NativeCommandTestParams["bot"]),
     cfg: params.cfg ?? ({} as OpenClawConfig),
-    runtime: params.runtime ?? ({ log } as RuntimeEnv),
+    runtime:
+      params.runtime ??
+      ({
+        log,
+        error: vi.fn(),
+        exit: vi.fn(),
+      } as unknown as RuntimeEnv),
     accountId: params.accountId ?? "default",
     telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
     allowFrom: params.allowFrom ?? [],
