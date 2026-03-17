@@ -1,5 +1,5 @@
 import type { MessageEvent, PostbackEvent } from "@line/bot-sdk";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
@@ -201,11 +201,9 @@ vi.mock("../pairing/pairing-store.js", () => ({
 }));
 
 describe("handleLineWebhookEvents", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ handleLineWebhookEvents, createLineWebhookReplayCache } = await import("./bot-handlers.js"));
-  });
-
-  beforeEach(() => {
     buildLineMessageContextMock.mockClear();
     buildLinePostbackContextMock.mockClear();
     readAllowFromStoreMock.mockClear();
