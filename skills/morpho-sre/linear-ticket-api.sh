@@ -310,7 +310,7 @@ cmd_issue_get_branch() {
   issue_id="$(printf '%s\n' "$response" | jq -r '.data.issue.id // empty')"
   [[ -n "$issue_id" ]] || die "issue not found: ${issue_ref}"
   git_branch_name="$(printf '%s\n' "$response" | jq -r '.data.issue.branchName // .data.issue.gitBranchName // empty')"
-  [[ -n "$git_branch_name" ]] || die "issue missing branchName: ${issue_ref}"
+  [[ -n "$git_branch_name" ]] || die "issue missing branchName/gitBranchName: ${issue_ref}"
   printf '%s\n' "$git_branch_name"
 }
 
