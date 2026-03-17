@@ -1,19 +1,13 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import { handleCommands } from "./commands-core.js";
+import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
-const tempDirs: string[] = [];
-
-async function createWorkspace(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-plugins-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-plugins-");
 
 async function createClaudeBundlePlugin(params: { workspaceDir: string; pluginId: string }) {
   const pluginDir = path.join(params.workspaceDir, ".openclaw", "extensions", params.pluginId);
@@ -38,14 +32,12 @@ function buildCfg(): OpenClawConfig {
 
 describe("handleCommands /plugins", () => {
   afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await workspaceHarness.cleanupWorkspaces();
   });
 
   it("lists discovered plugins and shows plugin details", async () => {
     await withTempHome("openclaw-command-plugins-home-", async () => {
-      const workspaceDir = await createWorkspace();
+      const workspaceDir = await workspaceHarness.createWorkspace();
       await createClaudeBundlePlugin({ workspaceDir, pluginId: "superpowers" });
 
       const listParams = buildCommandTestParams("/plugins list", buildCfg(), undefined, {
@@ -69,7 +61,7 @@ describe("handleCommands /plugins", () => {
 
   it("enables and disables a discovered plugin", async () => {
     await withTempHome("openclaw-command-plugins-home-", async () => {
-      const workspaceDir = await createWorkspace();
+      const workspaceDir = await workspaceHarness.createWorkspace();
       await createClaudeBundlePlugin({ workspaceDir, pluginId: "superpowers" });
 
       const enableParams = buildCommandTestParams(
@@ -113,7 +105,7 @@ describe("handleCommands /plugins", () => {
 
   it("rejects internal writes without operator.admin", async () => {
     await withTempHome("openclaw-command-plugins-home-", async () => {
-      const workspaceDir = await createWorkspace();
+      const workspaceDir = await workspaceHarness.createWorkspace();
       await createClaudeBundlePlugin({ workspaceDir, pluginId: "superpowers" });
 
       const params = buildCommandTestParams(
