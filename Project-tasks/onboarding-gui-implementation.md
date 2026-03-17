@@ -2,7 +2,7 @@
 
 **Created:** 2026-03-12
 **Author:** Operator1 (COO)
-**Status:** Implementation Guide
+**Status:** Phase 1 Complete — Phase 2 Planned
 **Reference:** [paperclipai/paperclip](https://github.com/paperclipai/paperclip) — onboarding wizard patterns
 **Depends on:** SQLite consolidation (Phases 0–11 landed), ui-next control panel, existing `wizard.*` RPC system
 
@@ -1041,7 +1041,135 @@ Paperclip is MIT licensed. Cherry-pick `-x` attribution preserves provenance in 
 
 ---
 
-## 14. References
+## 14. Phase 1 Completion Report (2026-03-17)
+
+**Branch:** `feature/onboarding-gui` (merged to `main`)
+**Commit:** `8941469014` — 24 files, 1997 lines added
+**Migration:** v17 (spec said v12, actual schema was at v16)
+
+### What was built
+
+| Component                                | Status                | Notes                                                                                                                                                         |
+| ---------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQLite migration v17 (`op1_onboarding`)  | Done                  | Simplified schema: generic JSON blobs (`steps_completed_json`, `config_snapshot_json`) instead of spec's per-field columns (`gateway_host`, `provider`, etc.) |
+| DB helpers (`onboarding-sqlite.ts`)      | Done                  | get/upsert/complete/skip/reset/stripConfigSecrets + test isolation                                                                                            |
+| TypeBox schemas (`schema/onboarding.ts`) | Done                  | 6 param schemas with `{ additionalProperties: false }`                                                                                                        |
+| 6 RPC handlers (`onboarding.ts`)         | Done                  | status, update, complete, skip, reset, validatePath                                                                                                           |
+| Method scoping                           | Done                  | status + validatePath → READ_SCOPE; rest → ADMIN_SCOPE (per-method, not prefix)                                                                               |
+| Tests (backend)                          | Done                  | 9 DB tests + 10 handler tests = 19 total, all passing                                                                                                         |
+| Wizard shell (`onboarding-wizard.tsx`)   | Done                  | Progress bar, step nav, back/continue/skip, Ctrl+Enter shortcut                                                                                               |
+| Step 1: Gateway                          | Done (basic)          | Auto-detect via `useGatewayStore` connection status                                                                                                           |
+| Step 2: Provider                         | Done                  | Auto-detect configured providers from `config.get` response, API key input, model selector, test connection                                                   |
+| Step 3: Agents                           | Done (read-only)      | Lists agents grouped by tier/department from `agents.list`                                                                                                    |
+| Step 4: Channels                         | Done (read-only)      | Detects configured channels from `channels.status`, shows Web Chat as always-on                                                                               |
+| Step 5: First Task                       | Done (basic)          | Sends message via `chat.send`, shows success confirmation                                                                                                     |
+| Step 6: Complete                         | Done                  | Summary checklist with done/skipped badges                                                                                                                    |
+| Route (`/onboarding`)                    | Done                  | Lazy-loaded in `app.tsx`                                                                                                                                      |
+| Sidebar link                             | Done (always visible) | "Setup Wizard" in new "Setup" nav section                                                                                                                     |
+| Auto-redirect                            | Done                  | Overview → `/onboarding` when `status === "pending"`                                                                                                          |
+| Hook (`use-onboarding.ts`)               | Done                  | Wraps all 6 RPCs                                                                                                                                              |
+
+### Key design decisions in Phase 1
+
+1. **Built from scratch** — skipped Phase 0 (Paperclip sync). All code is original, using Paperclip as design reference only.
+2. **Simplified schema** — generic JSON blobs instead of per-field columns. Easier to extend without migrations.
+3. **Provider auto-detection** — reads `config.get` response (unwrapping `ConfigFileSnapshot` wrapper → `.config` field), checks `models.providers`, `env.*_API_KEY` patterns, and `auth.profiles`.
+4. **Channels auto-detection** — parses real `channels.status` response shape (object keyed by channel ID with `channelAccounts`, `channelOrder`, `channelLabels`).
+5. **Write-forward config** — provider API keys written via `config.patch` on "Test Connection" click, not deferred.
+
+### Bugs found and fixed during testing
+
+1. **`config.get` response shape** — returns `ConfigFileSnapshot` wrapper (`{ path, exists, raw, parsed, resolved, config, hash, ... }`), not a flat config. UI must access `.config` or `.resolved` for actual data.
+2. **`channels.status` response shape** — returns `{ channels: Record<string, summary>, channelAccounts: Record<string, account[]>, channelOrder: string[], channelLabels: Record<string, string> }`, not a flat array.
+3. **Provider detection** — API keys often in `env.*_API_KEY` rather than inline `providers.*.apiKey`. Detection must check both patterns.
+
+---
+
+## 15. Phase 2 Plan — Full Spec Compliance
+
+### P2-1: Step 0 — Resume & Migration Detection
+
+**Spec ref:** §3 Step 0
+
+- [ ] Resume dialog: when `status === "in_progress"` and `currentStep > 1`, show "Continue from Step X?" with Resume / Start Over buttons
+- [ ] Import detection: call `config.get` + `agents.list` + `channels.status` to check if system is already configured. If yes, show "Already configured — [Import Current Config] [Run Setup Anyway]"
+- [ ] "Import Current Config" → auto-mark onboarding complete, redirect to overview
+- [ ] Auto-redirect from overview on `in_progress` too (currently only `pending`)
+
+### P2-2: Two-Column Layout
+
+**Spec ref:** §3 all steps
+
+- [ ] All steps: form on left, context/info panel on right
+- [ ] Responsive: stack vertically on `<768px`
+- [ ] Step 1: right panel shows gateway info (version, uptime, channels, agents count)
+- [ ] Step 2: right panel shows supported providers list
+- [ ] Step 3: right panel shows org chart visualization (div-based tree or SVG)
+- [ ] Step 4: right panel shows "How channels work" explainer
+- [ ] Step 5: right panel shows "What's happening" pipeline diagram
+
+### P2-3: Step 3 — Agent Interactivity
+
+**Spec ref:** §3 Step 3
+
+- [ ] Department toggles: Engineering (10), Marketing (10), Finance (10) — toggle all workers in a department
+- [ ] Tier enforcement: disabling Tier 2 head auto-disables Tier 3 workers with confirmation dialog
+- [ ] Re-enabling head does NOT auto-enable workers — show expandable worker list
+- [ ] Workspace path input with `onboarding.validatePath` RPC probe
+- [ ] Path validation feedback: exists/writable/create-it options
+- [ ] Wire toggles to `config.patch` for agent enable/disable
+
+### P2-4: Step 4 — Channel Configuration
+
+**Spec ref:** §3 Step 4
+
+- [ ] Expandable config sections per channel (click to expand → show token input)
+- [ ] Bot token input field per channel
+- [ ] Test probe per channel via `channels.status` with `{ probe: true }`
+- [ ] Inline success/failure feedback after test
+- [ ] Primary channel selector (stored in onboarding state, not consumed in v1)
+- [ ] Error recovery: invalid token → "Re-enter" / "Skip Channel"
+
+### P2-5: Step 5 — Streaming Response
+
+**Spec ref:** §3 Step 5
+
+- [ ] Agent selector dropdown (populated from `agents.list`)
+- [ ] Streaming response display inline — reuse `use-chat.ts` streaming infrastructure
+- [ ] Show response tokens as they arrive (not just "Message sent")
+- [ ] "What's happening" pipeline indicator (message → gateway → agent → response)
+
+### P2-6: Sidebar Conditional + Config Page
+
+**Spec ref:** §10
+
+- [ ] Hide "Setup Wizard" sidebar link when `onboarding.status` returns `completed` or `skipped`
+- [ ] Requires `sendRpc` in sidebar — use gateway store subscription or similar
+- [ ] Add "Re-run Setup" button in Config page → calls `onboarding.reset` + navigates to `/onboarding`
+
+### P2-7: Polish
+
+**Spec ref:** §8, §9
+
+- [ ] 3s polling on Step 1 when gateway not connected
+- [ ] Escape key to cancel probes
+- [ ] Error recovery: API key fails 3x → offer skip/re-enter
+- [ ] Gateway disconnect overlay with auto-retry
+- [ ] `.github/labeler.yml` — add onboarding paths + create matching label
+
+### Phase 2 Priority Order
+
+1. **P2-1** (Resume/Import) — prevents confusion on existing installs
+2. **P2-3** (Agent interactivity) — core spec requirement, biggest gap
+3. **P2-5** (Streaming response) — validates full pipeline works
+4. **P2-4** (Channel config) — enables channel setup without leaving wizard
+5. **P2-6** (Sidebar conditional) — minor but visible
+6. **P2-2** (Two-column layout) — visual polish
+7. **P2-7** (Polish) — error recovery, polling, shortcuts
+
+---
+
+## 16. References
 
 - Paperclip source: `https://github.com/paperclipai/paperclip`
 - **Upstream sync skill:** `.claude/skills/upstream-sync/SKILL.md` (multi-upstream: OpenClaw + Paperclip)
