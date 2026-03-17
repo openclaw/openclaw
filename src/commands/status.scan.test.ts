@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  hasPotentialConfiguredChannels: vi.fn(),
   readBestEffortConfig: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
   buildChannelsTable: vi.fn(),
@@ -14,6 +15,15 @@ const mocks = vi.hoisted(() => ({
   probeGateway: vi.fn(),
   resolveGatewayProbeAuthResolution: vi.fn(),
   ensurePluginRegistryLoaded: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
+});
+
+vi.mock("../channels/config-presence.js", () => ({
+  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
 }));
 
 vi.mock("../cli/progress.js", () => ({
@@ -33,8 +43,10 @@ vi.mock("./status-all/channels.js", () => ({
 }));
 
 vi.mock("./status.scan.runtime.js", () => ({
-  buildChannelsTable: mocks.buildChannelsTable,
-  collectChannelStatusIssues: vi.fn(() => []),
+  statusScanRuntime: {
+    buildChannelsTable: mocks.buildChannelsTable,
+    collectChannelStatusIssues: vi.fn(() => []),
+  },
 }));
 
 vi.mock("./status.update.js", () => ({
@@ -334,6 +346,7 @@ describe("scanStatus", () => {
   });
 
   it("preloads configured channel plugins for status --json when channel config exists", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.readBestEffortConfig.mockResolvedValue({
       session: {},
       plugins: { enabled: false },
@@ -396,6 +409,7 @@ describe("scanStatus", () => {
   });
 
   it("preloads configured channel plugins for status --json when channel auth is env-only", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     const prevMatrixToken = process.env.MATRIX_ACCESS_TOKEN;
     process.env.MATRIX_ACCESS_TOKEN = "token";
     mocks.readBestEffortConfig.mockResolvedValue({
