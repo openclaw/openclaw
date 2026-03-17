@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { inboundCtxCapture as capture } from "../../../../src/channels/plugins/contracts/inbound-testkit.js";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
@@ -7,6 +8,17 @@ import {
   createBaseDiscordMessageContext,
   createDiscordDirectMessageContextOverrides,
 } from "./message-handler.test-harness.js";
+
+vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
+  return {
+    ...actual,
+    dispatchInboundMessage: vi.fn(async (params: { ctx: MsgContext }) => {
+      capture.ctx = params.ctx;
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    }),
+  };
+});
 
 describe("discord processDiscordMessage inbound context", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {

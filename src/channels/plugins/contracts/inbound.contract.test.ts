@@ -18,19 +18,11 @@ const dispatchInboundMessageMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+vi.mock("../../../auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../auto-reply/dispatch.js")>();
   return {
     ...actual,
     dispatchInboundMessage: vi.fn(async (params: { ctx: MsgContext }) => {
-      inboundCtxCapture.ctx = params.ctx;
-      return await dispatchInboundMessageMock(params);
-    }),
-    dispatchInboundMessageWithDispatcher: vi.fn(async (params: { ctx: MsgContext }) => {
-      inboundCtxCapture.ctx = params.ctx;
-      return await dispatchInboundMessageMock(params);
-    }),
-    dispatchInboundMessageWithBufferedDispatcher: vi.fn(async (params: { ctx: MsgContext }) => {
       inboundCtxCapture.ctx = params.ctx;
       return await dispatchInboundMessageMock(params);
     }),
