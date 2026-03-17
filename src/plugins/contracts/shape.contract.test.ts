@@ -112,6 +112,32 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord("channel-demo", "Channel Demo"),
+      register(api) {
+        api.registerChannel({
+          plugin: {
+            id: "channel-demo",
+            meta: {
+              id: "channel-demo",
+              label: "Channel Demo",
+              selectionLabel: "Channel Demo",
+              docsPath: "/channels/channel-demo",
+              blurb: "channel demo",
+            },
+            capabilities: { chatTypes: ["direct"] },
+            config: {
+              listAccountIds: () => [],
+              resolveAccount: () => ({ accountId: "default" }),
+            },
+            outbound: { deliveryMode: "direct" },
+          },
+        });
+      },
+    });
+
     const inspect = buildAllPluginInspectReports({
       config,
       report: {
@@ -142,6 +168,11 @@ describe("plugin shape compatibility matrix", () => {
         shape: "hybrid-capability",
         capabilityMode: "hybrid",
       },
+      {
+        id: "channel-demo",
+        shape: "plain-capability",
+        capabilityMode: "plain",
+      },
     ]);
 
     expect(inspect[0]?.usesLegacyBeforeAgentStart).toBe(true);
@@ -150,5 +181,6 @@ describe("plugin shape compatibility matrix", () => {
       "text-inference",
       "web-search",
     ]);
+    expect(inspect[3]?.capabilities.map((entry) => entry.kind)).toEqual(["channel"]);
   });
 });
