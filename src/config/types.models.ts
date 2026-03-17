@@ -3,6 +3,7 @@ import type { SecretInput } from "./types.secrets.js";
 export const MODEL_APIS = [
   "openai-completions",
   "openai-responses",
+  "azure-openai-responses",
   "openai-codex-responses",
   "anthropic-messages",
   "google-generative-ai",

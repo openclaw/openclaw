@@ -201,7 +201,7 @@ describe("promptCustomApiConfig", () => {
     });
     const fetchMock = stubFetchSequence([{ ok: true }]);
 
-    await runPromptCustomApi(prompter);
+    const result = await runPromptCustomApi(prompter);
 
     const firstCall = fetchMock.mock.calls[0];
     const firstUrl = firstCall?.[0];
@@ -225,6 +225,10 @@ describe("promptCustomApiConfig", () => {
     });
     expect(parsedBody).not.toHaveProperty("model");
     expect(parsedBody).not.toHaveProperty("max_tokens");
+    const configuredProvider = Object.values(result.config.models?.providers ?? {})[0] as
+      | { api?: string }
+      | undefined;
+    expect(configuredProvider?.api).toBe("azure-openai-responses");
   });
 
   it("uses expanded max_tokens for anthropic verification probes", async () => {

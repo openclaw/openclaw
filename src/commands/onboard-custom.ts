@@ -473,8 +473,12 @@ async function applyCustomApiRetryChoice(params: {
 
 function resolveProviderApi(
   compatibility: CustomApiCompatibility,
-): "openai-completions" | "anthropic-messages" {
-  return compatibility === "anthropic" ? "anthropic-messages" : "openai-completions";
+  baseUrl: string,
+): "openai-completions" | "azure-openai-responses" | "anthropic-messages" {
+  if (compatibility === "anthropic") {
+    return "anthropic-messages";
+  }
+  return isAzureUrl(baseUrl) ? "azure-openai-responses" : "openai-completions";
 }
 
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
@@ -631,7 +635,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
         [providerId]: {
           ...existingProviderRest,
           baseUrl: resolvedBaseUrl,
-          api: resolveProviderApi(params.compatibility),
+          api: resolveProviderApi(params.compatibility, baseUrl),
           ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
           models: mergedModels.length > 0 ? mergedModels : [nextModel],
         },
