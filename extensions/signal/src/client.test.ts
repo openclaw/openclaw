@@ -3,19 +3,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fetchWithTimeoutMock = vi.fn();
 const resolveFetchMock = vi.fn();
 
-vi.mock("../../../src/infra/fetch.js", () => ({
-  resolveFetch: (...args: unknown[]) => resolveFetchMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
+  return {
+    ...actual,
+    resolveFetch: (...args: unknown[]) => resolveFetchMock(...args),
+    generateSecureUuid: () => "test-id",
+  };
+});
 
-vi.mock("../../../src/infra/secure-random.js", () => ({
-  generateSecureUuid: () => "test-id",
-}));
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
+    "openclaw/plugin-sdk/text-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithTimeout: (...args: unknown[]) => fetchWithTimeoutMock(...args),
+  };
+});
 
-vi.mock("../../../src/utils/fetch-timeout.js", () => ({
-  fetchWithTimeout: (...args: unknown[]) => fetchWithTimeoutMock(...args),
-}));
-
-import { signalRpcRequest } from "./client.js";
+let signalRpcRequest: typeof import("./client.js").signalRpcRequest;
 
 function rpcResponse(body: unknown, status = 200): Response {
   if (typeof body === "string") {
@@ -25,9 +34,11 @@ function rpcResponse(body: unknown, status = 200): Response {
 }
 
 describe("signalRpcRequest", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     resolveFetchMock.mockReturnValue(vi.fn());
+    ({ signalRpcRequest } = await import("./client.js"));
   });
 
   it("returns parsed RPC result", async () => {
