@@ -713,6 +713,68 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(getGlobalHookRunner()).toBeNull();
   });
 
+  it("only publishes plugin commands to the global registry during activating loads", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "command-plugin",
+      filename: "command-plugin.cjs",
+      body: `module.exports = {
+        id: "command-plugin",
+        register(api) {
+          api.registerCommand({
+            name: "pair",
+            description: "Pair device",
+            acceptsArgs: true,
+            handler: async ({ args }) => ({ text: \`paired:\${args ?? ""}\` }),
+          });
+        },
+      };`,
+    });
+    const { clearPluginCommands, getPluginCommandSpecs } = await import("./commands.js");
+
+    clearPluginCommands();
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["command-plugin"],
+        },
+      },
+      onlyPluginIds: ["command-plugin"],
+    });
+
+    expect(scoped.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
+    expect(scoped.commands.map((entry) => entry.command.name)).toEqual(["pair"]);
+    expect(getPluginCommandSpecs("telegram")).toEqual([]);
+
+    const active = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["command-plugin"],
+        },
+      },
+      onlyPluginIds: ["command-plugin"],
+    });
+
+    expect(active.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
+    expect(getPluginCommandSpecs("telegram")).toEqual([
+      {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+      },
+    ]);
+
+    clearPluginCommands();
+  });
+
   it("throws when activate:false is used without cache:false", () => {
     expect(() => loadOpenClawPlugins({ activate: false })).toThrow(
       "activate:false requires cache:false",
@@ -3211,6 +3273,16 @@ module.exports = {
     expect(resolved).toBe(distFile);
   });
 
+  it("configures the plugin loader jiti boundary to prefer native dist modules", () => {
+    const options = __testing.buildPluginLoaderJitiOptions({});
+
+    expect(options.tryNative).toBe(true);
+    expect(options.interopDefault).toBe(true);
+    expect(options.extensions).toContain(".js");
+    expect(options.extensions).toContain(".ts");
+    expect("alias" in options).toBe(false);
+  });
+
   it("prefers src root-alias shim when loader runs from src in non-production", () => {
     const { root, srcFile } = createPluginSdkAliasFixture({
       srcFile: "root-alias.cjs",
@@ -3241,6 +3313,15 @@ module.exports = {
       }),
     );
     expect(resolved).toBe(srcFile);
+  });
+
+  it("prefers dist plugin runtime module when loader runs from dist", () => {
+    const { root, distFile } = createPluginRuntimeAliasFixture();
+
+    const resolved = __testing.resolvePluginRuntimeModulePath({
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
   });
 
   it("resolves plugin runtime module from package root when loader runs from transpiler cache path", () => {
