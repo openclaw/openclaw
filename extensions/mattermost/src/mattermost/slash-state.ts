@@ -85,13 +85,19 @@ export function activateSlashCommands(params: {
   commandTokens: string[];
   registeredCommands: MattermostRegisteredCommand[];
   triggerMap?: Map<string, string>;
+  /**
+   * Maps Mattermost bot user ID → OpenClaw accountId, built at startup by
+   * calling /users/me for every enabled bot account. Used to route DM slash
+   * commands to the correct agent.
+   */
+  botUserIdMap?: Map<string, string>;
   api: {
     cfg: import("openclaw/plugin-sdk/mattermost").OpenClawConfig;
     runtime: import("openclaw/plugin-sdk/mattermost").RuntimeEnv;
   };
   log?: (msg: string) => void;
 }) {
-  const { account, commandTokens, registeredCommands, triggerMap, api, log } = params;
+  const { account, commandTokens, registeredCommands, triggerMap, botUserIdMap, api, log } = params;
   const accountId = account.accountId;
 
   const tokenSet = new Set(commandTokens);
@@ -102,6 +108,7 @@ export function activateSlashCommands(params: {
     runtime: api.runtime,
     commandTokens: tokenSet,
     triggerMap,
+    botUserIdMap,
     log,
   });
 

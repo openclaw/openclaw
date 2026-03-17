@@ -190,6 +190,79 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("returns error when a cron-owned isolated run finishes with no summary or delivery evidence", async () => {
+    await withTempHome(async (home) => {
+      mockEmbeddedPayloads([]);
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("error");
+      expect(res.error).toContain("without final summary or delivery");
+    });
+  });
+
+  it("does not apply the silent-completion guard to shared callers", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStoreEntries(home, {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now(),
+          lastProvider: "webchat",
+          lastTo: "",
+        },
+      });
+      mockEmbeddedPayloads([]);
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps: makeDeps(),
+        job: makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
+        message: DEFAULT_MESSAGE,
+        sessionKey: DEFAULT_SESSION_KEY,
+        lane: "cron",
+        deliveryContract: "shared",
+      });
+
+      expect(res.status).toBe("ok");
+    });
+  });
+
+  it("returns error when a cron-owned completion contract is missing required markers", async () => {
+    await withTempHome(async (home) => {
+      const { res } = await runCronTurn(home, {
+        jobPayload: {
+          ...DEFAULT_AGENT_TURN_PAYLOAD,
+          completionContract: {
+            requiredPhrases: ["CHAIN_COMPLETE: true", "SUMMARY_SENT: true"],
+          },
+        },
+        mockTexts: ["CHAIN_COMPLETE: true"],
+      });
+
+      expect(res.status).toBe("error");
+      expect(res.error).toContain("missing required completion markers");
+      expect(res.error).toContain("SUMMARY_SENT: true");
+    });
+  });
+
+  it("accepts a cron-owned completion contract when all required markers are present", async () => {
+    await withTempHome(async (home) => {
+      const { res } = await runCronTurn(home, {
+        jobPayload: {
+          ...DEFAULT_AGENT_TURN_PAYLOAD,
+          completionContract: {
+            requiredPhrases: ["CHAIN_COMPLETE: true", "SUMMARY_SENT: true"],
+          },
+        },
+        mockTexts: ["CHAIN_COMPLETE: true\nSUMMARY_SENT: true"],
+      });
+
+      expect(res.status).toBe("ok");
+    });
+  });
+
   it("returns error when embedded run payload is marked as error", async () => {
     await withTempHome(async (home) => {
       mockEmbeddedPayloads([

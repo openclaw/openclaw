@@ -50,6 +50,12 @@ type SlashHttpHandlerParams = {
   commandTokens: Set<string>;
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap?: ReadonlyMap<string, string>;
+  /**
+   * Maps Mattermost bot user ID → OpenClaw accountId.
+   * Used to route DM slash commands to the correct agent when commands are
+   * registered by a single "primary" account on behalf of all bots.
+   */
+  botUserIdMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
 };
 
@@ -212,7 +218,7 @@ async function authorizeSlashInvocation(params: {
  * from the Mattermost server when a user invokes a registered slash command.
  */
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const { account, cfg, runtime, commandTokens, triggerMap, log } = params;
+  const { account, cfg, runtime, commandTokens, triggerMap, botUserIdMap, log } = params;
 
   const MAX_BODY_BYTES = 64 * 1024; // 64KB
 
@@ -312,6 +318,8 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         channelDisplay: auth.channelDisplay,
         roomLabel: auth.roomLabel,
         commandAuthorized: auth.commandAuthorized,
+        channelInfo: auth.channelInfo,
+        botUserIdMap,
         log,
       });
     } catch (err) {
@@ -344,6 +352,8 @@ async function handleSlashCommandAsync(params: {
   channelDisplay: string;
   roomLabel: string;
   commandAuthorized: boolean;
+  channelInfo?: MattermostChannel | null;
+  botUserIdMap?: ReadonlyMap<string, string>;
   triggerId?: string;
   log?: (msg: string) => void;
 }) {
@@ -363,15 +373,39 @@ async function handleSlashCommandAsync(params: {
     channelDisplay,
     roomLabel,
     commandAuthorized,
+    channelInfo,
+    botUserIdMap,
     triggerId,
     log,
   } = params;
   const core = getMattermostRuntime();
 
+  // For DM channels, the channel name is "{botUserId}__{senderId}" (or vice versa).
+  // Use this to identify which bot account the user was DMing, so we route to the
+  // correct agent instead of always falling back to the default (first) agent.
+  let routingAccountId = account.accountId;
+  if (kind === "direct" && channelInfo?.name && botUserIdMap && botUserIdMap.size > 0) {
+    const parts = channelInfo.name.split("__");
+    const botMattermostUserId = parts.find((p) => p !== senderId && p.trim() !== "");
+    if (botMattermostUserId) {
+      const mappedAccountId = botUserIdMap.get(botMattermostUserId);
+      if (mappedAccountId) {
+        routingAccountId = mappedAccountId;
+        log?.(
+          `mattermost: slash DM routing resolved bot user ${botMattermostUserId} → account ${mappedAccountId}`,
+        );
+      } else {
+        log?.(
+          `mattermost: slash DM routing: no account found for bot user ${botMattermostUserId}, falling back to ${account.accountId}`,
+        );
+      }
+    }
+  }
+
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
     channel: "mattermost",
-    accountId: account.accountId,
+    accountId: routingAccountId,
     teamId,
     peer: {
       kind,

@@ -81,6 +81,11 @@ export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnP
 
 export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
 
+export type CronAgentTurnCompletionContract = {
+  /** All phrases must appear in the final cron-visible output for success. */
+  requiredPhrases: string[];
+};
+
 type CronAgentTurnPayloadFields = {
   message: string;
   /** Optional model override (provider/model or alias). */
@@ -96,6 +101,7 @@ type CronAgentTurnPayloadFields = {
   channel?: CronMessageChannel;
   to?: string;
   bestEffortDeliver?: boolean;
+  completionContract?: CronAgentTurnCompletionContract;
 };
 
 type CronAgentTurnPayload = {

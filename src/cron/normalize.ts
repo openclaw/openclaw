@@ -158,6 +158,24 @@ function coercePayload(payload: UnknownRecord) {
   ) {
     delete next.allowUnsafeExternalContent;
   }
+  if ("completionContract" in next) {
+    if (isRecord(next.completionContract)) {
+      const rawRequiredPhrases = Array.isArray(next.completionContract.requiredPhrases)
+        ? next.completionContract.requiredPhrases
+        : [];
+      const requiredPhrases = rawRequiredPhrases
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      if (requiredPhrases.length > 0) {
+        next.completionContract = { requiredPhrases };
+      } else {
+        delete next.completionContract;
+      }
+    } else {
+      delete next.completionContract;
+    }
+  }
   return next;
 }
 

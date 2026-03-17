@@ -695,6 +695,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.bestEffortDeliver === "boolean") {
     next.bestEffortDeliver = patch.bestEffortDeliver;
   }
+  if (patch.completionContract && typeof patch.completionContract === "object") {
+    next.completionContract = patch.completionContract;
+  }
   return next;
 }
 
@@ -763,6 +766,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     channel: patch.channel,
     to: patch.to,
     bestEffortDeliver: patch.bestEffortDeliver,
+    completionContract: patch.completionContract,
   };
 }
 

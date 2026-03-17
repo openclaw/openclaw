@@ -33,7 +33,7 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk/mattermost";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount } from "./accounts.js";
+import { listEnabledMattermostAccounts, resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
@@ -487,11 +487,46 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
         }
 
+        // Build Mattermost user ID → OpenClaw accountId map so that slash
+        // commands invoked in DMs can be routed to the correct bot account.
+        // Start with the current bot (whose user ID we already know), then
+        // query /users/me for each other enabled account in parallel.
+        const botUserIdMap = new Map<string, string>();
+        botUserIdMap.set(botUserId, account.accountId);
+        const otherAccounts = listEnabledMattermostAccounts(cfg).filter(
+          (a) => a.accountId !== account.accountId && a.botToken && a.baseUrl,
+        );
+        if (otherAccounts.length > 0) {
+          const results = await Promise.allSettled(
+            otherAccounts.map(async (a) => {
+              const c = createMattermostClient({
+                baseUrl: a.baseUrl!,
+                botToken: a.botToken!,
+              });
+              const u = await fetchMattermostMe(c);
+              return { mattermostUserId: u.id, accountId: a.accountId };
+            }),
+          );
+          for (const result of results) {
+            if (result.status === "fulfilled") {
+              botUserIdMap.set(result.value.mattermostUserId, result.value.accountId);
+            } else {
+              runtime.error?.(
+                `mattermost: failed to fetch user ID for bot account during slash setup: ${String(result.reason)}`,
+              );
+            }
+          }
+          runtime.log?.(
+            `mattermost: slash DM routing map built with ${botUserIdMap.size} bot account(s)`,
+          );
+        }
+
         activateSlashCommands({
           account,
           commandTokens: allRegistered.map((cmd) => cmd.token).filter(Boolean),
           registeredCommands: allRegistered,
           triggerMap,
+          botUserIdMap,
           api: { cfg, runtime },
           log: (msg) => runtime.log?.(msg),
         });
@@ -536,9 +571,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               if (newTokens.length > 0) {
                 activateSlashCommands({
                   account,
-                  commandTokens: [...allRegistered.map((c) => c.token).filter(Boolean), ...newTokens],
+                  commandTokens: [
+                    ...allRegistered.map((c) => c.token).filter(Boolean),
+                    ...newTokens,
+                  ],
                   registeredCommands: [...allRegistered, ...registered],
                   triggerMap: new Map([...triggerMap, ...lateTriggerMap]),
+                  botUserIdMap,
                   api: { cfg, runtime },
                   log: (msg) => runtime.log?.(msg),
                 });

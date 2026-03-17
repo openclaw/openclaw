@@ -276,14 +276,15 @@ class Mem0Client {
 
 /**
  * Resolve the effective userId from hook context, falling back to config default.
- * Uses sessionKey as a stable per-user identifier when available.
+ * Uses sessionKey as a stable per-conversation identifier when available,
+ * then agentId to ensure per-agent isolation for hook-triggered sessions,
+ * then the config default as a last resort.
  */
 function resolveUserId(
   ctx: { sessionKey?: string; agentId?: string },
   configUserId: string,
 ): string {
-  // sessionKey is the most stable per-conversation identifier available in hook context
-  return ctx.sessionKey || configUserId;
+  return ctx.sessionKey || ctx.agentId || configUserId;
 }
 
 // ============================================================================
@@ -321,10 +322,7 @@ export default {
             }),
           ),
         }),
-        async execute(
-          _toolCallId: string,
-          params: { query: string; limit?: number },
-        ) {
+        async execute(_toolCallId: string, params: { query: string; limit?: number }) {
           const memories = await client.search(params.query, undefined, params.limit);
 
           if (memories.length === 0) {
@@ -340,8 +338,7 @@ export default {
 
           const formatted = memories
             .map((m, i) => {
-              const score =
-                m.score !== undefined ? ` (relevance: ${m.score.toFixed(2)})` : "";
+              const score = m.score !== undefined ? ` (relevance: ${m.score.toFixed(2)})` : "";
               return `${i + 1}. ${m.memory}${score}`;
             })
             .join("\n");
@@ -369,14 +366,9 @@ export default {
           content: Type.String({
             description: "Fact or context to remember",
           }),
-          agent_id: Type.Optional(
-            Type.String({ description: "Agent ID for metadata (optional)" }),
-          ),
+          agent_id: Type.Optional(Type.String({ description: "Agent ID for metadata (optional)" })),
         }),
-        async execute(
-          _toolCallId: string,
-          params: { content: string; agent_id?: string },
-        ) {
+        async execute(_toolCallId: string, params: { content: string; agent_id?: string }) {
           const result = await client.add(params.content, undefined, params.agent_id);
 
           if (!result || !result.success) {
@@ -419,10 +411,7 @@ export default {
             }),
           ),
         }),
-        async execute(
-          _toolCallId: string,
-          params: { limit?: number },
-        ) {
+        async execute(_toolCallId: string, params: { limit?: number }) {
           const memories = await client.list(undefined, params.limit);
 
           if (memories.length === 0) {
@@ -436,9 +425,7 @@ export default {
             };
           }
 
-          const formatted = memories
-            .map((m, i) => `${i + 1}. [${m.id}] ${m.memory}`)
-            .join("\n");
+          const formatted = memories.map((m, i) => `${i + 1}. [${m.id}] ${m.memory}`).join("\n");
 
           return {
             content: [
@@ -468,13 +455,9 @@ export default {
           // Audit log for deletion
           const timestamp = new Date().toISOString();
           if (success) {
-            api.logger.info(
-              `memory-mem0: deleted memory id=${params.id} at=${timestamp}`,
-            );
+            api.logger.info(`memory-mem0: deleted memory id=${params.id} at=${timestamp}`);
           } else {
-            api.logger.warn(
-              `memory-mem0: failed to delete memory id=${params.id} at=${timestamp}`,
-            );
+            api.logger.warn(`memory-mem0: failed to delete memory id=${params.id} at=${timestamp}`);
           }
 
           return {
@@ -498,9 +481,7 @@ export default {
 
     api.registerCli(
       ({ program }) => {
-        const mem0 = program
-          .command("mem0")
-          .description("Mem0 memory plugin commands");
+        const mem0 = program.command("mem0").description("Mem0 memory plugin commands");
 
         mem0
           .command("search")
@@ -515,8 +496,7 @@ export default {
             }
             console.log(`\nFound ${memories.length} memories:\n`);
             for (const [i, m] of memories.entries()) {
-              const score =
-                m.score !== undefined ? ` [${m.score.toFixed(2)}]` : "";
+              const score = m.score !== undefined ? ` [${m.score.toFixed(2)}]` : "";
               console.log(`${i + 1}. ${m.memory}${score}`);
               console.log(`   ID: ${m.id}\n`);
             }
@@ -544,9 +524,7 @@ export default {
           .argument("<id>", "Memory ID to delete")
           .action(async (id: string) => {
             const success = await client.delete(id);
-            console.log(
-              success ? `Deleted: ${id}` : `Failed to delete: ${id}`,
-            );
+            console.log(success ? `Deleted: ${id}` : `Failed to delete: ${id}`);
           });
 
         mem0
@@ -576,9 +554,7 @@ export default {
 
         const userId = resolveUserId(ctx, config.userId);
         const memories = await client.search(prompt, userId, config.recallLimit);
-        const relevant = memories.filter(
-          (m) => (m.score || 0) >= config.recallThreshold,
-        );
+        const relevant = memories.filter((m) => (m.score || 0) >= config.recallThreshold);
 
         if (relevant.length === 0) return;
 

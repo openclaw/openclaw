@@ -2,6 +2,12 @@ import { Type, type TSchema } from "@sinclair/typebox";
 import { NonEmptyString } from "./primitives.js";
 
 function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
+  const completionContractSchema = Type.Object(
+    {
+      requiredPhrases: Type.Array(NonEmptyString, { minItems: 1 }),
+    },
+    { additionalProperties: false },
+  );
   return Type.Object(
     {
       kind: Type.Literal("agentTurn"),
@@ -16,6 +22,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       channel: Type.Optional(Type.String()),
       to: Type.Optional(Type.String()),
       bestEffortDeliver: Type.Optional(Type.Boolean()),
+      completionContract: Type.Optional(completionContractSchema),
     },
     { additionalProperties: false },
   );

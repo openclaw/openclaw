@@ -197,6 +197,52 @@ function appendCronDeliveryInstruction(params: {
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
+function hasMissingCronCompletionEvidence(params: {
+  deliveryContract: IsolatedDeliveryContract;
+  summary?: string;
+  outputText?: string;
+  deliveryPayloads: ReplyPayload[];
+  delivered?: boolean;
+  deliveryAttempted?: boolean;
+  didSendViaMessagingTool?: boolean;
+}): boolean {
+  if (params.deliveryContract !== "cron-owned") {
+    return false;
+  }
+  if (params.delivered === true || params.deliveryAttempted === true) {
+    return false;
+  }
+  if (params.didSendViaMessagingTool === true) {
+    return false;
+  }
+  if (params.summary?.trim() || params.outputText?.trim()) {
+    return false;
+  }
+  return params.deliveryPayloads.length === 0;
+}
+
+function resolveMissingCompletionContractPhrases(params: {
+  deliveryContract: IsolatedDeliveryContract;
+  completionContract?: { requiredPhrases?: string[] };
+  summary?: string;
+  outputText?: string;
+}): string[] {
+  if (params.deliveryContract !== "cron-owned") {
+    return [];
+  }
+  const requiredPhrases = params.completionContract?.requiredPhrases ?? [];
+  if (requiredPhrases.length === 0) {
+    return [];
+  }
+  const completionText = [params.outputText?.trim(), params.summary?.trim()]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+  if (!completionText) {
+    return [...requiredPhrases];
+  }
+  return requiredPhrases.filter((phrase) => !completionText.includes(phrase));
+}
+
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -872,6 +918,46 @@ export async function runCronIsolatedAgentTurn(params: {
   const deliveryAttempted = deliveryResult.deliveryAttempted;
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
+  const missingCompletionPhrases = resolveMissingCompletionContractPhrases({
+    deliveryContract,
+    completionContract:
+      params.job.payload.kind === "agentTurn" ? params.job.payload.completionContract : undefined,
+    summary,
+    outputText,
+  });
+  if (missingCompletionPhrases.length > 0) {
+    return withRunSession({
+      status: "error",
+      error: `cron isolated run missing required completion markers: ${missingCompletionPhrases.join(", ")}`,
+      summary,
+      outputText,
+      delivered,
+      deliveryAttempted,
+      ...telemetry,
+    });
+  }
+  if (
+    !hasFatalErrorPayload &&
+    hasMissingCronCompletionEvidence({
+      deliveryContract,
+      summary,
+      outputText,
+      deliveryPayloads,
+      delivered,
+      deliveryAttempted,
+      didSendViaMessagingTool: finalRunResult.didSendViaMessagingTool,
+    })
+  ) {
+    return withRunSession({
+      status: "error",
+      error: "cron isolated run completed without final summary or delivery",
+      summary,
+      outputText,
+      delivered,
+      deliveryAttempted,
+      ...telemetry,
+    });
+  }
 
   return resolveRunOutcome({ delivered, deliveryAttempted });
 }
