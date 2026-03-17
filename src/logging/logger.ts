@@ -348,6 +348,10 @@ function formatLocalDate(date: Date): string {
 }
 
 function defaultRollingPathForToday(): string {
+  // DEFAULT_LOG_DIR is always a Node-resolved path here: resolveSettings()
+  // gates on canUseNodeFs() and returns early for browser-safe environments,
+  // so this function is only ever reached when node:fs is available and
+  // path.join uses OS-native separators intentionally.
   const today = formatLocalDate(new Date());
   return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
 }
