@@ -32,6 +32,9 @@ function canUseNodeFs(): boolean {
 }
 
 function resolveDefaultLogDir(): string {
+  if (process.env.OPENCLAW_LOG_DIR) {
+    return process.env.OPENCLAW_LOG_DIR;
+  }
   return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
 }
 
