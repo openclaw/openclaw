@@ -68,6 +68,15 @@ export SKILL_API_KEY=YOUR_API_KEY
 export SKILL_API_URL=https://hub.openfinclaw.ai
 ```
 
+### ⚠️ API Key 安全提醒
+
+**重要：请勿泄露你的 Hub API Key！**
+
+- API Key 以 `fch_` 开头，**仅用于** hub.openfinclaw.ai 接口校验
+- **不要**将 API Key 提交到 Git 仓库或公开分享
+- **不要**在公开聊天、截图、代码示例中暴露真实的 API Key
+- 如果怀疑 Key 已泄露，请立即在 Hub 个人设置中重新生成
+
 ### 配置选项
 
 | 配置项             | 环境变量                   | 说明         | 默认值                       |
