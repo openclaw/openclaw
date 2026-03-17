@@ -11,16 +11,20 @@ function uniqueProviders() {
 
 const resolvePluginProvidersMock = vi.fn();
 const resolveOwningPluginIdsForProviderMock = vi.fn();
+const resolveNonBundledProviderPluginIdsMock = vi.fn();
 
 vi.mock("../providers.js", () => ({
   resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
   resolveOwningPluginIdsForProvider: (...args: unknown[]) =>
     resolveOwningPluginIdsForProviderMock(...args),
+  resolveNonBundledProviderPluginIds: (...args: unknown[]) =>
+    resolveNonBundledProviderPluginIdsMock(...args),
 }));
 
 const {
   augmentModelCatalogWithProviderPlugins,
   buildProviderMissingAuthMessageWithPlugin,
+  resetProviderRuntimeHookCacheForTest,
   resolveProviderBuiltInModelSuppression,
 } = await import("../provider-runtime.js");
 
@@ -28,9 +32,13 @@ describe("provider catalog contract", () => {
   beforeEach(() => {
     const providers = uniqueProviders();
     const providerIds = [...new Set(providerContractRegistry.map((entry) => entry.pluginId))];
+    resetProviderRuntimeHookCacheForTest();
 
     resolveOwningPluginIdsForProviderMock.mockReset();
     resolveOwningPluginIdsForProviderMock.mockReturnValue(providerIds);
+
+    resolveNonBundledProviderPluginIdsMock.mockReset();
+    resolveNonBundledProviderPluginIdsMock.mockReturnValue([]);
 
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) => {
