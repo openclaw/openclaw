@@ -164,6 +164,12 @@ importers:
       node-llama-cpp:
         specifier: 3.16.2
         version: 3.16.2(typescript@5.9.3)
+      nostr:
+        specifier: ^0.2.8
+        version: 0.2.8
+      nostr-tools:
+        specifier: ^2.23.3
+        version: 2.23.3(typescript@5.9.3)
       opusscript:
         specifier: ^0.1.1
         version: 0.1.1
@@ -342,6 +348,8 @@ importers:
 
   extensions/discord: {}
 
+  extensions/elevenlabs: {}
+
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
@@ -450,6 +458,8 @@ importers:
       openai:
         specifier: ^6.29.0
         version: 6.29.0(ws@8.19.0)(zod@4.3.6)
+
+  extensions/microsoft: {}
 
   extensions/minimax: {}
 
@@ -5437,6 +5447,10 @@ packages:
     resolution: {integrity: sha512-dBpDMdxv9Irdq66304OLfEmQ9tbNRFnFTuZiLo+bD+r332bBmMJ8GBLXklIXXgxd3+v9+KUnZaUR5PJMa75Gsg==}
     engines: {node: '>= 0.4.0'}
 
+  noble-secp256k1@1.2.14:
+    resolution: {integrity: sha512-GSCXyoZBUaaPwVWdYncMEmzlSUjF9J/YeEHpklYJCyg8wPuJP3NzDx0BkiwArzINkdX2HJHvUJhL6vVWPOQQcg==}
+    deprecated: Switch to namespaced @noble/secp256k1 for security and feature updates
+
   node-addon-api@8.6.0:
     resolution: {integrity: sha512-gBVjCaqDlRUk0EwoPNKzIr9KkS9041G/q31IBShPs1Xz6UTA+EXdZADbzqAJQrpDRq71CIMnOP5VMut3SL0z5Q==}
     engines: {node: ^18 || ^20 || >= 21}
@@ -5502,6 +5516,9 @@ packages:
 
   nostr-wasm@0.1.0:
     resolution: {integrity: sha512-78BTryCLcLYv96ONU8Ws3Q1JzjlAt+43pWQhIl86xZmWeegYCNLPml7yQ+gG3vR6V5h4XGj+TxO+SS5dsThQIA==}
+
+  nostr@0.2.8:
+    resolution: {integrity: sha512-p25OQiEB5x8rWWoWLRRbxtxQiaQgypaQQakSKw5+cp/SW0DXea/soMzqmTXei1I6HrcARuyfvedGTdoEU471Ow==}
 
   npm-run-path@4.0.1:
     resolution: {integrity: sha512-S48WzZW777zhNIrn7gxOlISNAqi9ZC/uQFnRdbeIHhZhCA6UqpkOT8T1G7BvfdgP4Er8gF4sUbaS0i7QvIfCWw==}
@@ -12683,6 +12700,8 @@ snapshots:
 
   netmask@2.0.2: {}
 
+  noble-secp256k1@1.2.14: {}
+
   node-addon-api@8.6.0: {}
 
   node-api-headers@1.8.0: {}
@@ -12787,6 +12806,14 @@ snapshots:
       typescript: 5.9.3
 
   nostr-wasm@0.1.0: {}
+
+  nostr@0.2.8:
+    dependencies:
+      noble-secp256k1: 1.2.14
+      ws: 8.19.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   npm-run-path@4.0.1:
     dependencies:
