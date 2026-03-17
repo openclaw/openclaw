@@ -9,7 +9,7 @@ tags: ["image-generation", "seedream", "byteplus", "ai-art", "text-to-image", "i
 
 ## Description
 
-Generate high-quality images from text prompts using BytePlus Seedream models. This skill provides access to three powerful Seedream model versions (4.0, 4.5, and 5.0-lite), each offering unique capabilities for different use cases.
+Generate high-quality images from text prompts using BytePlus Seedream models. This skill provides access to three powerful Seedream model versions (4.0, 4.5, and 5.0), each offering unique capabilities for different use cases.
 
 ## When to Use This Skill
 
@@ -35,11 +35,11 @@ Use this skill when:
 - **Text-to-Image**: Generate images from detailed text descriptions
 - **Image-to-Image**: Transform reference images into different styles
 - **Batch Generation**: Create multiple images in a single request
-- **Multiple Versions**: Choose from 4.0, 4.5, or 5.0-lite models
+- **Multiple Versions**: Choose from 4.0, 4.5, or 5.0 models
 - **Watermark Control**: Option to disable watermarks
 - **Custom Sizes**: Support for various image dimensions
-- **Output Formats**: PNG and JPEG formats (5.0-lite only)
-- **Web Search Tools**: Internet search integration (5.0-lite only)
+- **Output Formats**: PNG and JPEG formats (5.0 only)
+- **Web Search Tools**: Internet search integration (5.0 only)
 
 ## Installation & Setup
 
@@ -55,7 +55,7 @@ export ARK_DOLA_API_BASE="https://ark.ap-southeast.bytepluses.com/api/v3"
 
 ## Usage
 
-### Basic Usage (5.0-lite version recommended)
+### Basic Usage (5.0 version recommended)
 
 ```bash
 cd scripts
@@ -71,7 +71,7 @@ python seedream_image_generate.py -p "A cute kitten" --version 4.0
 # Use 4.5 version
 python seedream_image_generate.py -p "A cute kitten" --version 4.5
 
-# Use 5.0-lite version (recommended)
+# Use 5.0 version (recommended)
 python seedream_image_generate.py -p "A cute kitten" --version 5.0
 ```
 

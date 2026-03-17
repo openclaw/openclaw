@@ -90,7 +90,7 @@ def _get_headers() -> dict:
     """
     if not API_KEY:
         raise ValueError(
-            "Please set ARK_API_KEY or MODEL_IMAGE_API_KEY or MODEL_AGENT_API_KEY environment variable"
+            "Please set ARK_DOLA_API_KEY environment variable"
         )
     return {
         "Content-Type": "application/json",
@@ -237,7 +237,7 @@ async def seedream_generate(
         return {
             "status": "error",
             "success_list": [],
-            "error_list": ["Missing API key, please set ARK_API_KEY or MODEL_IMAGE_API_KEY or MODEL_AGENT_API_KEY"],
+            "error_list": ["Missing API key, please set ARK_DOLA_API_KEY"],
             "error_detail_list": [{"error": "Missing API key"}],
         }
 
@@ -380,9 +380,9 @@ def main():
     # Check API key
     if not API_KEY:
         print(
-            "  Error: Please set ARK_API_KEY or MODEL_IMAGE_API_KEY or MODEL_AGENT_API_KEY environment variable!"
+            "  Error: Please set ARK_DOLA_API_KEY environment variable!"
         )
-        print("  Tip: export ARK_API_KEY='your-api-key'")
+        print("  Tip: export ARK_DOLA_API_KEY='your-api-key'")
         sys.exit(1)
 
     if args.stream:
