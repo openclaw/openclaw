@@ -7,6 +7,7 @@ import {
   buildOpenGroupPolicyWarning,
   collectAllowlistProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
@@ -15,7 +16,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/matrix";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";

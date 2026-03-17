@@ -47,6 +47,7 @@
   "irc",
   "llm-task",
   "lobster",
+  "lazy-runtime",
   "matrix",
   "mattermost",
   "memory-core",

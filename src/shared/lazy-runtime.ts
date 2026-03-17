@@ -19,3 +19,11 @@ export function createLazyRuntimeMethod<TSurface, TArgs extends unknown[], TResu
   };
   return invoke;
 }
+
+export function createLazyRuntimeMethodBinder<TSurface>(load: () => Promise<TSurface>) {
+  return function <TArgs extends unknown[], TResult>(
+    select: (surface: TSurface) => (...args: TArgs) => TResult,
+  ): (...args: TArgs) => Promise<Awaited<TResult>> {
+    return createLazyRuntimeMethod(load, select);
+  };
+}

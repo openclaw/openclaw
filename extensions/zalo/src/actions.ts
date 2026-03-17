@@ -1,10 +1,10 @@
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/zalo";
 import { extractToolSend, jsonResult, readStringParam } from "openclaw/plugin-sdk/zalo";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import { listEnabledZaloAccounts } from "./accounts.js";
 
 type ZaloActionsRuntime = typeof import("./actions.runtime.js").zaloActionsRuntime;

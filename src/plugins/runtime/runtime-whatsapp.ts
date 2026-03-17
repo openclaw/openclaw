@@ -6,14 +6,12 @@ import {
   readWebSelfId,
   webAuthExists,
 } from "../../../extensions/whatsapp/src/auth-store.js";
-import { createLazyRuntimeMethod, createLazyRuntimeSurface } from "../../shared/lazy-runtime.js";
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeSurface,
+} from "../../shared/lazy-runtime.js";
 import { createRuntimeWhatsAppLoginTool } from "./runtime-whatsapp-login-tool.js";
 import type { PluginRuntime } from "./types.js";
-
-type RuntimeWhatsAppOutbound =
-  typeof import("./runtime-whatsapp-outbound.runtime.js").runtimeWhatsAppOutbound;
-type RuntimeWhatsAppLogin =
-  typeof import("./runtime-whatsapp-login.runtime.js").runtimeWhatsAppLogin;
 
 const loadWebOutbound = createLazyRuntimeSurface(
   () => import("./runtime-whatsapp-outbound.runtime.js"),
@@ -25,23 +23,18 @@ const loadWebLogin = createLazyRuntimeSurface(
   ({ runtimeWhatsAppLogin }) => runtimeWhatsAppLogin,
 );
 
-const sendMessageWhatsAppLazy = createLazyRuntimeMethod<
-  RuntimeWhatsAppOutbound,
-  Parameters<PluginRuntime["channel"]["whatsapp"]["sendMessageWhatsApp"]>,
-  ReturnType<PluginRuntime["channel"]["whatsapp"]["sendMessageWhatsApp"]>
->(loadWebOutbound, (runtimeWhatsAppOutbound) => runtimeWhatsAppOutbound.sendMessageWhatsApp);
+const bindWhatsAppOutboundMethod = createLazyRuntimeMethodBinder(loadWebOutbound);
+const bindWhatsAppLoginMethod = createLazyRuntimeMethodBinder(loadWebLogin);
 
-const sendPollWhatsAppLazy = createLazyRuntimeMethod<
-  RuntimeWhatsAppOutbound,
-  Parameters<PluginRuntime["channel"]["whatsapp"]["sendPollWhatsApp"]>,
-  ReturnType<PluginRuntime["channel"]["whatsapp"]["sendPollWhatsApp"]>
->(loadWebOutbound, (runtimeWhatsAppOutbound) => runtimeWhatsAppOutbound.sendPollWhatsApp);
-
-const loginWebLazy = createLazyRuntimeMethod<
-  RuntimeWhatsAppLogin,
-  Parameters<PluginRuntime["channel"]["whatsapp"]["loginWeb"]>,
-  ReturnType<PluginRuntime["channel"]["whatsapp"]["loginWeb"]>
->(loadWebLogin, (runtimeWhatsAppLogin) => runtimeWhatsAppLogin.loginWeb);
+const sendMessageWhatsAppLazy = bindWhatsAppOutboundMethod(
+  (runtimeWhatsAppOutbound) => runtimeWhatsAppOutbound.sendMessageWhatsApp,
+);
+const sendPollWhatsAppLazy = bindWhatsAppOutboundMethod(
+  (runtimeWhatsAppOutbound) => runtimeWhatsAppOutbound.sendPollWhatsApp,
+);
+const loginWebLazy = bindWhatsAppLoginMethod(
+  (runtimeWhatsAppLogin) => runtimeWhatsAppLogin.loginWeb,
+);
 
 const startWebLoginWithQrLazy: PluginRuntime["channel"]["whatsapp"]["startWebLoginWithQr"] = async (
   ...args

@@ -20,7 +20,7 @@ type LoginQwenPortalOAuth =
 type GithubCopilotLoginCommand =
   (typeof import("openclaw/plugin-sdk/provider-auth"))["githubCopilotLoginCommand"];
 type CreateVpsAwareHandlers =
-  (typeof import("../../commands/oauth-flow.js"))["createVpsAwareOAuthHandlers"];
+  (typeof import("../provider-oauth-flow.js"))["createVpsAwareOAuthHandlers"];
 
 const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>());
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn<LoginQwenPortalOAuth>());
