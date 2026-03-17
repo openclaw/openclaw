@@ -46,6 +46,7 @@ export async function listSpawnedSessionKeys(params: {
       params: {
         includeGlobal: false,
         includeUnknown: false,
+        includeArchived: true,
         limit,
         spawnedBy: params.requesterSessionKey,
       },

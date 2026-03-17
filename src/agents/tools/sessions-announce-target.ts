@@ -26,6 +26,7 @@ export async function resolveAnnounceTarget(params: {
       params: {
         includeGlobal: true,
         includeUnknown: true,
+        includeArchived: true,
         limit: 200,
       },
     });
