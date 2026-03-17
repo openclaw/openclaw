@@ -4,24 +4,25 @@ export type {
   ChannelMessageActionAdapter,
 } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
-export type { TelegramAccountConfig, TelegramActionConfig } from "../config/types.js";
+export type { PluginRuntime } from "../plugins/runtime/types.js";
+export type { OpenClawPluginApi } from "../plugins/types.js";
 export type {
-  ChannelMessageActionContext,
-  ChannelPlugin,
-  OpenClawPluginApi,
-  PluginRuntime,
-} from "./channel-plugin-common.js";
+  TelegramAccountConfig,
+  TelegramActionConfig,
+  TelegramNetworkConfig,
+} from "../config/types.js";
+
+export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+
 export {
-  DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   deleteAccountFromConfigSection,
-  emptyPluginConfigSchema,
   formatPairingApproveHint,
   getChatChannelMeta,
   migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
 
