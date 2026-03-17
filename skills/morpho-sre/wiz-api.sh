@@ -3,6 +3,7 @@ set -euo pipefail
 
 WIZ_API_URL="${WIZ_API_URL:-https://api.eu26.app.wiz.io/graphql}"
 WIZ_AUTH_URL="${WIZ_AUTH_URL:-https://auth.app.wiz.io/oauth/token}"
+WIZ_AUTH_AUDIENCE="${WIZ_AUTH_AUDIENCE:-wiz-api}"
 WIZ_API_TOKEN_CACHE="${WIZ_API_TOKEN_CACHE:-/tmp/wiz-api-token.json}"
 WIZ_API_MAX_PAGES="${WIZ_API_MAX_PAGES:-10}"
 WIZ_API_TIMEOUT="${WIZ_API_TIMEOUT:-30}"
@@ -137,7 +138,7 @@ authenticate() {
       --data-urlencode "grant_type=client_credentials" \
       --data-urlencode "client_id=${WIZ_API_ACTIVE_CLIENT_ID}" \
       --data-urlencode "client_secret=${WIZ_API_ACTIVE_CLIENT_SECRET}" \
-      --data-urlencode "audience=wiz-api" \
+      --data-urlencode "audience=${WIZ_AUTH_AUDIENCE}" \
       "$WIZ_AUTH_URL"
   )" || die "auth request failed"
 
@@ -299,6 +300,7 @@ cmd_print_plan() {
   "$WIZ_API_JQ_BIN" -nc \
     --arg apiUrl "$WIZ_API_URL" \
     --arg authUrl "$WIZ_AUTH_URL" \
+    --arg authAudience "$WIZ_AUTH_AUDIENCE" \
     --arg tokenCache "$WIZ_API_TOKEN_CACHE" \
     --arg credentialSource "$WIZ_API_CREDENTIAL_SOURCE" \
     --argjson maxPages "$WIZ_API_MAX_PAGES" \
@@ -306,6 +308,7 @@ cmd_print_plan() {
     '{
       apiUrl: $apiUrl,
       authUrl: $authUrl,
+      authAudience: $authAudience,
       tokenCache: $tokenCache,
       credentialSource: $credentialSource,
       maxPages: $maxPages,
@@ -328,28 +331,24 @@ cmd_issues() {
     esac
   done
 
-  local filter_parts=()
+  # Build filter JSON via jq — enum values passed as variables, not inline strings
+  local filter_json="{}"
   if [[ -n "$severity" ]]; then
-    filter_parts+=("severity: [$(printf '%s' "$severity" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
   if [[ -n "$status" ]]; then
-    filter_parts+=("status: [$(printf '%s' "$status" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$status" '. + {status: ($s | split(","))}')"
   fi
   if [[ -n "$issue_type" ]]; then
-    filter_parts+=("type: [$(printf '%s' "$issue_type" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$issue_type" '. + {type: ($s | split(","))}')"
   fi
   if [[ -n "$entity_type" ]]; then
-    filter_parts+=("entityType: [$(printf '%s' "$entity_type" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
-  fi
-
-  local filter_clause=""
-  if [[ "${#filter_parts[@]}" -gt 0 ]]; then
-    filter_clause="filterBy: { $(IFS=', '; printf '%s' "${filter_parts[*]}") },"
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$entity_type" '. + {entityType: ($s | split(","))}')"
   fi
 
   local query
-  query="query(\$first: Int, \$after: String) {
-    issuesV2(first: \$first, after: \$after, ${filter_clause} orderBy: { field: SEVERITY, direction: DESC }) {
+  query='query($first: Int, $after: String, $filterBy: IssueFilters) {
+    issuesV2(first: $first, after: $after, filterBy: $filterBy, orderBy: { field: SEVERITY, direction: DESC }) {
       nodes {
         id
         sourceRule { name }
@@ -362,10 +361,10 @@ cmd_issues() {
       }
       pageInfo { hasNextPage endCursor }
     }
-  }"
+  }'
 
   local vars_json
-  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson filterBy "$filter_json" '{ first: $first, filterBy: $filterBy }')"
   paginated_query "$query" "$vars_json" '.data.issuesV2' "$max_pages"
 }
 
@@ -384,28 +383,24 @@ cmd_vulns() {
     esac
   done
 
-  local filter_parts=()
+  # Build filter JSON via jq — enum values passed as variables, not inline strings
+  local filter_json="{}"
   if [[ -n "$severity" ]]; then
-    filter_parts+=("severity: [$(printf '%s' "$severity" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
   if [[ -n "$image" ]]; then
-    filter_parts+=("imageName: \"${image}\"")
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$image" '. + {imageName: $s}')"
   fi
   if [[ -n "$cve" ]]; then
-    filter_parts+=("name: \"${cve}\"")
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$cve" '. + {name: $s}')"
   fi
   if [[ "$has_fix" == "true" ]]; then
-    filter_parts+=("hasFix: true")
-  fi
-
-  local filter_clause=""
-  if [[ "${#filter_parts[@]}" -gt 0 ]]; then
-    filter_clause="filterBy: { $(IFS=', '; printf '%s' "${filter_parts[*]}") },"
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c '. + {hasFix: true}')"
   fi
 
   local query
-  query="query(\$first: Int, \$after: String) {
-    vulnerabilityFindings(first: \$first, after: \$after, ${filter_clause} orderBy: { field: SEVERITY, direction: DESC }) {
+  query='query($first: Int, $after: String, $filterBy: VulnerabilityFindingFilters) {
+    vulnerabilityFindings(first: $first, after: $after, filterBy: $filterBy, orderBy: { field: SEVERITY, direction: DESC }) {
       nodes {
         id
         name
@@ -421,10 +416,10 @@ cmd_vulns() {
       }
       pageInfo { hasNextPage endCursor }
     }
-  }"
+  }'
 
   local vars_json
-  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson filterBy "$filter_json" '{ first: $first, filterBy: $filterBy }')"
   paginated_query "$query" "$vars_json" '.data.vulnerabilityFindings' "$max_pages"
 }
 
@@ -492,25 +487,21 @@ cmd_cloud_config() {
     esac
   done
 
-  local filter_parts=()
+  # Build filter JSON via jq — enum values passed as variables, not inline strings
+  local filter_json="{}"
   if [[ -n "$severity" ]]; then
-    filter_parts+=("severity: [$(printf '%s' "$severity" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
   if [[ -n "$rule" ]]; then
-    filter_parts+=("rule: \"${rule}\"")
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$rule" '. + {rule: $s}')"
   fi
   if [[ -n "$status" ]]; then
-    filter_parts+=("status: [$(printf '%s' "$status" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
-  fi
-
-  local filter_clause=""
-  if [[ "${#filter_parts[@]}" -gt 0 ]]; then
-    filter_clause="filterBy: { $(IFS=', '; printf '%s' "${filter_parts[*]}") },"
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$status" '. + {status: ($s | split(","))}')"
   fi
 
   local query
-  query="query(\$first: Int, \$after: String) {
-    configurationFindings(first: \$first, after: \$after, ${filter_clause} orderBy: { field: SEVERITY, direction: DESC }) {
+  query='query($first: Int, $after: String, $filterBy: ConfigurationFindingFilters) {
+    configurationFindings(first: $first, after: $after, filterBy: $filterBy, orderBy: { field: SEVERITY, direction: DESC }) {
       nodes {
         id
         severity
@@ -522,10 +513,10 @@ cmd_cloud_config() {
       }
       pageInfo { hasNextPage endCursor }
     }
-  }"
+  }'
 
   local vars_json
-  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson filterBy "$filter_json" '{ first: $first, filterBy: $filterBy }')"
   paginated_query "$query" "$vars_json" '.data.configurationFindings' "$max_pages"
 }
 
@@ -541,15 +532,16 @@ cmd_k8s() {
     esac
   done
 
-  local filter_clause=""
+  # Build filter JSON via jq — search is a string, passed as a variable for safety
+  local filter_json="{}"
   if [[ -n "$cluster" ]]; then
-    filter_clause="filterBy: { search: \"${cluster}\" },"
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$cluster" '. + {search: $s}')"
   fi
 
   local query
-  query="query(\$first: Int, \$after: String) {
+  query='query($first: Int, $after: String, $filterBy: KubernetesClusterFilters) {
     kubernetesClusterQueries {
-      clusters(first: \$first, after: \$after, ${filter_clause}) {
+      clusters(first: $first, after: $after, filterBy: $filterBy) {
         nodes {
           id
           name
@@ -561,10 +553,10 @@ cmd_k8s() {
         pageInfo { hasNextPage endCursor }
       }
     }
-  }"
+  }'
 
   local vars_json
-  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson filterBy "$filter_json" '{ first: $first, filterBy: $filterBy }')"
   paginated_query "$query" "$vars_json" '.data.kubernetesClusterQueries.clusters' "$max_pages"
 }
 
@@ -580,19 +572,15 @@ cmd_runtime() {
     esac
   done
 
-  local filter_parts=()
+  # Build filter JSON via jq — enum values passed as variables, not inline strings
+  local filter_json="{}"
   if [[ -n "$severity" ]]; then
-    filter_parts+=("severity: [$(printf '%s' "$severity" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
-  fi
-
-  local filter_clause=""
-  if [[ "${#filter_parts[@]}" -gt 0 ]]; then
-    filter_clause="filterBy: { $(IFS=', '; printf '%s' "${filter_parts[*]}") },"
+    filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
 
   local query
-  query="query(\$first: Int, \$after: String) {
-    securityEvents(first: \$first, after: \$after, ${filter_clause} orderBy: { field: CREATED_AT, direction: DESC }) {
+  query='query($first: Int, $after: String, $filterBy: SecurityEventFilters) {
+    securityEvents(first: $first, after: $after, filterBy: $filterBy, orderBy: { field: CREATED_AT, direction: DESC }) {
       nodes {
         id
         severity
@@ -603,10 +591,10 @@ cmd_runtime() {
       }
       pageInfo { hasNextPage endCursor }
     }
-  }"
+  }'
 
   local vars_json
-  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" --argjson filterBy "$filter_json" '{ first: $first, filterBy: $filterBy }')"
   paginated_query "$query" "$vars_json" '.data.securityEvents' "$max_pages"
 }
 
@@ -694,6 +682,7 @@ Env:
   WIZ_CLIENT_ID, WIZ_CLIENT_SECRET (required unless Vault provides them)
   WIZ_API_URL           (default: https://api.eu26.app.wiz.io/graphql)
   WIZ_AUTH_URL          (default: https://auth.app.wiz.io/oauth/token)
+  WIZ_AUTH_AUDIENCE     (default: wiz-api)
   WIZ_API_TOKEN_CACHE   (default: /tmp/wiz-api-token.json)
   WIZ_API_MAX_PAGES     (default: 10)
   WIZ_API_TIMEOUT       (default: 30)
