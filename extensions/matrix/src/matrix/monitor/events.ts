@@ -5,6 +5,30 @@ import { sendReadReceiptMatrix } from "../send.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
+// Deduplication cache for Matrix message IDs to prevent duplicate processing
+const processedMessageIds = new Map<string, number>();
+const MESSAGE_DEDUP_TTL_MS = 30000; // 30 seconds TTL for deduplication entries
+const MESSAGE_CACHE_MAX_SIZE = 1000; // Max entries to prevent memory leaks
+
+function isMessageDuplicate(eventId: string): boolean {
+  const now = Date.now();
+  // Clean up old entries periodically
+  if (processedMessageIds.size > MESSAGE_CACHE_MAX_SIZE) {
+    for (const [key, timestamp] of processedMessageIds.entries()) {
+      if (now - timestamp > MESSAGE_DEDUP_TTL_MS) {
+        processedMessageIds.delete(key);
+      }
+    }
+  }
+
+  const lastProcessed = processedMessageIds.get(eventId);
+  if (lastProcessed && now - lastProcessed < MESSAGE_DEDUP_TTL_MS) {
+    return true;
+  }
+  processedMessageIds.set(eventId, now);
+  return false;
+}
+
 const matrixMonitorListenerRegistry = (() => {
   // Prevent duplicate listener registration when both bundled and extension
   // paths attempt to start monitors against the same shared client.
@@ -76,6 +100,13 @@ export function registerMatrixMonitorEvents(params: {
   client.on("room.message", (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id;
     const senderId = event?.sender;
+
+    // Deduplicate messages by event_id to prevent duplicate processing
+    if (eventId && isMessageDuplicate(eventId)) {
+      logVerboseMessage(`matrix: dropping duplicate message room=${roomId} id=${eventId}`);
+      return;
+    }
+
     if (eventId && senderId) {
       void (async () => {
         const currentSelfUserId = await resolveSelfUserId();
