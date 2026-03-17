@@ -5,12 +5,14 @@ import {
 } from "./inbound-debounce-policy.js";
 
 describe("shouldDebounceTextInbound", () => {
-  it("rejects blank text, media, and control commands", () => {
+  it("rejects blank text, media, slash commands, and bare abort triggers", () => {
     const cfg = {} as Parameters<typeof shouldDebounceTextInbound>[0]["cfg"];
 
     expect(shouldDebounceTextInbound({ text: "   ", cfg })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "hello", cfg, hasMedia: true })).toBe(false);
     expect(shouldDebounceTextInbound({ text: "/status", cfg })).toBe(false);
+    expect(shouldDebounceTextInbound({ text: "stop", cfg })).toBe(false);
+    expect(shouldDebounceTextInbound({ text: "wait", cfg })).toBe(false);
   });
 
   it("accepts normal text when debounce is allowed", () => {
