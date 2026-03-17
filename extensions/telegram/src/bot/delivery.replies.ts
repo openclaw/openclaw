@@ -151,9 +151,15 @@ async function deliverTextReply(params: {
           replyMarkup,
         },
       );
+      if (messageId == null) {
+        // sendTelegramText returned undefined (e.g. Telegram rejected empty
+        // content in the catch path) — treat as unsent.
+        return false;
+      }
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = messageId;
       }
+      return true;
     },
   });
   return firstDeliveredMessageId;
@@ -185,15 +191,27 @@ async function sendPendingFollowUpText(params: {
         logVerbose("telegram: skipping empty chunk in sendPendingFollowUpText");
         return false;
       }
-      await sendTelegramText(params.bot, params.chatId, chunk.html, params.runtime, {
-        replyToMessageId,
-        thread: params.thread,
-        textMode: "html",
-        plainText: chunk.text,
-        linkPreview: params.linkPreview,
-        silent: params.silent,
-        replyMarkup,
-      });
+      const messageId = await sendTelegramText(
+        params.bot,
+        params.chatId,
+        chunk.html,
+        params.runtime,
+        {
+          replyToMessageId,
+          thread: params.thread,
+          textMode: "html",
+          plainText: chunk.text,
+          linkPreview: params.linkPreview,
+          silent: params.silent,
+          replyMarkup,
+        },
+      );
+      if (messageId == null) {
+        // sendTelegramText returned undefined (e.g. Telegram rejected empty
+        // content in the catch path) — treat as unsent.
+        return false;
+      }
+      return true;
     },
   });
 }

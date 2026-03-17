@@ -77,8 +77,9 @@ export async function sendChunkedTelegramReplyText<
       replyQuoteText: shouldAttachQuote ? params.replyQuoteText : undefined,
     });
     // Skip delivery bookkeeping when the chunk was not actually sent
-    // (e.g. empty-chunk guard returned false). This prevents an unsent
-    // chunk from consuming the reply target or inflating deliveredCount.
+    // (e.g. empty-chunk guard returned false, or sendTelegramText returned
+    // undefined after Telegram rejected empty content). This prevents an
+    // unsent chunk from consuming the reply target or inflating deliveredCount.
     if (sent === false) {
       continue;
     }
