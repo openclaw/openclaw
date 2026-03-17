@@ -175,9 +175,9 @@ vi.mock("@mariozechner/pi-ai", async () => {
         const sawBundleResult = toolResultText.some((text) => text.includes("FROM-BUNDLE"));
         if (!sawBundleResult) {
           stream.push({
-            type: "done",
+            type: "error",
             reason: "error",
-            message: {
+            error: {
               role: "assistant" as const,
               content: [],
               stopReason: "error" as const,
