@@ -131,4 +131,78 @@ describe("Google image-generation provider", () => {
       model: "gemini-3.1-flash-image-preview",
     });
   });
+
+  it("sends reference images and explicit resolution for edit flows", async () => {
+    vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: "image/png",
+                    data: Buffer.from("png-data").toString("base64"),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
+      prompt: "Change only the sky to a sunset.",
+      cfg: {},
+      resolution: "4K",
+      inputImages: [
+        {
+          buffer: Buffer.from("reference-bytes"),
+          mimeType: "image/png",
+          fileName: "reference.png",
+        },
+      ],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: "image/png",
+                    data: Buffer.from("reference-bytes").toString("base64"),
+                  },
+                },
+                { text: "Change only the sky to a sunset." },
+              ],
+            },
+          ],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+            imageConfig: {
+              aspectRatio: "1:1",
+              imageSize: "4K",
+            },
+          },
+        }),
+      }),
+    );
+  });
 });

@@ -8,7 +8,7 @@ describe("OpenAI image-generation provider", () => {
   });
 
   it("generates PNG buffers from the OpenAI Images API", async () => {
-    vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockResolvedValue({
+    const resolveApiKeySpy = vi.spyOn(modelAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "sk-test",
       source: "env",
       mode: "api-key",
@@ -27,17 +27,31 @@ describe("OpenAI image-generation provider", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = buildOpenAIImageGenerationProvider();
+    const authStore = { version: 1, profiles: {} };
     const result = await provider.generateImage({
       provider: "openai",
       model: "gpt-image-1",
       prompt: "draw a cat",
       cfg: {},
+      authStore,
     });
 
+    expect(resolveApiKeySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        store: authStore,
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.openai.com/v1/images/generations",
       expect.objectContaining({
         method: "POST",
+        body: JSON.stringify({
+          model: "gpt-image-1",
+          prompt: "draw a cat",
+          n: 1,
+          size: "1024x1024",
+        }),
       }),
     );
     expect(result).toEqual({
@@ -51,5 +65,19 @@ describe("OpenAI image-generation provider", () => {
       ],
       model: "gpt-image-1",
     });
+  });
+
+  it("rejects reference-image edits for now", async () => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-1",
+        prompt: "Edit this image",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow("does not support reference-image edits");
   });
 });
