@@ -1,9 +1,6 @@
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
-type OnboardCoreAuthOptionKey = keyof Pick<
-  OnboardOptions,
-  "commonstackApiKey" | "litellmApiKey"
->;
+type OnboardCoreAuthOptionKey = keyof Pick<OnboardOptions, "commonstackApiKey" | "litellmApiKey">;
 
 export type OnboardCoreAuthFlag = {
   optionKey: OnboardCoreAuthOptionKey;

@@ -1,10 +1,7 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.js";
-import {
-  setCommonstackApiKey,
-  setLitellmApiKey,
-} from "../../../plugins/provider-auth-storage.js";
+import { setCommonstackApiKey, setLitellmApiKey } from "../../../plugins/provider-auth-storage.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { applyCommonstackConfig } from "../../onboard-auth.config-core.js";
 import { applyLitellmConfig } from "../../onboard-auth.config-litellm.js";
