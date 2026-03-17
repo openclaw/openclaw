@@ -13,23 +13,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 设置 Node.js 22，并启用 pnpm 缓存
+      # 使用 Node.js 22，并启用 pnpm 缓存
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'           # 关键修改：从 18 改为 22
+          node-version: '22'
           cache: 'pnpm'
 
-      # 安装 pnpm（setup-node 后 npm 已可用）
+      # 安装 pnpm，并确保其路径加入 PATH
       - name: Install pnpm
-        run: npm install -g pnpm
+        run: |
+          npm install -g pnpm
+          echo "$(npm config get prefix)/bin" >> $GITHUB_PATH
+          pnpm --version   # 验证安装
 
       - name: Install xcodegen
         run: brew install xcodegen
 
       - name: Prepare iOS project
         run: |
-          pnpm --version                # 验证 pnpm 安装
           chmod +x ./scripts/ios-configure-signing.sh
           pnpm install
           ./scripts/ios-configure-signing.sh
