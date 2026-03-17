@@ -112,7 +112,7 @@ async function readJsonLines<T extends Record<string, unknown>>(
       logSreMetric("relationship_index_ndjson_corrupt_line", {
         path: filePath,
         error: error instanceof Error ? error.message : String(error),
-        linePreview: line.slice(0, 100),
+        lineLength: line.length,
       });
       continue;
     }
