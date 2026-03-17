@@ -126,6 +126,8 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--ttl");
     expect(promptArgs).toContain("180");
     expect(promptArgs).toContain("--approve-all");
+    expect(promptArgs).toContain("--cd");
+    expect(promptArgs).not.toContain("--cwd");
   });
 
   it("uses sessions new with --resume-session when resumeSessionId is provided", async () => {
