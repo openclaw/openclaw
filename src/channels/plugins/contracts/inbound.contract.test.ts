@@ -6,9 +6,9 @@ import type { ResolvedSlackAccount } from "../../../../extensions/slack/src/acco
 import { prepareSlackMessage } from "../../../../extensions/slack/src/monitor/message-handler/prepare.js";
 import { createInboundSlackTestContext } from "../../../../extensions/slack/src/monitor/message-handler/prepare.test-helpers.js";
 import type { SlackMessageEvent } from "../../../../extensions/slack/src/types.js";
-import { inboundCtxCapture } from "../../../../test/helpers/inbound-contract-dispatch-mock.js";
 import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { inboundCtxCapture } from "./inbound-contract-dispatch-mock.js";
 import { expectChannelInboundContextContract } from "./suites.js";
 
 const signalCapture = vi.hoisted(() => ({ ctx: undefined as MsgContext | undefined }));
