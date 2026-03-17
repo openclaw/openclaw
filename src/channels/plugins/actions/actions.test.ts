@@ -986,16 +986,28 @@ describe("telegramMessageActions", () => {
         expectedChatId: "123",
         expectedMessageId: "9001",
       },
+      {
+        name: "missing messageId soft-falls through to telegram-actions",
+        params: {
+          chatId: "123",
+          emoji: "ok",
+        },
+        toolContext: undefined,
+        expectedChatId: "123",
+        expectedMessageId: undefined,
+      },
     ] as const) {
       handleTelegramAction.mockClear();
-      await telegramMessageActions.handleAction?.({
-        channel: "telegram",
-        action: "react",
-        params: testCase.params,
-        cfg,
-        accountId: undefined,
-        toolContext: testCase.toolContext,
-      });
+      await expect(
+        telegramMessageActions.handleAction?.({
+          channel: "telegram",
+          action: "react",
+          params: testCase.params,
+          cfg,
+          accountId: undefined,
+          toolContext: testCase.toolContext,
+        }),
+      ).resolves.toBeDefined();
 
       expect(handleTelegramAction, testCase.name).toHaveBeenCalledTimes(1);
       const call = handleTelegramAction.mock.calls[0]?.[0];
@@ -1005,34 +1017,12 @@ describe("telegramMessageActions", () => {
       const callPayload = call as Record<string, unknown>;
       expect(callPayload.action, testCase.name).toBe("react");
       expect(String(callPayload.chatId), testCase.name).toBe(testCase.expectedChatId);
-      expect(String(callPayload.messageId), testCase.name).toBe(testCase.expectedMessageId);
+      if (testCase.expectedMessageId === undefined) {
+        expect(callPayload.messageId, testCase.name).toBeUndefined();
+      } else {
+        expect(String(callPayload.messageId), testCase.name).toBe(testCase.expectedMessageId);
+      }
     }
-  });
-
-  it("forwards missing reaction messageId to telegram-actions for soft-fail handling", async () => {
-    const cfg = telegramCfg();
-
-    await expect(
-      telegramMessageActions.handleAction?.({
-        channel: "telegram",
-        action: "react",
-        params: {
-          chatId: "123",
-          emoji: "ok",
-        },
-        cfg,
-        accountId: undefined,
-      }),
-    ).resolves.toBeDefined();
-
-    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
-    const call = handleTelegramAction.mock.calls[0]?.[0];
-    if (!call) {
-      throw new Error("missing telegram action call");
-    }
-    const callPayload = call as Record<string, unknown>;
-    expect(callPayload.action).toBe("react");
-    expect(callPayload.messageId).toBeUndefined();
   });
 });
 
