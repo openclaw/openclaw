@@ -13,27 +13,27 @@ type GuardedSource = {
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
   {
     path: "extensions/discord/src/shared.ts",
-    forbiddenPatterns: [/openclaw\/plugin-sdk\/discord/, /plugin-sdk-internal\/discord/],
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/discord["']/, /plugin-sdk-internal\/discord/],
   },
   {
     path: "extensions/slack/src/shared.ts",
-    forbiddenPatterns: [/openclaw\/plugin-sdk\/slack/, /plugin-sdk-internal\/slack/],
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/slack["']/, /plugin-sdk-internal\/slack/],
   },
   {
     path: "extensions/telegram/src/shared.ts",
-    forbiddenPatterns: [/openclaw\/plugin-sdk\/telegram/, /plugin-sdk-internal\/telegram/],
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/telegram["']/, /plugin-sdk-internal\/telegram/],
   },
   {
     path: "extensions/imessage/src/shared.ts",
-    forbiddenPatterns: [/openclaw\/plugin-sdk\/imessage/, /plugin-sdk-internal\/imessage/],
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/imessage["']/, /plugin-sdk-internal\/imessage/],
   },
   {
     path: "extensions/whatsapp/src/shared.ts",
-    forbiddenPatterns: [/openclaw\/plugin-sdk\/whatsapp/, /plugin-sdk-internal\/whatsapp/],
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/whatsapp["']/, /plugin-sdk-internal\/whatsapp/],
   },
   {
     path: "extensions/signal/src/shared.ts",
-    forbiddenPatterns: [/openclaw\/plugin-sdk\/signal/, /plugin-sdk-internal\/signal/],
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/signal["']/, /plugin-sdk-internal\/signal/],
   },
 ];
 
@@ -135,6 +135,47 @@ function collectExtensionSourceFiles(): string[] {
       if (
         fullPath.includes(".test.") ||
         fullPath.includes(".fixture.") ||
+        fullPath.includes(".snap") ||
+        fullPath.includes("test-support") ||
+        fullPath.endsWith("/api.ts") ||
+        fullPath.endsWith("/runtime-api.ts")
+      ) {
+        continue;
+      }
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function collectCoreSourceFiles(): string[] {
+  const srcDir = resolve(ROOT_DIR, "..", "src");
+  const files: string[] = [];
+  const stack = [srcDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const fullPath = resolve(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
+          continue;
+        }
+        stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
+        continue;
+      }
+      if (entry.name.endsWith(".d.ts")) {
+        continue;
+      }
+      if (
+        fullPath.includes(".test.") ||
+        fullPath.includes(".spec.") ||
+        fullPath.includes(".fixture.") ||
         fullPath.includes(".snap")
       ) {
         continue;
@@ -174,6 +215,24 @@ describe("channel import guardrails", () => {
       );
       expect(text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
         /["']openclaw\/plugin-sdk\/compat["']/,
+      );
+    }
+  });
+
+  it("keeps core production files off extension private src imports", () => {
+    for (const file of collectCoreSourceFiles()) {
+      const text = readFileSync(file, "utf8");
+      expect(text, `${file} should not import extensions/*/src`).not.toMatch(
+        /["'][^"']*extensions\/[^/"']+\/src\//,
+      );
+    }
+  });
+
+  it("keeps extension production files off other extensions' private src imports", () => {
+    for (const file of collectExtensionSourceFiles()) {
+      const text = readFileSync(file, "utf8");
+      expect(text, `${file} should not import another extension's src`).not.toMatch(
+        /["'][^"']*\.\.\/(?:\.\.\/)?(?!src\/)[^/"']+\/src\//,
       );
     }
   });

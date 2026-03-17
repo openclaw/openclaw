@@ -70,6 +70,11 @@ describe("resolvePluginProviders", () => {
         config: expect.objectContaining({
           plugins: expect.objectContaining({
             allow: expect.arrayContaining(["openrouter", "google", "kilocode", "moonshot"]),
+            entries: expect.objectContaining({
+              google: { enabled: true },
+              kilocode: { enabled: true },
+              moonshot: { enabled: true },
+            }),
           }),
         }),
         cache: false,
@@ -89,6 +94,10 @@ describe("resolvePluginProviders", () => {
           plugins: expect.objectContaining({
             enabled: true,
             allow: expect.arrayContaining(["google", "moonshot"]),
+            entries: expect.objectContaining({
+              google: { enabled: true },
+              moonshot: { enabled: true },
+            }),
           }),
         }),
         cache: false,

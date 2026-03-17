@@ -12,7 +12,7 @@ import {
   setAccountEnabledInConfigSection,
   SignalConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal";
+} from "openclaw/plugin-sdk/signal-core";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
