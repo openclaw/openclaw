@@ -46,6 +46,16 @@ export type PluginManifestRegistry = {
 
 const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
 
+function canonicalizeIdHint(idHint: string): string {
+  return (
+    {
+      "ollama-provider": "ollama",
+      "sglang-provider": "sglang",
+      "vllm-provider": "vllm",
+    }[idHint] ?? idHint
+  );
+}
+
 // Keep a short cache window to collapse bursty reloads during startup flows.
 const DEFAULT_MANIFEST_CACHE_MS = 1000;
 
@@ -184,7 +194,7 @@ export function loadPluginManifestRegistry(params: {
     }
     const manifest = manifestRes.manifest;
 
-    if (candidate.idHint && candidate.idHint !== manifest.id) {
+    if (candidate.idHint && canonicalizeIdHint(candidate.idHint) !== manifest.id) {
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
