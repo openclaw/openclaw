@@ -1,9 +1,12 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import type { MockFn } from "openclaw/plugin-sdk/testing";
+import type { MockFn } from "openclaw/plugin-sdk/test-utils";
 import { beforeEach, vi } from "vitest";
+import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
+import * as providerDispatcherModule from "../../../src/auto-reply/reply/provider-dispatcher.js";
+import * as skillCommandsModule from "../../../src/auto-reply/skill-commands.js";
+import type { MsgContext } from "../../../src/auto-reply/templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../../../src/auto-reply/types.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import * as pairingStoreModule from "../../../src/pairing/pairing-store.js";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
@@ -36,13 +39,6 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   return {
     ...actual,
     loadConfig,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
     resolveStorePath: vi.fn((storePath) => storePath ?? sessionStorePath),
   };
 });
@@ -68,46 +64,62 @@ export function getUpsertChannelPairingRequestMock(): AnyAsyncMock {
   return upsertChannelPairingRequest;
 }
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    readChannelAllowFromStore,
-    upsertChannelPairingRequest,
-  };
-});
+const readChannelAllowFromStoreSpy = vi
+  .spyOn(pairingStoreModule, "readChannelAllowFromStore")
+  .mockImplementation(
+    readChannelAllowFromStore as unknown as typeof pairingStoreModule.readChannelAllowFromStore,
+  );
+const upsertChannelPairingRequestSpy = vi
+  .spyOn(pairingStoreModule, "upsertChannelPairingRequest")
+  .mockImplementation(
+    upsertChannelPairingRequest as unknown as typeof pairingStoreModule.upsertChannelPairingRequest,
+  );
 
 const skillCommandsHoisted = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
   replySpy: vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
     await opts?.onReplyStart?.();
     return undefined;
-  }) as MockFn<
-    (
-      ctx: MsgContext,
-      opts?: GetReplyOptions,
-      configOverride?: OpenClawConfig,
-    ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
-  >,
+  }),
 }));
 export const listSkillCommandsForAgents = skillCommandsHoisted.listSkillCommandsForAgents;
-export const replySpy = skillCommandsHoisted.replySpy;
+export const replySpy = skillCommandsHoisted.replySpy as MockFn<
+  (
+    ctx: MsgContext,
+    opts?: GetReplyOptions,
+    configOverride?: OpenClawConfig,
+  ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
+>;
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    listSkillCommandsForAgents: skillCommandsHoisted.listSkillCommandsForAgents,
-    getReplyFromConfig: skillCommandsHoisted.replySpy,
-    __replySpy: skillCommandsHoisted.replySpy,
-    dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-      async ({ ctx, replyOptions }: { ctx: MsgContext; replyOptions?: GetReplyOptions }) => {
-        await skillCommandsHoisted.replySpy(ctx, replyOptions);
-        return { queuedFinal: false };
-      },
-    ),
-  };
-});
+const listSkillCommandsForAgentsSpy = vi
+  .spyOn(skillCommandsModule, "listSkillCommandsForAgents")
+  .mockImplementation(listSkillCommandsForAgents);
+const dispatchReplyWithBufferedBlockDispatcherSpy = vi
+  .spyOn(providerDispatcherModule, "dispatchReplyWithBufferedBlockDispatcher")
+  .mockImplementation(async (params) => {
+    try {
+      await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
+    } catch {
+      // Typing lifecycle failures should not block dispatch in test harnesses.
+    }
+    const result = await replySpy(params.ctx, params.replyOptions);
+    const replies = Array.isArray(result) ? result : result ? [result] : [];
+    for (const payload of replies) {
+      const withPrefix =
+        params.dispatcherOptions.responsePrefix && payload.text
+          ? {
+              ...payload,
+              text: `${params.dispatcherOptions.responsePrefix} ${payload.text}`.trim(),
+            }
+          : payload;
+      await params.dispatcherOptions.deliver(withPrefix, { kind: "final" });
+    }
+    params.dispatcherOptions.typingCallbacks?.onIdle?.();
+    return {
+      queuedFinal: replies.length > 0,
+      counts: { tool: 0, block: 0, final: replies.length > 0 ? 1 : 0 },
+    };
+  });
 
 const systemEventsHoisted = vi.hoisted(() => ({
   enqueueSystemEventSpy: vi.fn(),
@@ -118,7 +130,7 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
-    enqueueSystemEvent: systemEventsHoisted.enqueueSystemEventSpy,
+    enqueueSystemEvent: enqueueSystemEventSpy,
   };
 });
 
@@ -128,7 +140,7 @@ const sentMessageCacheHoisted = vi.hoisted(() => ({
 export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
 
 vi.mock("./sent-message-cache.js", () => ({
-  wasSentByBot: sentMessageCacheHoisted.wasSentByBot,
+  wasSentByBot,
   recordSentMessage: vi.fn(),
   clearSentMessageCache: vi.fn(),
 }));
@@ -213,28 +225,20 @@ vi.mock("grammy", () => ({
   InputFile: class {},
 }));
 
-const runnerHoisted = vi.hoisted(() => ({
-  sequentializeMiddleware: vi.fn(async (_ctx: unknown, next?: () => Promise<void>) => {
-    if (typeof next === "function") {
-      await next();
-    }
-  }),
-  sequentializeSpy: vi.fn(() => runnerHoisted.sequentializeMiddleware),
-  throttlerSpy: vi.fn(() => "throttler"),
-}));
-export const sequentializeSpy: AnyMock = runnerHoisted.sequentializeSpy;
+const sequentializeMiddleware = vi.fn();
+export const sequentializeSpy: AnyMock = vi.fn(() => sequentializeMiddleware);
 export let sequentializeKey: ((ctx: unknown) => string) | undefined;
 vi.mock("@grammyjs/runner", () => ({
   sequentialize: (keyFn: (ctx: unknown) => string) => {
     sequentializeKey = keyFn;
-    return runnerHoisted.sequentializeSpy();
+    return sequentializeSpy();
   },
 }));
 
-export const throttlerSpy: AnyMock = runnerHoisted.throttlerSpy;
+export const throttlerSpy: AnyMock = vi.fn(() => "throttler");
 
 vi.mock("@grammyjs/transformer-throttler", () => ({
-  apiThrottler: () => runnerHoisted.throttlerSpy(),
+  apiThrottler: () => throttlerSpy(),
 }));
 
 export const getOnHandler = (event: string) => {
@@ -308,6 +312,10 @@ export function makeForumGroupMessageCtx(params?: {
 
 beforeEach(() => {
   resetInboundDedupe();
+  listSkillCommandsForAgentsSpy.mockClear();
+  dispatchReplyWithBufferedBlockDispatcherSpy.mockClear();
+  readChannelAllowFromStoreSpy.mockClear();
+  upsertChannelPairingRequestSpy.mockClear();
   loadConfig.mockReset();
   loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   loadWebMedia.mockReset();
@@ -359,14 +367,7 @@ beforeEach(() => {
   listSkillCommandsForAgents.mockReset();
   listSkillCommandsForAgents.mockReturnValue([]);
   middlewareUseSpy.mockReset();
-  runnerHoisted.sequentializeMiddleware.mockReset();
-  runnerHoisted.sequentializeMiddleware.mockImplementation(async (_ctx, next) => {
-    if (typeof next === "function") {
-      await next();
-    }
-  });
   sequentializeSpy.mockReset();
-  sequentializeSpy.mockImplementation(() => runnerHoisted.sequentializeMiddleware);
   botCtorSpy.mockReset();
   sequentializeKey = undefined;
 });
