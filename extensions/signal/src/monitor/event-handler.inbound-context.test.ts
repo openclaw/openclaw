@@ -1,8 +1,6 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as dispatchModule from "../../../../src/auto-reply/dispatch.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
-import * as sendModule from "../send.js";
 import { createSignalEventHandler } from "./event-handler.js";
 import {
   createBaseSignalEventHandlerDeps,
@@ -11,11 +9,7 @@ import {
 
 const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock, capture } = vi.hoisted(
   () => {
-    const captureState: {
-      ctx: MsgContext | undefined;
-      // oxlint-disable-next-line typescript/no-explicit-any
-      lastParams?: any;
-    } = { ctx: undefined };
+    const captureState: { ctx: MsgContext | undefined } = { ctx: undefined };
     return {
       sendTypingMock: vi.fn(),
       sendReadReceiptMock: vi.fn(),
@@ -25,7 +19,6 @@ const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock, capture
           replyOptions?: { onReplyStart?: () => void | Promise<void> };
         }) => {
           captureState.ctx = params.ctx;
-          captureState.lastParams = params;
           await Promise.resolve(params.replyOptions?.onReplyStart?.());
           return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
         },
@@ -35,53 +28,33 @@ const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock, capture
   },
 );
 
+vi.mock("../send.js", () => ({
+  sendMessageSignal: vi.fn(),
+  sendTypingSignal: sendTypingMock,
+  sendReadReceiptSignal: sendReadReceiptMock,
+}));
+
+vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
+  return {
+    ...actual,
+    dispatchInboundMessage: dispatchInboundMessageMock,
+    dispatchInboundMessageWithDispatcher: dispatchInboundMessageMock,
+    dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessageMock,
+  };
+});
+
 vi.mock("../../../../src/pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn(),
 }));
 
-const sendTypingSpy = vi
-  .spyOn(sendModule, "sendTypingSignal")
-  .mockImplementation(sendTypingMock as typeof sendModule.sendTypingSignal);
-const sendReadReceiptSpy = vi
-  .spyOn(sendModule, "sendReadReceiptSignal")
-  .mockImplementation(sendReadReceiptMock as typeof sendModule.sendReadReceiptSignal);
-const sendMessageSpy = vi
-  .spyOn(sendModule, "sendMessageSignal")
-  .mockResolvedValue({ messageId: "signal-message-1" });
-
-const dispatchInboundMessageSpy = vi
-  .spyOn(dispatchModule, "dispatchInboundMessage")
-  .mockImplementation(dispatchInboundMessageMock);
-const dispatchInboundMessageWithDispatcherSpy = vi
-  .spyOn(dispatchModule, "dispatchInboundMessageWithDispatcher")
-  .mockImplementation(dispatchInboundMessageMock);
-const dispatchInboundMessageWithBufferedDispatcherSpy = vi
-  .spyOn(dispatchModule, "dispatchInboundMessageWithBufferedDispatcher")
-  .mockImplementation(dispatchInboundMessageMock);
-
 describe("signal createSignalEventHandler inbound context", () => {
   beforeEach(() => {
     capture.ctx = undefined;
-    capture.lastParams = undefined;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
     dispatchInboundMessageMock.mockClear();
-    dispatchInboundMessageSpy.mockClear();
-    dispatchInboundMessageWithDispatcherSpy.mockClear();
-    dispatchInboundMessageWithBufferedDispatcherSpy.mockClear();
-    sendTypingSpy.mockClear();
-    sendReadReceiptSpy.mockClear();
-    sendMessageSpy.mockClear();
-  });
-
-  afterAll(() => {
-    dispatchInboundMessageSpy.mockRestore();
-    dispatchInboundMessageWithDispatcherSpy.mockRestore();
-    dispatchInboundMessageWithBufferedDispatcherSpy.mockRestore();
-    sendTypingSpy.mockRestore();
-    sendReadReceiptSpy.mockRestore();
-    sendMessageSpy.mockRestore();
   });
 
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
@@ -163,13 +136,6 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    // The dispatcher mock captures and exposes reply options so we can verify
-    // typing callback wiring even when no final reply is queued.
-    const onReplyStart = capture.lastParams?.replyOptions?.onReplyStart as
-      | (() => Promise<void> | void)
-      | undefined;
-    expect(onReplyStart).toBeTypeOf("function");
-    await onReplyStart?.();
     expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
     expect(sendReadReceiptMock).toHaveBeenCalledWith(
       "signal:+15550001111",

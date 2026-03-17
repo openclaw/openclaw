@@ -165,9 +165,7 @@ export const providerContractPluginIds = [
   ...new Set(providerContractRegistry.map((entry) => entry.pluginId)),
 ].toSorted((left, right) => left.localeCompare(right));
 
-export const providerContractCompatPluginIds = providerContractPluginIds.map((pluginId) =>
-  pluginId === "kimi" ? "kimi-coding" : pluginId,
-);
+export const providerContractCompatPluginIds = [...providerContractPluginIds];
 
 export function requireProviderContractProvider(providerId: string): ProviderPlugin {
   const provider = uniqueProviderContractProviders.find((entry) => entry.id === providerId);
