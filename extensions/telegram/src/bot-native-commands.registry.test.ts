@@ -30,6 +30,22 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     description: string;
   };
 
+  function createCommandBot() {
+    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const bot = {
+      api: {
+        setMyCommands,
+        sendMessage,
+      },
+      command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+        commandHandlers.set(name, cb);
+      }),
+    } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"];
+    return { bot, commandHandlers, sendMessage, setMyCommands };
+  }
+
   async function waitForRegisteredCommands(
     setMyCommands: ReturnType<typeof vi.fn>,
   ): Promise<RegisteredCommand[]> {
@@ -88,9 +104,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   });
 
   it("registers and executes plugin commands through the real plugin registry", async () => {
-    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
 
     expect(
       registerPluginCommand("demo-plugin", {
@@ -104,15 +118,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
 
     registerTelegramNativeCommands({
       ...buildParams({}),
-      bot: {
-        api: {
-          setMyCommands,
-          sendMessage,
-        },
-        command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-          commandHandlers.set(name, cb);
-        }),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+      bot,
     });
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
@@ -139,5 +145,73 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
       }),
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+  });
+
+  it("keeps real plugin command handlers available when native menu registration is disabled", () => {
+    const { bot, commandHandlers, setMyCommands } = createCommandBot();
+
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+        requireAuth: false,
+        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
+      }),
+    ).toEqual({ ok: true });
+
+    registerTelegramNativeCommands({
+      ...buildParams({}, "default"),
+      bot,
+      nativeEnabled: false,
+    });
+
+    expect(setMyCommands).not.toHaveBeenCalled();
+    expect(commandHandlers.has("pair")).toBe(true);
+  });
+
+  it("allows requireAuth:false plugin commands for unauthorized senders through the real registry", async () => {
+    const { bot, commandHandlers, sendMessage, setMyCommands } = createCommandBot();
+
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+        requireAuth: false,
+        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
+      }),
+    ).toEqual({ ok: true });
+
+    registerTelegramNativeCommands({
+      ...buildParams({
+        commands: { allowFrom: { telegram: ["999"] } } as OpenClawConfig["commands"],
+      }),
+      bot,
+      allowFrom: ["999"],
+      nativeEnabled: false,
+    });
+
+    expect(setMyCommands).not.toHaveBeenCalled();
+
+    const handler = commandHandlers.get("pair");
+    expect(handler).toBeTruthy();
+
+    await handler?.({
+      match: "now",
+      message: {
+        message_id: 10,
+        date: 123456,
+        chat: { id: 123, type: "private" },
+        from: { id: 111, username: "nope" },
+      },
+    });
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "paired:now" })],
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });
