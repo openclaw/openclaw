@@ -3349,7 +3349,7 @@ description: test skill
     }
   });
 
-  it("evaluates open-group exposure findings", async () => {
+  it("evaluates trust-model exposure findings", async () => {
     const cases = [
       {
         name: "flags open groupPolicy when tools.elevated is enabled",
@@ -3426,18 +3426,6 @@ description: test skill
           ).toBe(false);
         },
       },
-    ] as const;
-
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg);
-        testCase.assert(res);
-      }),
-    );
-  });
-
-  it("evaluates multi-user trust-model heuristics", async () => {
-    const cases = [
       {
         name: "warns when config heuristics suggest a likely multi-user setup",
         cfg: {
