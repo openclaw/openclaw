@@ -363,18 +363,46 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { runId };
     },
     async enqueue(params) {
-      const payload = await dispatchGatewayMethod<{ runId?: string }>("agent.enqueue", {
-        sessionKey: params.sessionKey,
-        message: params.message,
-        deliver: params.deliver ?? false,
-        idempotencyKey: resolvePluginSubagentIdempotencyKey({
-          idempotencyKey: params.idempotencyKey,
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const overrideRequested = Boolean(params.provider || params.model);
+      const hasRequestScopeClient = Boolean(scope?.client);
+      let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
+      let allowSyntheticModelOverride = false;
+      if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
+        const fallbackAuth = authorizeFallbackModelOverride({
+          pluginId: scope?.pluginId,
+          provider: params.provider,
+          model: params.model,
+        });
+        if (!fallbackAuth.allowed) {
+          throw new Error(fallbackAuth.reason);
+        }
+        allowOverride = true;
+        allowSyntheticModelOverride = true;
+      }
+      if (overrideRequested && !allowOverride) {
+        throw new Error("provider/model override is not authorized for this plugin subagent enqueue.");
+      }
+      const payload = await dispatchGatewayMethod<{ runId?: string }>(
+        "agent.enqueue",
+        {
           sessionKey: params.sessionKey,
-          method: "agent.enqueue",
-        }),
-        ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
-        ...(params.lane && { lane: params.lane }),
-      });
+          message: params.message,
+          deliver: params.deliver ?? false,
+          idempotencyKey: resolvePluginSubagentIdempotencyKey({
+            idempotencyKey: params.idempotencyKey,
+            sessionKey: params.sessionKey,
+            method: "agent.enqueue",
+          }),
+          ...(allowOverride && params.provider && { provider: params.provider }),
+          ...(allowOverride && params.model && { model: params.model }),
+          ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
+          ...(params.lane && { lane: params.lane }),
+        },
+        {
+          allowSyntheticModelOverride,
+        },
+      );
       const runId = payload?.runId;
       if (typeof runId !== "string" || !runId) {
         throw new Error("Gateway agent.enqueue method returned an invalid runId.");
@@ -382,10 +410,16 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { runId };
     },
     async abort(params) {
-      const payload = await dispatchGatewayMethod<{ aborted?: boolean }>("agent.abort", {
-        runId: params.runId,
-        ...(params.sessionKey && { sessionKey: params.sessionKey }),
-      });
+      const payload = await dispatchGatewayMethod<{ aborted?: boolean }>(
+        "agent.abort",
+        {
+          runId: params.runId,
+          ...(params.sessionKey && { sessionKey: params.sessionKey }),
+        },
+        {
+          syntheticScopes: [ADMIN_SCOPE],
+        },
+      );
       return { aborted: payload?.aborted === true };
     },
     async waitForRun(params) {
