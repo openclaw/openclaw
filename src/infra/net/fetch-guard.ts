@@ -3,6 +3,7 @@ import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
 import {
+  assertAllowedHostnameWithPolicyOrThrow,
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
@@ -192,7 +193,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
       const pinned = canUseTrustedEnvProxy
-        ? undefined
+        ? (assertAllowedHostnameWithPolicyOrThrow(parsedUrl.hostname, params.policy), undefined)
         : await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
             lookupFn: params.lookupFn,
             policy: params.policy,

@@ -2,7 +2,7 @@ import {
   fetchWithSsrFGuard,
   GUARDED_FETCH_MODE,
 } from "../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { isBlockedHostnameOrIp, type SsrFPolicy } from "../infra/net/ssrf.js";
 
 export function buildRemoteBaseUrlPolicy(baseUrl: string): SsrFPolicy | undefined {
   const trimmed = baseUrl.trim();
@@ -29,10 +29,19 @@ export async function withRemoteHttpResponse<T>(params: {
   auditContext?: string;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
+  let mode: typeof GUARDED_FETCH_MODE[keyof typeof GUARDED_FETCH_MODE] | undefined;
+  try {
+    const hostname = new URL(params.url).hostname;
+    if (!isBlockedHostnameOrIp(hostname, params.ssrfPolicy)) {
+      mode = GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
+    }
+  } catch {
+    mode = undefined;
+  }
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
-    mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    ...(mode ? { mode } : {}),
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
   });

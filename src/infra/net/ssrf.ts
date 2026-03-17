@@ -91,6 +91,33 @@ function matchesHostnameAllowlist(hostname: string, allowlist: string[]): boolea
   return allowlist.some((pattern) => isHostnameAllowedByPattern(hostname, pattern));
 }
 
+export function assertAllowedHostnameWithPolicyOrThrow(
+  hostname: string,
+  policy?: SsrFPolicy,
+): string {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) {
+    throw new Error("Invalid hostname");
+  }
+
+  const allowedHostnames = normalizeHostnameSet(policy?.allowedHostnames);
+  const hostnameAllowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
+
+  if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
+    throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
+  }
+
+  const isExplicitAllowed = allowedHostnames.has(normalized);
+  const skipPrivateNetworkChecks =
+    isPrivateNetworkAllowedByPolicy(policy) || isExplicitAllowed;
+
+  if (!skipPrivateNetworkChecks) {
+    assertAllowedHostOrIpOrThrow(normalized, policy);
+  }
+
+  return normalized;
+}
+
 function looksLikeUnsupportedIpv4Literal(address: string): boolean {
   const parts = address.split(".");
   if (parts.length === 0 || parts.length > 4) {
@@ -293,25 +320,11 @@ export async function resolvePinnedHostnameWithPolicy(
   hostname: string,
   params: { lookupFn?: LookupFn; policy?: SsrFPolicy } = {},
 ): Promise<PinnedHostname> {
-  const normalized = normalizeHostname(hostname);
-  if (!normalized) {
-    throw new Error("Invalid hostname");
-  }
-
-  const allowPrivateNetwork = isPrivateNetworkAllowedByPolicy(params.policy);
+  const normalized = assertAllowedHostnameWithPolicyOrThrow(hostname, params.policy);
   const allowedHostnames = normalizeHostnameSet(params.policy?.allowedHostnames);
-  const hostnameAllowlist = normalizeHostnameAllowlist(params.policy?.hostnameAllowlist);
   const isExplicitAllowed = allowedHostnames.has(normalized);
-  const skipPrivateNetworkChecks = allowPrivateNetwork || isExplicitAllowed;
-
-  if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
-    throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
-  }
-
-  if (!skipPrivateNetworkChecks) {
-    // Phase 1: fail fast for literal hosts/IPs before any DNS lookup side-effects.
-    assertAllowedHostOrIpOrThrow(normalized, params.policy);
-  }
+  const skipPrivateNetworkChecks =
+    isPrivateNetworkAllowedByPolicy(params.policy) || isExplicitAllowed;
 
   const lookupFn = params.lookupFn ?? dnsLookup;
   const results = await lookupFn(normalized, { all: true });

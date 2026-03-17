@@ -310,4 +310,20 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
     await result.release();
   });
+
+  it("still enforces hostname allowlist in trusted env proxy mode", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://evil.example.org/file.txt",
+        fetchImpl,
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+        policy: { hostnameAllowlist: ["cdn.example.com", "*.assets.example.com"] },
+      }),
+    ).rejects.toThrow(/allowlist/i);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });
