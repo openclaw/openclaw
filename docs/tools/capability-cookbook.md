@@ -1,7 +1,7 @@
 ---
 summary: "Cookbook for adding a new shared capability to OpenClaw"
 read_when:
-  - Adding a new core capability and plugin seam
+  - Adding a new core capability and plugin registration surface
   - Deciding whether code belongs in core, a vendor plugin, or a feature plugin
   - Wiring a new runtime helper for channels or tools
 title: "Capability Cookbook"

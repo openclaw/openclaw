@@ -611,7 +611,7 @@ Provider plugins now have two layers:
 - runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
-tool policy. These hooks are the seam for provider-specific behavior without
+tool policy. These hooks are the extension surface for provider-specific behavior without
 needing a whole custom inference transport.
 
 Use manifest `providerAuthEnvVars` when the provider has env-based credentials
@@ -1099,10 +1099,10 @@ authoring plugins:
   a one-time deprecation warning outside test environments.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
-  public seams under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
+  public entry points under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
   `setup-entry.js`, and narrowly scoped files such as `login-qr-api.js`. Never
   import `extensions/<id>/src/*` from core or from another extension.
-- Repo seam split:
+- Repo entry point split:
   `extensions/<id>/api.js` is the helper/types barrel,
   `extensions/<id>/runtime-api.js` is the runtime-only barrel,
   `extensions/<id>/index.js` is the bundled plugin entry,
@@ -1660,7 +1660,7 @@ Recommended sequence:
    lifecycle, channel-facing semantics, and runtime helper shape.
 2. add typed plugin registration/runtime surfaces
    Extend `OpenClawPluginApi` and/or `api.runtime` with the smallest useful
-   typed seam.
+   typed capability surface.
 3. wire core + channel/feature consumers
    Channels and feature plugins should consume the new capability through core,
    not by importing a vendor implementation directly.
@@ -1850,8 +1850,8 @@ Plugins can register **model providers** so users can run OAuth or API-key
 setup inside OpenClaw, surface provider setup in onboarding/model-pickers, and
 contribute implicit provider discovery.
 
-Provider plugins are the modular extension seam for model-provider setup. They
-are not just "OAuth helpers" anymore.
+Provider plugins are the modular extension surface for model-provider setup.
+They are not just "OAuth helpers" anymore.
 
 ### Provider plugin lifecycle
 
