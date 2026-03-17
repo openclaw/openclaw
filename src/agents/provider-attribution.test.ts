@@ -34,7 +34,8 @@ describe("provider attribution", () => {
       version: "2026.3.14",
       headers: {
         "HTTP-Referer": "https://openclaw.ai",
-        "X-Title": "OpenClaw",
+        "X-OpenRouter-Title": "OpenClaw",
+        "X-OpenRouter-Categories": "cli-agent",
       },
     });
   });
@@ -46,7 +47,8 @@ describe("provider attribution", () => {
       }),
     ).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "OpenClaw",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "cli-agent",
     });
   });
 

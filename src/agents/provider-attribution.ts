@@ -52,7 +52,8 @@ function buildOpenRouterAttributionPolicy(
     ...identity,
     headers: {
       "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": identity.product,
+      "X-OpenRouter-Title": identity.product,
+      "X-OpenRouter-Categories": "cli-agent",
     },
   };
 }

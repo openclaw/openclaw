@@ -28,7 +28,8 @@ describe("proxy stream wrappers", () => {
       {
         headers: {
           "HTTP-Referer": "https://openclaw.ai",
-          "X-Title": "OpenClaw",
+          "X-OpenRouter-Title": "OpenClaw",
+          "X-OpenRouter-Categories": "cli-agent",
           "X-Custom": "1",
         },
       },
