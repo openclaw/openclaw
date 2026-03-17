@@ -236,9 +236,17 @@ function loadBundleMcpConfig(params: {
   rootDir: string;
   bundleFormat: PluginBundleFormat;
 }): { config: BundleMcpConfig; diagnostics: string[] } {
+  // Normalize to the real path so that absolutized cwd/args are canonical on
+  // all platforms (on Windows, fs.mkdtemp can return 8.3 short-path forms).
+  let rootDir = params.rootDir;
+  try {
+    rootDir = fs.realpathSync(rootDir);
+  } catch {
+    // keep original if the directory doesn't exist yet
+  }
   const manifestRelativePath = MANIFEST_PATH_BY_FORMAT[params.bundleFormat];
   const manifestLoaded = readPluginJsonObject({
-    rootDir: params.rootDir,
+    rootDir,
     relativePath: manifestRelativePath,
     allowMissing: params.bundleFormat === "claude",
   });
@@ -249,14 +257,14 @@ function loadBundleMcpConfig(params: {
   let merged: BundleMcpConfig = { mcpServers: {} };
   const filePaths = resolveBundleMcpConfigPaths({
     raw: manifestLoaded.raw,
-    rootDir: params.rootDir,
+    rootDir,
     bundleFormat: params.bundleFormat,
   });
   for (const relativePath of filePaths) {
     merged = applyMergePatch(
       merged,
       loadBundleFileBackedMcpConfig({
-        rootDir: params.rootDir,
+        rootDir,
         relativePath,
       }),
     ) as BundleMcpConfig;
@@ -266,7 +274,7 @@ function loadBundleMcpConfig(params: {
     merged,
     loadBundleInlineMcpConfig({
       raw: manifestLoaded.raw,
-      baseDir: params.rootDir,
+      baseDir: rootDir,
     }),
   ) as BundleMcpConfig;
 
