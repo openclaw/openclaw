@@ -514,26 +514,31 @@ describe("monitorTelegramProvider (grammY)", () => {
   });
 
   it("reuses the resolved transport across polling restarts", async () => {
-    const telegramTransport = {
-      fetch: globalThis.fetch,
-      sourceFetch: globalThis.fetch,
-    };
-    resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const telegramTransport = {
+        fetch: globalThis.fetch,
+        sourceFetch: globalThis.fetch,
+      };
+      resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
 
-    const abort = new AbortController();
-    mockRunOnceWithStalledPollingRunner();
-    mockRunOnceAndAbort(abort);
+      const abort = new AbortController();
+      mockRunOnceWithStalledPollingRunner();
+      mockRunOnceAndAbort(abort);
 
-    const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
-    await vi.waitFor(() => expect(createTelegramBotCalls.length).toBeGreaterThanOrEqual(1));
+      const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+      await vi.waitFor(() => expect(createTelegramBotCalls.length).toBeGreaterThanOrEqual(1));
 
-    expect(emitUnhandledRejection(makeTaggedPollingFetchError())).toBe(true);
-    await monitor;
+      vi.advanceTimersByTime(120_000);
+      await monitor;
 
-    expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(1);
-    expect(createTelegramBotCalls).toHaveLength(2);
-    expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport);
-    expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport);
+      expect(resolveTelegramTransportSpy).toHaveBeenCalledTimes(1);
+      expect(createTelegramBotCalls).toHaveLength(2);
+      expect(createTelegramBotCalls[0]?.telegramTransport).toBe(telegramTransport);
+      expect(createTelegramBotCalls[1]?.telegramTransport).toBe(telegramTransport);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aborts the active Telegram fetch when unhandled network rejection forces restart", async () => {
