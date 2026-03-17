@@ -1,4 +1,4 @@
-import { ChannelType } from "@buape/carbon";
+import { ChannelType, MessageType } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -64,12 +64,14 @@ export function createDiscordMessage(params: {
   mentionedUsers?: Array<{ id: string }>;
   mentionedEveryone?: boolean;
   attachments?: Array<Record<string, unknown>>;
+  type?: MessageType;
 }): import("@buape/carbon").Message {
   return {
     id: params.id,
     content: params.content,
     timestamp: new Date().toISOString(),
     channelId: params.channelId,
+    type: params.type ?? MessageType.Default,
     attachments: params.attachments ?? [],
     mentionedUsers: params.mentionedUsers ?? [],
     mentionedRoles: [],

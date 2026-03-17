@@ -1,11 +1,21 @@
-import { ChannelType } from "@buape/carbon";
+import { ChannelType, MessageType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+const { enqueueSystemEventMock, transcribeFirstAudioMock } = vi.hoisted(() => ({
+  enqueueSystemEventMock: vi.fn(),
+  transcribeFirstAudioMock: vi.fn(),
+}));
 
 vi.mock("./preflight-audio.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  };
+});
 import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
@@ -255,8 +265,42 @@ describe("resolvePreflightMentionRequirement", () => {
 
 describe("preflightDiscordMessage", () => {
   beforeEach(() => {
+    enqueueSystemEventMock.mockReset();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     transcribeFirstAudioMock.mockReset();
+  });
+
+  it("drops channel rename system messages into the system event queue", async () => {
+    const channelId = "channel-rename-1";
+    const guildId = "guild-rename-1";
+    const message = createDiscordMessage({
+      id: "m-rename-1",
+      channelId,
+      content: "alice changed the channel name: general",
+      type: MessageType.ChannelNameChange,
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(enqueueSystemEventMock).toHaveBeenCalledOnce();
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Discord system: alice renamed the channel in Guild One #general",
+      {
+        sessionKey: "main",
+        contextKey: "discord:system:channel-rename-1:m-rename-1",
+      },
+    );
   });
 
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
