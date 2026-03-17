@@ -93,6 +93,39 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 - `devices clear` is intentionally gated by `--yes`.
 - If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.
 
+## Paperclip / `openclaw_gateway` first-run approval
+
+When a new Paperclip agent connects through the `openclaw_gateway` adapter for the
+first time, the Gateway may require a one-time **device pairing approval** before
+runs can succeed. If Paperclip shows an error like
+`openclaw_gateway_pairing_required`, approve the pending device and retry.
+
+Typical local setup:
+
+```bash
+openclaw devices approve --latest
+```
+
+If the gateway is remote or requires explicit credentials, pass them directly:
+
+```bash
+openclaw devices approve --latest --url <gateway-ws-url> --token <gateway-token>
+```
+
+To avoid re-approving after restarts, keep a persistent device key in the
+Paperclip adapter config instead of generating a new ephemeral identity each run:
+
+```json
+{
+  "adapterConfig": {
+    "devicePrivateKeyPem": "<your-ed25519-private-key-in-pkcs8-pem>"
+  }
+}
+```
+
+If approval keeps failing, run `openclaw devices list` first to confirm a pending
+request exists.
+
 ## Token drift recovery checklist
 
 Use this when Control UI or other clients keep failing with `AUTH_TOKEN_MISMATCH` or `AUTH_DEVICE_TOKEN_MISMATCH`.
