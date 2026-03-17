@@ -167,6 +167,18 @@ For example, TTS follows this shape:
 
 That same pattern should be preferred for future capabilities.
 
+### Capability example: video
+
+If OpenClaw adds video, prefer this order:
+
+1. define a core video capability
+2. decide the shared contract: input media shape, provider result shape, cache/fallback behavior, and runtime helpers
+3. let vendor plugins such as `openai` or a future video vendor register video implementations
+4. let channels or feature plugins consume `api.runtime.video` instead of wiring directly to a provider plugin
+
+This avoids baking one provider's video assumptions into core. The plugin owns
+the vendor surface; core owns the capability contract.
+
 ## Compatible bundles
 
 OpenClaw also recognizes two compatible external bundle layouts:
