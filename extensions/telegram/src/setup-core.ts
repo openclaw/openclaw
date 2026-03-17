@@ -1,8 +1,6 @@
 import {
-  applyAccountNameToChannelSection,
+  createPatchedAccountSetupAdapter,
   DEFAULT_ACCOUNT_ID,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   splitSetupEntries,
@@ -109,15 +107,8 @@ export async function promptTelegramAllowFromForAccount(params: {
   });
 }
 
-export const telegramSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
+export const telegramSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
+  channelKey: channel,
   validateInput: ({ accountId, input }) => {
     if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
       return "TELEGRAM_BOT_TOKEN can only be used for the default account.";
@@ -127,60 +118,12 @@ export const telegramSetupAdapter: ChannelSetupAdapter = {
     }
     return null;
   },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          telegram: {
-            ...next.channels?.telegram,
-            enabled: true,
-            ...(input.useEnv
-              ? {}
-              : input.tokenFile
-                ? { tokenFile: input.tokenFile }
-                : input.token
-                  ? { botToken: input.token }
-                  : {}),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        telegram: {
-          ...next.channels?.telegram,
-          enabled: true,
-          accounts: {
-            ...next.channels?.telegram?.accounts,
-            [accountId]: {
-              ...next.channels?.telegram?.accounts?.[accountId],
-              enabled: true,
-              ...(input.tokenFile
-                ? { tokenFile: input.tokenFile }
-                : input.token
-                  ? { botToken: input.token }
-                  : {}),
-            },
-          },
-        },
-      },
-    };
-  },
-};
+  buildPatch: (input) =>
+    input.useEnv
+      ? {}
+      : input.tokenFile
+        ? { tokenFile: input.tokenFile }
+        : input.token
+          ? { botToken: input.token }
+          : {},
+});
