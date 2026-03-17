@@ -111,6 +111,8 @@ function buildCacheKey(params: {
   const bundledRoot = roots.stock ?? "";
   // The manifest registry only depends on where plugins are discovered from (workspace + load paths).
   // It does not depend on allow/deny/entries enable-state, so exclude those for higher cache hit rates.
+  // Note: plugins.installs is also excluded; the duplicate-suppression path reads it at resolve time,
+  // but the 1-second TTL keeps staleness to a narrow window that is acceptable for diagnostics.
   return `${workspaceKey}::${configExtensionsRoot}::${bundledRoot}::${JSON.stringify(loadPaths)}`;
 }
 
@@ -373,7 +375,7 @@ export function loadPluginManifestRegistry(
       // Auto-discovered duplicates of bundled plugins are expected (e.g. channels
       // config auto-enabling a bundled extension) and should resolve silently.
       const isBundledDuplicate =
-        existing.candidate.origin === "bundled" || candidate.origin === "bundled";
+        (existing.candidate.origin === "bundled") !== (candidate.origin === "bundled");
       const isExplicitOverride =
         isBundledDuplicate &&
         (() => {
