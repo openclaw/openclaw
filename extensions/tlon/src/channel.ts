@@ -27,12 +27,12 @@ const tlonSetupWizardProxy = {
     resolveConfigured: async ({ cfg }) =>
       await (await loadTlonChannelRuntime()).tlonSetupWizard.status.resolveConfigured({ cfg }),
     resolveStatusLines: async ({ cfg, configured }) =>
-      await (
+      (await (
         await loadTlonChannelRuntime()
       ).tlonSetupWizard.status.resolveStatusLines?.({
         cfg,
         configured,
-      }),
+      })) ?? [],
   },
   introNote: {
     title: "Tlon setup",
