@@ -31,12 +31,22 @@ function canUseNodeFs(): boolean {
   }
 }
 
-function resolveDefaultLogDir(): string {
-  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
+function resolveDefaultLogPaths(): { dir: string; file: string } {
+  // In browser-safe environments (no node:fs), use POSIX paths directly so that
+  // path.join does not convert forward slashes to backslashes on Windows.
+  if (!canUseNodeFs()) {
+    return {
+      dir: POSIX_OPENCLAW_TMP_DIR,
+      file: `${POSIX_OPENCLAW_TMP_DIR}/openclaw.log`,
+    };
+  }
+  const dir = resolvePreferredOpenClawTmpDir();
+  return { dir, file: path.join(dir, "openclaw.log") };
 }
 
-export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
-export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
+const { dir: _defaultLogDir, file: _defaultLogFile } = resolveDefaultLogPaths();
+export const DEFAULT_LOG_DIR = _defaultLogDir;
+export const DEFAULT_LOG_FILE = _defaultLogFile; // legacy single-file path
 
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
