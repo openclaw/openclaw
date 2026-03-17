@@ -401,33 +401,32 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       (!host.chatRunId || host.chatRunId === agentPayload.runId)
     ) {
       // Cancel the fast timer — lifecycle.end provides the immediate reload.
-      // Keep the slow timer (if pending from chat.inbound) as a persistence-lag
-      // safety net. If no slow timer exists, schedule one so the inbound turn
-      // is picked up even when lifecycle.end races ahead of durable writes.
       if (_chatInboundTimerFast) {
         clearTimeout(_chatInboundTimerFast);
         _chatInboundTimerFast = null;
       }
       void loadChatHistory(host as unknown as OpenClawApp);
-      if (!_chatInboundTimerSlow) {
-        const endSessionKey = agentPayload.sessionKey;
-        _chatInboundTimerSlow = setTimeout(() => {
-          _chatInboundTimerSlow = null;
-          if (host.sessionKey !== endSessionKey) {
-            return;
-          }
-          // Skip if a new run started during the delay window
-          const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
-            .chatStreamStartedAt;
-          if (
-            host.chatRunId ||
-            (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)
-          ) {
-            return;
-          }
-          void loadChatHistory(host as unknown as OpenClawApp);
-        }, 3000);
+      // P2 fix: force-scope slow fallback timer to the current ending session.
+      // Always reschedule (clearing any stale timer) so cross-session lifecycle
+      // ends don't starve each other's persistence-lag retry.
+      const endSessionKey = agentPayload.sessionKey;
+      if (_chatInboundTimerSlow) {
+        clearTimeout(_chatInboundTimerSlow);
+        _chatInboundTimerSlow = null;
       }
+      _chatInboundTimerSlow = setTimeout(() => {
+        _chatInboundTimerSlow = null;
+        if (host.sessionKey !== endSessionKey) {
+          return;
+        }
+        // Skip if a new run started during the delay window
+        const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
+          .chatStreamStartedAt;
+        if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)) {
+          return;
+        }
+        void loadChatHistory(host as unknown as OpenClawApp);
+      }, 3000);
     }
     return;
   }
