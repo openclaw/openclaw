@@ -44,6 +44,28 @@ describe("command secret target ids", () => {
     expect([...scoped.targetIds].some((id) => id.startsWith("channels.telegram."))).toBe(false);
   });
 
+  it("does not coerce missing accountId to default when channel is scoped", () => {
+    const scoped = getScopedChannelsCommandSecretTargets({
+      config: {
+        channels: {
+          discord: {
+            defaultAccount: "ops",
+            accounts: {
+              ops: {
+                token: { source: "env", provider: "default", id: "DISCORD_OPS" },
+              },
+            },
+          },
+        },
+      } as never,
+      channel: "discord",
+    });
+
+    expect(scoped.allowedPaths).toBeUndefined();
+    expect(scoped.targetIds.size).toBeGreaterThan(0);
+    expect([...scoped.targetIds].every((id) => id.startsWith("channels.discord."))).toBe(true);
+  });
+
   it("scopes allowed paths to channel globals + selected account", () => {
     const scoped = getScopedChannelsCommandSecretTargets({
       config: {

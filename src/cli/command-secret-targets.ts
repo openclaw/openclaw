@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeAccountId } from "../routing/session-key.js";
+import { normalizeOptionalAccountId } from "../routing/session-key.js";
 import {
   discoverConfigSecretTargetsByIds,
   listSecretTargetRegistryEntries,
@@ -81,7 +81,7 @@ export function getScopedChannelsCommandSecretTargets(params: {
 } {
   const channel = normalizeScopedChannelId(params.channel);
   const targetIds = selectChannelTargetIds(channel);
-  const normalizedAccountId = normalizeAccountId(params.accountId);
+  const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
   if (!channel || !normalizedAccountId) {
     return { targetIds };
   }
