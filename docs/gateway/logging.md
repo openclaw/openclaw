@@ -22,6 +22,7 @@ OpenClaw has two log “surfaces”:
 - The log file path and level can be configured via `~/.openclaw/openclaw.json`:
   - `logging.file`
   - `logging.level`
+  - `logging.maxFileBytes` — maximum single-file size in bytes before writes are suppressed (default: 500 MB)
 
 The file format is one JSON object per line.
 

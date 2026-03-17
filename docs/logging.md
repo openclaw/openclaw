@@ -105,6 +105,7 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
   "logging": {
     "level": "info",
     "file": "/tmp/openclaw/openclaw-YYYY-MM-DD.log",
+    "maxFileBytes": 524288000,
     "consoleLevel": "info",
     "consoleStyle": "pretty",
     "redactSensitive": "tools",
@@ -121,6 +122,20 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g. `OPENCLAW_LOG_LEVEL=debug`). The env var takes precedence over the config file, so you can raise verbosity for a single run without editing `openclaw.json`. You can also pass the global CLI option **`--log-level <level>`** (for example, `openclaw --log-level debug gateway run`), which overrides the environment variable for that command.
 
 `--verbose` only affects console output; it does not change file log levels.
+
+### File size cap
+
+`logging.maxFileBytes`: maximum size (in bytes) of a single daily log file. When the file exceeds this limit, further writes are silently suppressed until the next day's file rotates in. Default: `524288000` (500 MB).
+
+To raise the cap to 1 GB:
+
+```json
+{
+  "logging": {
+    "maxFileBytes": 1073741824
+  }
+}
+```
 
 ### Console styles
 
