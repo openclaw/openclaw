@@ -4,32 +4,25 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import type { MediaFetchError } from "../media/fetch.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
 
 // ---------------------------------------------------------------------------
 // Module mocks
 // ---------------------------------------------------------------------------
 
-vi.mock("../agents/model-auth.js", () => ({
-  resolveApiKeyForProvider: vi.fn(async () => ({
+type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+
+const resolveApiKeyForProviderMock = vi.hoisted(() =>
+  vi.fn<ResolveApiKeyForProvider>(async () => ({
     apiKey: "test-key", // pragma: allowlist secret
     source: "test",
     mode: "api-key",
   })),
-  requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-    if (auth?.apiKey) {
-      return auth.apiKey;
-    }
-    throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
-  },
-  resolveAwsSdkEnvVarName: vi.fn(() => undefined),
-  resolveEnvApiKey: vi.fn(() => null),
-  resolveModelAuthMode: vi.fn(() => "api-key"),
-  getApiKeyForModel: vi.fn(async () => ({ apiKey: "test-key", source: "test", mode: "api-key" })),
-  getCustomProviderApiKey: vi.fn(() => undefined),
-  ensureAuthProfileStore: vi.fn(async () => ({})),
-  resolveAuthProfileOrder: vi.fn(() => []),
-}));
+);
+const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const runExecMock = vi.hoisted(() => vi.fn());
+const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
 
 const { MediaFetchErrorMock } = vi.hoisted(() => {
   class MediaFetchErrorMock extends Error {
@@ -42,22 +35,6 @@ const { MediaFetchErrorMock } = vi.hoisted(() => {
   }
   return { MediaFetchErrorMock };
 });
-
-vi.mock("../media/fetch.js", () => ({
-  fetchRemoteMedia: vi.fn(),
-  MediaFetchError: MediaFetchErrorMock,
-}));
-
-vi.mock("../process/exec.js", () => ({
-  runExec: vi.fn(),
-  runCommandWithTimeout: vi.fn(),
-}));
-
-const mockDeliverOutboundPayloads = vi.fn();
-
-vi.mock("../infra/outbound/deliver.js", () => ({
-  deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
-}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -145,6 +122,41 @@ function createAudioConfigWithoutEchoFlag() {
 
 describe("applyMediaUnderstanding – echo transcript", () => {
   beforeAll(async () => {
+    vi.resetModules();
+    vi.doMock("../agents/model-auth.js", () => ({
+      resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+      requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
+        if (auth?.apiKey) {
+          return auth.apiKey;
+        }
+        throw new Error(
+          `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
+        );
+      },
+      resolveAwsSdkEnvVarName: vi.fn(() => undefined),
+      resolveEnvApiKey: vi.fn(() => null),
+      resolveModelAuthMode: vi.fn(() => "api-key"),
+      getApiKeyForModel: vi.fn(async () => ({
+        apiKey: "test-key",
+        source: "test",
+        mode: "api-key",
+      })),
+      getCustomProviderApiKey: vi.fn(() => undefined),
+      ensureAuthProfileStore: vi.fn(async () => ({})),
+      resolveAuthProfileOrder: vi.fn(() => []),
+    }));
+    vi.doMock("../media/fetch.js", () => ({
+      fetchRemoteMedia: fetchRemoteMediaMock,
+      MediaFetchError: MediaFetchErrorMock as typeof MediaFetchError,
+    }));
+    vi.doMock("../process/exec.js", () => ({
+      runExec: runExecMock,
+      runCommandWithTimeout: vi.fn(),
+    }));
+    vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
+      deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+    }));
+
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });
     suiteTempMediaRootDir = await fs.mkdtemp(path.join(baseDir, TEMP_MEDIA_PREFIX));
@@ -155,7 +167,10 @@ describe("applyMediaUnderstanding – echo transcript", () => {
   });
 
   beforeEach(() => {
-    mockDeliverOutboundPayloads.mockClear();
+    resolveApiKeyForProviderMock.mockClear();
+    fetchRemoteMediaMock.mockReset();
+    runExecMock.mockReset();
+    mockDeliverOutboundPayloads.mockReset();
     mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "echo-1" }]);
     clearMediaUnderstandingBinaryCacheForTests?.();
   });
