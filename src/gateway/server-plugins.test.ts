@@ -379,7 +379,10 @@ describe("loadGatewayPlugins", () => {
       const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
       const auth = authorizeOperatorScopesForMethod("sessions.get", scopes);
       if (!auth.allowed) {
-        opts.respond(false, undefined, { message: `missing scope: ${auth.missingScope}` });
+        opts.respond(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: `missing scope: ${auth.missingScope}`,
+        });
         return;
       }
       opts.respond(true, { messages: [{ id: "m-1" }] });
