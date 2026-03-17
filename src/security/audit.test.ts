@@ -199,6 +199,20 @@ async function runChannelSecurityAudit(
   });
 }
 
+async function runInstallMetadataAudit(
+  cfg: OpenClawConfig,
+  stateDir: string,
+): Promise<SecurityAuditReport> {
+  return runSecurityAudit({
+    config: cfg,
+    includeFilesystem: true,
+    includeChannelSecurity: false,
+    stateDir,
+    configPath: path.join(stateDir, "openclaw.json"),
+    execDockerRawFn: execDockerRawUnavailable,
+  });
+}
+
 describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
@@ -3076,80 +3090,75 @@ description: test skill
     }
   });
 
-  it("warns on unpinned npm install specs and missing integrity metadata", async () => {
-    const cfg: OpenClawConfig = {
-      plugins: {
-        installs: {
-          "voice-call": {
-            source: "npm",
-            spec: "@openclaw/voice-call",
-          },
-        },
-      },
-      hooks: {
-        internal: {
+  it.each([
+    {
+      name: "warns on unpinned npm install specs and missing integrity metadata",
+      cfg: {
+        plugins: {
           installs: {
-            "test-hooks": {
+            "voice-call": {
               source: "npm",
-              spec: "@openclaw/test-hooks",
+              spec: "@openclaw/voice-call",
             },
           },
         },
-      },
-    };
-
-    const res = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      stateDir: sharedInstallMetadataStateDir,
-      configPath: path.join(sharedInstallMetadataStateDir, "openclaw.json"),
-      execDockerRawFn: execDockerRawUnavailable,
-    });
-
-    expect(hasFinding(res, "plugins.installs_unpinned_npm_specs", "warn")).toBe(true);
-    expect(hasFinding(res, "plugins.installs_missing_integrity", "warn")).toBe(true);
-    expect(hasFinding(res, "hooks.installs_unpinned_npm_specs", "warn")).toBe(true);
-    expect(hasFinding(res, "hooks.installs_missing_integrity", "warn")).toBe(true);
-  });
-
-  it("does not warn on pinned npm install specs with integrity metadata", async () => {
-    const cfg: OpenClawConfig = {
-      plugins: {
-        installs: {
-          "voice-call": {
-            source: "npm",
-            spec: "@openclaw/voice-call@1.2.3",
-            integrity: "sha512-plugin",
-          },
-        },
-      },
-      hooks: {
-        internal: {
-          installs: {
-            "test-hooks": {
-              source: "npm",
-              spec: "@openclaw/test-hooks@1.2.3",
-              integrity: "sha512-hook",
+        hooks: {
+          internal: {
+            installs: {
+              "test-hooks": {
+                source: "npm",
+                spec: "@openclaw/test-hooks",
+              },
             },
           },
         },
-      },
-    };
-
-    const res = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      stateDir: sharedInstallMetadataStateDir,
-      configPath: path.join(sharedInstallMetadataStateDir, "openclaw.json"),
-      execDockerRawFn: execDockerRawUnavailable,
-    });
-
-    expect(hasFinding(res, "plugins.installs_unpinned_npm_specs")).toBe(false);
-    expect(hasFinding(res, "plugins.installs_missing_integrity")).toBe(false);
-    expect(hasFinding(res, "hooks.installs_unpinned_npm_specs")).toBe(false);
-    expect(hasFinding(res, "hooks.installs_missing_integrity")).toBe(false);
+      } satisfies OpenClawConfig,
+      expectedPresent: [
+        "plugins.installs_unpinned_npm_specs",
+        "plugins.installs_missing_integrity",
+        "hooks.installs_unpinned_npm_specs",
+        "hooks.installs_missing_integrity",
+      ],
+    },
+    {
+      name: "does not warn on pinned npm install specs with integrity metadata",
+      cfg: {
+        plugins: {
+          installs: {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call@1.2.3",
+              integrity: "sha512-plugin",
+            },
+          },
+        },
+        hooks: {
+          internal: {
+            installs: {
+              "test-hooks": {
+                source: "npm",
+                spec: "@openclaw/test-hooks@1.2.3",
+                integrity: "sha512-hook",
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedAbsent: [
+        "plugins.installs_unpinned_npm_specs",
+        "plugins.installs_missing_integrity",
+        "hooks.installs_unpinned_npm_specs",
+        "hooks.installs_missing_integrity",
+      ],
+    },
+  ])("$name", async (testCase) => {
+    const res = await runInstallMetadataAudit(testCase.cfg, sharedInstallMetadataStateDir);
+    for (const checkId of testCase.expectedPresent ?? []) {
+      expect(hasFinding(res, checkId, "warn"), checkId).toBe(true);
+    }
+    for (const checkId of testCase.expectedAbsent ?? []) {
+      expect(hasFinding(res, checkId), checkId).toBe(false);
+    }
   });
 
   it("warns when install records drift from installed package versions", async () => {
@@ -3195,14 +3204,7 @@ description: test skill
       },
     };
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      stateDir,
-      configPath: path.join(stateDir, "openclaw.json"),
-      execDockerRawFn: execDockerRawUnavailable,
-    });
+    const res = await runInstallMetadataAudit(cfg, stateDir);
 
     expect(hasFinding(res, "plugins.installs_version_drift", "warn")).toBe(true);
     expect(hasFinding(res, "hooks.installs_version_drift", "warn")).toBe(true);
