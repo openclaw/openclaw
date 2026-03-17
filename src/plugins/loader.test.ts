@@ -2698,6 +2698,9 @@ module.exports = {
       if ("expectedDisabledError" in scenario) {
         expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
       }
+      expect(
+        registry.diagnostics.some((diag) => String(diag.message).includes("duplicate plugin id")),
+      ).toBe(false);
     }
   });
 
