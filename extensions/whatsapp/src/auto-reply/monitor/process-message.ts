@@ -220,11 +220,13 @@ export async function processMessage(params: {
   });
 
   const correlationId = params.msg.id ?? newConnectionId();
+  const directPeerId = params.msg.chatType === "group" ? null : resolveDirectPeerId(params.msg);
+  const directFrom = directPeerId ?? conversationId;
   params.replyLogger.info(
     {
       connectionId: params.connectionId,
       correlationId,
-      from: params.msg.chatType === "group" ? conversationId : params.msg.from,
+      from: params.msg.chatType === "group" ? conversationId : directFrom,
       to: params.msg.to,
       body: elide(combinedBody, 240),
       mediaType: params.msg.mediaType ?? null,
@@ -233,8 +235,6 @@ export async function processMessage(params: {
     "inbound web message",
   );
 
-  const directPeerId = params.msg.chatType === "group" ? null : resolveDirectPeerId(params.msg);
-  const directFrom = directPeerId ?? conversationId;
   const fromDisplay = params.msg.chatType === "group" ? conversationId : directFrom;
   const kindLabel = params.msg.mediaType ? `, ${params.msg.mediaType}` : "";
   whatsappInboundLog.info(
