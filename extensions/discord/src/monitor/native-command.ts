@@ -73,6 +73,7 @@ import {
   createDiscordModelPickerFallbackButton as createDiscordModelPickerFallbackButtonUi,
   createDiscordModelPickerFallbackSelect as createDiscordModelPickerFallbackSelectUi,
   replyWithDiscordModelPickerProviders,
+  resolveDiscordNativeChoiceContext,
   shouldOpenDiscordModelPickerFromCommand,
   type DiscordCommandArgContext,
   type DiscordModelPickerContext,
@@ -124,8 +125,11 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
 function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
   cfg: ReturnType<typeof loadConfig>;
+  resolveChoiceContext?: (
+    interaction: AutocompleteInteraction,
+  ) => Promise<{ provider?: string; model?: string } | null>;
 }): CommandOptions | undefined {
-  const { command, cfg } = params;
+  const { command, cfg, resolveChoiceContext } = params;
   const args = command.args;
   if (!args || args.length === 0) {
     return undefined;
@@ -158,7 +162,17 @@ function buildDiscordCommandOptions(params: {
           const focused = interaction.options.getFocused();
           const focusValue =
             typeof focused?.value === "string" ? focused.value.trim().toLowerCase() : "";
-          const choices = resolveCommandArgChoices({ command, arg, cfg });
+          const context =
+            typeof arg.choices === "function" && resolveChoiceContext
+              ? await resolveChoiceContext(interaction)
+              : null;
+          const choices = resolveCommandArgChoices({
+            command,
+            arg,
+            cfg,
+            provider: context?.provider,
+            model: context?.model,
+          });
           const filtered = focusValue
             ? choices.filter((choice) => choice.label.toLowerCase().includes(focusValue))
             : choices;
@@ -297,6 +311,13 @@ export function createDiscordNativeCommand(params: {
   const commandOptions = buildDiscordCommandOptions({
     command: commandDefinition,
     cfg,
+    resolveChoiceContext: async (interaction) =>
+      resolveDiscordNativeChoiceContext({
+        interaction,
+        cfg,
+        accountId,
+        threadBindings,
+      }),
   });
   const options = commandOptions
     ? (commandOptions satisfies CommandOptions)
