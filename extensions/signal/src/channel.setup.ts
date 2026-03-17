@@ -2,70 +2,16 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  buildChannelConfigSchema,
-  DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
-  getChatChannelMeta,
-  normalizeE164,
-  setAccountEnabledInConfigSection,
-  SignalConfigSchema,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal";
-import {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-  type ResolvedSignalAccount,
-} from "./accounts.js";
-import { signalConfigAccessors, signalSetupWizard } from "./plugin-shared.js";
+import { DEFAULT_ACCOUNT_ID, normalizeE164, type ChannelPlugin } from "openclaw/plugin-sdk/signal";
+import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { signalSetupAdapter } from "./setup-core.js";
+import { createSignalPluginBase, signalSetupWizard } from "./shared.js";
 
 export const signalSetupPlugin: ChannelPlugin<ResolvedSignalAccount> = {
-  id: "signal",
-  meta: {
-    ...getChatChannelMeta("signal"),
-  },
-  setupWizard: signalSetupWizard,
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    media: true,
-    reactions: true,
-  },
-  streaming: {
-    blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-  },
-  reload: { configPrefixes: ["channels.signal"] },
-  configSchema: buildChannelConfigSchema(SignalConfigSchema),
-  config: {
-    listAccountIds: (cfg) => listSignalAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveSignalAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "signal",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "signal",
-        accountId,
-        clearBaseFields: ["account", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
-      }),
-    isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.baseUrl,
-    }),
-    ...signalConfigAccessors,
-  },
+  ...createSignalPluginBase({
+    setupWizard: signalSetupWizard,
+    setup: signalSetupAdapter,
+  }),
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) =>
       buildAccountScopedDmSecurityPolicy({
@@ -90,5 +36,4 @@ export const signalSetupPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         mentionGated: false,
       }),
   },
-  setup: signalSetupAdapter,
 };
