@@ -471,8 +471,16 @@ const ToolLoopDetectionSchema = z
     historySize: z.number().int().positive().optional(),
     warningThreshold: z.number().int().positive().optional(),
     criticalThreshold: z.number().int().positive().optional(),
-    browserSearchWarningThreshold: z.number().int().positive().optional(),
-    browserSearchCriticalThreshold: z.number().int().positive().optional(),
+    browserSearchWarningThreshold: z
+      .number()
+      .int()
+      .min(2, "tools.loopDetection.browserSearchWarningThreshold must be at least 2.")
+      .optional(),
+    browserSearchCriticalThreshold: z
+      .number()
+      .int()
+      .min(2, "tools.loopDetection.browserSearchCriticalThreshold must be at least 2.")
+      .optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
   })
