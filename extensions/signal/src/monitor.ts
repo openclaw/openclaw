@@ -298,30 +298,35 @@ async function deliverReplies(params: {
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
+    const replyTo = payload.replyToId ?? undefined;
     if (!text && mediaList.length === 0) {
       continue;
     }
     if (mediaList.length === 0) {
+      let firstChunk = true;
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
         await sendMessageSignal(target, chunk, {
           baseUrl,
           account,
           maxBytes,
           accountId,
+          replyToId: firstChunk ? replyTo : undefined,
         });
+        firstChunk = false;
       }
     } else {
       let first = true;
       for (const url of mediaList) {
         const caption = first ? text : "";
-        first = false;
         await sendMessageSignal(target, caption, {
           baseUrl,
           account,
           mediaUrl: url,
           maxBytes,
           accountId,
+          replyToId: first ? replyTo : undefined,
         });
+        first = false;
       }
     }
     runtime.log?.(`delivered reply to ${target}`);
