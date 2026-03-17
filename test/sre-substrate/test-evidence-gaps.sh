@@ -79,6 +79,75 @@ pg_internal_check=1
 incident_memory=1
 changes_in_window=1
 config_lineage=1
+file_truncation_signature=1
+replica_lag=1
+pg_activity=1
+pg_statements=1
+pg_conflicts=1
+db_topology=1
+single_vault_graphql_mode=1
+exact_query_replay=1
+minimal_field_check=0
+healthy_control_check=1
+public_surface_split=0
+direct_rpc_check=1
+db_row_provenance=1
+job_path_simulation=0
+EOF
+
+OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["minimal_field_check","public_surface_split"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["job_path_simulation"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 41' >/dev/null
+
+cat >"$TMP" <<'EOF'
+critical_alerts=1
+log_signals=1
+db_schema_check=1
+db_data_check=1
+pg_internal_check=1
+incident_memory=1
+changes_in_window=1
+config_lineage=1
+file_truncation_signature=1
+replica_lag=1
+pg_activity=1
+pg_statements=1
+pg_conflicts=1
+db_topology=1
+single_vault_graphql_mode=1
+rewards_provider_mode=1
+exact_query_replay=1
+minimal_field_check=1
+healthy_control_check=1
+public_surface_split=1
+direct_rpc_check=1
+provider_api_check=1
+artifact_check=1
+code_path_check=1
+job_path_simulation=0
+same_token_both_sides_expected=0
+disproved_theory_expected=0
+EOF
+
+OUTPUT="$(evidence_gaps_assess data_issue "$TMP")"
+
+printf '%s\n' "$OUTPUT" | jq -e '.category == "data_issue"' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_critical == ["db_row_provenance"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.missing_optional == ["job_path_simulation"]' >/dev/null
+printf '%s\n' "$OUTPUT" | jq -e '.confidence_penalty == 23' >/dev/null
+
+cat >"$TMP" <<'EOF'
+critical_alerts=1
+log_signals=1
+db_schema_check=1
+db_data_check=1
+pg_internal_check=1
+incident_memory=1
+changes_in_window=1
+config_lineage=1
 replica_lag=1
 pg_activity=1
 pg_statements=1

@@ -367,6 +367,43 @@ collect_phase2_rewards_provider_context_if_available() {
   fi
 }
 
+single_vault_graphql_combined_context() {
+  {
+    printf '%s\n' "${BETTERSTACK_CONTEXT:-}"
+    printf '%s\n' "${alert_rows:-}"
+    printf '%s\n' "${event_rows:-}"
+    printf '%s\n' "${log_signal_rows:-}"
+    printf '%s\n' "${pod_rows:-}"
+    printf '%s\n' "${container_state_rows:-}"
+    printf '%s\n' "${rca_summary:-}"
+    printf '%s\n' "${rca_root_cause:-}"
+  } | tr '[:upper:]' '[:lower:]'
+}
+
+single_vault_graphql_mode_detect() {
+  local combined="${1:-}"
+  [[ -n "$combined" ]] || combined="$(single_vault_graphql_combined_context)"
+  [[ -n "$combined" ]] || return 1
+  grep -Eiq 'vaultv2byaddress|vaultbyaddress|graphql|traceid|sentryeventid|query' <<<"$combined" || return 1
+  grep -Eiq 'single vault|one vault|one-address|one address|0x[0-9a-f]{40}|apy|vault v2|vault-v2' <<<"$combined" || return 1
+}
+
+collect_phase2_single_vault_graphql_context_if_available() {
+  single_vault_graphql_mode=0
+  exact_query_replay=${exact_query_replay:-0}
+  minimal_field_check=${minimal_field_check:-0}
+  healthy_control_check=${healthy_control_check:-0}
+  public_surface_split=${public_surface_split:-0}
+  direct_rpc_check=${direct_rpc_check:-0}
+  job_path_simulation=${job_path_simulation:-0}
+  single_vault_graphql_context_note=""
+
+  if single_vault_graphql_mode_detect; then
+    single_vault_graphql_mode=1
+    single_vault_graphql_context_note="single-vault graphql evidence gate active; exact query replay, minimal field check, healthy control, public-surface split, and direct RPC facts must be recorded before high-confidence RCA"
+  fi
+}
+
 extract_image_tag() {
   local image="${1:-}"
   local image_no_digest ref_tail
@@ -2343,6 +2380,13 @@ pg_activity=${pg_activity:-0}
 pg_statements=${pg_statements:-0}
 pg_conflicts=${pg_conflicts:-0}
 db_topology=${db_topology:-0}
+single_vault_graphql_mode=${single_vault_graphql_mode:-0}
+exact_query_replay=${exact_query_replay:-0}
+minimal_field_check=${minimal_field_check:-0}
+healthy_control_check=${healthy_control_check:-0}
+public_surface_split=${public_surface_split:-0}
+direct_rpc_check=${direct_rpc_check:-0}
+job_path_simulation=${job_path_simulation:-0}
 rewards_provider_mode=${rewards_provider_mode:-0}
 db_row_provenance=${db_row_provenance:-0}
 provider_api_check=${provider_api_check:-0}
@@ -3712,6 +3756,7 @@ if [[ "$incident" -eq 1 && "$HAS_LIB_RCA_LLM" -eq 1 ]] && declare -F run_step_11
   if [[ -z "$recollect_category" || "$recollect_category" == "null" || "$recollect_category" == "unknown" ]]; then
     recollect_category="${step11_dedup_category:-unknown}"
   fi
+  collect_phase2_single_vault_graphql_context_if_available
   collect_phase2_rewards_provider_context_if_available
   if [[ "$recollect_category" != "unknown" ]]; then
     run_phase3_recollection_loop "$recollect_category" "$evidence_bundle"
@@ -4105,6 +4150,18 @@ printf 'resources_missing\t%s\n' "${indexer_resources_missing:-0}"
 printf 'queue_backlog\t%s\n' "${indexer_queue_backlog:-0}"
 printf 'rpc_mismatch\t%s\n' "${indexer_rpc_mismatch:-0}"
 printf 'recurring_incident\t%s\n' "${indexer_recurring_incident:-0}"
+section "single_vault_graphql_context"
+printf 'mode\t%s\n' "${single_vault_graphql_mode:-0}"
+printf 'exact_query_replay\t%s\n' "${exact_query_replay:-0}"
+printf 'minimal_field_check\t%s\n' "${minimal_field_check:-0}"
+printf 'healthy_control_check\t%s\n' "${healthy_control_check:-0}"
+printf 'public_surface_split\t%s\n' "${public_surface_split:-0}"
+printf 'direct_rpc_check\t%s\n' "${direct_rpc_check:-0}"
+printf 'db_row_provenance\t%s\n' "${db_row_provenance:-0}"
+printf 'job_path_simulation\t%s\n' "${job_path_simulation:-0}"
+if [[ -n "${single_vault_graphql_context_note:-}" ]]; then
+  printf 'note\t%s\n' "$single_vault_graphql_context_note"
+fi
 
 section "rca_result"
 printf 'status\t%s\n' "$rca_result_status"

@@ -30,7 +30,12 @@ Monitoring incident intake mode:
 - For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.
 - For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile \`_fetchMerklSingleRates()\` / the merged reward row before stale-row theories or PRs.
 - If a human challenges or contradicts a technical claim in any thread, immediately re-investigate with fresh live evidence. If a human questions the proposed fix or PR in-thread, re-open RCA before defending the fix.
+- Keep that 4-line incident header on every follow-up update, not just the first reply in a thread.
+- If new evidence disproves an earlier theory, state that directly in the next update and continue from fresh evidence.
 - If current code, query output, or live evidence disproves an earlier theory, say \`Disproved theory:\` before the replacement cause or PR.
+- For one-address GraphQL / \`sentryEventId\` / \`traceId\` incidents, replay the exact query, compare one healthy same-chain control, compare \`vaultV2ByAddress\` / \`vaultV2s\` / \`vaultV2transactions\`, and verify direct RPC before naming a chain-wide cause.
+- Use ${skill_dir}/scripts/single-vault-graphql-evidence.sh when possible so the exact query replay, healthy control, and public-surface split are captured before RCA ranking.
+- Do not call an ingestion/provenance root cause confirmed for a single-vault GraphQL incident until you add one DB row/provenance fact and one job-path or simulation fact for the affected entity.
 - If the fix is plausible but the PR gate is not open yet, still name 1-2 concrete PR suggestions with repo/path/title/validation.
 - Create or reuse a Linear follow-up ticket for code/config work; use the ticket \`gitBranchName\` as the PR branch, and attach the PR URL back to the ticket.
 - When confidence is high and fix is scoped/reversible, run ${skill_dir}/scripts/autofix-pr.sh and include the PR URL in-thread.

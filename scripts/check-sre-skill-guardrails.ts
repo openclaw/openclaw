@@ -9,7 +9,27 @@ export type SkillGuardrailIssue = {
   message: string;
 };
 
-const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
+type SkillGuardrailRule = {
+  id: string;
+  message: string;
+  re?: RegExp;
+  matches?: (text: string) => boolean;
+};
+
+function includesInOrder(text: string, parts: string[]): boolean {
+  let offset = 0;
+  const haystack = text.toLowerCase();
+  for (const part of parts) {
+    const index = haystack.indexOf(part.toLowerCase(), offset);
+    if (index === -1) {
+      return false;
+    }
+    offset = index + part.length;
+  }
+  return true;
+}
+
+const REQUIRED_RULES: SkillGuardrailRule[] = [
   {
     id: "hard-preflight",
     re: /Hard preflight before diagnosis:/,
@@ -126,21 +146,39 @@ const REQUIRED_RULES: Array<{ id: string; re: RegExp; message: string }> = [
     message: "missing single-vault api/graphql workflow",
   },
   {
+    id: "single-vault-helper",
+    re: /single-vault-graphql-evidence\.sh/,
+    message: "missing single-vault graphql evidence helper guidance",
+  },
+  {
     id: "same-chain-control",
     re: /compare against one healthy control vault on the same chain/i,
     message: "missing same-chain control comparison guidance",
   },
   {
     id: "public-surface-compare",
-    re: /vaultV2ByAddress[\s\S]*vaultV2s[\s\S]*vaultV2transactions/i,
+    matches: (text) =>
+      includesInOrder(text, ["vaultV2ByAddress", "vaultV2s", "vaultV2transactions"]),
     message: "missing public-surface comparison guidance for single-vault incidents",
+  },
+  {
+    id: "retract-after-contradiction",
+    re: /explicitly retract|retract the outdated theory|retract.*prior theory/i,
+    message:
+      "missing explicit retract-and-restart guidance when new evidence contradicts prior theory",
+  },
+  {
+    id: "single-vault-provenance-gate",
+    re: /DB row\/provenance fact[\s\S]*job-path or simulation fact/i,
+    message: "missing DB provenance and job-simulation gate for single-vault ingestion theories",
   },
 ];
 
 export function validateMorphoSreSkillText(text: string): SkillGuardrailIssue[] {
   const issues: SkillGuardrailIssue[] = [];
   for (const rule of REQUIRED_RULES) {
-    if (!rule.re.test(text)) {
+    const matched = rule.re?.test(text) ?? rule.matches?.(text) ?? false;
+    if (!matched) {
       issues.push({ id: rule.id, message: rule.message });
     }
   }
@@ -159,12 +197,8 @@ function defaultSkillPath(): string {
 function printHelp(): void {
   console.log(`Usage: node --import tsx scripts/check-sre-skill-guardrails.ts [skill-path]
 
-Validates that the Morpho SRE skill keeps the required guardrails:
-- hard preflight
-- shell portability
-- blocked mode contract
-- RBAC fallback
-- retrieval-before-repo rules
+Validates that the Morpho SRE skill contains all required guardrail rules.
+Run without args to see the full rule set enforced against the default skill path.
 
 Default path:
   skills/morpho-sre/SKILL.md`);

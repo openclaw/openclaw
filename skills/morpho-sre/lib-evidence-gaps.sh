@@ -65,6 +65,7 @@ evidence_gaps_assess() {
   local category="${1:-unknown}"
   local source_file="${2:-/dev/stdin}"
   local manifest_file critical_keys optional_keys
+  local single_vault_graphql_keys single_vault_graphql_optional_keys single_vault_graphql_mode
   local rewards_provider_keys rewards_provider_optional_keys
   local rewards_provider_same_token_keys rewards_provider_reversal_keys
   local rewards_provider_mode rewards_provider_same_token_required rewards_provider_reversal_required
@@ -81,6 +82,19 @@ evidence_gaps_assess() {
 
   critical_keys="$(_evidence_gap_section_keys "$manifest_file" critical)"
   optional_keys="$(_evidence_gap_section_keys "$manifest_file" optional)"
+  single_vault_graphql_mode="$(_evidence_gap_lookup_value "$source_file" "single_vault_graphql_mode")"
+  if [[ "$category" == "data_issue" ]] && _evidence_gap_value_present "${single_vault_graphql_mode:-}"; then
+    single_vault_graphql_keys="$(_evidence_gap_section_keys "$manifest_file" single_vault_graphql_critical)"
+    critical_keys="$(
+      printf '%s\n%s\n' "$critical_keys" "$single_vault_graphql_keys" \
+        | awk 'NF > 0 && !seen[$0]++ { print }'
+    )"
+    single_vault_graphql_optional_keys="$(_evidence_gap_section_keys "$manifest_file" single_vault_graphql_optional)"
+    optional_keys="$(
+      printf '%s\n%s\n' "$optional_keys" "$single_vault_graphql_optional_keys" \
+        | awk 'NF > 0 && !seen[$0]++ { print }'
+    )"
+  fi
   rewards_provider_mode="$(_evidence_gap_lookup_value "$source_file" "rewards_provider_mode")"
   if [[ "$category" == "data_issue" ]] && _evidence_gap_value_present "${rewards_provider_mode:-}"; then
     rewards_provider_keys="$(_evidence_gap_section_keys "$manifest_file" rewards_provider_critical)"
@@ -110,6 +124,12 @@ evidence_gaps_assess() {
       )"
     fi
   fi
+
+  optional_keys="$(
+    awk 'NR == FNR { if (NF > 0) seen[$0] = 1; next } NF > 0 && !seen[$0]++ { print }' \
+      <(printf '%s\n' "$critical_keys") \
+      <(printf '%s\n' "$optional_keys")
+  )"
 
   while IFS= read -r key; do
     [[ -n "$key" ]] || continue

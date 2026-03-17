@@ -15,6 +15,15 @@ optional:
   - pg_statements
   - pg_conflicts
   - db_topology
+single_vault_graphql_critical:
+  - exact_query_replay
+  - minimal_field_check
+  - healthy_control_check
+  - public_surface_split
+  - direct_rpc_check
+single_vault_graphql_optional:
+  - db_row_provenance
+  - job_path_simulation
 rewards_provider_critical:
   # Always required for rewards/provider incidents.
   - db_row_provenance

@@ -5,11 +5,11 @@
 - Service: blue-api / vault-v2 public GraphQL
 - Date: 2026-03-12
 - Env: prod
-- Severity: medium
+- Severity: high
 - What broke: one HyperEVM vault V2 returned null APY fields and state-field GraphQL errors while peers on the same chain still worked.
 - Customer impact: confirmed. The broken vault page and public API response were incomplete.
 - Detection: Slack bug-report thread, exact public GraphQL query, live public API checks, direct HyperEVM RPC checks.
-- Resolution status: unresolved in this repo. Root cause should be handed to blue-api owners after public-path localization.
+- Resolution: fixed. The indexer filtered HyperEVM adapter-v2 factory events with the wrong hardcoded address, so adapter provenance rows never landed in the DB. Tactical SQL inserts restored the reported vault immediately; permanent fix was code + backfill from the factory deployment block.
 
 ## Fingerprints
 
@@ -50,12 +50,26 @@
 
 ## Likely Cause
 
-- Primary: vault-specific current-state materialization or persistence failure after metadata / transaction ingestion.
-- Strong hint: list/state-backed surfaces miss the vault while metadata and transaction surfaces still see it.
-- Needed internal confirmation:
-  - DB row diff for broken vault vs healthy control
-  - processor/job logs around block `29432545`
-  - replay / backfill of current-state materialization for this address
+- Primary: the indexer overrode the SDK's HyperEVM `morphoMarketV1AdapterV2Factory` address with the wrong hardcoded address, so `CreateMorphoMarketV1AdapterV2` events from the real factory were skipped.
+- Contributing:
+  - metadata and transaction paths still worked, which made the incident look like a generic current-state gap at first
+  - the vault-level sync job logged `unknown adapter or Morpho Vault V1 not found` because the adapter provenance table was empty for the affected adapter
+- Provenance facts:
+  - SDK/correct factory: `0xaEff6Ef4B7bbfbAadB18b634A8F11392CBeB72Be`
+  - stale hardcoded override: `0x6d6A3ba62836d6B40277767dCAc8fd390d4BcedC`
+  - missed event blocks: `21460330`, `22076552`, `29432606`, `29515505`
+
+## Fix
+
+- Immediate mitigation:
+  - insert the missing `indexer.create_morpho_market_v1_adapter_v2` rows with an idempotent SQL workaround
+  - rerun or wait for the next vault-v2 sync cycle
+- Permanent fix:
+  - update the HyperEVM hardcoded factory override to match the SDK / onchain factory
+  - redeploy the affected indexer/image
+  - backfill from block `21460330` so every missed adapter-v2 event lands in the DB
+- Job-path lesson:
+  - for adapter-v2 incidents, probe the adapter address against the factory, not the parent vault address
 
 ## Ruled Out
 
@@ -68,6 +82,10 @@
   - newer chain-999 vaults exist with materialized state
 - “onchain contract broken”:
   - direct RPC returns valid totals
+- generic RPC/provider failure:
+  - the decisive skip was deterministic provenance filtering, not random empty-chain reads
+- unsupported third-party vault theory:
+  - the vault's adapter is a valid adapter-v2 instance; the missing provenance row made it look unsupported
 
 ## Validation Recipe
 
@@ -76,7 +94,8 @@
 3. Compare with one healthy same-chain control vault.
 4. Compare `vaultV2ByAddress`, `vaultV2s`, and `vaultV2transactions` for the same address.
 5. Verify direct onchain `totalAssets()` and `totalSupply()`.
-6. Only then name the likely broken internal path.
+6. Add one DB row/provenance fact and one job-path/simulation fact before naming an ingestion root cause.
+7. Only then name the likely broken internal path.
 
 ## Prevention / Guardrails
 
@@ -84,3 +103,5 @@
 - Do not reuse an older APY incident unless resolver family, failing fields, and entity shape match.
 - Treat exact user-supplied queries, event IDs, and trace IDs as mandatory replay artifacts.
 - For single-vault public-data incidents, use public-path split plus direct RPC before deeper repo/code theories.
+- Before naming a provenance/internal-ingestion root cause, require one live DB row/provenance fact and one job-path/simulation fact.
+- If the latest evidence disproves the current theory, retract it explicitly instead of layering the new evidence under the old claim.
