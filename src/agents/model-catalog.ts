@@ -131,6 +131,13 @@ function mergeConfiguredOptInProviderModels(params: {
   }
 }
 
+function getConfiguredModelId(model: unknown): string | null {
+  if (typeof model !== "object" || model === null || !("id" in model)) {
+    return null;
+  }
+  return typeof model.id === "string" ? model.id : null;
+}
+
 function resolveConfiguredCatalogProvider(params: {
   config: OpenClawConfig;
   rawProvider: string;
@@ -146,10 +153,7 @@ function resolveConfiguredCatalogProvider(params: {
       continue;
     }
     const hasModel = providerCfg.models.some(
-      (model) =>
-        String((model as { id?: unknown })?.id ?? "")
-          .trim()
-          .toLowerCase() === normalizedModelId,
+      (model) => getConfiguredModelId(model)?.trim().toLowerCase() === normalizedModelId,
     );
     if (hasModel) {
       matches.push(providerKey);

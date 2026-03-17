@@ -253,7 +253,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModel("openrouter", "google/gemini-2.5-flash", "/tmp/agent", cfg);
 

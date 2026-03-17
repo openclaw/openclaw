@@ -247,7 +247,7 @@ describe("loadModelCatalog", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
     });
 
     expect(result).toContainEqual(
@@ -291,7 +291,7 @@ describe("loadModelCatalog", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
     });
 
     expect(result).toContainEqual(
