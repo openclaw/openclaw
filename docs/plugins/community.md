@@ -50,7 +50,7 @@ Use this format when adding entries:
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
 
-- **Workspace Cloud Sync** — Bidirectional workspace sync with cloud storage (Dropbox, Google Drive, OneDrive, S3, 70+ providers) via rclone
+- **Workspace Sync & Backup** — Workspace cloud sync (mailbox, mirror, bisync modes) and encrypted backups via rclone. Supports Dropbox, Google Drive, OneDrive, S3, and 70+ providers. Zero LLM cost.
   npm: `openclaw-workspace-sync`
   repo: `https://github.com/ashbrener/openclaw-workspace-sync`
   install: `openclaw plugins install openclaw-workspace-sync`
