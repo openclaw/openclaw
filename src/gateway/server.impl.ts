@@ -96,6 +96,7 @@ import {
   runGatewayStartupDiscoveryPhase,
   runGatewayStartupSecretsPrecheck,
   runGatewayStartupSidecarPhase,
+  runGatewayStartupTailscaleExposurePhase,
   runGatewayStartupTransportBootstrapPhase,
   runGatewayStartupTlsRuntimePhase,
 } from "./server-startup-preflight.js";
@@ -841,12 +842,15 @@ export async function startGatewayServer(
       });
   const tailscaleCleanup = minimalTestGateway
     ? null
-    : await startGatewayTailscaleExposure({
-        tailscaleMode,
-        resetOnExit: tailscaleConfig.resetOnExit,
-        port,
-        controlUiBasePath,
-        logTailscale,
+    : await runGatewayStartupTailscaleExposurePhase({
+        startTailscaleExposure: async () =>
+          await startGatewayTailscaleExposure({
+            tailscaleMode,
+            resetOnExit: tailscaleConfig.resetOnExit,
+            port,
+            controlUiBasePath,
+            logTailscale,
+          }),
       });
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;

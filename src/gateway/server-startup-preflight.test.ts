@@ -14,6 +14,7 @@ import {
   runGatewayStartupSecretsPrecheck,
   runGatewayStartupDiscoveryPhase,
   runGatewayStartupSidecarPhase,
+  runGatewayStartupTailscaleExposurePhase,
   runGatewayStartupTransportBootstrapPhase,
   runGatewayStartupTlsRuntimePhase,
 } from "./server-startup-preflight.js";
@@ -518,6 +519,30 @@ describe("runGatewayStartupDiscoveryPhase", () => {
   });
 });
 
+describe("runGatewayStartupTailscaleExposurePhase", () => {
+  it("returns tailscale cleanup on success", async () => {
+    const tailscaleCleanup = vi.fn(async () => {});
+    const result = await runGatewayStartupTailscaleExposurePhase({
+      startTailscaleExposure: vi.fn().mockResolvedValue(tailscaleCleanup),
+    });
+
+    expect(result).toBe(tailscaleCleanup);
+  });
+
+  it("classifies tailscale exposure failures", async () => {
+    await expect(
+      runGatewayStartupTailscaleExposurePhase({
+        startTailscaleExposure: vi.fn().mockRejectedValue(new Error("tailscale serve failed")),
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "tailscale_exposure",
+        message: "tailscale serve failed",
+      }),
+    );
+  });
+});
+
 describe("runGatewayStartupRuntimeConfigPhase", () => {
   it("stores resolved runtime config and preserves prior context fields", async () => {
     const baseSnapshot = createSnapshot({ config: { gateway: { bind: "loopback" } } });
@@ -761,6 +786,19 @@ describe("classifyGatewayStartupPreflightError", () => {
     });
   });
 
+  it("classifies serialized tailscale exposure errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "tailscale_exposure",
+      message: "tailscale serve failed",
+    });
+
+    expect(classified).toEqual({
+      phase: "tailscale_exposure",
+      message: "tailscale serve failed",
+    });
+  });
+
   it("returns null for non-preflight errors", () => {
     expect(classifyGatewayStartupPreflightError(new Error("boom"))).toBeNull();
   });
@@ -845,6 +883,16 @@ describe("formatGatewayStartupPreflightFailure", () => {
         message: "mdns bind failed",
       }),
     ).toBe("Gateway startup phase failed (discovery_startup): mdns bind failed");
+  });
+
+  it("formats classified tailscale exposure failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "tailscale_exposure",
+        message: "tailscale serve failed",
+      }),
+    ).toBe("Gateway startup phase failed (tailscale_exposure): tailscale serve failed");
   });
 
   it("returns null for non-classified failures", () => {
