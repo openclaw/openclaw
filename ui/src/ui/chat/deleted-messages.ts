@@ -1,3 +1,5 @@
+import { getSafeLocalStorage } from "../../local-storage.ts";
+
 const PREFIX = "openclaw:deleted:";
 
 export class DeletedMessages {
@@ -30,7 +32,7 @@ export class DeletedMessages {
 
   private load(): void {
     try {
-      const raw = localStorage.getItem(this.key);
+      const raw = getSafeLocalStorage()?.getItem(this.key);
       if (!raw) {
         return;
       }
@@ -44,6 +46,10 @@ export class DeletedMessages {
   }
 
   private save(): void {
-    localStorage.setItem(this.key, JSON.stringify([...this._keys]));
+    try {
+      getSafeLocalStorage()?.setItem(this.key, JSON.stringify([...this._keys]));
+    } catch {
+      // ignore
+    }
   }
 }

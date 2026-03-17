@@ -1,5 +1,5 @@
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import {
   createCliDeps,
@@ -15,7 +15,7 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
     setupIsolatedAgentTurnMocks();
   });
 
-  it("routes forum-topic and plain telegram targets through the correct delivery path", async () => {
+  it("routes forum-topic telegram targets through the correct delivery path", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = createCliDeps();
@@ -36,8 +36,13 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
         text: "forum message",
         messageThreadId: 42,
       });
+    });
+  });
 
-      vi.clearAllMocks();
+  it("routes plain telegram targets through the correct delivery path", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
       mockAgentPayloads([{ text: "plain message" }]);
 
       const plainRes = await runTelegramAnnounceTurn({

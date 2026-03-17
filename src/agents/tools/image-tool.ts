@@ -1,9 +1,10 @@
-import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getMediaUnderstandingProvider } from "../../media-understanding/providers/index.js";
+import { buildProviderRegistry } from "../../media-understanding/runner.js";
+import { loadWebMedia } from "../../plugin-sdk/web-media.js";
 import { resolveUserPath } from "../../utils.js";
-import { loadWebMedia } from "../../web/media.js";
-import { isMinimaxVlmModel, isMinimaxVlmProvider, minimaxUnderstandImage } from "../minimax-vlm.js";
+import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -14,17 +15,12 @@ import {
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
-  resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
-  resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
 import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
-  discoverAuthStorage,
-  discoverModels,
-  ensureOpenClawModelsJson,
   resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
@@ -168,27 +164,6 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
   return undefined;
 }
 
-function buildImageContext(
-  prompt: string,
-  images: Array<{ base64: string; mimeType: string }>,
-): Context {
-  const content: Array<
-    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
-  > = [{ type: "text", text: prompt }];
-  for (const img of images) {
-    content.push({ type: "image", data: img.base64, mimeType: img.mimeType });
-  }
-  return {
-    messages: [
-      {
-        role: "user",
-        content,
-        timestamp: Date.now(),
-      },
-    ],
-  };
-}
-
 type ImageSandboxConfig = {
   root: string;
   bridge: SandboxFsBridge;
@@ -200,7 +175,7 @@ async function runImagePrompt(params: {
   imageModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
-  images: Array<{ base64: string; mimeType: string }>;
+  images: Array<{ buffer: Buffer; mimeType: string }>;
 }): Promise<{
   text: string;
   provider: string;
@@ -208,50 +183,75 @@ async function runImagePrompt(params: {
   attempts: Array<{ provider: string; model: string; error: string }>;
 }> {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
-
-  await ensureOpenClawModelsJson(effectiveCfg, params.agentDir);
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const providerCfg: OpenClawConfig = effectiveCfg ?? {};
+  const providerRegistry = buildProviderRegistry(undefined, providerCfg);
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
-      if (!model.input?.includes("image")) {
-        throw new Error(`Model does not support images: ${provider}/${modelId}`);
+      const imageProvider = getMediaUnderstandingProvider(provider, providerRegistry);
+      if (!imageProvider) {
+        throw new Error(`No media-understanding provider registered for ${provider}`);
       }
-      const apiKey = await resolveModelRuntimeApiKey({
-        model,
-        cfg: effectiveCfg,
-        agentDir: params.agentDir,
-        authStorage,
-      });
-
-      // MiniMax VLM only supports a single image; use the first one.
-      if (isMinimaxVlmModel(model.provider, model.id)) {
-        const first = params.images[0];
-        const imageDataUrl = `data:${first.mimeType};base64,${first.base64}`;
-        const text = await minimaxUnderstandImage({
-          apiKey,
+      if (params.images.length > 1 && imageProvider.describeImages) {
+        const described = await imageProvider.describeImages({
+          images: params.images.map((image, index) => ({
+            buffer: image.buffer,
+            fileName: `image-${index + 1}`,
+            mime: image.mimeType,
+          })),
+          provider,
+          model: modelId,
           prompt: params.prompt,
-          imageDataUrl,
-          modelBaseUrl: model.baseUrl,
+          maxTokens: resolveImageToolMaxTokens(undefined),
+          timeoutMs: 30_000,
+          cfg: providerCfg,
+          agentDir: params.agentDir,
         });
-        return { text, provider: model.provider, model: model.id };
+        return { text: described.text, provider, model: described.model ?? modelId };
+      }
+      if (!imageProvider.describeImage) {
+        throw new Error(`Provider does not support image analysis: ${provider}`);
+      }
+      if (params.images.length === 1) {
+        const image = params.images[0];
+        const described = await imageProvider.describeImage({
+          buffer: image.buffer,
+          fileName: "image-1",
+          mime: image.mimeType,
+          provider,
+          model: modelId,
+          prompt: params.prompt,
+          maxTokens: resolveImageToolMaxTokens(undefined),
+          timeoutMs: 30_000,
+          cfg: providerCfg,
+          agentDir: params.agentDir,
+        });
+        return { text: described.text, provider, model: described.model ?? modelId };
       }
 
-      const context = buildImageContext(params.prompt, params.images);
-      const message = await complete(model, context, {
-        apiKey,
-        maxTokens: resolveImageToolMaxTokens(model.maxTokens),
-      });
-      const text = coerceImageAssistantText({
-        message,
-        provider: model.provider,
-        model: model.id,
-      });
-      return { text, provider: model.provider, model: model.id };
+      const parts: string[] = [];
+      for (const [index, image] of params.images.entries()) {
+        const described = await imageProvider.describeImage({
+          buffer: image.buffer,
+          fileName: `image-${index + 1}`,
+          mime: image.mimeType,
+          provider,
+          model: modelId,
+          prompt: `${params.prompt}\n\nDescribe image ${index + 1} of ${params.images.length}.`,
+          maxTokens: resolveImageToolMaxTokens(undefined),
+          timeoutMs: 30_000,
+          cfg: providerCfg,
+          agentDir: params.agentDir,
+        });
+        parts.push(`Image ${index + 1}:\n${described.text.trim()}`);
+      }
+      return {
+        text: parts.join("\n\n").trim(),
+        provider,
+        model: modelId,
+      };
     },
   });
 
@@ -383,7 +383,7 @@ export function createImageTool(options?: {
 
       // MARK: - Load and resolve each image
       const loadedImages: Array<{
-        base64: string;
+        buffer: Buffer;
         mimeType: string;
         resolvedImage: string;
         rewrittenFrom?: string;
@@ -469,9 +469,8 @@ export function createImageTool(options?: {
           ("contentType" in media && media.contentType) ||
           ("mimeType" in media && media.mimeType) ||
           "image/png";
-        const base64 = media.buffer.toString("base64");
         loadedImages.push({
-          base64,
+          buffer: media.buffer,
           mimeType,
           resolvedImage,
           ...(resolvedPathInfo.rewrittenFrom
@@ -487,7 +486,7 @@ export function createImageTool(options?: {
         imageModelConfig,
         modelOverride,
         prompt: promptRaw,
-        images: loadedImages.map((img) => ({ base64: img.base64, mimeType: img.mimeType })),
+        images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),
       });
 
       const imageDetails =
