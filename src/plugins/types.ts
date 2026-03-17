@@ -246,6 +246,18 @@ export type ProviderCatalogContext = {
     apiKey: string | undefined;
     discoveryApiKey?: string;
   };
+  resolveProviderAuth: (
+    providerId?: string,
+    options?: {
+      oauthMarker?: string;
+    },
+  ) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+    mode: "api_key" | "oauth" | "token" | "none";
+    source: "env" | "profile" | "none";
+    profileId?: string;
+  };
 };
 
 export type ProviderCatalogResult =
