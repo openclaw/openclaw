@@ -52,6 +52,12 @@ vi.mock("../agents/model-catalog.js", () => ({
       name: "Sonnet",
       contextWindow: 200000,
     },
+    {
+      provider: "deepseek",
+      id: "deepseek-chat",
+      name: "DeepSeek Chat",
+      contextWindow: 64000,
+    },
   ],
 }));
 
@@ -236,5 +242,46 @@ describe("session_status tool", () => {
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
+  });
+
+  it("infers provider for bare model names when switching away from the current provider", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.3-codex",
+      },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.3-codex" },
+            models: {
+              "openai-codex/gpt-5.3-codex": {},
+              "deepseek/deepseek-chat": {},
+            },
+          },
+        },
+      } as unknown as import("../config/config.js").OpenClawConfig,
+    }).find((candidate) => candidate.name === "session_status");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing session_status tool");
+    }
+
+    await tool.execute("call4", { model: "deepseek-chat" });
+    expect(updateSessionStoreMock).toHaveBeenCalled();
+    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
+      string,
+      Record<string, unknown>,
+    ];
+    const saved = savedStore.main as Record<string, unknown>;
+    expect(saved.providerOverride).toBe("deepseek");
+    expect(saved.modelOverride).toBe("deepseek-chat");
   });
 });

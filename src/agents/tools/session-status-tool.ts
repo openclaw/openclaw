@@ -26,9 +26,11 @@ import { resolveAgentDir } from "../agent-scope.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { resolveModelAuthLabel } from "../model-auth-label.js";
 import { loadModelCatalog } from "../model-catalog.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
@@ -150,9 +152,18 @@ async function resolveModelOverride(params: {
     defaultModel: currentModel,
   });
 
+  const rawModel = splitTrailingAuthProfile(raw).model?.trim() ?? "";
+  const inferredProvider =
+    rawModel && !rawModel.includes("/") && !aliasIndex.byAlias.has(rawModel.toLowerCase())
+      ? inferUniqueProviderFromConfiguredModels({
+          cfg: params.cfg,
+          model: rawModel,
+        })
+      : undefined;
+
   const resolved = resolveModelRefFromString({
     raw,
-    defaultProvider: currentProvider,
+    defaultProvider: inferredProvider ?? currentProvider,
     aliasIndex,
   });
   if (!resolved) {
