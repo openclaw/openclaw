@@ -986,16 +986,13 @@ export async function startGatewayServer(
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   if (!minimalTestGateway) {
-    if (deferredConfiguredChannelPluginIds.length > 0) {
-      ({ pluginRegistry } = loadGatewayPlugins({
-        cfg: cfgAtStart,
-        workspaceDir: defaultWorkspaceDir,
-        log,
-        coreGatewayHandlers,
-        baseMethods,
-        logDiagnostics: false,
-      }));
-    }
+    // NOTE: The second loadGatewayPlugins() call that previously lived here
+    // was removed because it re-ran register() for *every* plugin (not just
+    // the deferred channel ones), creating duplicate closures.  Plugins that
+    // bind ports (e.g. voice-call) hit EADDRINUSE on the second pass.
+    // Channel plugins that need full runtime are now loaded eagerly in the
+    // first pass above; the preferSetupRuntimeForChannelPlugins optimisation
+    // is kept for the initial load but the post-listen reload is dropped.
     ({ browserControl, pluginServices } = await startGatewaySidecars({
       cfg: cfgAtStart,
       pluginRegistry,
