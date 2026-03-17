@@ -22,13 +22,13 @@ import {
   normalizeTrustedSafeBinDirs,
 } from "../infra/exec-safe-bin-trust.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { resolveTelegramAccount } from "../plugin-sdk/account-resolution.js";
 import {
   fetchTelegramChatId,
   inspectTelegramAccount,
   isNumericTelegramUserId,
   listTelegramAccountIds,
   normalizeTelegramAllowFromEntry,
-  resolveTelegramAccount,
 } from "../plugin-sdk/telegram.js";
 import {
   formatChannelAccountsDefaultPath,
