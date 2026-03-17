@@ -5,91 +5,106 @@ import {
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "../../../extensions/telegram/src/thread-bindings.js";
 import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
+import { createLazyRuntimeMethod, createLazyRuntimeSurface } from "../../shared/lazy-runtime.js";
 import { createTelegramTypingLease } from "./runtime-telegram-typing.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
-let runtimeTelegramOpsPromise: Promise<typeof import("./runtime-telegram-ops.runtime.js")> | null =
-  null;
+type RuntimeTelegramOps = typeof import("./runtime-telegram-ops.runtime.js").runtimeTelegramOps;
 
-function loadRuntimeTelegramOps() {
-  runtimeTelegramOpsPromise ??= import("./runtime-telegram-ops.runtime.js");
-  return runtimeTelegramOpsPromise;
-}
+const loadRuntimeTelegramOps = createLazyRuntimeSurface(
+  () => import("./runtime-telegram-ops.runtime.js"),
+  ({ runtimeTelegramOps }) => runtimeTelegramOps,
+);
 
-const auditGroupMembershipLazy: PluginRuntimeChannel["telegram"]["auditGroupMembership"] = async (
-  ...args
-) => {
-  const { auditTelegramGroupMembership } = await loadRuntimeTelegramOps();
-  return auditTelegramGroupMembership(...args);
-};
+const auditGroupMembershipLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["auditGroupMembership"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["auditGroupMembership"]>
+>(loadRuntimeTelegramOps, (runtimeTelegramOps) => runtimeTelegramOps.auditGroupMembership);
 
-const probeTelegramLazy: PluginRuntimeChannel["telegram"]["probeTelegram"] = async (...args) => {
-  const { probeTelegram } = await loadRuntimeTelegramOps();
-  return probeTelegram(...args);
-};
+const probeTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["probeTelegram"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["probeTelegram"]>
+>(loadRuntimeTelegramOps, (runtimeTelegramOps) => runtimeTelegramOps.probeTelegram);
 
-const sendMessageTelegramLazy: PluginRuntimeChannel["telegram"]["sendMessageTelegram"] = async (
-  ...args
-) => {
-  const { sendMessageTelegram } = await loadRuntimeTelegramOps();
-  return sendMessageTelegram(...args);
-};
+const sendMessageTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["sendMessageTelegram"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["sendMessageTelegram"]>
+>(loadRuntimeTelegramOps, (runtimeTelegramOps) => runtimeTelegramOps.sendMessageTelegram);
 
-const sendPollTelegramLazy: PluginRuntimeChannel["telegram"]["sendPollTelegram"] = async (
-  ...args
-) => {
-  const { sendPollTelegram } = await loadRuntimeTelegramOps();
-  return sendPollTelegram(...args);
-};
+const sendPollTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["sendPollTelegram"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["sendPollTelegram"]>
+>(loadRuntimeTelegramOps, (runtimeTelegramOps) => runtimeTelegramOps.sendPollTelegram);
 
-const monitorTelegramProviderLazy: PluginRuntimeChannel["telegram"]["monitorTelegramProvider"] =
-  async (...args) => {
-    const { monitorTelegramProvider } = await loadRuntimeTelegramOps();
-    return monitorTelegramProvider(...args);
-  };
+const monitorTelegramProviderLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["monitorTelegramProvider"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["monitorTelegramProvider"]>
+>(loadRuntimeTelegramOps, (runtimeTelegramOps) => runtimeTelegramOps.monitorTelegramProvider);
 
-const sendTypingTelegramLazy: PluginRuntimeChannel["telegram"]["typing"]["pulse"] = async (
-  ...args
-) => {
-  const { sendTypingTelegram } = await loadRuntimeTelegramOps();
-  return sendTypingTelegram(...args);
-};
+const sendTypingTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["typing"]["pulse"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["typing"]["pulse"]>
+>(loadRuntimeTelegramOps, (runtimeTelegramOps) => runtimeTelegramOps.typing.pulse);
 
-const editMessageTelegramLazy: PluginRuntimeChannel["telegram"]["conversationActions"]["editMessage"] =
-  async (...args) => {
-    const { editMessageTelegram } = await loadRuntimeTelegramOps();
-    return editMessageTelegram(...args);
-  };
+const editMessageTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["conversationActions"]["editMessage"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["conversationActions"]["editMessage"]>
+>(
+  loadRuntimeTelegramOps,
+  (runtimeTelegramOps) => runtimeTelegramOps.conversationActions.editMessage,
+);
 
-const editMessageReplyMarkupTelegramLazy: PluginRuntimeChannel["telegram"]["conversationActions"]["editReplyMarkup"] =
-  async (...args) => {
-    const { editMessageReplyMarkupTelegram } = await loadRuntimeTelegramOps();
-    return editMessageReplyMarkupTelegram(...args);
-  };
+const editMessageReplyMarkupTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["conversationActions"]["editReplyMarkup"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["conversationActions"]["editReplyMarkup"]>
+>(
+  loadRuntimeTelegramOps,
+  (runtimeTelegramOps) => runtimeTelegramOps.conversationActions.editReplyMarkup,
+);
 
-const deleteMessageTelegramLazy: PluginRuntimeChannel["telegram"]["conversationActions"]["deleteMessage"] =
-  async (...args) => {
-    const { deleteMessageTelegram } = await loadRuntimeTelegramOps();
-    return deleteMessageTelegram(...args);
-  };
+const deleteMessageTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["conversationActions"]["deleteMessage"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["conversationActions"]["deleteMessage"]>
+>(
+  loadRuntimeTelegramOps,
+  (runtimeTelegramOps) => runtimeTelegramOps.conversationActions.deleteMessage,
+);
 
-const renameForumTopicTelegramLazy: PluginRuntimeChannel["telegram"]["conversationActions"]["renameTopic"] =
-  async (...args) => {
-    const { renameForumTopicTelegram } = await loadRuntimeTelegramOps();
-    return renameForumTopicTelegram(...args);
-  };
+const renameForumTopicTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["conversationActions"]["renameTopic"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["conversationActions"]["renameTopic"]>
+>(
+  loadRuntimeTelegramOps,
+  (runtimeTelegramOps) => runtimeTelegramOps.conversationActions.renameTopic,
+);
 
-const pinMessageTelegramLazy: PluginRuntimeChannel["telegram"]["conversationActions"]["pinMessage"] =
-  async (...args) => {
-    const { pinMessageTelegram } = await loadRuntimeTelegramOps();
-    return pinMessageTelegram(...args);
-  };
+const pinMessageTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["conversationActions"]["pinMessage"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["conversationActions"]["pinMessage"]>
+>(
+  loadRuntimeTelegramOps,
+  (runtimeTelegramOps) => runtimeTelegramOps.conversationActions.pinMessage,
+);
 
-const unpinMessageTelegramLazy: PluginRuntimeChannel["telegram"]["conversationActions"]["unpinMessage"] =
-  async (...args) => {
-    const { unpinMessageTelegram } = await loadRuntimeTelegramOps();
-    return unpinMessageTelegram(...args);
-  };
+const unpinMessageTelegramLazy = createLazyRuntimeMethod<
+  RuntimeTelegramOps,
+  Parameters<PluginRuntimeChannel["telegram"]["conversationActions"]["unpinMessage"]>,
+  ReturnType<PluginRuntimeChannel["telegram"]["conversationActions"]["unpinMessage"]>
+>(
+  loadRuntimeTelegramOps,
+  (runtimeTelegramOps) => runtimeTelegramOps.conversationActions.unpinMessage,
+);
 
 export function createRuntimeTelegram(): PluginRuntimeChannel["telegram"] {
   return {

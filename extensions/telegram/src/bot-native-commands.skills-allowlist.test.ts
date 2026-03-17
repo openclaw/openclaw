@@ -10,18 +10,10 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
-
-const pluginCommandMocks = vi.hoisted(() => ({
-  getPluginCommandSpecs: vi.fn(() => []),
-  matchPluginCommand: vi.fn(() => null),
-  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
-}));
-
-vi.mock("../../../src/plugins/commands.js", () => ({
-  getPluginCommandSpecs: pluginCommandMocks.getPluginCommandSpecs,
-  matchPluginCommand: pluginCommandMocks.matchPluginCommand,
-  executePluginCommand: pluginCommandMocks.executePluginCommand,
-}));
+import {
+  pluginCommandMocks,
+  resetPluginCommandMocks,
+} from "./bot-native-commands.plugin-command-test-support.js";
 
 const tempDirs: string[] = [];
 
@@ -34,9 +26,7 @@ async function makeWorkspace(prefix: string) {
 describe("registerTelegramNativeCommands skill allowlist integration", () => {
   afterEach(async () => {
     resetNativeCommandMenuMocks();
-    pluginCommandMocks.getPluginCommandSpecs.mockClear().mockReturnValue([]);
-    pluginCommandMocks.matchPluginCommand.mockClear().mockReturnValue(null);
-    pluginCommandMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
+    resetPluginCommandMocks();
     await Promise.all(
       tempDirs
         .splice(0, tempDirs.length)

@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { IMessageAccountConfig } from "../../../src/config/types.js";
 import {
   createAccountListHelpers,
   normalizeAccountId,
   resolveAccountEntry,
-} from "../../../src/plugin-sdk-internal/accounts.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
+import type { IMessageAccountConfig } from "openclaw/plugin-sdk/imessage";
 
 export type ResolvedIMessageAccount = {
   accountId: string;

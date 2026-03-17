@@ -113,11 +113,13 @@ That means:
 Examples:
 
 - the bundled `openai` plugin owns OpenAI model-provider behavior and OpenAI
-  speech + media-understanding behavior
+  speech + media-understanding + image-generation behavior
 - the bundled `elevenlabs` plugin owns ElevenLabs speech behavior
 - the bundled `microsoft` plugin owns Microsoft speech behavior
-- the bundled `google`, `minimax`, `mistral`, `moonshot`, and `zai` plugins own
-  their media-understanding backends
+- the bundled `google` plugin owns Google model-provider behavior plus Google
+  media-understanding + image-generation + web-search behavior
+- the bundled `minimax`, `mistral`, `moonshot`, and `zai` plugins own their
+  media-understanding backends
 - the `voice-call` plugin is a feature plugin: it owns call transport, tools,
   CLI, routes, and runtime, but it consumes core TTS/STT capability instead of
   inventing a second speech stack
@@ -256,6 +258,9 @@ the vendor surface; core owns the capability contract and fallback behavior.
 If OpenClaw adds a new domain later, such as video generation, use the same
 sequence again: define the core capability first, then let vendor plugins
 register implementations against it.
+
+Need a concrete rollout checklist? See
+[Capability Cookbook](/tools/capability-cookbook).
 
 ## Compatible bundles
 
@@ -920,8 +925,16 @@ Notes:
 Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
 authoring plugins:
 
-- `openclaw/plugin-sdk/core` for generic plugin APIs, provider auth types, and shared helpers such as routing/session utilities and logger-backed runtimes.
-- `openclaw/plugin-sdk/compat` for bundled/internal plugin code that needs broader shared runtime helpers than `core`.
+- `openclaw/plugin-sdk/core` for the smallest generic plugin-facing contract.
+- Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
+  `openclaw/plugin-sdk/channel-config-schema`,
+  `openclaw/plugin-sdk/channel-policy`,
+  `openclaw/plugin-sdk/reply-history`,
+  `openclaw/plugin-sdk/routing`,
+  `openclaw/plugin-sdk/runtime-store`, and
+  `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
+- `openclaw/plugin-sdk/compat` remains as a legacy migration surface for older
+  external plugins. Bundled plugins should not use it.
 - `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.
@@ -982,8 +995,8 @@ Compatibility note:
 
 - `openclaw/plugin-sdk` remains supported for existing external plugins.
 - New and migrated bundled plugins should use channel or extension-specific
-  subpaths; use `core` for generic surfaces and `compat` only when broader
-  shared helpers are required.
+  subpaths; use `core` plus explicit domain subpaths for generic surfaces, and
+  treat `compat` as migration-only.
 
 ## Read-only channel inspection
 

@@ -3,6 +3,7 @@ import {
   createActionGate,
   createWhatsAppOutboundBase,
   DEFAULT_ACCOUNT_ID,
+  formatWhatsAppConfigAllowFromEntries,
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
   readStringParam,
@@ -25,6 +26,7 @@ import {
   WHATSAPP_CHANNEL,
 } from "./shared.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
+
 function normalizeWhatsAppPayloadText(text: string | undefined): string {
   return (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, "");
 }
@@ -164,7 +166,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   auth: {
     login: async ({ cfg, accountId, runtime, verbose }) => {
-      const resolvedAccountId = accountId?.trim() || whatsappPlugin.config.defaultAccountId(cfg);
+      const resolvedAccountId =
+        accountId?.trim() || whatsappPlugin.config.defaultAccountId?.(cfg) || DEFAULT_ACCOUNT_ID;
       await (
         await loadWhatsAppChannelRuntime()
       ).loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
