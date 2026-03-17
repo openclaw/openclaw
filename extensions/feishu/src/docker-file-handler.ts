@@ -361,11 +361,22 @@ export async function handleDockerFile(
         
         const shouldCleanup = config.cleanupTempFiles !== false;
         
+        // Create a read stream from the temp file
+        const fileData = fs.createReadStream(tempInfo.tempPath);
+        
+        // Bind cleanup to stream close event to avoid race condition
+        if (shouldCleanup) {
+          fileData.on('close', async () => {
+            await cleanupTempFile(tempInfo);
+          });
+        }
+        
         return {
-          fileData: fs.createReadStream(tempInfo.tempPath),
-          cleanup: shouldCleanup 
-            ? async () => await cleanupTempFile(tempInfo)
-            : async () => {},
+          fileData,
+          cleanup: async () => {
+            // Cleanup is now handled by stream close event
+            // This function is kept for backward compatibility
+          },
         };
       } catch (copyError) {
         // Copy failed, fallback to original path

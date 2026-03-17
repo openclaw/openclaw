@@ -9,6 +9,7 @@ import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+import { handleDockerFile, type DockerFileConfig } from "./docker-file-handler";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 
@@ -321,33 +322,52 @@ export async function uploadFileFeishu(params: {
   fileType: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
   duration?: number; // Required for audio/video files, in milliseconds
   accountId?: string;
+  dockerFileConfig?: DockerFileConfig;
 }): Promise<UploadFileResult> {
-  const { cfg, file, fileName, fileType, duration, accountId } = params;
+  const { cfg, file, fileName, fileType, duration, accountId, dockerFileConfig } = params;
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
-  // SDK accepts Buffer directly or fs.ReadStream for file paths
-  // Using Readable.from(buffer) causes issues with form-data library
-  // See: https://github.com/larksuite/node-sdk/issues/121
-  const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
+  // Handle Docker file accessibility using handleDockerFile
+  let fileData: Buffer | fs.ReadStream;
+  let cleanupFn: (() => Promise<void>) | null = null;
+
+  if (typeof file === "string") {
+    const handleResult = await handleDockerFile(file, dockerFileConfig || {});
+    fileData = handleResult.fileData;
+    // Note: cleanup is now handled by stream close event in handleDockerFile
+    // We keep the reference for backward compatibility but it's a no-op
+    cleanupFn = handleResult.cleanup;
+  } else {
+    // Buffer provided, use directly
+    fileData = file;
+  }
 
   const safeFileName = sanitizeFileNameForUpload(fileName);
 
-  const response = await client.im.file.create({
-    data: {
-      file_type: fileType,
-      file_name: safeFileName,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
-      file: fileData as any,
-      ...(duration !== undefined && { duration }),
-    },
-  });
+  try {
+    const response = await client.im.file.create({
+      data: {
+        file_type: fileType,
+        file_name: safeFileName,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
+        file: fileData as any,
+        ...(duration !== undefined && { duration }),
+      },
+    });
 
-  return {
-    fileKey: extractFeishuUploadKey(response, {
-      key: "file_key",
-      errorPrefix: "Feishu file upload failed",
-    }),
-  };
+    return {
+      fileKey: extractFeishuUploadKey(response, {
+        key: "file_key",
+        errorPrefix: "Feishu file upload failed",
+      }),
+    };
+  } finally {
+    // Note: cleanup is handled by stream close event in handleDockerFile
+    // This call is for backward compatibility and is effectively a no-op
+    if (cleanupFn) {
+      await cleanupFn();
+    }
+  }
 }
 
 /**
