@@ -42,14 +42,17 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
 
-  const disableDeviceIdentity = (() => {
-    try {
-      const hostname = new URL(opts.url).hostname;
-      // Local authenticated probes should stay device-bound so read/detail RPCs
-      // are not scope-limited by the shared-auth scope stripping hardening.
-      return isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password);
-    } catch {
+  const attachDeviceIdentity = (() => {
+    // Unauthenticated probes remain identity-free (legacy behavior and lighter handshake).
+    if (!(opts.auth?.token || opts.auth?.password)) {
       return false;
+    }
+    try {
+      // Authenticated probes stay device-bound (local + remote) so scope diagnostics stay accurate.
+      void isLoopbackHost(new URL(opts.url).hostname);
+      return true;
+    } catch {
+      return true;
     }
   })();
 
@@ -76,7 +79,7 @@ export async function probeGateway(opts: {
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
-      deviceIdentity: disableDeviceIdentity ? null : undefined,
+      deviceIdentity: attachDeviceIdentity ? undefined : null,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },

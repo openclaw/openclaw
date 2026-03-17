@@ -57,6 +57,10 @@ Do not edit these files under this plan:
 - [x] Split config read and validate from mutation APIs
 - [x] Prove `loadConfig()` does not write files
 - [x] Add deterministic tests for read-only config paths
+- [x] Disable bundled plugin permission repair writes during config validation read paths
+- [x] Route daemon status config loading through explicit read-only config loads
+- [x] Isolate daemon status config reads from direct `process.env` object mutation paths
+- [x] Hydrate dotenv into read-only env snapshots instead of mutating `process.env` in top-level read helpers
 
 ### Stage 2B: global state registry hardening
 
@@ -64,6 +68,8 @@ Do not edit these files under this plan:
 - [x] Introduce `RuntimeStateContainer` in startup path
 - [x] Keep compatibility adapters for existing globals
 - [x] Add tests for container lifecycle and order
+- [x] Move fallback gateway context ownership into `RuntimeStateContainer` and clear it during shutdown
+- [x] Clear remote skills cache/registry state and health broadcast callback during gateway shutdown
 
 ### Stage 3A: gateway startup decomposition
 
@@ -76,6 +82,8 @@ Do not edit these files under this plan:
 - [x] Extract runtime config reloader wiring seam
 - [x] Pass typed context phase to phase (preflight, secrets precheck, auth bootstrap, runtime policy)
 - [x] Add phase failure classification tests and shared reporting (CLI startup and restart loop)
+- [x] Extract explicit runtime-config and control-ui-root startup phase helpers with focused tests
+- [x] Classify runtime-config and control-ui-root phase failures through shared startup phase formatter
 
 ### Stage 3B: onboarding flow consolidation
 

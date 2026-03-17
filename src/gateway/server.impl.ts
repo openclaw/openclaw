@@ -25,6 +25,7 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import {
+  clearSkillsRemoteState,
   primeRemoteSkillsCache,
   refreshRemoteBinsForConnectedNodes,
   setSkillsRemoteRegistry,
@@ -79,7 +80,7 @@ import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import { loadGatewayPlugins, setFallbackGatewayContext } from "./server-plugins.js";
+import { loadGatewayPlugins } from "./server-plugins.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -88,6 +89,8 @@ import { logGatewayStartup } from "./server-startup-log.js";
 import {
   runGatewayStartupAuthBootstrap,
   runGatewayStartupConfigPreflight,
+  runGatewayStartupControlUiRootPhase,
+  runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
 } from "./server-startup-preflight.js";
@@ -102,6 +105,7 @@ import {
   getPresenceVersion,
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
+  setBroadcastHealthUpdate,
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
@@ -395,19 +399,23 @@ export async function startGatewayServer(
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
   const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
   let pluginServices: PluginServicesHandle | null = null;
-  const runtimeConfig = await resolveGatewayRuntimeConfig({
-    cfg: cfgAtStart,
-    port,
-    bind: opts.bind,
-    host: opts.host,
-    controlUiEnabled: opts.controlUiEnabled,
-    openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
-    openResponsesEnabled: opts.openResponsesEnabled,
-    auth: opts.auth,
-    tailscale: opts.tailscale,
+  const startupContextWithRuntimeConfig = await runGatewayStartupRuntimeConfigPhase({
+    context: startupContext,
+    resolveRuntimeConfig: async (config) =>
+      await resolveGatewayRuntimeConfig({
+        cfg: config,
+        port,
+        bind: opts.bind,
+        host: opts.host,
+        controlUiEnabled: opts.controlUiEnabled,
+        openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+        openResponsesEnabled: opts.openResponsesEnabled,
+        auth: opts.auth,
+        tailscale: opts.tailscale,
+      }),
   });
-  // Persist runtime-derived startup data so later phases/tests can assert phase outputs explicitly.
-  startupContext = { ...startupContext, runtimeConfig };
+  startupContext = startupContextWithRuntimeConfig;
+  const runtimeConfig = startupContextWithRuntimeConfig.runtimeConfig;
   const {
     bindHost,
     controlUiEnabled,
@@ -431,19 +439,23 @@ export async function startGatewayServer(
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
 
-  const controlUiRootState = await resolveGatewayControlUiRootState({
-    controlUiEnabled,
-    controlUiRootOverride,
-    gatewayRuntime,
-    log,
-    runtimePathContext: {
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    },
+  const startupContextWithControlUiRoot = await runGatewayStartupControlUiRootPhase({
+    context: startupContextWithRuntimeConfig,
+    resolveControlUiRootState: async () =>
+      await resolveGatewayControlUiRootState({
+        controlUiEnabled,
+        controlUiRootOverride,
+        gatewayRuntime,
+        log,
+        runtimePathContext: {
+          moduleUrl: import.meta.url,
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+        },
+      }),
   });
-  // Keep resolved control-ui startup state in the shared context for deterministic phase tracking.
-  startupContext = { ...startupContext, controlUiRootState };
+  startupContext = startupContextWithControlUiRoot;
+  const controlUiRootState = startupContextWithControlUiRoot.controlUiRootState;
 
   const wizardRunner = opts.wizardRunner ?? runSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
@@ -760,7 +772,7 @@ export async function startGatewayServer(
   // Store the gateway context as a fallback for plugin subagent dispatch
   // in non-WS paths (Telegram polling, WhatsApp, etc.) where no per-request
   // scope is set via AsyncLocalStorage.
-  setFallbackGatewayContext(gatewayRequestContext);
+  runtimeState.fallbackGatewayContext.set(gatewayRequestContext);
 
   attachGatewayWsHandlers({
     wss,
@@ -950,7 +962,10 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
+      setBroadcastHealthUpdate(null);
+      clearSkillsRemoteState();
       runtimeState.secretsRuntime.clear();
+      runtimeState.fallbackGatewayContext.clear();
       await close(opts);
     },
   };

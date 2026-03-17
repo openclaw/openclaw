@@ -5,8 +5,10 @@ import {
   createGatewayStartupContext,
   formatGatewayStartupPreflightFailure,
   runGatewayStartupAuthBootstrap,
+  runGatewayStartupControlUiRootPhase,
   GatewayStartupPreflightError,
   runGatewayStartupConfigPreflight,
+  runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
 } from "./server-startup-preflight.js";
@@ -327,6 +329,133 @@ describe("runGatewayStartupRuntimePolicyPhase", () => {
   });
 });
 
+describe("runGatewayStartupRuntimeConfigPhase", () => {
+  it("stores resolved runtime config and preserves prior context fields", async () => {
+    const baseSnapshot = createSnapshot({ config: { gateway: { bind: "loopback" } } });
+    const baseContext = {
+      ...createGatewayStartupContext(baseSnapshot),
+      secretsPrechecked: true,
+      diagnosticsEnabled: true,
+    };
+    const runtimeConfig = {
+      bindHost: "127.0.0.1",
+      controlUiEnabled: true,
+      openAiChatCompletionsEnabled: false,
+      openAiChatCompletionsConfig: {},
+      openResponsesEnabled: false,
+      openResponsesConfig: {},
+      strictTransportSecurityHeader: undefined,
+      controlUiBasePath: "/control",
+      controlUiRoot: undefined,
+      resolvedAuth: { mode: "none" },
+      tailscaleConfig: undefined,
+      tailscaleMode: "off",
+      hooksConfig: {},
+      canvasHostEnabled: false,
+    };
+
+    const result = await runGatewayStartupRuntimeConfigPhase({
+      context: baseContext,
+      resolveRuntimeConfig: vi.fn().mockResolvedValue(runtimeConfig),
+    });
+
+    expect(result.runtimeConfig).toBe(runtimeConfig);
+    expect(result.config).toBe(baseContext.config);
+    expect(result.secretsPrechecked).toBe(true);
+    expect(result.diagnosticsEnabled).toBe(true);
+  });
+
+  it("propagates runtime config resolution failures", async () => {
+    const failure = new Error("runtime config failed");
+
+    await expect(
+      runGatewayStartupRuntimeConfigPhase({
+        context: createGatewayStartupContext(createSnapshot()),
+        resolveRuntimeConfig: vi.fn().mockRejectedValue(failure),
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "runtime_config_resolution",
+        message: "runtime config failed",
+      }),
+    );
+  });
+});
+
+describe("runGatewayStartupControlUiRootPhase", () => {
+  it("stores resolved control-ui root state and preserves runtime config context", async () => {
+    const baseSnapshot = createSnapshot();
+    const runtimeConfig = {
+      bindHost: "127.0.0.1",
+      controlUiEnabled: true,
+      openAiChatCompletionsEnabled: false,
+      openAiChatCompletionsConfig: {},
+      openResponsesEnabled: false,
+      openResponsesConfig: {},
+      strictTransportSecurityHeader: undefined,
+      controlUiBasePath: "/control",
+      controlUiRoot: undefined,
+      resolvedAuth: { mode: "none" },
+      tailscaleConfig: undefined,
+      tailscaleMode: "off",
+      hooksConfig: {},
+      canvasHostEnabled: false,
+    };
+    const context = {
+      ...createGatewayStartupContext(baseSnapshot),
+      runtimeConfig,
+    };
+    const controlUiRootState = {
+      source: "absolute-path",
+      absolutePath: "/tmp/control-ui",
+      diagnostics: [],
+    };
+
+    const result = await runGatewayStartupControlUiRootPhase({
+      context,
+      resolveControlUiRootState: vi.fn().mockResolvedValue(controlUiRootState),
+    });
+
+    expect(result.runtimeConfig).toBe(runtimeConfig);
+    expect(result.controlUiRootState).toBe(controlUiRootState);
+  });
+
+  it("propagates control-ui root resolution failures", async () => {
+    const runtimeConfig = {
+      bindHost: "127.0.0.1",
+      controlUiEnabled: true,
+      openAiChatCompletionsEnabled: false,
+      openAiChatCompletionsConfig: {},
+      openResponsesEnabled: false,
+      openResponsesConfig: {},
+      strictTransportSecurityHeader: undefined,
+      controlUiBasePath: "/control",
+      controlUiRoot: undefined,
+      resolvedAuth: { mode: "none" },
+      tailscaleConfig: undefined,
+      tailscaleMode: "off",
+      hooksConfig: {},
+      canvasHostEnabled: false,
+    };
+    const failure = new Error("control ui root failed");
+
+    await expect(
+      runGatewayStartupControlUiRootPhase({
+        context: {
+          ...createGatewayStartupContext(createSnapshot()),
+          runtimeConfig,
+        },
+        resolveControlUiRootState: vi.fn().mockRejectedValue(failure),
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "control_ui_root_resolution",
+        message: "control ui root failed",
+      }),
+    );
+  });
+});
+
 describe("classifyGatewayStartupPreflightError", () => {
   it("classifies concrete startup preflight errors", () => {
     const classified = classifyGatewayStartupPreflightError(
@@ -352,6 +481,19 @@ describe("classifyGatewayStartupPreflightError", () => {
     });
   });
 
+  it("classifies serialized runtime startup phase errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "runtime_config_resolution",
+      message: "runtime config failed",
+    });
+
+    expect(classified).toEqual({
+      phase: "runtime_config_resolution",
+      message: "runtime config failed",
+    });
+  });
+
   it("returns null for non-preflight errors", () => {
     expect(classifyGatewayStartupPreflightError(new Error("boom"))).toBeNull();
   });
@@ -366,6 +508,16 @@ describe("formatGatewayStartupPreflightFailure", () => {
         message: "Invalid config",
       }),
     ).toBe("Gateway startup phase failed (config_validation): Invalid config");
+  });
+
+  it("formats classified runtime startup phase failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "control_ui_root_resolution",
+        message: "control ui root failed",
+      }),
+    ).toBe("Gateway startup phase failed (control_ui_root_resolution): control ui root failed");
   });
 
   it("returns null for non-classified failures", () => {
