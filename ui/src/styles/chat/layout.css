@@ -363,6 +363,12 @@
   box-sizing: border-box;
 }
 
+.agent-chat__pinned-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 .agent-chat__input {
   position: relative;
   display: flex;

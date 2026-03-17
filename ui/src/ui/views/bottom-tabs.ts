@@ -16,10 +16,12 @@ const BOTTOM_TABS: Array<{ id: Tab; label: string; icon: keyof typeof icons }> =
 
 export function renderBottomTabs(props: BottomTabsProps) {
   return html`
-    <nav class="bottom-tabs">
+    <nav class="bottom-tabs" role="tablist" aria-label="Navigation">
       ${BOTTOM_TABS.map(
         (tab) => html`
           <button
+            role="tab"
+            aria-selected=${props.activeTab === tab.id}
             class="bottom-tab ${props.activeTab === tab.id ? "bottom-tab--active" : ""}"
             @click=${() => props.onTabChange(tab.id)}
           >

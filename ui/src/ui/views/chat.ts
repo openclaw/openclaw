@@ -618,6 +618,7 @@ function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof not
       <input
         type="text"
         placeholder="Search messages..."
+        aria-label="Search messages"
         .value=${vs.searchQuery}
         @input=${(e: Event) => {
           vs.searchQuery = (e.target as HTMLInputElement).value;
@@ -656,7 +657,7 @@ function renderPinnedSection(
   }
   return html`
     <div class="agent-chat__pinned">
-      <button class="agent-chat__pinned-toggle" @click=${() => {
+      <button class="agent-chat__pinned-toggle" aria-expanded=${vs.pinnedExpanded} aria-label="Pinned messages" @click=${() => {
         vs.pinnedExpanded = !vs.pinnedExpanded;
         requestUpdate();
       }}>
@@ -667,22 +668,22 @@ function renderPinnedSection(
       ${
         vs.pinnedExpanded
           ? html`
-            <div class="agent-chat__pinned-list">
+            <ul class="agent-chat__pinned-list">
               ${entries.map(
                 ({ index, text, role }) => html`
-                <div class="agent-chat__pinned-item">
+                <li class="agent-chat__pinned-item">
                   <span class="agent-chat__pinned-role">${role === "user" ? "You" : "Assistant"}</span>
                   <span class="agent-chat__pinned-text">${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span>
                   <button class="btn-ghost" @click=${() => {
                     pinned.unpin(index);
                     requestUpdate();
-                  }} title="Unpin">
+                  }} title="Unpin" aria-label="Unpin message">
                     ${icons.x}
                   </button>
-                </div>
+                </li>
               `,
               )}
-            </div>
+            </ul>
           `
           : nothing
       }
@@ -701,12 +702,14 @@ function renderSlashMenu(
   // Arg-picker mode: show options for the selected command
   if (vs.slashMenuMode === "args" && vs.slashMenuCommand && vs.slashMenuArgItems.length > 0) {
     return html`
-      <div class="slash-menu">
+      <div class="slash-menu" role="listbox" aria-label="Slash commands">
         <div class="slash-menu-group">
           <div class="slash-menu-group__label">/${vs.slashMenuCommand.name} ${vs.slashMenuCommand.description}</div>
           ${vs.slashMenuArgItems.map(
             (arg, i) => html`
               <div
+                role="option"
+                aria-selected=${i === vs.slashMenuIndex}
                 class="slash-menu-item ${i === vs.slashMenuIndex ? "slash-menu-item--active" : ""}"
                 @click=${() => selectSlashArg(arg, props, requestUpdate, true)}
                 @mouseenter=${() => {
@@ -721,7 +724,7 @@ function renderSlashMenu(
             `,
           )}
         </div>
-        <div class="slash-menu-footer">
+        <div class="slash-menu-footer" aria-hidden="true">
           <kbd>↑↓</kbd> navigate
           <kbd>Tab</kbd> fill
           <kbd>Enter</kbd> run
@@ -759,6 +762,8 @@ function renderSlashMenu(
         ${entries.map(
           ({ cmd, globalIdx }) => html`
             <div
+              role="option"
+              aria-selected=${globalIdx === vs.slashMenuIndex}
               class="slash-menu-item ${globalIdx === vs.slashMenuIndex ? "slash-menu-item--active" : ""}"
               @click=${() => selectSlashCommand(cmd, props, requestUpdate)}
               @mouseenter=${() => {
@@ -787,9 +792,9 @@ function renderSlashMenu(
   }
 
   return html`
-    <div class="slash-menu">
+    <div class="slash-menu" role="listbox" aria-label="Slash commands">
       ${sections}
-      <div class="slash-menu-footer">
+      <div class="slash-menu-footer" aria-hidden="true">
         <kbd>↑↓</kbd> navigate
         <kbd>Tab</kbd> fill
         <kbd>Enter</kbd> select
@@ -1198,6 +1203,7 @@ export function renderChat(props: ChatProps) {
 
         <textarea
           ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+          aria-label="Message input"
           .value=${props.draft}
           dir=${detectTextDirection(props.draft)}
           ?disabled=${!props.connected}
@@ -1216,6 +1222,7 @@ export function renderChat(props: ChatProps) {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
               title="Attach file"
+              aria-label="Attach file"
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
@@ -1267,6 +1274,7 @@ export function renderChat(props: ChatProps) {
                       }
                     }}
                     title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                    aria-label=${vs.sttRecording ? "Stop recording" : "Voice input"}
                     ?disabled=${!props.connected}
                   >
                     ${vs.sttRecording ? icons.micOff : icons.mic}
@@ -1294,14 +1302,14 @@ export function renderChat(props: ChatProps) {
                     </button>
                   `
             }
-            <button class="btn-ghost" @click=${() => exportMarkdown(props)} title="Export" ?disabled=${props.messages.length === 0}>
+            <button class="btn-ghost" @click=${() => exportMarkdown(props)} title="Export" aria-label="Export chat" ?disabled=${props.messages.length === 0}>
               ${icons.download}
             </button>
 
             ${
               canAbort && (isBusy || props.sending)
                 ? html`
-                  <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop">
+                  <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop" aria-label="Stop generation">
                     ${icons.stop}
                   </button>
                 `
@@ -1316,6 +1324,7 @@ export function renderChat(props: ChatProps) {
                     }}
                     ?disabled=${!props.connected || props.sending}
                     title=${isBusy ? "Queue" : "Send"}
+                    aria-label=${isBusy ? "Queue message" : "Send message"}
                   >
                     ${icons.send}
                   </button>
