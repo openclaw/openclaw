@@ -22,10 +22,13 @@ jq -e '
   .channels.slack.channels["#platform-monitoring"].incidentRootOnly == true and
   .channels.slack.channels["#platform-monitoring"].incidentIgnoreResolved == true and
   .channels.slack.channels["#platform-monitoring"].incidentDedupeWindowSeconds == 21600 and
+  .channels.slack.channels["#platform-monitoring"].incidentBotAllowPrefix == "New incident" and
   .channels.slack.channels["#public-api-monitoring"].incidentRootOnly == true and
   .channels.slack.channels["#public-api-monitoring"].incidentIgnoreResolved == true and
   .channels.slack.channels["#public-api-monitoring"].incidentDedupeWindowSeconds == 21600 and
+  .channels.slack.channels["#public-api-monitoring"].incidentBotAllowPrefix == "New incident" and
   .channels.slack.channels["#staging-infra-monitoring"].incidentRootOnly == true and
   .channels.slack.channels["#staging-infra-monitoring"].incidentIgnoreResolved == true and
-  .channels.slack.channels["#staging-infra-monitoring"].incidentDedupeWindowSeconds == 21600
+  .channels.slack.channels["#staging-infra-monitoring"].incidentDedupeWindowSeconds == 21600 and
+  .channels.slack.channels["#staging-infra-monitoring"].incidentBotAllowPrefix == "New incident"
 ' "$CONFIG" >/dev/null

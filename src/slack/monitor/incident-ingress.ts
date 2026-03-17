@@ -96,6 +96,16 @@ export function resolveSlackIncidentIngressDrop(params: {
     return { shouldDrop: true, reason: "incident-resolved-update" };
   }
 
+  // When a bot-allow prefix is configured, drop bot messages whose body does
+  // not start with the required prefix (e.g. "New incident"). Human messages
+  // are unaffected so operators can still interact freely.
+  if (channelConfig.incidentBotAllowPrefix && isBotMessage) {
+    const trimmed = params.rawBody.trimStart();
+    if (!trimmed.startsWith(channelConfig.incidentBotAllowPrefix)) {
+      return { shouldDrop: true, reason: "incident-bot-prefix-mismatch" };
+    }
+  }
+
   // Allow non-root incident follow-ups only when the channel enables them and
   // the per-message security gate already approved this specific human reply.
   if (channelConfig.incidentRootOnly && !isRootMessage && !canBypassRootOnly) {
