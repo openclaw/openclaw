@@ -148,6 +148,8 @@ describe("exec approvals store helpers", () => {
       expect.objectContaining({
         pattern: "/usr/bin/rg",
         lastUsedAt: 123_456,
+        createdAt: 123_456,
+        createdFrom: "allow-always",
       }),
     ]);
     expect(readApprovalsFile(dir).agents?.worker?.allowlist?.[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);

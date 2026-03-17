@@ -489,15 +489,15 @@ async function executeSystemRunPhase(
 
   if (phase.policy.approvalDecision === "allow-always" && phase.security === "allowlist") {
     if (phase.policy.analysisOk) {
-      const patterns = resolveAllowAlwaysPatterns({
+      const entries = resolveAllowAlwaysPatterns({
         segments: phase.segments,
         cwd: phase.cwd,
         env: phase.env,
         platform: process.platform,
       });
-      for (const pattern of patterns) {
-        if (pattern) {
-          addAllowlistEntry(phase.approvals.file, phase.agentId, pattern);
+      for (const entry of entries) {
+        if (entry.pattern) {
+          addAllowlistEntry(phase.approvals.file, phase.agentId, entry.pattern, entry.args);
         }
       }
     }

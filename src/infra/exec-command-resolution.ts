@@ -143,6 +143,7 @@ export function resolveAllowlistCandidatePath(
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: CommandResolution | null,
+  effectiveArgv?: string[],
 ): ExecAllowlistEntry | null {
   if (!entries.length) {
     return null;
@@ -168,6 +169,16 @@ export function matchAllowlist(
       continue;
     }
     if (matchesExecAllowlistPattern(pattern, resolvedPath)) {
+      // For exact-match entries, also require args to match element-by-element.
+      if (entry.matchMode === "exact" && entry.args != null) {
+        const commandArgs = effectiveArgv ? effectiveArgv.slice(1) : [];
+        if (
+          entry.args.length !== commandArgs.length ||
+          !entry.args.every((a, i) => a === commandArgs[i])
+        ) {
+          continue;
+        }
+      }
       return entry;
     }
   }

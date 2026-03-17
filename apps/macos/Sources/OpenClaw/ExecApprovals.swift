@@ -118,48 +118,72 @@ struct ExecAllowlistRejectedEntry: Equatable {
 struct ExecAllowlistEntry: Codable, Hashable, Identifiable {
     var id: UUID
     var pattern: String
+    var args: [String]?
+    var matchMode: String?
     var lastUsedAt: Double?
     var lastUsedCommand: String?
     var lastResolvedPath: String?
+    var createdAt: Double?
+    var createdFrom: String?
 
     init(
         id: UUID = UUID(),
         pattern: String,
+        args: [String]? = nil,
+        matchMode: String? = nil,
         lastUsedAt: Double? = nil,
         lastUsedCommand: String? = nil,
-        lastResolvedPath: String? = nil)
+        lastResolvedPath: String? = nil,
+        createdAt: Double? = nil,
+        createdFrom: String? = nil)
     {
         self.id = id
         self.pattern = pattern
+        self.args = args
+        self.matchMode = matchMode
         self.lastUsedAt = lastUsedAt
         self.lastUsedCommand = lastUsedCommand
         self.lastResolvedPath = lastResolvedPath
+        self.createdAt = createdAt
+        self.createdFrom = createdFrom
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case pattern
+        case args
+        case matchMode
         case lastUsedAt
         case lastUsedCommand
         case lastResolvedPath
+        case createdAt
+        case createdFrom
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         self.pattern = try container.decode(String.self, forKey: .pattern)
+        self.args = try container.decodeIfPresent([String].self, forKey: .args)
+        self.matchMode = try container.decodeIfPresent(String.self, forKey: .matchMode)
         self.lastUsedAt = try container.decodeIfPresent(Double.self, forKey: .lastUsedAt)
         self.lastUsedCommand = try container.decodeIfPresent(String.self, forKey: .lastUsedCommand)
         self.lastResolvedPath = try container.decodeIfPresent(String.self, forKey: .lastResolvedPath)
+        self.createdAt = try container.decodeIfPresent(Double.self, forKey: .createdAt)
+        self.createdFrom = try container.decodeIfPresent(String.self, forKey: .createdFrom)
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.id, forKey: .id)
         try container.encode(self.pattern, forKey: .pattern)
+        try container.encodeIfPresent(self.args, forKey: .args)
+        try container.encodeIfPresent(self.matchMode, forKey: .matchMode)
         try container.encodeIfPresent(self.lastUsedAt, forKey: .lastUsedAt)
         try container.encodeIfPresent(self.lastUsedCommand, forKey: .lastUsedCommand)
         try container.encodeIfPresent(self.lastResolvedPath, forKey: .lastResolvedPath)
+        try container.encodeIfPresent(self.createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(self.createdFrom, forKey: .createdFrom)
     }
 }
 
@@ -450,7 +474,11 @@ enum ExecApprovalsStore {
     }
 
     @discardableResult
-    static func addAllowlistEntry(agentId: String?, pattern: String) -> ExecAllowlistPatternValidationReason? {
+    static func addAllowlistEntry(
+        agentId: String?,
+        pattern: String,
+        args: [String]? = nil
+    ) -> ExecAllowlistPatternValidationReason? {
         let normalizedPattern: String
         switch ExecApprovalHelpers.validateAllowlistPattern(pattern) {
         case let .valid(validPattern):
@@ -464,10 +492,20 @@ enum ExecApprovalsStore {
             var agents = file.agents ?? [:]
             var entry = agents[key] ?? ExecApprovalsAgent()
             var allowlist = entry.allowlist ?? []
-            if allowlist.contains(where: { $0.pattern == normalizedPattern }) { return }
+            // Dedup key includes args when present.
+            let isDuplicate = allowlist.contains { existing in
+                guard existing.pattern == normalizedPattern else { return false }
+                return existing.args == args
+            }
+            if isDuplicate { return }
+            let now = Date().timeIntervalSince1970 * 1000
             allowlist.append(ExecAllowlistEntry(
                 pattern: normalizedPattern,
-                lastUsedAt: Date().timeIntervalSince1970 * 1000))
+                args: args,
+                matchMode: args != nil ? "exact" : nil,
+                lastUsedAt: now,
+                createdAt: now,
+                createdFrom: "allow-always"))
             entry.allowlist = allowlist
             agents[key] = entry
             file.agents = agents
@@ -754,9 +792,24 @@ enum ExecApprovalHelpers {
         return false
     }
 
+    struct AllowAlwaysResolvedEntry {
+        let pattern: String
+        let args: [String]?
+    }
+
     static func allowlistPattern(command: [String], resolution: ExecCommandResolution?) -> String? {
         let pattern = resolution?.resolvedPath ?? resolution?.rawExecutable ?? command.first ?? ""
         return pattern.isEmpty ? nil : pattern
+    }
+
+    static func allowlistEntry(command: [String], resolution: ExecCommandResolution?) -> AllowAlwaysResolvedEntry? {
+        guard let pattern = self.allowlistPattern(command: command, resolution: resolution) else {
+            return nil
+        }
+        // Extract args (everything after the binary) from the effective command.
+        let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForResolution(command)
+        let args: [String]? = effective.count > 1 ? Array(effective.dropFirst()) : nil
+        return AllowAlwaysResolvedEntry(pattern: pattern, args: args)
     }
 
     private static func containsPathComponent(_ pattern: String) -> Bool {

@@ -225,15 +225,15 @@ export async function processGatewayAllowlist(
       } else if (decision === "allow-always") {
         approvedByAsk = true;
         if (hostSecurity === "allowlist") {
-          const patterns = resolveAllowAlwaysPatterns({
+          const entries = resolveAllowAlwaysPatterns({
             segments: allowlistEval.segments,
             cwd: params.workdir,
             env: params.env,
             platform: process.platform,
           });
-          for (const pattern of patterns) {
-            if (pattern) {
-              addAllowlistEntry(approvals.file, params.agentId, pattern);
+          for (const entry of entries) {
+            if (entry.pattern) {
+              addAllowlistEntry(approvals.file, params.agentId, entry.pattern, entry.args);
             }
           }
         }

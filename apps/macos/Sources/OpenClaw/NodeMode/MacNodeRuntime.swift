@@ -799,13 +799,19 @@ extension MacNodeRuntime {
         allowlistResolutions: [ExecCommandResolution])
     {
         guard persistAllowlist, security == .allowlist else { return }
-        var seenPatterns = Set<String>()
+        var seenKeys = Set<String>()
         for candidate in allowlistResolutions {
-            guard let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: candidate) else {
+            guard let entry = ExecApprovalHelpers.allowlistEntry(command: command, resolution: candidate) else {
                 continue
             }
-            if seenPatterns.insert(pattern).inserted {
-                ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
+            let key = entry.args != nil
+                ? "\(entry.pattern)\0\(entry.args!)"
+                : entry.pattern
+            if seenKeys.insert(key).inserted {
+                ExecApprovalsStore.addAllowlistEntry(
+                    agentId: agentId,
+                    pattern: entry.pattern,
+                    args: entry.args)
             }
         }
     }

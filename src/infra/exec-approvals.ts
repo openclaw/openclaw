@@ -106,9 +106,13 @@ export type ExecApprovalsDefaults = {
 export type ExecAllowlistEntry = {
   id?: string;
   pattern: string;
+  args?: string[] | null;
+  matchMode?: "path-only" | "exact";
   lastUsedAt?: number;
   lastUsedCommand?: string;
   lastResolvedPath?: string;
+  createdAt?: number;
+  createdFrom?: "allow-always" | "manual" | "rule-promotion";
 };
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
@@ -180,8 +184,14 @@ function mergeLegacyAgent(
   const allowlist: ExecAllowlistEntry[] = [];
   const seen = new Set<string>();
   const pushEntry = (entry: ExecAllowlistEntry) => {
-    const key = normalizeAllowlistPattern(entry.pattern);
-    if (!key || seen.has(key)) {
+    const patternKey = normalizeAllowlistPattern(entry.pattern);
+    if (!patternKey) {
+      return;
+    }
+    const key = entry.args != null
+      ? `${patternKey}\0${JSON.stringify(entry.args)}`
+      : patternKey;
+    if (seen.has(key)) {
       return;
     }
     seen.add(key);
@@ -526,6 +536,7 @@ export function addAllowlistEntry(
   approvals: ExecApprovalsFile,
   agentId: string | undefined,
   pattern: string,
+  args?: string[] | null,
 ) {
   const target = agentId ?? DEFAULT_AGENT_ID;
   const agents = approvals.agents ?? {};
@@ -535,10 +546,32 @@ export function addAllowlistEntry(
   if (!trimmed) {
     return;
   }
-  if (allowlist.some((entry) => entry.pattern === trimmed)) {
+  // Dedup key includes args when present so `python3 foo.py` and `python3 bar.py`
+  // produce distinct entries.
+  const dedupKey = args != null
+    ? `${trimmed}\0${JSON.stringify(args)}`
+    : trimmed;
+  if (allowlist.some((entry) => {
+    const entryKey = entry.args != null
+      ? `${entry.pattern}\0${JSON.stringify(entry.args)}`
+      : entry.pattern;
+    return entryKey === dedupKey;
+  })) {
     return;
   }
-  allowlist.push({ id: crypto.randomUUID(), pattern: trimmed, lastUsedAt: Date.now() });
+  const now = Date.now();
+  const newEntry: ExecAllowlistEntry = {
+    id: crypto.randomUUID(),
+    pattern: trimmed,
+    lastUsedAt: now,
+    createdAt: now,
+    createdFrom: "allow-always",
+  };
+  if (args != null) {
+    newEntry.args = args;
+    newEntry.matchMode = "exact";
+  }
+  allowlist.push(newEntry);
   agents[target] = { ...existing, allowlist };
   approvals.agents = agents;
   saveExecApprovals(approvals);
