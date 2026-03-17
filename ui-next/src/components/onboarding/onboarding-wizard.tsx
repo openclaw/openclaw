@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { ONBOARDING_STEPS } from "@/lib/onboarding-utils";
+import { useGatewayStore } from "@/store/gateway-store";
 import { StepAgents } from "./step-agents";
 import { StepChannels } from "./step-channels";
 import { StepComplete } from "./step-complete";
@@ -106,7 +107,7 @@ export function OnboardingWizard({ initialStep }: Props) {
   const canSkipCurrent = currentStep >= 2 && currentStep <= 4;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -139,20 +140,30 @@ export function OnboardingWizard({ initialStep }: Props) {
         ))}
       </div>
 
-      {/* Step content */}
-      <div className="min-h-[400px]">
-        {currentStep === 1 && <StepGateway onValidChange={setCanAdvance} />}
-        {currentStep === 2 && <StepProvider onValidChange={setCanAdvance} />}
-        {currentStep === 3 && <StepAgents onValidChange={setCanAdvance} />}
-        {currentStep === 4 && <StepChannels onValidChange={setCanAdvance} />}
-        {currentStep === 5 && <StepFirstTask onValidChange={setCanAdvance} />}
-        {currentStep === 6 && (
-          <StepComplete
-            stepsCompleted={stepsCompleted}
-            stepsSkipped={stepsSkipped}
-            onValidChange={setCanAdvance}
-          />
-        )}
+      {/* Step content — two-column layout */}
+      <div className="min-h-[400px] grid grid-cols-1 lg:grid-cols-[1fr,300px] gap-6">
+        <div>
+          {currentStep === 1 && <StepGateway onValidChange={setCanAdvance} />}
+          {currentStep === 2 && <StepProvider onValidChange={setCanAdvance} />}
+          {currentStep === 3 && <StepAgents onValidChange={setCanAdvance} />}
+          {currentStep === 4 && <StepChannels onValidChange={setCanAdvance} />}
+          {currentStep === 5 && <StepFirstTask onValidChange={setCanAdvance} />}
+          {currentStep === 6 && (
+            <StepComplete
+              stepsCompleted={stepsCompleted}
+              stepsSkipped={stepsSkipped}
+              onValidChange={setCanAdvance}
+            />
+          )}
+        </div>
+        {/* Right info panel — hidden on mobile, empty for step 6 */}
+        <div className="hidden lg:block">
+          {currentStep === 1 && <GatewayInfoPanel />}
+          {currentStep === 2 && <ProviderInfoPanel />}
+          {currentStep === 3 && <AgentInfoPanel />}
+          {currentStep === 4 && <ChannelInfoPanel />}
+          {currentStep === 5 && <FirstTaskInfoPanel />}
+        </div>
       </div>
 
       {/* Navigation */}
@@ -171,6 +182,125 @@ export function OnboardingWizard({ initialStep }: Props) {
             {isLastStep ? "Finish" : "Continue"}
             {!isLastStep && <ChevronRight className="h-4 w-4 ml-1" />}
           </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GatewayInfoPanel() {
+  const hello = useGatewayStore((s) => s.hello);
+  const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <h3 className="text-sm font-semibold text-muted-foreground">Gateway Info</h3>
+      {isConnected && hello ? (
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Protocol</span>
+            <span>v{hello.protocol}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Methods</span>
+            <span>{hello.features?.methods?.length ?? 0}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Events</span>
+            <span>{hello.features?.events?.length ?? 0}</span>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">Waiting for connection...</p>
+      )}
+    </div>
+  );
+}
+
+function ProviderInfoPanel() {
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <h3 className="text-sm font-semibold text-muted-foreground">Supported Providers</h3>
+      <div className="space-y-2 text-xs text-muted-foreground">
+        <div>Anthropic — Claude models</div>
+        <div>Google — Gemini models</div>
+        <div>Ollama — Local open-source models</div>
+        <div>OpenAI — GPT models</div>
+        <div>Custom — Any OpenAI-compatible endpoint</div>
+      </div>
+      <p className="text-xs text-muted-foreground/70 pt-2 border-t border-border">
+        You can add more providers later in the Config page.
+      </p>
+    </div>
+  );
+}
+
+function AgentInfoPanel() {
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <h3 className="text-sm font-semibold text-muted-foreground">Organization</h3>
+      <div className="space-y-1 text-xs">
+        <div className="font-medium">Tier 1 — Leadership</div>
+        <div className="text-muted-foreground ml-3">Operator1 (COO)</div>
+        <div className="font-medium mt-2">Tier 2 — Department Heads</div>
+        <div className="text-muted-foreground ml-3">Neo (CTO) — Engineering</div>
+        <div className="text-muted-foreground ml-3">Morpheus (CMO) — Marketing</div>
+        <div className="text-muted-foreground ml-3">Trinity (CFO) — Finance</div>
+        <div className="font-medium mt-2">Tier 3 — Specialists</div>
+        <div className="text-muted-foreground ml-3">10 per department (30 total)</div>
+      </div>
+    </div>
+  );
+}
+
+function ChannelInfoPanel() {
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <h3 className="text-sm font-semibold text-muted-foreground">How Channels Work</h3>
+      <div className="space-y-2 text-xs text-muted-foreground">
+        <p>
+          Channels connect messaging platforms to your agent team. Each channel routes messages
+          through the gateway to the appropriate agent.
+        </p>
+        <p>
+          Web Chat is always available. Add Telegram, Discord, or other channels for mobile access.
+        </p>
+        <p>
+          All channels share the same agent system — conversations are consistent regardless of
+          platform.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function FirstTaskInfoPanel() {
+  return (
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <h3 className="text-sm font-semibold text-muted-foreground">What Happens</h3>
+      <div className="space-y-2 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="w-5 h-5 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-bold">
+            1
+          </span>
+          <span className="text-muted-foreground">Your message goes to the gateway</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-5 h-5 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-bold">
+            2
+          </span>
+          <span className="text-muted-foreground">Gateway routes to the selected agent</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-5 h-5 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-bold">
+            3
+          </span>
+          <span className="text-muted-foreground">Agent processes with the AI provider</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="w-5 h-5 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-bold">
+            4
+          </span>
+          <span className="text-muted-foreground">Response streams back in real time</span>
         </div>
       </div>
     </div>

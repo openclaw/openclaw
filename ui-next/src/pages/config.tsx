@@ -1,5 +1,14 @@
-import { Settings, RotateCcw, Save, Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
+import {
+  Settings,
+  RotateCcw,
+  Save,
+  Loader2,
+  AlertTriangle,
+  CheckCircle2,
+  Wand2,
+} from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { ConfigDiffBanner } from "@/components/config/config-diff-banner";
 import { ConfigFormView } from "@/components/config/config-form-view";
 import { ConfigSidebar } from "@/components/config/config-sidebar";
@@ -32,6 +41,7 @@ type ConfigResult = {
 export function ConfigPage() {
   const { sendRpc } = useGateway();
   const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
+  const navigate = useNavigate();
 
   // Config data state
   const [configRaw, setConfigRaw] = useState("");
@@ -265,6 +275,21 @@ export function ConfigPage() {
           <span className="text-xs font-mono text-muted-foreground">SQLite database</span>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              try {
+                await sendRpc("onboarding.reset");
+              } catch {
+                /* ignore — gateway may not support reset */
+              }
+              void navigate("/onboarding");
+            }}
+          >
+            <Wand2 className="h-3.5 w-3.5" />
+            Re-run Setup
+          </Button>
           <Button variant="outline" size="sm" onClick={loadConfig} disabled={loading}>
             <RotateCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
             Reload

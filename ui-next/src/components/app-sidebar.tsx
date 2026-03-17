@@ -27,6 +27,7 @@ import {
   Wand2,
 } from "lucide-react";
 import * as React from "react";
+import { useState, useEffect } from "react";
 import { NavMain } from "@/components/nav-main";
 import { NavStatus } from "@/components/nav-status";
 import {
@@ -39,6 +40,8 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
+import { useGateway } from "@/hooks/use-gateway";
+import { useGatewayStore } from "@/store/gateway-store";
 
 const navData = {
   setup: [
@@ -274,6 +277,26 @@ const navData = {
 };
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const { sendRpc } = useGateway();
+  const isConnected = useGatewayStore((s) => s.connectionStatus === "connected");
+
+  // Hide "Setup Wizard" link once onboarding is completed or skipped
+  const [showSetup, setShowSetup] = useState(true);
+  useEffect(() => {
+    if (!isConnected) {
+      return;
+    }
+    sendRpc<{ status: string }>("onboarding.status")
+      .then((result) => {
+        if (result.status === "completed" || result.status === "skipped") {
+          setShowSetup(false);
+        }
+      })
+      .catch(() => {
+        // Gateway doesn't support onboarding RPC or not connected yet
+      });
+  }, [isConnected, sendRpc]);
+
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -294,7 +317,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain label="Setup" items={navData.setup} />
+        {showSetup && <NavMain label="Setup" items={navData.setup} />}
         <NavMain label="Chat" items={navData.chat} />
         <NavMain label="Control" items={navData.control} defaultOpen />
         <NavMain label="Agent" items={navData.agent} />
