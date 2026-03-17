@@ -1,4 +1,4 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-models";
 import {
@@ -16,12 +16,11 @@ function matchesModernXaiModel(modelId: string): boolean {
   return XAI_MODERN_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
-const xaiPlugin = {
+export default definePluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "xAI",
@@ -68,6 +67,4 @@ const xaiPlugin = {
       }),
     );
   },
-};
-
-export default xaiPlugin;
+});

@@ -1,8 +1,7 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { parseDurationMs } from "openclaw/plugin-sdk/cli-runtime";
 import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
   type ProviderAuthContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
@@ -312,12 +311,11 @@ async function runAnthropicSetupTokenNonInteractive(ctx: {
   });
 }
 
-const anthropicPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Anthropic Provider",
   description: "Bundled Anthropic provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Anthropic",
@@ -399,6 +397,4 @@ const anthropicPlugin = {
     });
     api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
   },
-};
-
-export default anthropicPlugin;
+});

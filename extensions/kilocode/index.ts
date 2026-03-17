@@ -1,4 +1,4 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import {
@@ -10,12 +10,11 @@ import { buildKilocodeProviderWithDiscovery } from "./provider-catalog.js";
 
 const PROVIDER_ID = "kilocode";
 
-const kilocodePlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Kilo Gateway Provider",
   description: "Bundled Kilo Gateway provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Kilo Gateway",
@@ -66,6 +65,4 @@ const kilocodePlugin = {
       isCacheTtlEligible: (ctx) => ctx.modelId.startsWith("anthropic/"),
     });
   },
-};
-
-export default kilocodePlugin;
+});

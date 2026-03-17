@@ -20,7 +20,7 @@ function createHarness(config: Record<string, unknown>) {
       command = definition;
     }),
   };
-  register(api as never);
+  register.register(api as never);
   if (!command) {
     throw new Error("talk-voice command not registered");
   }

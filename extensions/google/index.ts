@@ -1,4 +1,4 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { buildGoogleImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -14,12 +14,11 @@ import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import { googleMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 
-const googlePlugin = {
+export default definePluginEntry({
   id: "google",
   name: "Google Plugin",
   description: "Bundled Google plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: "google",
       label: "Google AI Studio",
@@ -70,6 +69,4 @@ const googlePlugin = {
       }),
     );
   },
-};
-
-export default googlePlugin;
+});

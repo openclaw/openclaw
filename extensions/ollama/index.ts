@@ -1,5 +1,5 @@
 import {
-  emptyPluginConfigSchema,
+  definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
@@ -15,11 +15,10 @@ async function loadProviderSetup() {
   return await import("openclaw/plugin-sdk/ollama-setup");
 }
 
-const ollamaPlugin = {
+export default definePluginEntry({
   id: "ollama",
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
-  configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: PROVIDER_ID,
@@ -123,6 +122,4 @@ const ollamaPlugin = {
       },
     });
   },
-};
-
-export default ollamaPlugin;
+});

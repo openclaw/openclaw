@@ -1,6 +1,5 @@
 import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
   type ProviderAuthContext,
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
@@ -226,12 +225,11 @@ function buildZaiApiKeyMethod(params: {
   };
 }
 
-const zaiPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Z.AI Provider",
   description: "Bundled Z.AI provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Z.AI",
@@ -311,6 +309,4 @@ const zaiPlugin = {
     });
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },
-};
-
-export default zaiPlugin;
+});

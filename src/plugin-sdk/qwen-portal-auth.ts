@@ -1,7 +1,7 @@
 // Narrow plugin-sdk surface for the bundled qwen-portal-auth plugin.
 // Keep this list additive and scoped to symbols used under extensions/qwen-portal-auth.
 
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export { definePluginEntry } from "./core.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export type {
   OpenClawPluginApi,

@@ -2,8 +2,7 @@ import { ensureAuthProfileStore, listProfilesForProvider } from "openclaw/plugin
 import { QWEN_OAUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildOauthProviderAuthResult,
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
   type ProviderAuthContext,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/qwen-portal-auth";
@@ -55,12 +54,11 @@ function resolveCatalog(ctx: ProviderCatalogContext) {
   };
 }
 
-const qwenPortalPlugin = {
+export default definePluginEntry({
   id: "qwen-portal-auth",
   name: "Qwen OAuth",
   description: "OAuth flow for Qwen (free-tier) models",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: PROVIDER_LABEL,
@@ -146,6 +144,4 @@ const qwenPortalPlugin = {
       }),
     });
   },
-};
-
-export default qwenPortalPlugin;
+});
