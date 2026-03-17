@@ -21,7 +21,7 @@ Related:
 
 ```bash
 openclaw plugins list
-openclaw plugins info <id>
+openclaw plugins inspect <id>
 openclaw plugins enable <id>
 openclaw plugins disable <id>
 openclaw plugins uninstall <id>
@@ -30,6 +30,8 @@ openclaw plugins update <id>
 openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
 ```
+
+`info` is an alias for `inspect`.
 
 Bundled plugins ship with OpenClaw but start disabled. Use `plugins enable` to
 activate them.
@@ -148,3 +150,26 @@ marketplace installs.
 When a stored integrity hash exists and the fetched artifact hash changes,
 OpenClaw prints a warning and asks for confirmation before proceeding. Use
 global `--yes` to bypass prompts in CI/non-interactive runs.
+
+### Inspect
+
+```bash
+openclaw plugins inspect <id>
+openclaw plugins inspect <id> --json
+```
+
+Deep introspection for a single plugin. Shows identity, load status, source,
+plugin shape, registered capabilities, hooks, tools, commands, services,
+gateway methods, HTTP routes, policy flags, diagnostics, and install metadata.
+
+Plugin shape is derived from actual registration behavior:
+
+- **plain-capability** — one capability type registered
+- **hybrid-capability** — multiple capability types registered
+- **hook-only** — only hooks, no capabilities or surfaces
+- **non-capability** — tools/commands/services but no capabilities
+
+The `--json` flag outputs a machine-readable report suitable for scripting and
+auditing.
+
+`info` is an alias for `inspect`.
