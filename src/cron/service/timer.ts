@@ -501,14 +501,7 @@ export function applyJobResult(
     } else if (result.status === "error" && job.enabled) {
       const retryConfig = resolveRetryConfig(state.deps.cronConfig);
       const transient = isTransientCronError(result.error, retryConfig.retryOn);
-      // Use full backoff ladder by default for recurring jobs (retry-storm protection).
-      // Only use custom schedule when cronConfig.retry.backoffMs is explicitly set.
-      const backoffSchedule =
-        Array.isArray(state.deps.cronConfig?.retry?.backoffMs) &&
-        state.deps.cronConfig.retry.backoffMs.length > 0
-          ? state.deps.cronConfig.retry.backoffMs
-          : DEFAULT_BACKOFF_SCHEDULE_MS;
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1, backoffSchedule);
+      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1, retryConfig.backoffMs);
       let normalNext: number | undefined;
       try {
         normalNext =
