@@ -1179,6 +1179,18 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
+  it("returns workspace-only context when attempt data is missing", () => {
+    const legacy = buildAfterTurnRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(legacy).toEqual({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+  });
+
   it("uses primary model when compaction.model is not set", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {

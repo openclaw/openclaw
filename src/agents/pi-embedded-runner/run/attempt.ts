@@ -1294,7 +1294,7 @@ export function prependSystemPromptAddition(params: {
 
 /** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
-  attempt: Pick<
+  attempt?: Pick<
     EmbeddedRunAttemptParams,
     | "sessionKey"
     | "messageChannel"
@@ -1315,24 +1315,25 @@ export function buildAfterTurnRuntimeContext(params: {
   workspaceDir: string;
   agentDir: string;
 }): Partial<CompactEmbeddedPiSessionParams> {
+  const attempt = params.attempt;
   return {
-    sessionKey: params.attempt.sessionKey,
-    messageChannel: params.attempt.messageChannel,
-    messageProvider: params.attempt.messageProvider,
-    agentAccountId: params.attempt.agentAccountId,
-    authProfileId: params.attempt.authProfileId,
+    sessionKey: attempt?.sessionKey,
+    messageChannel: attempt?.messageChannel,
+    messageProvider: attempt?.messageProvider,
+    agentAccountId: attempt?.agentAccountId,
+    authProfileId: attempt?.authProfileId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
-    config: params.attempt.config,
-    skillsSnapshot: params.attempt.skillsSnapshot,
-    senderIsOwner: params.attempt.senderIsOwner,
-    provider: params.attempt.provider,
-    model: params.attempt.modelId,
-    thinkLevel: params.attempt.thinkLevel,
-    reasoningLevel: params.attempt.reasoningLevel,
-    bashElevated: params.attempt.bashElevated,
-    extraSystemPrompt: params.attempt.extraSystemPrompt,
-    ownerNumbers: params.attempt.ownerNumbers,
+    config: attempt?.config,
+    skillsSnapshot: attempt?.skillsSnapshot,
+    senderIsOwner: attempt?.senderIsOwner,
+    provider: attempt?.provider,
+    model: attempt?.modelId,
+    thinkLevel: attempt?.thinkLevel,
+    reasoningLevel: attempt?.reasoningLevel,
+    bashElevated: attempt?.bashElevated,
+    extraSystemPrompt: attempt?.extraSystemPrompt,
+    ownerNumbers: attempt?.ownerNumbers,
   };
 }
 

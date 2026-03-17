@@ -336,7 +336,7 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
     expect(result.agentModelOverride).toBe("gigachat/GigaChat-2-Max");
-    expect(resolveAgentModelPrimaryValue(result.config)).toBeUndefined();
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBeUndefined();
     expect(await readAuthProfile("gigachat:default")).toMatchObject({
       type: "api_key",
       provider: "gigachat",
