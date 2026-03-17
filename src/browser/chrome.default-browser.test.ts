@@ -115,4 +115,49 @@ describe("browser default executable detection", () => {
     expect(exe?.path).toBe(edgePath);
     expect(exe?.kind).toBe("edge");
   });
+
+  it.each([
+    ["com.microsoft.edgemac.beta", "com.microsoft.EdgeBeta", "Microsoft Edge Beta"],
+    ["com.microsoft.edgemac.dev", "com.microsoft.EdgeDev", "Microsoft Edge Dev"],
+    ["com.microsoft.edgemac.canary", "com.microsoft.EdgeCanary", "Microsoft Edge Canary"],
+  ])(
+    "resolves Edge channel variant %s via LaunchServices fallback",
+    (lsId, canonicalId, appName) => {
+      const appDir = `/Applications/${appName}.app`;
+      vi.mocked(execFileSync).mockImplementation((cmd, args) => {
+        const argsStr = Array.isArray(args) ? args.join(" ") : "";
+        if (cmd === "/usr/bin/plutil" && argsStr.includes("LSHandlers")) {
+          return JSON.stringify([{ LSHandlerURLScheme: "http", LSHandlerRoleAll: lsId }]);
+        }
+        if (cmd === "/usr/bin/osascript" && argsStr.includes("path to application id")) {
+          if (argsStr.includes(lsId)) {
+            return "";
+          }
+          if (argsStr.includes(canonicalId)) {
+            return appDir;
+          }
+          return "";
+        }
+        if (cmd === "/usr/bin/defaults") {
+          return appName;
+        }
+        return "";
+      });
+      vi.mocked(fs.existsSync).mockImplementation((p) => {
+        const value = String(p);
+        if (value.includes(launchServicesPlist)) {
+          return true;
+        }
+        return value.includes(`${appName}.app`) && value.includes("MacOS");
+      });
+
+      const exe = resolveBrowserExecutableForPlatform(
+        {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+        "darwin",
+      );
+
+      expect(exe?.path).toContain(appName);
+      expect(exe?.kind).toBe("edge");
+    },
+  );
 });
