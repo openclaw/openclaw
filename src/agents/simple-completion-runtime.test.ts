@@ -21,9 +21,10 @@ vi.mock("../../extensions/github-copilot/token.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
-import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
+let prepareSimpleCompletionModel: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModel;
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
   hoisted.resolveModelMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
@@ -53,6 +54,7 @@ beforeEach(() => {
     source: "cache:/tmp/copilot-token.json",
     baseUrl: "https://api.individual.githubcopilot.com",
   });
+  ({ prepareSimpleCompletionModel } = await import("./simple-completion-runtime.js"));
 });
 
 describe("prepareSimpleCompletionModel", () => {

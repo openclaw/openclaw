@@ -19,9 +19,10 @@ vi.mock("../../../../src/agents/pi-embedded-utils.js", () => ({
   extractAssistantText: hoisted.extractAssistantTextMock,
 }));
 
-import { generateThreadTitle } from "./thread-title.js";
+let generateThreadTitle: typeof import("./thread-title.js").generateThreadTitle;
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
   hoisted.completeMock.mockReset();
   hoisted.prepareSimpleCompletionModelForAgentMock.mockReset();
   hoisted.extractAssistantTextMock.mockReset();
@@ -44,6 +45,7 @@ beforeEach(() => {
   });
   hoisted.completeMock.mockResolvedValue({});
   hoisted.extractAssistantTextMock.mockReturnValue("Generated title");
+  ({ generateThreadTitle } = await import("./thread-title.js"));
 });
 
 describe("generateThreadTitle", () => {
