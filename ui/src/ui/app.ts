@@ -1,6 +1,8 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
+import "./components/debug-drawer.ts";
+import { debugLog, isDebugEnabled, setDebugEnabled } from "./debug-connection.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -19,6 +21,7 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
+import "./components/debug-drawer.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
@@ -136,6 +139,7 @@ export class OpenClawApp extends LitElement {
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
+  @state() debugDrawerOpen = false;
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
   private sidebarCloseTimer: number | null = null;
@@ -166,6 +170,7 @@ export class OpenClawApp extends LitElement {
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
   @state() navDrawerOpen = false;
+  @state() debugDrawerOpen = false;
 
   onSlashAction?: (action: string) => void;
 
@@ -457,6 +462,11 @@ export class OpenClawApp extends LitElement {
         this.paletteQuery = "";
         this.paletteActiveIndex = 0;
       }
+    }
+    // Ctrl+Shift+D to toggle debug drawer
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "D") {
+      e.preventDefault();
+      this.debugDrawerOpen = !this.debugDrawerOpen;
     }
   };
 
