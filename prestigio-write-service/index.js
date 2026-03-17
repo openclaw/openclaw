@@ -25,7 +25,8 @@ const ACTION_FIELDS = {
   'mark-not-received': ['item_id'],
   'apply-credit': ['order_item_id', 'xero_contact_id', 'xero_invoice_id', 'amount', 'description', 'source_context', 'reference', 'requested_at'],
   'search-xero-invoices': ['search', 'contact_id', 'invoice_number', 'statuses', 'requested_at'],
-  'search-xero-quotes': ['search', 'contact_id', 'quote_number', 'statuses', 'requested_at']
+  'search-xero-quotes': ['search', 'contact_id', 'quote_number', 'statuses', 'requested_at'],
+  'search-xero-bank-transactions': ['search', 'contact_id', 'from_date', 'to_date', 'requested_at']
 };
 
 // --- Write response atomically ---
@@ -42,6 +43,7 @@ async function callEdgeFunction(action, fields) {
     action === 'apply-credit' ? 'xero-apply-credit' :
     action === 'search-xero-invoices' ? 'xero-search-invoices' :
     action === 'search-xero-quotes' ? 'xero-search-quotes' :
+    action === 'search-xero-bank-transactions' ? 'xero-search-bank-transactions' :
     'stitch-write';
   const res = await fetch(`${SUPABASE_URL}/functions/v1/${functionName}`, {
     method: 'POST',
