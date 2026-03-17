@@ -161,6 +161,24 @@ export function isGroupInviteAllowed(
   return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedInviter);
 }
 
+/**
+ * Resolve quoted/cited content only after the caller has passed authorization.
+ * Unauthorized paths must keep raw text and must not trigger cross-channel cite fetches.
+ */
+export async function resolveAuthorizedMessageText(params: {
+  rawText: string;
+  content: unknown;
+  authorizedForCites: boolean;
+  resolveAllCites: (content: unknown) => Promise<string>;
+}): Promise<string> {
+  const { rawText, content, authorizedForCites, resolveAllCites } = params;
+  if (!authorizedForCites) {
+    return rawText;
+  }
+  const citedContent = await resolveAllCites(content);
+  return citedContent + rawText;
+}
+
 // Helper to recursively extract text from inline content
 function renderInlineItem(
   item: any,
