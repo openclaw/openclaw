@@ -56,7 +56,7 @@ describe("tool-policy", () => {
   it("resolves known profiles and ignores unknown ones", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
-    expect(coding?.allow).toContain("cron");
+    expect(coding?.allow).not.toContain("cron");
     expect(coding?.allow).not.toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
