@@ -3,6 +3,7 @@ import {
   createScopedPairingAccess,
   dispatchInboundReplyWithBase,
   formatTextWithAttachmentLinks,
+  issuePairingChallenge,
   logInboundDrop,
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
@@ -208,28 +209,25 @@ export async function handleIrcInbound(params: {
       }).allowed;
       if (!dmAllowed) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await pairing.upsertPairingRequest({
-            id: senderDisplay.toLowerCase(),
+          await issuePairingChallenge({
+            channel: CHANNEL_ID,
+            senderId: senderDisplay.toLowerCase(),
+            senderIdLine: `Your IRC id: ${senderDisplay}`,
             meta: { name: message.senderNick || undefined },
-          });
-          if (created) {
-            try {
-              const reply = core.channel.pairing.buildPairingReply({
-                channel: CHANNEL_ID,
-                idLine: `Your IRC id: ${senderDisplay}`,
-                code,
-              });
+            upsertPairingRequest: pairing.upsertPairingRequest,
+            sendPairingReply: async (text) => {
               await deliverIrcReply({
-                payload: { text: reply },
+                payload: { text },
                 target: message.senderNick,
                 accountId: account.accountId,
                 sendReply: params.sendReply,
                 statusSink,
               });
-            } catch (err) {
+            },
+            onReplyError: (err) => {
               runtime.error?.(`irc: pairing reply failed for ${senderDisplay}: ${String(err)}`);
-            }
-          }
+            },
+          });
         }
         runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
         return;

@@ -199,6 +199,16 @@ describe("extractAssistantText", () => {
       "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
     );
   });
+
+  it("preserves successful turns with stale background errorMessage", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "end_turn",
+      errorMessage: "insufficient credits for embedding model",
+      content: [{ type: "text", text: "Handle payment required errors in your API." }],
+    };
+    expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
+  });
 });
 
 describe("resolveAnnounceTarget", () => {

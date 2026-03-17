@@ -85,7 +85,10 @@ describe("sessions_spawn depth + child limits", () => {
   });
 
   it("rejects spawning when caller depth reaches maxSpawnDepth", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:parent" });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:subagent:parent",
+      workspaceDir: "/parent/workspace",
+    });
     const result = await tool.execute("call-depth-reject", { task: "hello" });
 
     expect(result.details).toMatchObject({
@@ -109,13 +112,20 @@ describe("sessions_spawn depth + child limits", () => {
     const calls = callGatewayMock.mock.calls.map(
       (call) => call[0] as { method?: string; params?: Record<string, unknown> },
     );
-    const agentCall = calls.find((entry) => entry.method === "agent");
-    expect(agentCall?.params?.spawnedBy).toBe("agent:main:subagent:parent");
+    const spawnedByPatch = calls.find(
+      (entry) =>
+        entry.method === "sessions.patch" &&
+        entry.params?.spawnedBy === "agent:main:subagent:parent",
+    );
+    expect(spawnedByPatch?.params?.key).toMatch(/^agent:main:subagent:/);
+    expect(typeof spawnedByPatch?.params?.spawnedWorkspaceDir).toBe("string");
 
     const spawnDepthPatch = calls.find(
       (entry) => entry.method === "sessions.patch" && entry.params?.spawnDepth === 2,
     );
     expect(spawnDepthPatch?.params?.key).toMatch(/^agent:main:subagent:/);
+    expect(spawnDepthPatch?.params?.subagentRole).toBe("leaf");
+    expect(spawnDepthPatch?.params?.subagentControlScope).toBe("none");
   });
 
   it("rejects depth-2 callers when maxSpawnDepth is 2 (using stored spawnDepth on flat keys)", async () => {

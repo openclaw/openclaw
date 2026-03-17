@@ -78,6 +78,11 @@ describe("TwilioProvider.buildBaseUrl", () => {
     );
   });
 });
+function expectStreamingTwiml(body: string) {
+  expect(body).toContain(STREAM_URL);
+  expect(body).toContain('<Parameter name="token" value="');
+  expect(body).toContain("<Connect>");
+}
 
 describe("TwilioProvider", () => {
   it("uses regional base URL when region/edge are configured", () => {
@@ -98,9 +103,8 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toContain(STREAM_URL);
-    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
-    expect(result.providerResponseBody).toContain("<Connect>");
+    expect(result.providerResponseBody).toBeDefined();
+    expectStreamingTwiml(result.providerResponseBody ?? "");
   });
 
   it("returns empty TwiML for status callbacks", () => {
@@ -123,9 +127,8 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toContain(STREAM_URL);
-    expect(result.providerResponseBody).toContain('<Parameter name="token" value="');
-    expect(result.providerResponseBody).toContain("<Connect>");
+    expect(result.providerResponseBody).toBeDefined();
+    expectStreamingTwiml(result.providerResponseBody ?? "");
   });
 
   it("returns queue TwiML for second inbound call when first call is active", () => {

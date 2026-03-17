@@ -1,14 +1,6 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/signal";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
-
-export function setSignalRuntime(next: PluginRuntime) {
-  runtime = next;
-}
-
-export function getSignalRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Signal runtime not initialized");
-  }
-  return runtime;
-}
+const { setRuntime: setSignalRuntime, getRuntime: getSignalRuntime } =
+  createPluginRuntimeStore<PluginRuntime>("Signal runtime not initialized");
+export { getSignalRuntime, setSignalRuntime };

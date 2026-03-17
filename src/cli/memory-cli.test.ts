@@ -2,15 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const getMemorySearchManager = vi.fn();
-const loadConfig = vi.fn(() => ({}));
-const resolveDefaultAgentId = vi.fn(() => "main");
-const resolveCommandSecretRefsViaGateway = vi.fn(async ({ config }: { config: unknown }) => ({
-  resolvedConfig: config,
-  diagnostics: [] as string[],
-}));
+const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
+const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [] as string[],
+  })),
+);
 
 vi.mock("../memory/index.js", () => ({
   getMemorySearchManager,
@@ -33,7 +35,8 @@ let defaultRuntime: typeof import("../runtime.js").defaultRuntime;
 let isVerbose: typeof import("../globals.js").isVerbose;
 let setVerbose: typeof import("../globals.js").setVerbose;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ registerMemoryCli } = await import("./memory-cli.js"));
   ({ defaultRuntime } = await import("../runtime.js"));
   ({ isVerbose, setVerbose } = await import("../globals.js"));
@@ -111,6 +114,29 @@ describe("memory cli", () => {
     program.name("test");
     registerMemoryCli(program);
     await program.parseAsync(["memory", ...args], { from: "user" });
+  }
+
+  function captureHelpOutput(command: Command | undefined) {
+    let output = "";
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      output += String(chunk);
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      command?.outputHelp();
+      return output;
+    } finally {
+      writeSpy.mockRestore();
+    }
+  }
+
+  function getMemoryHelpText() {
+    const program = new Command();
+    registerMemoryCli(program);
+    const memoryCommand = program.commands.find((command) => command.name() === "memory");
+    return captureHelpOutput(memoryCommand);
   }
 
   async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
@@ -218,6 +244,17 @@ describe("memory cli", () => {
     await runMemoryCli(["status"]);
 
     expect(hasLoggedInactiveSecretDiagnostic(log)).toBe(true);
+  });
+
+  it("documents memory help examples", () => {
+    const helpText = getMemoryHelpText();
+
+    expect(helpText).toContain("openclaw memory status --deep");
+    expect(helpText).toContain("Probe embedding provider readiness.");
+    expect(helpText).toContain('openclaw memory search "meeting notes"');
+    expect(helpText).toContain("Quick search using positional query.");
+    expect(helpText).toContain('openclaw memory search --query "deployment" --max-results 20');
+    expect(helpText).toContain("Limit results for focused troubleshooting.");
   });
 
   it("prints vector error when unavailable", async () => {
