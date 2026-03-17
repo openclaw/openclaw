@@ -66,13 +66,20 @@ describe("Ghost reminder bug (issue #13317)", () => {
       Provider?: string;
       Body?: string;
     } | null,
-    reminderText: string,
+    tokenText?: string,
   ) => {
     expect(calledCtx).not.toBeNull();
     expect(calledCtx?.Provider).toBe("cron-event");
-    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-    expect(calledCtx?.Body).toContain(reminderText);
-    expect(calledCtx?.Body).not.toContain("HEARTBEAT_OK");
+    expect(calledCtx?.Body).toContain("SYSTEM_WAKE source=cron");
+    if (tokenText) {
+      expect(calledCtx?.Body).toContain(`token=${tokenText}`);
+    }
+    expect(calledCtx?.Body).toContain(
+      "Reply HEARTBEAT_OK unless session context requires follow-up.",
+    );
+    expect(calledCtx?.Body).not.toContain("A scheduled reminder has been triggered");
+    expect(calledCtx?.Body).not.toContain("Please relay this reminder");
+    expect(calledCtx?.Body).not.toContain("Handle this reminder internally");
     expect(calledCtx?.Body).not.toContain("heartbeat poll");
   };
 
@@ -148,7 +155,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(replyCallCount).toBe(1);
     expect(calledCtx?.Provider).toBe("heartbeat");
-    expect(calledCtx?.Body).not.toContain("scheduled reminder has been triggered");
+    expect(calledCtx?.Body).not.toContain("A scheduled reminder has been triggered");
     expect(calledCtx?.Body).not.toContain("relay this reminder");
     expect(sendTelegram).toHaveBeenCalled();
   });
@@ -161,7 +168,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       },
     );
     expect(result.status).toBe("ran");
-    expectCronEventPrompt(calledCtx, "Reminder: Check Base Scout results");
+    expectCronEventPrompt(calledCtx);
     expect(sendTelegram).toHaveBeenCalled();
   });
 
@@ -174,7 +181,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       },
     );
     expect(result.status).toBe("ran");
-    expectCronEventPrompt(calledCtx, "Reminder: Check Base Scout results");
+    expectCronEventPrompt(calledCtx);
     expect(sendTelegram).toHaveBeenCalled();
   });
 
@@ -193,8 +200,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(replyCallCount).toBe(1);
     expect(calledCtx?.Provider).toBe("cron-event");
-    expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
-    expect(calledCtx?.Body).toContain("Cron: QMD maintenance completed");
+    expect(calledCtx?.Body).toContain("SYSTEM_WAKE source=cron");
+    expect(calledCtx?.Body).toContain("token=Cron: QMD maintenance completed");
     expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
     expect(sendTelegram).toHaveBeenCalled();
   });
@@ -212,7 +219,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("cron-event");
-    expect(calledCtx?.Body).toContain("Handle this reminder internally");
+    expect(calledCtx?.Body).toContain("SYSTEM_WAKE source=cron");
+    expect(calledCtx?.Body).toContain(
+      "Reply HEARTBEAT_OK unless session context requires follow-up.",
+    );
+    expect(calledCtx?.Body).not.toContain("Handle this reminder internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 

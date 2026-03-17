@@ -89,7 +89,11 @@ describe("cron tool", () => {
     return payload?.sessionKey;
   }
 
-  async function executeAddWithContextMessages(callId: string, contextMessages: number) {
+  async function executeAddWithContextMessages(
+    callId: string,
+    contextMessages: number,
+    jobOverrides: Record<string, unknown>,
+  ) {
     const tool = createCronTool({ agentSessionKey: "main" });
     await tool.execute(callId, {
       action: "add",
@@ -97,7 +101,7 @@ describe("cron tool", () => {
       job: {
         name: "reminder",
         schedule: { at: new Date(123).toISOString() },
-        payload: { kind: "systemEvent", text: "Reminder: the thing." },
+        ...jobOverrides,
       },
     });
   }
@@ -223,7 +227,7 @@ describe("cron tool", () => {
     expect(sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
 
-  it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
+  it("adds recent context for isolated agentTurn reminders when contextMessages > 0", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
         messages: [
@@ -237,7 +241,10 @@ describe("cron tool", () => {
       })
       .mockResolvedValueOnce({ ok: true });
 
-    await executeAddWithContextMessages("call3", 3);
+    await executeAddWithContextMessages("call3", 3, {
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "Review the latest status" },
+    });
 
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
     const historyCall = readGatewayCall(0);
@@ -245,11 +252,12 @@ describe("cron tool", () => {
 
     const cronCall = readGatewayCall(1);
     expect(cronCall.method).toBe("cron.add");
-    const text = readCronPayloadText(1);
-    expect(text).toContain("Recent context:");
-    expect(text).toContain("User: Discussed Q2 budget");
-    expect(text).toContain("Assistant: We agreed to review on Tuesday.");
-    expect(text).toContain("User: Remind me about the thing at 2pm");
+    const params = cronCall.params as { payload?: { message?: string } } | undefined;
+    const message = params?.payload?.message ?? "";
+    expect(message).toContain("Recent context:");
+    expect(message).toContain("User: Discussed Q2 budget");
+    expect(message).toContain("Assistant: We agreed to review on Tuesday.");
+    expect(message).toContain("User: Remind me about the thing at 2pm");
   });
 
   it("caps contextMessages at 10", async () => {
@@ -259,7 +267,10 @@ describe("cron tool", () => {
     }));
     callGatewayMock.mockResolvedValueOnce({ messages }).mockResolvedValueOnce({ ok: true });
 
-    await executeAddWithContextMessages("call5", 20);
+    await executeAddWithContextMessages("call5", 20, {
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "Review the latest status" },
+    });
 
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
     const historyCall = readGatewayCall(0);
@@ -267,11 +278,26 @@ describe("cron tool", () => {
     const historyParams = historyCall.params as { limit?: number } | undefined;
     expect(historyParams?.limit).toBe(10);
 
-    const text = readCronPayloadText(1);
-    expect(text).not.toMatch(/Message 1\\b/);
-    expect(text).not.toMatch(/Message 2\\b/);
-    expect(text).toContain("Message 3");
-    expect(text).toContain("Message 12");
+    const params = readGatewayCall(1).params as { payload?: { message?: string } } | undefined;
+    const message = params?.payload?.message ?? "";
+    expect(message).not.toMatch(/Message 1\\b/);
+    expect(message).not.toMatch(/Message 2\\b/);
+    expect(message).toContain("Message 3");
+    expect(message).toContain("Message 12");
+  });
+
+  it("does not add context to main-session wake tokens", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    await executeAddWithContextMessages("call-main-token", 3, {
+      payload: { kind: "systemEvent", text: "wake up" },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const cronCall = readGatewayCall(0);
+    expect(cronCall.method).toBe("cron.add");
+    const text = readCronPayloadText(0);
+    expect(text).toBe("wake up");
   });
 
   it("does not add context when contextMessages is 0 (default)", async () => {
@@ -283,7 +309,7 @@ describe("cron tool", () => {
       job: {
         name: "reminder",
         schedule: { at: new Date(123).toISOString() },
-        payload: { text: "Reminder: the thing." },
+        payload: { kind: "systemEvent", text: "wake up" },
       },
     });
 
@@ -305,7 +331,7 @@ describe("cron tool", () => {
         name: "reminder",
         schedule: { at: new Date(123).toISOString() },
         agentId: null,
-        payload: { kind: "systemEvent", text: "Reminder: the thing." },
+        payload: { kind: "systemEvent", text: "wake up" },
       },
     });
 

@@ -1269,7 +1269,10 @@ describe("runHeartbeatOnce", () => {
         if (testCase.expectCronContext) {
           const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
           expect(calledCtx.Provider, testCase.name).toBe("cron-event");
-          expect(calledCtx.Body, testCase.name).toContain("scheduled reminder has been triggered");
+          expect(calledCtx.Body, testCase.name).toContain("SYSTEM_WAKE source=cron");
+          expect(calledCtx.Body, testCase.name).toContain(
+            "Reply HEARTBEAT_OK unless session context requires follow-up.",
+          );
         }
       } finally {
         replySpy.mockRestore();
@@ -1325,7 +1328,11 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
       expect(calledCtx.Provider).toBe("cron-event");
-      expect(calledCtx.Body).toContain("Handle this reminder internally");
+      expect(calledCtx.Body).toContain("SYSTEM_WAKE source=cron");
+      expect(calledCtx.Body).toContain("token=Cron: rotate logs");
+      expect(calledCtx.Body).toContain(
+        "Reply HEARTBEAT_OK unless session context requires follow-up.",
+      );
       expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
     } finally {
       replySpy.mockRestore();

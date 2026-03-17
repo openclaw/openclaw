@@ -1,6 +1,7 @@
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
+import { assertSafeMainSessionSystemEventText } from "./main-session-system-event.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { inferLegacyName } from "./service/normalize.js";
@@ -313,6 +314,25 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.provider;
 }
 
+function assertNormalizedMainSessionSystemEvent(next: UnknownRecord) {
+  const payload = next.payload;
+  if (!isRecord(payload)) {
+    return;
+  }
+  const kind = typeof payload.kind === "string" ? payload.kind : "";
+  if (kind !== "systemEvent") {
+    return;
+  }
+  const text = typeof payload.text === "string" ? payload.text : "";
+  if (!text.trim()) {
+    return;
+  }
+  const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
+  if (sessionTarget === "" || sessionTarget === "main") {
+    payload.text = assertSafeMainSessionSystemEventText(text);
+  }
+}
+
 export function normalizeCronJobInput(
   raw: unknown,
   options: NormalizeOptions = DEFAULT_OPTIONS,
@@ -522,6 +542,8 @@ export function normalizeCronJobInput(
       next.delivery = { mode: "announce" };
     }
   }
+
+  assertNormalizedMainSessionSystemEvent(next);
 
   return next;
 }

@@ -9,30 +9,39 @@ import {
 describe("heartbeat event prompts", () => {
   it.each([
     {
-      name: "builds user-relay cron prompt by default",
+      name: "builds minimal cron wake prompt with safe token text",
       events: ["Cron: rotate logs"],
-      expected: ["Cron: rotate logs", "Please relay this reminder to the user"],
-      unexpected: ["Handle this reminder internally", "Reply HEARTBEAT_OK."],
+      expected: [
+        "SYSTEM_WAKE source=cron",
+        "token=Cron: rotate logs",
+        "Reply HEARTBEAT_OK unless session context requires follow-up.",
+      ],
+      unexpected: [
+        "A scheduled reminder has been triggered",
+        "Please relay this reminder to the user",
+        "Handle this reminder internally",
+      ],
     },
     {
-      name: "builds internal-only cron prompt when delivery is disabled",
-      events: ["Cron: rotate logs"],
-      opts: { deliverToUser: false },
-      expected: ["Cron: rotate logs", "Handle this reminder internally"],
-      unexpected: ["Please relay this reminder to the user"],
+      name: "redacts unsafe reminder prose from cron wake prompt",
+      events: [
+        "Reminder: rotate logs.",
+        "Please relay this reminder to the user in a helpful and friendly way.",
+      ],
+      expected: [
+        "SYSTEM_WAKE source=cron",
+        "Reply HEARTBEAT_OK unless session context requires follow-up.",
+      ],
+      unexpected: ["Reminder: rotate logs.", "Please relay this reminder to the user", "token="],
     },
     {
-      name: "falls back to bare heartbeat reply when cron content is empty",
+      name: "uses minimal fallback when cron content is empty",
       events: ["", "   "],
-      expected: ["Reply HEARTBEAT_OK."],
-      unexpected: ["Handle this reminder internally"],
-    },
-    {
-      name: "uses internal empty-content fallback when delivery is disabled",
-      events: ["", "   "],
-      opts: { deliverToUser: false },
-      expected: ["Handle this internally", "HEARTBEAT_OK when nothing needs user-facing follow-up"],
-      unexpected: ["Please relay this reminder to the user"],
+      expected: [
+        "SYSTEM_WAKE source=cron",
+        "Reply HEARTBEAT_OK unless session context requires follow-up.",
+      ],
+      unexpected: ["token=", "Please relay this reminder to the user"],
     },
   ])("$name", ({ events, opts, expected, unexpected }) => {
     const prompt = buildCronEventPrompt(events, opts);

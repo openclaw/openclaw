@@ -1,40 +1,27 @@
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import {
+  collectMainSessionSystemEventTokens,
+  MAIN_SESSION_SYSTEM_EVENT_FALLBACK_TOKEN,
+} from "../cron/main-session-system-event.js";
 
-// Build a dynamic prompt for cron events by embedding the actual event content.
-// This ensures the model sees the reminder text directly instead of relying on
-// "shown in the system messages above" which may not be visible in context.
+// Main-session cron wakes should stay internal-only. Keep only short safe
+// tokens in the prompt and redact richer event text.
 export function buildCronEventPrompt(
   pendingEvents: string[],
-  opts?: {
+  _opts?: {
     deliverToUser?: boolean;
   },
 ): string {
-  const deliverToUser = opts?.deliverToUser ?? true;
-  const eventText = pendingEvents.join("\n").trim();
-  if (!eventText) {
-    if (!deliverToUser) {
-      return (
-        "A scheduled cron event was triggered, but no event content was found. " +
-        "Handle this internally and reply HEARTBEAT_OK when nothing needs user-facing follow-up."
-      );
+  const tokens = collectMainSessionSystemEventTokens(pendingEvents);
+  const lines = ["SYSTEM_WAKE source=cron"];
+  for (const token of tokens) {
+    if (token === MAIN_SESSION_SYSTEM_EVENT_FALLBACK_TOKEN) {
+      continue;
     }
-    return (
-      "A scheduled cron event was triggered, but no event content was found. " +
-      "Reply HEARTBEAT_OK."
-    );
+    lines.push(`token=${token}`);
   }
-  if (!deliverToUser) {
-    return (
-      "A scheduled reminder has been triggered. The reminder content is:\n\n" +
-      eventText +
-      "\n\nHandle this reminder internally. Do not relay it to the user unless explicitly requested."
-    );
-  }
-  return (
-    "A scheduled reminder has been triggered. The reminder content is:\n\n" +
-    eventText +
-    "\n\nPlease relay this reminder to the user in a helpful and friendly way."
-  );
+  lines.push("Reply HEARTBEAT_OK unless session context requires follow-up.");
+  return lines.join("\n");
 }
 
 export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {

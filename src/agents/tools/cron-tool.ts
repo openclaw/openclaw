@@ -236,7 +236,7 @@ JOB SCHEMA (for add action):
 }
 
 SESSION TARGET OPTIONS:
-- "main": Run in the main session (requires payload.kind="systemEvent")
+- "main": Run in the main session with a short internal wake token (requires payload.kind="systemEvent")
 - "isolated": Run in an ephemeral isolated session (requires payload.kind="agentTurn")
 - "current": Bind to the current session where the cron is created (resolved at creation time)
 - "session:<custom-id>": Run in a persistent named session (e.g., "session:project-alpha-daily")
@@ -257,7 +257,7 @@ SCHEDULE TYPES (schedule.kind):
 ISO timestamps without an explicit timezone are treated as UTC.
 
 PAYLOAD TYPES (payload.kind):
-- "systemEvent": Injects text as system event into session
+- "systemEvent": Injects short internal wake text into the main session
   { "kind": "systemEvent", "text": "<message>" }
 - "agentTurn": Runs agent with message (isolated sessions only)
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
@@ -272,6 +272,7 @@ DELIVERY (top-level):
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
+- main-session systemEvent text must stay a short internal wake token; use isolated agentTurn jobs for rich reminder/follow-up prose
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
@@ -279,7 +280,7 @@ WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
 - "now": Wake immediately
 
-Use jobId as the canonical identifier; id is accepted for compatibility. Use contextMessages (0-10) to add previous messages as context to the job text.`,
+Use jobId as the canonical identifier; id is accepted for compatibility. Use contextMessages (0-10) to add previous messages as context to isolated agentTurn job text.`,
     parameters: CronToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -425,14 +426,23 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
               ? params.contextMessages
               : 0;
+          const sessionTarget =
+            job && typeof job === "object" && "sessionTarget" in job
+              ? (job as { sessionTarget?: string }).sessionTarget
+              : undefined;
+          const isIsolatedLikeSession =
+            sessionTarget === "isolated" ||
+            sessionTarget === "current" ||
+            (typeof sessionTarget === "string" && sessionTarget.startsWith("session:"));
           if (
             job &&
             typeof job === "object" &&
             "payload" in job &&
-            (job as { payload?: { kind?: string; text?: string } }).payload?.kind === "systemEvent"
+            isIsolatedLikeSession &&
+            (job as { payload?: { kind?: string; message?: string } }).payload?.kind === "agentTurn"
           ) {
-            const payload = (job as { payload: { kind: string; text: string } }).payload;
-            if (typeof payload.text === "string" && payload.text.trim()) {
+            const payload = (job as { payload: { kind: string; message: string } }).payload;
+            if (typeof payload.message === "string" && payload.message.trim()) {
               const contextLines = await buildReminderContextLines({
                 agentSessionKey: opts?.agentSessionKey,
                 gatewayOpts,
@@ -440,8 +450,8 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 callGatewayTool: callGateway,
               });
               if (contextLines.length > 0) {
-                const baseText = stripExistingContext(payload.text);
-                payload.text = `${baseText}${REMINDER_CONTEXT_MARKER}${contextLines.join("\n")}`;
+                const baseText = stripExistingContext(payload.message);
+                payload.message = `${baseText}${REMINDER_CONTEXT_MARKER}${contextLines.join("\n")}`;
               }
             }
           }

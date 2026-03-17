@@ -70,6 +70,26 @@ describe("applyJobPatch", () => {
     expect(job.delivery).toEqual({ mode: "webhook", to: "https://example.invalid/cron" });
   });
 
+  it("rejects rich main-session systemEvent payloads when switching targets", () => {
+    const job = createIsolatedAgentTurnJob("job-rich-main", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    expect(() =>
+      applyJobPatch(job, {
+        sessionTarget: "main",
+        payload: {
+          kind: "systemEvent",
+          text: "Please relay this reminder to the user in a helpful and friendly way",
+        },
+      }),
+    ).toThrow(
+      'cron main-session systemEvent text must be a short internal wake token; use sessionTarget="isolated" with payload.kind="agentTurn" for rich reminders or follow-up prose',
+    );
+  });
+
   it("maps legacy payload delivery updates onto delivery", () => {
     const job = createIsolatedAgentTurnJob("job-2", {
       mode: "announce",
@@ -419,6 +439,21 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     );
   });
 
+  it("rejects rich main-session systemEvent text at creation time", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        ...mainJobInput("main"),
+        payload: {
+          kind: "systemEvent",
+          text: "Reminder: check the transcript and send the user a friendly update",
+        },
+      }),
+    ).toThrow(
+      'cron main-session systemEvent text must be a short internal wake token; use sessionTarget="isolated" with payload.kind="agentTurn" for rich reminders or follow-up prose',
+    );
+  });
+
   it("rejects main-session job for non-default agent even without explicit defaultAgentId", () => {
     const state = createMockState(now);
     expect(() => createJob(state, mainJobInput("custom-agent"))).toThrow(
@@ -437,6 +472,24 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
         wakeMode: "now",
         payload: { kind: "agentTurn", message: "do it" },
         agentId: "custom-agent",
+      }),
+    ).not.toThrow();
+  });
+
+  it("allows isolated rich follow-up prompts", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        name: "isolated-follow-up",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message:
+            "Review the current session state, decide whether a user update is needed, and send one only if warranted.",
+        },
       }),
     ).not.toThrow();
   });
