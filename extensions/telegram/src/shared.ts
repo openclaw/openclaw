@@ -1,8 +1,8 @@
-import { createScopedChannelConfigBase } from "openclaw/plugin-sdk/compat";
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   createScopedAccountConfigAccessors,
-  formatAllowFromLowercase,
-} from "openclaw/plugin-sdk/compat";
+  createScopedChannelConfigBase,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelConfigSchema,
   getChatChannelMeta,

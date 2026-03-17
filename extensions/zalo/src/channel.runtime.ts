@@ -1,4 +1,4 @@
-import { createAccountStatusSink } from "openclaw/plugin-sdk/compat";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/zalo";
 import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
@@ -41,7 +41,9 @@ export async function probeZaloAccount(params: {
 
 export async function startZaloGatewayAccount(
   ctx: Parameters<
-    NonNullable<import("openclaw/plugin-sdk/zalo").ChannelPlugin["gateway"]>["startAccount"]
+    NonNullable<
+      NonNullable<import("openclaw/plugin-sdk/zalo").ChannelPlugin["gateway"]>["startAccount"]
+    >
   >[0],
 ) {
   const account = ctx.account;

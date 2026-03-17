@@ -1,18 +1,16 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { ensureModelAllowlistEntry } from "../../src/commands/model-allowlist.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import { buildPairedProviderApiKeyCatalog } from "../../src/plugins/provider-catalog.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { ensureModelAllowlistEntry } from "openclaw/plugin-sdk/provider-onboard";
 import { buildBytePlusCodingProvider, buildBytePlusProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "byteplus";
 const BYTEPLUS_DEFAULT_MODEL_REF = "byteplus-plan/ark-code-latest";
 
-const byteplusPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "BytePlus Provider",
   description: "Bundled BytePlus provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "BytePlus",
@@ -46,18 +44,19 @@ const byteplusPlugin = {
       ],
       catalog: {
         order: "paired",
-        run: (ctx) =>
-          buildPairedProviderApiKeyCatalog({
-            ctx,
-            providerId: PROVIDER_ID,
-            buildProviders: () => ({
-              byteplus: buildBytePlusProvider(),
-              "byteplus-plan": buildBytePlusCodingProvider(),
-            }),
-          }),
+        run: async (ctx) => {
+          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+          return {
+            providers: {
+              byteplus: { ...buildBytePlusProvider(), apiKey },
+              "byteplus-plan": { ...buildBytePlusCodingProvider(), apiKey },
+            },
+          };
+        },
       },
     });
   },
-};
-
-export default byteplusPlugin;
+});

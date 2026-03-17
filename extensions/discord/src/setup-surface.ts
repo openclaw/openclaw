@@ -1,13 +1,11 @@
 import {
-  noteChannelLookupFailure,
-  noteChannelLookupSummary,
+  formatDocsLink,
   type OpenClawConfig,
   promptLegacyChannelAllowFrom,
   resolveSetupAccountId,
   type WizardPrompter,
-} from "../../../src/plugin-sdk-internal/setup.js";
-import { type ChannelSetupWizard } from "../../../src/plugin-sdk-internal/setup.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+} from "openclaw/plugin-sdk/setup";
+import { type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultDiscordAccountId, resolveDiscordAccount } from "./accounts.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import {
@@ -17,7 +15,6 @@ import {
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import {
   createDiscordSetupWizardBase,
-  discordSetupAdapter,
   DISCORD_TOKEN_HELP_LINES,
   parseDiscordAllowFromId,
   setDiscordGuildChannelAllowlist,
@@ -82,6 +79,27 @@ async function promptDiscordAllowFrom(params: {
   });
 }
 
+async function resolveDiscordGroupAllowlist(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  credentialValues: { token?: string };
+  entries: string[];
+}) {
+  const token =
+    resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId }).token ||
+    (typeof params.credentialValues.token === "string" ? params.credentialValues.token : "");
+  if (!token || params.entries.length === 0) {
+    return params.entries.map((input) => ({
+      input,
+      resolved: false,
+    }));
+  }
+  return await resolveDiscordChannelAllowlist({
+    token,
+    entries: params.entries,
+  });
+}
+
 export const discordSetupWizard: ChannelSetupWizard = createDiscordSetupWizardBase({
   promptAllowFrom: promptDiscordAllowFrom,
   resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) =>
@@ -91,53 +109,11 @@ export const discordSetupWizard: ChannelSetupWizard = createDiscordSetupWizardBa
         (typeof credentialValues.token === "string" ? credentialValues.token : ""),
       entries,
     }),
-  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) => {
-    const token =
-      resolveDiscordAccount({ cfg, accountId }).token ||
-      (typeof credentialValues.token === "string" ? credentialValues.token : "");
-    let resolved: DiscordChannelResolution[] = entries.map((input) => ({
-      input,
-      resolved: false,
-    }));
-    if (!token || entries.length === 0) {
-      return resolved;
-    }
-    try {
-      resolved = await resolveDiscordChannelAllowlist({
-        token,
-        entries,
-      });
-      const resolvedChannels = resolved.filter((entry) => entry.resolved && entry.channelId);
-      const resolvedGuilds = resolved.filter(
-        (entry) => entry.resolved && entry.guildId && !entry.channelId,
-      );
-      const unresolved = resolved.filter((entry) => !entry.resolved).map((entry) => entry.input);
-      await noteChannelLookupSummary({
-        prompter,
-        label: "Discord channels",
-        resolvedSections: [
-          {
-            title: "Resolved channels",
-            values: resolvedChannels
-              .map((entry) => entry.channelId)
-              .filter((value): value is string => Boolean(value)),
-          },
-          {
-            title: "Resolved guilds",
-            values: resolvedGuilds
-              .map((entry) => entry.guildId)
-              .filter((value): value is string => Boolean(value)),
-          },
-        ],
-        unresolved,
-      });
-    } catch (error) {
-      await noteChannelLookupFailure({
-        prompter,
-        label: "Discord channels",
-        error,
-      });
-    }
-    return resolved;
-  },
+  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries }) =>
+    await resolveDiscordGroupAllowlist({
+      cfg,
+      accountId,
+      credentialValues,
+      entries,
+    }),
 });

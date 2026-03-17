@@ -1,5 +1,13 @@
-import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/compat";
-import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
+import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
+import {
+  buildAccountScopedDmSecurityPolicy,
+  collectAllowlistProviderRestrictSendersWarnings,
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
@@ -7,21 +15,14 @@ import {
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   looksLikeSignalTargetId,
+  normalizeE164,
   normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/signal";
-import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
-import {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-  type ResolvedSignalAccount,
-} from "./accounts.js";
+import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import {
   looksLikeUuid,
@@ -123,14 +124,7 @@ function buildSignalBaseSessionKey(params: {
   accountId?: string | null;
   peer: RoutePeer;
 }) {
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: "signal",
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    identityLinks: params.cfg.session?.identityLinks,
-  });
+  return buildOutboundBaseSessionKey({ ...params, channel: "signal" });
 }
 
 function resolveSignalOutboundSessionRoute(params: {
@@ -315,6 +309,32 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       }),
     }),
   },
+  security: {
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      return buildAccountScopedDmSecurityPolicy({
+        cfg,
+        channelKey: "signal",
+        accountId,
+        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+        policy: account.config.dmPolicy,
+        allowFrom: account.config.allowFrom ?? [],
+        policyPathSuffix: "dmPolicy",
+        normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
+      });
+    },
+    collectWarnings: ({ account, cfg }) => {
+      return collectAllowlistProviderRestrictSendersWarnings({
+        cfg,
+        providerConfigPresent: cfg.channels?.signal !== undefined,
+        configuredGroupPolicy: account.config.groupPolicy,
+        surface: "Signal groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.signal.groupPolicy",
+        groupAllowFromPath: "channels.signal.groupAllowFrom",
+        mentionGated: false,
+      });
+    },
+  },
   messaging: {
     normalizeTarget: normalizeSignalMessagingTarget,
     parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
@@ -325,6 +345,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
     },
   },
+  setup: signalSetupAdapter,
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),

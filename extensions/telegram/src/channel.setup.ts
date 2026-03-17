@@ -5,8 +5,9 @@ import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import { createTelegramPluginBase } from "./shared.js";
 
-export const telegramSetupPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> =
-  createTelegramPluginBase({
+export const telegramSetupPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
+  ...createTelegramPluginBase({
     setupWizard: telegramSetupWizard,
     setup: telegramSetupAdapter,
-  });
+  }),
+};

@@ -1,8 +1,10 @@
 import {
   buildAccountScopedDmSecurityPolicy,
-  buildChannelConfigSchema,
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
+} from "openclaw/plugin-sdk/channel-policy";
+import {
+  buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
   getChatChannelMeta,
@@ -23,6 +25,14 @@ import {
 } from "./accounts.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
+
+export async function loadWhatsAppChannelRuntime() {
+  return await import("./channel.runtime.js");
+}
+
+export const whatsappSetupWizardProxy = createWhatsAppSetupWizardProxy(async () => ({
+  whatsappSetupWizard: (await loadWhatsAppChannelRuntime()).whatsappSetupWizard,
+}));
 
 export function createWhatsAppSetupWizardProxy(
   loadWizard: () => Promise<{

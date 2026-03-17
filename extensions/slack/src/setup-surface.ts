@@ -7,11 +7,11 @@ import {
   promptLegacyChannelAllowFrom,
   resolveSetupAccountId,
   type WizardPrompter,
-} from "../../../src/plugin-sdk-internal/setup.js";
+} from "openclaw/plugin-sdk/setup";
 import type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
-} from "../../../src/plugin-sdk-internal/setup.js";
+} from "openclaw/plugin-sdk/setup";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
@@ -89,6 +89,47 @@ async function promptSlackAllowFrom(params: {
   });
 }
 
+async function resolveSlackGroupAllowlist(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  credentialValues: { botToken?: string };
+  entries: string[];
+  prompter: { note: (message: string, title?: string) => Promise<void> };
+}) {
+  let keys = params.entries;
+  const accountWithTokens = resolveSlackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const activeBotToken = accountWithTokens.botToken || params.credentialValues.botToken || "";
+  if (activeBotToken && params.entries.length > 0) {
+    try {
+      const resolved = await resolveSlackChannelAllowlist({
+        token: activeBotToken,
+        entries: params.entries,
+      });
+      const resolvedKeys = resolved
+        .filter((entry) => entry.resolved && entry.id)
+        .map((entry) => entry.id as string);
+      const unresolved = resolved.filter((entry) => !entry.resolved).map((entry) => entry.input);
+      keys = [...resolvedKeys, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
+      await noteChannelLookupSummary({
+        prompter: params.prompter,
+        label: "Slack channels",
+        resolvedSections: [{ title: "Resolved", values: resolvedKeys }],
+        unresolved,
+      });
+    } catch (error) {
+      await noteChannelLookupFailure({
+        prompter: params.prompter,
+        label: "Slack channels",
+        error,
+      });
+    }
+  }
+  return keys;
+}
+
 export const slackSetupWizard: ChannelSetupWizard = createSlackSetupWizardBase({
   promptAllowFrom: promptSlackAllowFrom,
   resolveAllowFromEntries: async ({ credentialValues, entries }) =>
@@ -96,38 +137,12 @@ export const slackSetupWizard: ChannelSetupWizard = createSlackSetupWizardBase({
       token: credentialValues.botToken,
       entries,
     }),
-  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) => {
-    let keys = entries;
-    const accountWithTokens = resolveSlackAccount({
+  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries, prompter }) =>
+    await resolveSlackGroupAllowlist({
       cfg,
       accountId,
-    });
-    const activeBotToken = accountWithTokens.botToken || credentialValues.botToken || "";
-    if (activeBotToken && entries.length > 0) {
-      try {
-        const resolved = await resolveSlackChannelAllowlist({
-          token: activeBotToken,
-          entries,
-        });
-        const resolvedKeys = resolved
-          .filter((entry) => entry.resolved && entry.id)
-          .map((entry) => entry.id as string);
-        const unresolved = resolved.filter((entry) => !entry.resolved).map((entry) => entry.input);
-        keys = [...resolvedKeys, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
-        await noteChannelLookupSummary({
-          prompter,
-          label: "Slack channels",
-          resolvedSections: [{ title: "Resolved", values: resolvedKeys }],
-          unresolved,
-        });
-      } catch (error) {
-        await noteChannelLookupFailure({
-          prompter,
-          label: "Slack channels",
-          error,
-        });
-      }
-    }
-    return keys;
-  },
+      credentialValues,
+      entries,
+      prompter,
+    }),
 });
