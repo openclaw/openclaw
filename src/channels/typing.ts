@@ -1,3 +1,4 @@
+import { logWarn } from "../logger.js";
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
 import { createTypingStartGuard } from "./typing-start-guard.js";
 
@@ -55,7 +56,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     clearTtlTimer();
     ttlTimer = setTimeout(() => {
       if (!closed) {
-        console.warn(`[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
+        logWarn(`[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
         fireStop();
       }
     }, maxDurationMs);
