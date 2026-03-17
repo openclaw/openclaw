@@ -330,7 +330,7 @@ export function buildBootstrapPromptWarning(params: {
   };
 }
 
-export function prependBootstrapPromptWarning(
+export function appendBootstrapPromptWarning(
   prompt: string,
   warningLines?: string[],
   options?: {
@@ -350,8 +350,11 @@ export function prependBootstrapPromptWarning(
     "Treat Project Context as partial and read the relevant files directly if details seem missing.",
     ...normalizedLines.map((line) => `- ${line}`),
   ].join("\n");
-  return prompt ? `${warningBlock}\n\n${prompt}` : warningBlock;
+  return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
 }
+
+// Backward-compatible alias while older callers still import the prepend name.
+export const prependBootstrapPromptWarning = appendBootstrapPromptWarning;
 
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;
