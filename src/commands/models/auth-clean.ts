@@ -236,7 +236,7 @@ export async function modelsAuthCleanCommand(
     }
     return true;
   });
-  const toKeep = storeProfileIds.filter((id) => configuredProfiles.has(id));
+  const toKeep = storeProfileIds.filter((id) => !toRemove.includes(id));
 
   // Safety guard: refuse to wipe everything when openclaw.json has no auth
   // config at all (e.g. profiles and order both absent/empty). This avoids
