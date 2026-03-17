@@ -1,16 +1,18 @@
+import { buildKilocodeProvider } from "../../extensions/kilocode/provider-catalog.js";
+import { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
+import {
+  QIANFAN_DEFAULT_MODEL_ID,
+  buildQianfanProvider,
+} from "../../extensions/qianfan/provider-catalog.js";
+import {
+  XIAOMI_DEFAULT_MODEL_ID,
+  buildXiaomiProvider,
+} from "../../extensions/xiaomi/provider-catalog.js";
 import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
 } from "../agents/huggingface-models.js";
-import {
-  buildKilocodeProvider,
-  buildKimiCodingProvider,
-  buildQianfanProvider,
-  buildXiaomiProvider,
-  QIANFAN_DEFAULT_MODEL_ID,
-  XIAOMI_DEFAULT_MODEL_ID,
-} from "../agents/models-config.providers.static.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
