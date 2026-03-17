@@ -303,6 +303,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "usage",
+    description: "Show token usage and cost summaries",
+    hasSubcommands: false,
+    register: async (program) => {
+      const mod = await import("../usage-cli.js");
+      mod.registerUsageCli(program);
+    },
+  },
+  {
     name: "completion",
     description: "Generate shell completion script",
     hasSubcommands: false,
