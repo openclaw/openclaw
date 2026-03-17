@@ -303,8 +303,12 @@ export async function sendBlueBubblesAttachment(params: {
 
   // Convert voice messages to iMessage-friendly CAF before upload.
   let isAudioMessage = wantsVoice;
-  if (isAudioMessage && privateApiStatus === false) {
-    warnBlueBubbles("Voice bubbles require Private API; sending as a regular attachment instead.");
+  if (isAudioMessage && !privateApiEnabled) {
+    warnBlueBubbles(
+      privateApiStatus === null
+        ? "Private API probe failed; sending voice as a regular attachment instead."
+        : "Voice bubbles require Private API; sending as a regular attachment instead.",
+    );
     isAudioMessage = false;
   }
   if (isAudioMessage) {
