@@ -495,6 +495,7 @@ function createPluginRecord(params: {
     channelIds: [],
     providerIds: [],
     speechProviderIds: [],
+    mediaUnderstandingProviderIds: [],
     webSearchProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
