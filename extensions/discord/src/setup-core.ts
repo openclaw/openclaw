@@ -1,9 +1,7 @@
+import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
 import type { DiscordGuildEntry } from "../../../src/config/types.discord.js";
 import {
-  applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
@@ -72,15 +70,8 @@ export function parseDiscordAllowFromId(value: string): string | null {
   });
 }
 
-export const discordSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
+export const discordSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
+  channelKey: channel,
   validateInput: ({ accountId, input }) => {
     if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
       return "DISCORD_BOT_TOKEN can only be used for the default account.";
@@ -90,53 +81,8 @@ export const discordSetupAdapter: ChannelSetupAdapter = {
     }
     return null;
   },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          discord: {
-            ...next.channels?.discord,
-            enabled: true,
-            ...(input.useEnv ? {} : input.token ? { token: input.token } : {}),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        discord: {
-          ...next.channels?.discord,
-          enabled: true,
-          accounts: {
-            ...next.channels?.discord?.accounts,
-            [accountId]: {
-              ...next.channels?.discord?.accounts?.[accountId],
-              enabled: true,
-              ...(input.token ? { token: input.token } : {}),
-            },
-          },
-        },
-      },
-    };
-  },
-};
+  buildPatch: (input) => (input.useEnv ? {} : input.token ? { token: input.token } : {}),
+});
 
 type DiscordAllowFromResolverParams = {
   cfg: OpenClawConfig;
