@@ -770,6 +770,20 @@ describe("requireMentionInThreads", () => {
     expect(result).toBeNull();
   });
 
+  it("allows thread reply with explicit mention when requireMentionInThreads is true", async () => {
+    const ctx = createMentionGateCtx({
+      C1: { allow: true, requireMention: true, requireMentionInThreads: true },
+    });
+    ctx.botUserId = "BBOT";
+    const result = await prepareSlackMessage({
+      ctx,
+      account,
+      message: makeMessage({ thread_ts: "100.000", text: "<@BBOT> hello" }),
+      opts: { source: "message" },
+    });
+    expect(result).not.toBeNull();
+  });
+
   it("allows thread reply with implicit mention when requireMentionInThreads is not set", async () => {
     // Simulate the bot having previously participated in this thread.
     recordSlackThreadParticipation("default", "C1", "100.000");
