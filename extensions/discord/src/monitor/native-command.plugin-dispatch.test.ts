@@ -5,7 +5,6 @@ import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dis
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import * as pluginCommandsModule from "../../../../src/plugins/commands.js";
 import { clearPluginCommands, registerPluginCommand } from "../../../../src/plugins/commands.js";
-import { createDiscordNativeCommand } from "./native-command.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
@@ -13,27 +12,30 @@ import {
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type ResolveConfiguredAcpBindingRecordFn =
-  typeof import("../../../../src/acp/persistent-bindings.js").resolveConfiguredAcpBindingRecord;
+  typeof import("openclaw/plugin-sdk/conversation-runtime").resolveConfiguredAcpRoute;
 type EnsureConfiguredAcpBindingSessionFn =
-  typeof import("../../../../src/acp/persistent-bindings.js").ensureConfiguredAcpBindingSession;
+  typeof import("openclaw/plugin-sdk/conversation-runtime").ensureConfiguredAcpRouteReady;
 
 const persistentBindingMocks = vi.hoisted(() => ({
-  resolveConfiguredAcpBindingRecord: vi.fn<ResolveConfiguredAcpBindingRecordFn>(() => null),
+  resolveConfiguredAcpBindingRecord: vi.fn<ResolveConfiguredAcpBindingRecordFn>((params) => ({
+    configuredBinding: null,
+    route: params.route,
+  })),
   ensureConfiguredAcpBindingSession: vi.fn<EnsureConfiguredAcpBindingSessionFn>(async () => ({
     ok: true,
-    sessionKey: "agent:codex:acp:binding:discord:default:seed",
   })),
 }));
 
-vi.mock("../../../../src/acp/persistent-bindings.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../../src/acp/persistent-bindings.js")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
-    resolveConfiguredAcpBindingRecord: persistentBindingMocks.resolveConfiguredAcpBindingRecord,
-    ensureConfiguredAcpBindingSession: persistentBindingMocks.ensureConfiguredAcpBindingSession,
+    resolveConfiguredAcpRoute: persistentBindingMocks.resolveConfiguredAcpBindingRecord,
+    ensureConfiguredAcpRouteReady: persistentBindingMocks.ensureConfiguredAcpBindingSession,
   };
 });
+
+import { createDiscordNativeCommand } from "./native-command.js";
 
 function createInteraction(params?: {
   channelType?: ChannelType;
@@ -80,31 +82,106 @@ function createStatusCommand(cfg: OpenClawConfig) {
   });
 }
 
-function setConfiguredBinding(channelId: string, boundSessionKey: string) {
-  persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue({
-    spec: {
-      channel: "discord",
-      accountId: "default",
-      conversationId: channelId,
-      agentId: "codex",
-      mode: "persistent",
-    },
-    record: {
-      bindingId: `config:acp:discord:default:${channelId}`,
-      targetSessionKey: boundSessionKey,
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: channelId,
-      },
-      status: "active",
-      boundAt: 0,
-    },
+function createPluginCommand(params: { cfg: OpenClawConfig; name: string }) {
+  return createDiscordNativeCommand({
+    command: {
+      name: params.name,
+      description: "Pair",
+      acceptsArgs: true,
+    } satisfies NativeCommandSpec,
+    cfg: params.cfg,
+    discordConfig: params.cfg.channels?.discord ?? {},
+    accountId: "default",
+    sessionPrefix: "discord:slash",
+    ephemeralDefault: true,
+    threadBindings: createNoopThreadBindingManager("default"),
   });
+}
+
+function registerPairPlugin(params?: { discordNativeName?: string }) {
+  expect(
+    registerPluginCommand("demo-plugin", {
+      name: "pair",
+      ...(params?.discordNativeName
+        ? {
+            nativeNames: {
+              telegram: "pair_device",
+              discord: params.discordNativeName,
+            },
+          }
+        : {}),
+      description: "Pair device",
+      acceptsArgs: true,
+      requireAuth: false,
+      handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
+    }),
+  ).toEqual({ ok: true });
+}
+
+async function expectPairCommandReply(params: {
+  cfg: OpenClawConfig;
+  commandName: string;
+  interaction: MockCommandInteraction;
+}) {
+  const command = createPluginCommand({
+    cfg: params.cfg,
+    name: params.commandName,
+  });
+  const dispatchSpy = vi
+    .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+    .mockResolvedValue({} as never);
+
+  await (command as { run: (interaction: unknown) => Promise<void> }).run(
+    Object.assign(params.interaction, {
+      options: {
+        getString: () => "now",
+        getBoolean: () => null,
+        getFocused: () => "",
+      },
+    }) as unknown,
+  );
+
+  expect(dispatchSpy).not.toHaveBeenCalled();
+  expect(params.interaction.reply).toHaveBeenCalledWith(
+    expect.objectContaining({ content: "paired:now" }),
+  );
+}
+
+function setConfiguredBinding(channelId: string, boundSessionKey: string) {
+  persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockImplementation((params) => ({
+    configuredBinding: {
+      spec: {
+        channel: "discord",
+        accountId: params.accountId,
+        conversationId: channelId,
+        parentConversationId: params.parentConversationId,
+        agentId: "codex",
+        mode: "persistent",
+      },
+      record: {
+        bindingId: `config:acp:discord:${params.accountId}:${channelId}`,
+        targetSessionKey: boundSessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: params.accountId,
+          conversationId: channelId,
+        },
+        status: "active",
+        boundAt: 0,
+      },
+    },
+    boundSessionKey,
+    boundAgentId: "codex",
+    route: {
+      ...params.route,
+      agentId: "codex",
+      sessionKey: boundSessionKey,
+      matchedBy: "binding.channel",
+    },
+  }));
   persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
     ok: true,
-    sessionKey: boundSessionKey,
   });
 }
 
@@ -156,112 +233,38 @@ describe("Discord native plugin command dispatch", () => {
     vi.restoreAllMocks();
     clearPluginCommands();
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReset();
-    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReturnValue(null);
+    persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockImplementation((params) => ({
+      configuredBinding: null,
+      route: params.route,
+    }));
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockReset();
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
       ok: true,
-      sessionKey: "agent:codex:acp:binding:discord:default:seed",
     });
   });
 
   it("executes plugin commands from the real registry through the native Discord command path", async () => {
     const cfg = createConfig();
-    const commandSpec: NativeCommandSpec = {
-      name: "pair",
-      description: "Pair",
-      acceptsArgs: true,
-    };
-    const command = createDiscordNativeCommand({
-      command: commandSpec,
-      cfg,
-      discordConfig: cfg.channels?.discord ?? {},
-      accountId: "default",
-      sessionPrefix: "discord:slash",
-      ephemeralDefault: true,
-      threadBindings: createNoopThreadBindingManager("default"),
-    });
     const interaction = createInteraction();
 
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "pair",
-        description: "Pair device",
-        acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
-
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(
-      Object.assign(interaction, {
-        options: {
-          getString: () => "now",
-          getBoolean: () => null,
-          getFocused: () => "",
-        },
-      }) as unknown,
-    );
-
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith(
-      expect.objectContaining({ content: "paired:now" }),
-    );
+    registerPairPlugin();
+    await expectPairCommandReply({
+      cfg,
+      commandName: "pair",
+      interaction,
+    });
   });
 
   it("round-trips Discord native aliases through the real plugin registry", async () => {
     const cfg = createConfig();
-    const commandSpec: NativeCommandSpec = {
-      name: "pairdiscord",
-      description: "Pair",
-      acceptsArgs: true,
-    };
-    const command = createDiscordNativeCommand({
-      command: commandSpec,
-      cfg,
-      discordConfig: cfg.channels?.discord ?? {},
-      accountId: "default",
-      sessionPrefix: "discord:slash",
-      ephemeralDefault: true,
-      threadBindings: createNoopThreadBindingManager("default"),
-    });
     const interaction = createInteraction();
 
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "pair",
-        nativeNames: {
-          telegram: "pair_device",
-          discord: "pairdiscord",
-        },
-        description: "Pair device",
-        acceptsArgs: true,
-        requireAuth: false,
-        handler: async ({ args }) => ({ text: `paired:${args ?? ""}` }),
-      }),
-    ).toEqual({ ok: true });
-
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
-
-    await (command as { run: (interaction: unknown) => Promise<void> }).run(
-      Object.assign(interaction, {
-        options: {
-          getString: () => "now",
-          getBoolean: () => null,
-          getFocused: () => "",
-        },
-      }) as unknown,
-    );
-
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith(
-      expect.objectContaining({ content: "paired:now" }),
-    );
+    registerPairPlugin({ discordNativeName: "pairdiscord" });
+    await expectPairCommandReply({
+      cfg,
+      commandName: "pairdiscord",
+      interaction,
+    });
   });
 
   it("blocks unauthorized Discord senders before requireAuth:false plugin commands execute", async () => {

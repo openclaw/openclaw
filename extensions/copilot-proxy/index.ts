@@ -1,6 +1,5 @@
 import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
   type ProviderAuthContext,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/copilot-proxy";
@@ -71,12 +70,11 @@ function buildModelDefinition(modelId: string) {
   };
 }
 
-const copilotProxyPlugin = {
+export default definePluginEntry({
   id: "copilot-proxy",
   name: "Copilot Proxy",
   description: "Local Copilot Proxy (VS Code LM) provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: "copilot-proxy",
       label: "Copilot Proxy",
@@ -157,6 +155,4 @@ const copilotProxyPlugin = {
       },
     });
   },
-};
-
-export default copilotProxyPlugin;
+});
