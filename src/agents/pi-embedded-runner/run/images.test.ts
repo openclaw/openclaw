@@ -11,6 +11,11 @@ import {
   modelSupportsImages,
 } from "./images.js";
 
+function expectNoPromptImages(result: { detectedRefs: unknown[]; images: unknown[] }) {
+  expect(result.detectedRefs).toHaveLength(0);
+  expect(result.images).toHaveLength(0);
+}
+
 describe("detectImageReferences", () => {
   it("detects absolute file paths with common extensions", () => {
     const prompt = "Check this image /path/to/screenshot.png and tell me what you see";
@@ -262,8 +267,7 @@ describe("detectAndLoadPromptImages", () => {
       existingImages: [{ type: "image", data: "abc", mimeType: "image/png" }],
     });
 
-    expect(result.images).toHaveLength(0);
-    expect(result.detectedRefs).toHaveLength(0);
+    expectNoPromptImages(result);
   });
 
   it("returns no detected refs when prompt has no image references", async () => {
@@ -273,8 +277,7 @@ describe("detectAndLoadPromptImages", () => {
       model: { input: ["text", "image"] },
     });
 
-    expect(result.detectedRefs).toHaveLength(0);
-    expect(result.images).toHaveLength(0);
+    expectNoPromptImages(result);
   });
 
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
