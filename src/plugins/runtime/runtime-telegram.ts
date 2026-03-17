@@ -1,4 +1,4 @@
-import { collectTelegramUnmentionedGroupIds } from "../../../extensions/telegram/api.js";
+import { collectTelegramUnmentionedGroupIds } from "../../../extensions/telegram/runtime-api.js";
 import { telegramMessageActions } from "../../../extensions/telegram/runtime-api.js";
 import {
   setTelegramThreadBindingIdleTimeoutBySessionKey,

@@ -4,6 +4,36 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ALLOWED_EXTENSION_PUBLIC_SEAMS = new Set([
+  "api.js",
+  "index.js",
+  "login-qr-api.js",
+  "runtime-api.js",
+  "setup-entry.js",
+]);
+const GUARDED_CHANNEL_EXTENSIONS = new Set([
+  "bluebubbles",
+  "discord",
+  "feishu",
+  "googlechat",
+  "imessage",
+  "irc",
+  "line",
+  "matrix",
+  "mattermost",
+  "msteams",
+  "nextcloud-talk",
+  "nostr",
+  "signal",
+  "slack",
+  "synology-chat",
+  "telegram",
+  "tlon",
+  "twitch",
+  "whatsapp",
+  "zalo",
+  "zalouser",
+]);
 
 type GuardedSource = {
   path: string;
@@ -186,6 +216,27 @@ function collectCoreSourceFiles(): string[] {
   return files;
 }
 
+function collectExtensionImports(text: string): string[] {
+  return [...text.matchAll(/["']([^"']*extensions\/[^"']+\.(?:[cm]?[jt]sx?))["']/g)].map(
+    (match) => match[1] ?? "",
+  );
+}
+
+function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void {
+  for (const specifier of imports) {
+    const normalized = specifier.replaceAll("\\", "/");
+    const extensionId = normalized.match(/extensions\/([^/]+)\//)?.[1] ?? null;
+    if (!extensionId || !GUARDED_CHANNEL_EXTENSIONS.has(extensionId)) {
+      continue;
+    }
+    const basename = normalized.split("/").at(-1) ?? "";
+    expect(
+      ALLOWED_EXTENSION_PUBLIC_SEAMS.has(basename),
+      `${file} should only import approved extension seams, got ${specifier}`,
+    ).toBe(true);
+  }
+}
+
 describe("channel import guardrails", () => {
   it("keeps channel helper modules off their own SDK barrels", () => {
     for (const source of SAME_CHANNEL_SDK_GUARDS) {
@@ -234,6 +285,18 @@ describe("channel import guardrails", () => {
       expect(text, `${file} should not import another extension's src`).not.toMatch(
         /["'][^"']*\.\.\/(?:\.\.\/)?(?!src\/)[^/"']+\/src\//,
       );
+    }
+  });
+
+  it("keeps core extension imports limited to approved public seams", () => {
+    for (const file of collectCoreSourceFiles()) {
+      expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readFileSync(file, "utf8")));
+    }
+  });
+
+  it("keeps extension-to-extension imports limited to approved public seams", () => {
+    for (const file of collectExtensionSourceFiles()) {
+      expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readFileSync(file, "utf8")));
     }
   });
 });
