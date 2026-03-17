@@ -124,12 +124,30 @@ function runCatalog(params: {
   provider: Awaited<ReturnType<typeof requireProvider>>;
   env?: NodeJS.ProcessEnv;
   resolveProviderApiKey?: () => { apiKey: string | undefined };
+  resolveProviderAuth?: (
+    providerId?: string,
+    options?: { oauthMarker?: string },
+  ) => {
+    apiKey: string | undefined;
+    discoveryApiKey?: string;
+    mode: "api_key" | "oauth" | "token" | "none";
+    source: "env" | "profile" | "none";
+    profileId?: string;
+  };
 }) {
   return runProviderCatalog({
     provider: params.provider,
     config: {},
     env: params.env ?? ({} as NodeJS.ProcessEnv),
     resolveProviderApiKey: params.resolveProviderApiKey ?? (() => ({ apiKey: undefined })),
+    resolveProviderAuth:
+      params.resolveProviderAuth ??
+      ((_, options) => ({
+        apiKey: options?.oauthMarker,
+        discoveryApiKey: undefined,
+        mode: options?.oauthMarker ? "oauth" : "none",
+        source: options?.oauthMarker ? "profile" : "none",
+      })),
   });
 }
 
@@ -250,6 +268,12 @@ describe("provider discovery contract", () => {
         },
         env: {} as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          mode: "none",
+          source: "none",
+        }),
       }),
     ).resolves.toMatchObject({
       provider: {
@@ -276,6 +300,12 @@ describe("provider discovery contract", () => {
         config: {},
         env: {} as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          mode: "none",
+          source: "none",
+        }),
       }),
     ).resolves.toBeNull();
     expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, { quiet: true });
@@ -299,6 +329,12 @@ describe("provider discovery contract", () => {
         resolveProviderApiKey: () => ({
           apiKey: "VLLM_API_KEY",
           discoveryApiKey: "env-vllm-key",
+        }),
+        resolveProviderAuth: () => ({
+          apiKey: "VLLM_API_KEY",
+          discoveryApiKey: "env-vllm-key",
+          mode: "api_key",
+          source: "env",
         }),
       }),
     ).resolves.toEqual({
@@ -333,6 +369,12 @@ describe("provider discovery contract", () => {
           apiKey: "SGLANG_API_KEY",
           discoveryApiKey: "env-sglang-key",
         }),
+        resolveProviderAuth: () => ({
+          apiKey: "SGLANG_API_KEY",
+          discoveryApiKey: "env-sglang-key",
+          mode: "api_key",
+          source: "env",
+        }),
       }),
     ).resolves.toEqual({
       provider: {
@@ -358,6 +400,12 @@ describe("provider discovery contract", () => {
           MINIMAX_API_KEY: "minimax-key",
         } as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: "minimax-key" }),
+        resolveProviderAuth: () => ({
+          apiKey: "minimax-key",
+          discoveryApiKey: undefined,
+          mode: "api_key",
+          source: "env",
+        }),
       }),
     ).resolves.toMatchObject({
       provider: {
@@ -398,6 +446,13 @@ describe("provider discovery contract", () => {
         config: {},
         env: {} as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: "minimax-oauth",
+          discoveryApiKey: "access-token",
+          mode: "oauth",
+          source: "profile",
+          profileId: "minimax-portal:default",
+        }),
       }),
     ).resolves.toMatchObject({
       provider: {
@@ -429,6 +484,12 @@ describe("provider discovery contract", () => {
         },
         env: {} as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          mode: "none",
+          source: "none",
+        }),
       }),
     ).resolves.toMatchObject({
       provider: {
@@ -458,6 +519,12 @@ describe("provider discovery contract", () => {
           MODELSTUDIO_API_KEY: "modelstudio-key",
         } as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: "modelstudio-key" }),
+        resolveProviderAuth: () => ({
+          apiKey: "modelstudio-key",
+          discoveryApiKey: undefined,
+          mode: "api_key",
+          source: "env",
+        }),
       }),
     ).resolves.toMatchObject({
       provider: {
@@ -484,6 +551,12 @@ describe("provider discovery contract", () => {
         config: {},
         env: {} as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          mode: "none",
+          source: "none",
+        }),
       }),
     ).resolves.toBeNull();
   });
@@ -524,6 +597,12 @@ describe("provider discovery contract", () => {
           CLOUDFLARE_AI_GATEWAY_API_KEY: "secret-value",
         } as NodeJS.ProcessEnv,
         resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          mode: "none",
+          source: "none",
+        }),
       }),
     ).resolves.toEqual({
       provider: {
