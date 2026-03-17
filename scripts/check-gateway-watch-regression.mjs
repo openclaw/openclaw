@@ -8,9 +8,9 @@ import process from "node:process";
 const DEFAULTS = {
   outputDir: path.join(process.cwd(), ".local", "gateway-watch-regression"),
   windowMs: 8_000,
-  sigkillGraceMs: 3_000,
-  cpuWarnMs: 500,
-  cpuFailMs: 8_000,
+  sigkillGraceMs: 10_000,
+  startupReadyWarnMs: 5_000,
+  startupReadyFailMs: 8_000,
   distRuntimeFileGrowthMax: 200,
   distRuntimeByteGrowthMax: 2 * 1024 * 1024,
   keepLogs: true,
@@ -39,11 +39,11 @@ function parseArgs(argv) {
       case "--sigkill-grace-ms":
         options.sigkillGraceMs = Number(readValue());
         break;
-      case "--cpu-warn-ms":
-        options.cpuWarnMs = Number(readValue());
+      case "--startup-ready-warn-ms":
+        options.startupReadyWarnMs = Number(readValue());
         break;
-      case "--cpu-fail-ms":
-        options.cpuFailMs = Number(readValue());
+      case "--startup-ready-fail-ms":
+        options.startupReadyFailMs = Number(readValue());
         break;
       case "--dist-runtime-file-growth-max":
         options.distRuntimeFileGrowthMax = Number(readValue());
@@ -206,75 +206,34 @@ function runCheckedCommand(command, args) {
   throw new Error(`${command} ${args.join(" ")} failed with status ${result.status ?? "unknown"}`);
 }
 
-function buildTimeCommandArgs(pidFilePath) {
-  const wrapperSource = [
-    "const fs = require('node:fs');",
-    "const { spawn } = require('node:child_process');",
-    "const child = spawn('pnpm', ['gateway:watch'], {",
-    "  cwd: process.cwd(),",
-    "  env: process.env,",
-    "  stdio: 'inherit',",
-    "  detached: true,",
-    "});",
-    "fs.writeFileSync(process.env.OPENCLAW_WATCH_CHILD_PID_FILE, `${child.pid}\\n`, 'utf8');",
-    "child.on('exit', (code, signal) => {",
-    "  if (typeof code === 'number') process.exit(code);",
-    "  process.exit(signal ? 128 : 0);",
-    "});",
-  ].join(" ");
-  if (process.platform === "darwin") {
-    return {
-      command: "/usr/bin/time",
-      args: ["-lp", process.execPath, "-e", wrapperSource],
-      extraEnv: { OPENCLAW_WATCH_CHILD_PID_FILE: pidFilePath },
-    };
-  }
-  return {
-    command: "/usr/bin/time",
-    args: ["-f", "__TIMING__ user=%U sys=%S elapsed=%e", process.execPath, "-e", wrapperSource],
-    extraEnv: { OPENCLAW_WATCH_CHILD_PID_FILE: pidFilePath },
-  };
-}
-
-function parseTiming(stderrText) {
-  if (process.platform === "darwin") {
-    const user = Number(stderrText.match(/^user\s+([0-9.]+)/m)?.[1] ?? "NaN");
-    const sys = Number(stderrText.match(/^sys\s+([0-9.]+)/m)?.[1] ?? "NaN");
-    const elapsed = Number(stderrText.match(/^real\s+([0-9.]+)/m)?.[1] ?? "NaN");
-    return {
-      userSeconds: user,
-      sysSeconds: sys,
-      elapsedSeconds: elapsed,
-    };
-  }
-
-  const match = stderrText.match(/__TIMING__ user=([0-9.]+) sys=([0-9.]+) elapsed=([0-9.]+)/);
-  return {
-    userSeconds: Number(match?.[1] ?? "NaN"),
-    sysSeconds: Number(match?.[2] ?? "NaN"),
-    elapsedSeconds: Number(match?.[3] ?? "NaN"),
-  };
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function runTimedWatch(options, outputDir) {
-  const pidFilePath = path.join(outputDir, "watch.child.pid");
-  const { command: timeCommand, args: timeArgs, extraEnv } = buildTimeCommandArgs(pidFilePath);
   const stdoutPath = path.join(outputDir, "watch.stdout.log");
   const stderrPath = path.join(outputDir, "watch.stderr.log");
-  const child = spawn(timeCommand, timeArgs, {
+  const startedAt = Date.now();
+  let startupReadyMs = null;
+  const child = spawn("pnpm", ["gateway:watch"], {
     cwd: process.cwd(),
-    env: { ...process.env, ...extraEnv },
+    env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
   });
+  const watchPid = child.pid;
+  if (typeof watchPid !== "number") {
+    throw new Error("Failed to spawn pnpm gateway:watch");
+  }
 
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk) => {
-    stdout += String(chunk);
+    const chunkText = String(chunk);
+    stdout += chunkText;
+    if (startupReadyMs === null && chunkText.includes("[gateway] listening on ws://")) {
+      startupReadyMs = Date.now() - startedAt;
+    }
   });
   child.stderr?.on("data", (chunk) => {
     stderr += String(chunk);
@@ -284,22 +243,12 @@ async function runTimedWatch(options, outputDir) {
     child.on("exit", (code, signal) => resolve({ code, signal }));
   });
 
-  let watchChildPid = null;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (fs.existsSync(pidFilePath)) {
-      watchChildPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
-      break;
-    }
-    await sleep(100);
-  }
-
   await sleep(options.windowMs);
-  if (watchChildPid) {
-    try {
-      process.kill(-watchChildPid, "SIGTERM");
-    } catch {
-      // ignore
-    }
+
+  try {
+    process.kill(-watchPid, "SIGTERM");
+  } catch {
+    // ignore
   }
 
   const gracefulExit = await Promise.race([
@@ -308,12 +257,10 @@ async function runTimedWatch(options, outputDir) {
   ]);
 
   if (gracefulExit === null) {
-    if (watchChildPid) {
-      try {
-        process.kill(-watchChildPid, "SIGKILL");
-      } catch {
-        // ignore
-      }
+    try {
+      process.kill(-watchPid, "SIGKILL");
+    } catch {
+      // ignore
     }
   }
 
@@ -323,36 +270,10 @@ async function runTimedWatch(options, outputDir) {
 
   return {
     exit,
-    timing: parseTiming(stderr),
+    startupReadyMs,
     stdoutPath,
     stderrPath,
   };
-}
-
-function isDirtyWatchTree() {
-  const result = spawnSync(
-    "git",
-    [
-      "status",
-      "--porcelain",
-      "--untracked-files=normal",
-      "--",
-      "src",
-      "extensions",
-      "package.json",
-      "tsconfig.json",
-      "tsdown.config.ts",
-    ],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  return (result.stdout ?? "").trim().length > 0;
 }
 
 function parsePathFile(filePath) {
@@ -382,10 +303,6 @@ function fail(message) {
   console.error(`FAIL: ${message}`);
 }
 
-function warn(message) {
-  console.warn(`WARN: ${message}`);
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
@@ -398,7 +315,6 @@ async function main() {
 
   const watchDir = path.join(options.outputDir, "watch");
   ensureDir(watchDir);
-  const dirtyWatchTree = isDirtyWatchTree();
   const watchResult = await runTimedWatch(options, watchDir);
 
   const postDir = path.join(options.outputDir, "post");
@@ -410,7 +326,7 @@ async function main() {
   const distRuntimeAddedPaths = diff.added.filter((entry) =>
     entry.startsWith("dist-runtime/"),
   ).length;
-  const cpuMs = Math.round((watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000);
+  const startupReadyMs = watchResult.startupReadyMs;
   const watchTriggeredBuild =
     fs
       .readFileSync(watchResult.stderrPath, "utf8")
@@ -421,11 +337,10 @@ async function main() {
 
   const summary = {
     windowMs: options.windowMs,
-    dirtyWatchTree,
     watchTriggeredBuild,
-    cpuMs,
-    cpuWarnMs: options.cpuWarnMs,
-    cpuFailMs: options.cpuFailMs,
+    startupReadyMs,
+    startupReadyWarnMs: options.startupReadyWarnMs,
+    startupReadyFailMs: options.startupReadyFailMs,
     distRuntimeFileGrowth,
     distRuntimeFileGrowthMax: options.distRuntimeFileGrowthMax,
     distRuntimeByteGrowth,
@@ -434,7 +349,6 @@ async function main() {
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,
-    timing: watchResult.timing,
   };
   fs.writeFileSync(
     path.join(options.outputDir, "summary.json"),
@@ -444,7 +358,6 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
 
   const failures = [];
-  const skipCpuGate = dirtyWatchTree === true && watchTriggeredBuild;
   if (distRuntimeFileGrowth > options.distRuntimeFileGrowthMax) {
     failures.push(
       `dist-runtime file growth ${distRuntimeFileGrowth} exceeded max ${options.distRuntimeFileGrowthMax}`,
@@ -455,22 +368,18 @@ async function main() {
       `dist-runtime apparent byte growth ${distRuntimeByteGrowth} exceeded max ${options.distRuntimeByteGrowthMax}`,
     );
   }
-  if (skipCpuGate) {
-    warn(
-      "Skipping CPU threshold gate because the watched tree is dirty and gateway:watch rebuilt dist.",
+  if (!Number.isFinite(startupReadyMs)) {
+    failures.push(
+      "gateway:watch never reached the gateway listening state in the measurement window",
     );
-  } else {
-    if (!Number.isFinite(cpuMs)) {
-      failures.push("failed to parse CPU timing from gateway:watch run");
-    }
-    if (cpuMs > options.cpuFailMs) {
-      failures.push(
-        `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window (max ${options.cpuFailMs}ms)`,
-      );
-    }
-    if (cpuMs > options.cpuWarnMs) {
-      warn(`gateway:watch used ${cpuMs}ms CPU, above warn threshold ${options.cpuWarnMs}ms`);
-    }
+  } else if (startupReadyMs > options.startupReadyFailMs) {
+    failures.push(
+      `LOUD ALARM: gateway:watch took ${startupReadyMs}ms to reach the listening state after pnpm build, above loud-alarm threshold ${options.startupReadyFailMs}ms`,
+    );
+  } else if (startupReadyMs > options.startupReadyWarnMs) {
+    failures.push(
+      `gateway:watch took ${startupReadyMs}ms to reach the listening state after pnpm build, above target ${options.startupReadyWarnMs}ms`,
+    );
   }
 
   if (failures.length > 0) {
@@ -482,6 +391,8 @@ async function main() {
     );
     process.exit(1);
   }
+
+  process.exit(0);
 }
 
 await main();
