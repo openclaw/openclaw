@@ -12,7 +12,7 @@ metadata:
       bins:
         - clawhub
         - curl
-        - python3
+        - jq
         - git
     install:
       - id: node
@@ -41,7 +41,7 @@ Use this skill when the user asks something like:
 
 - If a skill is already installed and working — use it directly
 - For skills that don't exist anywhere — offer to create one instead
-- For updating or publishing skills — use the `clawhub` skill instead
+- For updating or publishing skills — use the clawhub skill instead
 
 ---
 
@@ -65,9 +65,8 @@ Output includes: skill name, description, version, author.
 
 If ClawHub has no results, fall back to GitHub.
 
-Note: set `GITHUB_TOKEN` in your environment for reliable results.
-Unauthenticated requests are capped at 60/hour per IP and will silently
-return empty results on 403 errors.
+Note: set GITHUB_TOKEN in your environment for reliable results.
+Unauthenticated requests are capped at 60/hour per IP.
 
 ```bash
 GITHUB_AUTH=""
@@ -75,18 +74,16 @@ if [ -n "$GITHUB_TOKEN" ]; then
   GITHUB_AUTH="-H Authorization:Bearer $GITHUB_TOKEN"
 fi
 
-# Search for openclaw skill repos
 curl -s $GITHUB_AUTH \
   "https://api.github.com/search/repositories?q=openclaw+skill+KEYWORD&sort=stars&per_page=5" \
-  | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('message','')) if data.get('message') else [print(r['full_name'],'|',r.get('description',''),'|',r['html_url']) for r in data.get('items',[])]"
+  | jq -r '.items[] | "\(.full_name) | \(.description) | \(.html_url)"'
 
-# Search for SKILL.md files matching a topic
 curl -s $GITHUB_AUTH \
   "https://api.github.com/search/code?q=openclaw+KEYWORD+filename:SKILL.md&per_page=5" \
-  | python3 -c "import sys,json; data=json.load(sys.stdin); print(data.get('message','')) if data.get('message') else [print(i['repository']['full_name'],'|',i['path'],'|',i['html_url']) for i in data.get('items',[])]"
+  | jq -r '.items[] | "\(.repository.full_name) | \(.path) | \(.html_url)"'
 ```
 
-Replace `KEYWORD` with the tool or topic the user asked about.
+Replace KEYWORD with the tool or topic the user asked about.
 
 ---
 
@@ -137,9 +134,10 @@ GITHUB_AUTH=""
 if [ -n "$GITHUB_TOKEN" ]; then
   GITHUB_AUTH="-H Authorization:Bearer $GITHUB_TOKEN"
 fi
+
 curl -s $GITHUB_AUTH \
   "https://api.github.com/search/repositories?q=openclaw+skill+KEYWORD&per_page=5" \
-  | python3 -c "import sys,json; [print(r['full_name'],'|',r.get('description','')) for r in json.load(sys.stdin).get('items',[])]"
+  | jq -r '.items[] | "\(.full_name) | \(.description)"'
 
 # 4. If found on GitHub, use the Step 4 clone flow above
 ```
@@ -150,16 +148,16 @@ curl -s $GITHUB_AUTH \
 
 If nothing exists anywhere, tell the user:
 
-> "I couldn't find a skill for [X] on ClawHub or GitHub. I can write one for you —
-> it's just a SKILL.md file with usage docs. Want me to create it?"
+"I could not find a skill for X on ClawHub or GitHub. I can write one for you.
+It is just a SKILL.md file with usage docs. Want me to create it?"
 
 ---
 
 ## Notes
 
 - ClawHub registry: https://clawhub.com
-- Default install dir: `./skills/` inside your OpenClaw workspace
-- Override install dir: `--workdir /path` or `CLAWHUB_WORKDIR` env var
-- Custom registry: `--registry https://my-registry.com` or `CLAWHUB_REGISTRY`
-- Set `GITHUB_TOKEN` env var for reliable GitHub API search (avoids 60 req/hour rate limit)
+- Default install dir: ./skills/ inside your OpenClaw workspace
+- Override install dir: --workdir /path or CLAWHUB_WORKDIR env var
+- Custom registry: --registry https://my-registry.com or CLAWHUB_REGISTRY
+- Set GITHUB_TOKEN env var for reliable GitHub API search (avoids 60 req/hour rate limit)
 - After installing a skill, OpenClaw picks it up automatically — no restart needed
