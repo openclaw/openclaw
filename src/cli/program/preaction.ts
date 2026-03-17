@@ -150,6 +150,19 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       commandPath,
       ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
     });
+
+    // Initialize redaction with sensitive values from config and environment.
+    // This runs after ensureConfigReady to ensure config is loaded.
+    try {
+      const { initializeRedactionWithConfig } = await import("../../logging/redact-init.js");
+      const { loadConfig } = await import("../../config/config.js");
+      const config = loadConfig();
+      initializeRedactionWithConfig(config);
+    } catch {
+      // Best-effort initialization; if it fails, redaction will still work
+      // with default patterns, just without runtime-discovered values.
+    }
+
     // Load plugins for commands that need channel access
     if (shouldLoadPluginsForCommand(commandPath, argv)) {
       const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
