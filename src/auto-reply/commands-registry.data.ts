@@ -455,7 +455,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "mcp",
       nativeName: "mcp",
-      description: "Show or set embedded Pi MCP servers.",
+      description: "Show or set OpenClaw MCP servers.",
       textAlias: "/mcp",
       category: "management",
       args: [
@@ -479,6 +479,28 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
       argsParsing: "none",
       formatArgs: COMMAND_ARG_FORMATTERS.mcp,
+    }),
+    defineChatCommand({
+      key: "plugins",
+      nativeName: "plugins",
+      description: "List, show, enable, or disable plugins.",
+      textAliases: ["/plugins", "/plugin"],
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "list | show | get | enable | disable",
+          type: "string",
+          choices: ["list", "show", "get", "enable", "disable"],
+        },
+        {
+          name: "path",
+          description: "Plugin id or name",
+          type: "string",
+        },
+      ],
+      argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.plugins,
     }),
     defineChatCommand({
       key: "debug",
