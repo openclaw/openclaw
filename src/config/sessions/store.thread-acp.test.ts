@@ -2,8 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import { recordSessionMetaFromInbound } from "./store.js";
 import type { SessionEntry } from "./types.js";
+
+function stubCtx(): MsgContext {
+  return { MessageId: "msg1" } as MsgContext;
+}
 
 describe("thread-bound ACP session metadata", () => {
   let tempDir: string;
@@ -29,9 +34,16 @@ describe("thread-bound ACP session metadata", () => {
       acp: {
         backend: "acpx",
         agent: "codex",
+        runtimeSessionName: "acpx:v1:test",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
         identity: {
+          state: "resolved",
           acpxRecordId: "019cf750-8267-7f02-bce4-f5d5a74adcda",
           acpxSessionId: "019cf750-8267-7f02-bce4-f5d5a74adcda",
+          source: "ensure",
+          lastUpdatedAt: Date.now(),
         },
       },
     };
@@ -43,7 +55,7 @@ describe("thread-bound ACP session metadata", () => {
     const result = await recordSessionMetaFromInbound({
       storePath,
       sessionKey: threadKey,
-      ctx: { MessageId: "msg1" } as any,
+      ctx: stubCtx(),
     });
 
     expect(result?.acp).toEqual(baseSession.acp);
@@ -57,9 +69,16 @@ describe("thread-bound ACP session metadata", () => {
       acp: {
         backend: "acpx",
         agent: "main",
+        runtimeSessionName: "acpx:v1:test",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
         identity: {
+          state: "resolved",
           acpxRecordId: "test-record-id",
           acpxSessionId: "test-session-id",
+          source: "ensure",
+          lastUpdatedAt: Date.now(),
         },
       },
     };
@@ -71,7 +90,7 @@ describe("thread-bound ACP session metadata", () => {
     const result = await recordSessionMetaFromInbound({
       storePath,
       sessionKey: threadKey,
-      ctx: { MessageId: "msg1" } as any,
+      ctx: stubCtx(),
     });
 
     expect(result?.acp).toEqual(baseSession.acp);
@@ -81,11 +100,11 @@ describe("thread-bound ACP session metadata", () => {
     const baseKey = "agent:codex:acp:base-id";
     const threadKey = `${baseKey}:thread:123`;
 
-    const existingAcp = { backend: "existing", agent: "test" };
+    const existingAcp = { backend: "existing", agent: "test" } as SessionEntry["acp"];
     const threadSession: SessionEntry = {
       sessionId: "thread-session",
       updatedAt: Date.now(),
-      acp: existingAcp as any,
+      acp: existingAcp,
     };
 
     fs.writeFileSync(storePath, JSON.stringify({ [threadKey]: threadSession }));
@@ -93,7 +112,7 @@ describe("thread-bound ACP session metadata", () => {
     const result = await recordSessionMetaFromInbound({
       storePath,
       sessionKey: threadKey,
-      ctx: { MessageId: "msg1" } as any,
+      ctx: stubCtx(),
     });
 
     expect(result?.acp).toEqual(existingAcp);
@@ -107,10 +126,9 @@ describe("thread-bound ACP session metadata", () => {
     const result = await recordSessionMetaFromInbound({
       storePath,
       sessionKey: threadKey,
-      ctx: { MessageId: "msg1" } as any,
+      ctx: stubCtx(),
     });
 
     expect(result?.acp).toBeUndefined();
   });
 });
-

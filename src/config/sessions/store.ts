@@ -767,12 +767,28 @@ export async function recordSessionMetaFromInbound(params: {
     (store) => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey });
       const existing = resolved.existing;
-      const patch = deriveSessionMetaPatch({
+      let patch = deriveSessionMetaPatch({
         ctx,
         sessionKey: resolved.normalizedKey,
         existing,
         groupResolution: params.groupResolution,
       });
+
+      // Copy ACP metadata from base session to thread-bound session
+      if (!existing?.acp && resolved.normalizedKey.includes(":thread:")) {
+        const threadIndex = resolved.normalizedKey.lastIndexOf(":thread:");
+        if (threadIndex > 0) {
+          const baseKey = resolved.normalizedKey.substring(0, threadIndex);
+          const baseSession = store[baseKey];
+          if (baseSession?.acp) {
+            if (!patch) {
+              patch = {};
+            }
+            patch.acp = baseSession.acp;
+          }
+        }
+      }
+
       if (!patch) {
         if (existing && resolved.legacyKeys.length > 0) {
           store[resolved.normalizedKey] = existing;
@@ -784,18 +800,6 @@ export async function recordSessionMetaFromInbound(params: {
       }
       if (!existing && !createIfMissing) {
         return null;
-      }
-
-      // Copy ACP metadata from base session to thread-bound session
-      if (!existing?.acp && resolved.normalizedKey.includes(':thread:')) {
-        const threadIndex = resolved.normalizedKey.lastIndexOf(':thread:');
-        if (threadIndex > 0) {
-          const baseKey = resolved.normalizedKey.substring(0, threadIndex);
-          const baseSession = store[baseKey];
-          if (baseSession?.acp) {
-            patch.acp = baseSession.acp;
-          }
-        }
       }
 
       const next = existing
