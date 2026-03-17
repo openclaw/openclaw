@@ -30,8 +30,6 @@ export {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "../channels/plugins/setup-wizard-helpers.js";
-export { detectBinary } from "../commands/onboard-helpers.js";
-export { installSignalCli } from "../commands/signal-install.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { hasConfiguredSecretInput } from "../config/types.secrets.js";
