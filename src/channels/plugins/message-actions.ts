@@ -3,6 +3,10 @@ import type { TSchema } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
+import {
+  createMessageActionDiscoveryContext,
+  resolveMessageActionDiscoveryChannelId,
+} from "./message-action-discovery.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type {
   ChannelMessageActionContext,
@@ -124,27 +128,17 @@ export function listChannelMessageCapabilitiesForChannel(params: {
   agentId?: string | null;
   requesterSenderId?: string | null;
 }): ChannelMessageCapability[] {
-  if (!params.channel) {
+  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
+  if (!channelId) {
     return [];
   }
-  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
+  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
   return plugin?.actions
     ? Array.from(
         listCapabilities({
           pluginId: plugin.id,
           actions: plugin.actions,
-          context: {
-            cfg: params.cfg,
-            currentChannelProvider: params.channel,
-            currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            accountId: params.accountId,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            agentId: params.agentId,
-            requesterSenderId: params.requesterSenderId,
-          },
+          context: createMessageActionDiscoveryContext(params),
         }),
       )
     : [];
@@ -204,19 +198,9 @@ export function resolveChannelMessageToolSchemaProperties(params: {
 }): Record<string, TSchema> {
   const properties: Record<string, TSchema> = {};
   const plugins = listChannelPlugins();
-  const currentChannel = params.channel?.trim() || undefined;
-  const discoveryBase: ChannelMessageActionDiscoveryContext = {
-    cfg: params.cfg,
-    currentChannelId: params.currentChannelId,
-    currentChannelProvider: currentChannel,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    accountId: params.accountId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    requesterSenderId: params.requesterSenderId,
-  };
+  const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
+  const discoveryBase: ChannelMessageActionDiscoveryContext =
+    createMessageActionDiscoveryContext(params);
 
   for (const plugin of plugins) {
     const getToolSchema = plugin?.actions?.getToolSchema;

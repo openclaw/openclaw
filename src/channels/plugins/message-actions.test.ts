@@ -22,16 +22,22 @@ const emptyRegistry = createTestRegistry([]);
 function createMessageActionsPlugin(params: {
   id: "discord" | "telegram";
   capabilities: readonly ChannelMessageCapability[];
+  aliases?: string[];
 }): ChannelPlugin {
+  const base = createChannelTestPluginBase({
+    id: params.id,
+    label: params.id === "discord" ? "Discord" : "Telegram",
+    capabilities: { chatTypes: ["direct", "group"] },
+    config: {
+      listAccountIds: () => ["default"],
+    },
+  });
   return {
-    ...createChannelTestPluginBase({
-      id: params.id,
-      label: params.id === "discord" ? "Discord" : "Telegram",
-      capabilities: { chatTypes: ["direct", "group"] },
-      config: {
-        listAccountIds: () => ["default"],
-      },
-    }),
+    ...base,
+    meta: {
+      ...base.meta,
+      ...(params.aliases ? { aliases: params.aliases } : {}),
+    },
     actions: {
       listActions: () => ["send"],
       getCapabilities: () => params.capabilities,
@@ -128,6 +134,29 @@ describe("message action capability checks", () => {
     expect(channelSupportsMessageCapabilityForChannel({ cfg: {} as OpenClawConfig }, "cards")).toBe(
       false,
     );
+  });
+
+  it("normalizes channel aliases for per-channel capability checks", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createMessageActionsPlugin({
+            id: "telegram",
+            aliases: ["tg"],
+            capabilities: ["cards"],
+          }),
+        },
+      ]),
+    );
+
+    expect(
+      listChannelMessageCapabilitiesForChannel({
+        cfg: {} as OpenClawConfig,
+        channel: "tg",
+      }),
+    ).toEqual(["cards"]);
   });
 
   it("skips crashing action/capability discovery paths and logs once", () => {
