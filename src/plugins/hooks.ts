@@ -317,20 +317,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
 
-    for (const hook of hooks) {
-      try {
-        const handlerResult = await (
-          hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>
-        )(event, ctx);
-        if (handlerResult?.handled) {
-          return handlerResult;
-        }
-      } catch (err) {
-        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
-      }
-    }
-
-    return undefined;
+    return await runClaimingHooksList(hooks, hookName, event, ctx);
   }
 
   async function runClaimingHookForPlugin<
@@ -351,6 +338,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted)`,
     );
 
+    return await runClaimingHooksList(hooks, hookName, event, ctx);
+  }
+
+  async function runClaimingHooksList<
+    K extends PluginHookName,
+    TResult extends { handled: boolean },
+  >(
+    hooks: Array<PluginHookRegistration<K> & { pluginId: string }>,
+    hookName: K,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<TResult | undefined> {
     for (const hook of hooks) {
       try {
         const handlerResult = await (
