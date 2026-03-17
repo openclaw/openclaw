@@ -194,7 +194,7 @@ export function normalizeAgentLabel(agent: {
   return agent.name?.trim() || agent.identity?.name?.trim() || agent.id;
 }
 
-const AVATAR_URL_RE = /^(https?:\/\/|data:image\/|blob:)/i;
+const AVATAR_URL_RE = /^(https?:\/\/|data:image\/|blob:|\/)/i;
 
 export function resolveAgentAvatarUrl(
   agent: { identity?: { avatar?: string; avatarUrl?: string } },
