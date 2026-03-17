@@ -20,7 +20,7 @@ export { OPENCODE_GO_DEFAULT_MODEL_REF } from "../commands/opencode-go-model-def
 export { OPENCODE_ZEN_DEFAULT_MODEL } from "../commands/opencode-zen-model-default.js";
 export { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
 
-export * from "../commands/onboard-auth.models.js";
+export * from "../plugins/provider-model-definitions.js";
 
 export {
   buildCloudflareAiGatewayModelDefinition,
