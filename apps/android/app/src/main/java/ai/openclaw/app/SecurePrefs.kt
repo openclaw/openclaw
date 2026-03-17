@@ -108,6 +108,9 @@ class SecurePrefs(
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
 
+  private val _themeMode = MutableStateFlow(loadThemeMode())
+  val themeMode: StateFlow<ThemeMode> = _themeMode
+
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
     plainPrefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
@@ -308,6 +311,11 @@ class SecurePrefs(
     _speakerEnabled.value = value
   }
 
+  fun setThemeMode(mode: ThemeMode) {
+    plainPrefs.edit { putString("appearance.theme", mode.rawValue) }
+    _themeMode.value = mode
+  }
+
   private fun loadVoiceWakeMode(): VoiceWakeMode {
     val raw = plainPrefs.getString(voiceWakeModeKey, null)
     val resolved = VoiceWakeMode.fromRawValue(raw)
@@ -327,6 +335,11 @@ class SecurePrefs(
       plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
     }
     return resolved
+  }
+
+  private fun loadThemeMode(): ThemeMode {
+    val raw = plainPrefs.getString("appearance.theme", null)
+    return ThemeMode.fromRawValue(raw)
   }
 
   private fun loadWakeWords(): List<String> {
