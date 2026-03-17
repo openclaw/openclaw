@@ -24,6 +24,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/slack";
+import { createSlackActions } from "../../../src/channels/plugins/slack.actions.js";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { normalizeOutboundThreadId } from "../../../src/infra/outbound/thread-id.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
@@ -36,8 +37,6 @@ import {
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import { handleSlackMessageAction } from "./message-action-dispatch.js";
-import { extractSlackToolSend, listSlackMessageActions } from "./message-actions.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
@@ -319,6 +318,12 @@ const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
   slackSetupWizard: (await loadSlackChannelRuntime()).slackSetupWizard,
 }));
 
+const slackActions = createSlackActions("slack", {
+  invoke: () => async (action, cfg, toolContext) =>
+    await getSlackRuntime().channel.slack.handleSlackAction(action, cfg, toolContext),
+  skipNormalizeChannelId: true,
+});
+
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   ...createSlackPluginBase({
     setupWizard: slackSetupWizard,
@@ -506,28 +511,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       return resolved.map((entry) => toResolvedTarget(entry, entry.note));
     },
   },
-  actions: {
-    listActions: ({ cfg }) => listSlackMessageActions(cfg),
-    getCapabilities: ({ cfg }) => {
-      const capabilities = new Set<"interactive" | "blocks">();
-      if (listSlackMessageActions(cfg).includes("send")) {
-        capabilities.add("blocks");
-      }
-      if (isSlackInteractiveRepliesEnabled({ cfg })) {
-        capabilities.add("interactive");
-      }
-      return Array.from(capabilities);
-    },
-    extractToolSend: ({ args }) => extractSlackToolSend(args),
-    handleAction: async (ctx) =>
-      await handleSlackMessageAction({
-        providerId: "slack",
-        ctx,
-        includeReadThreadId: true,
-        invoke: async (action, cfg, toolContext) =>
-          await getSlackRuntime().channel.slack.handleSlackAction(action, cfg, toolContext),
-      }),
-  },
+  actions: slackActions,
   outbound: {
     deliveryMode: "direct",
     chunker: null,
