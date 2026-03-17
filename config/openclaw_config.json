@@ -44,7 +44,7 @@
       "tool_execution": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
       "data_parsing": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
       "general": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
-      "research": "bartowski/DeepSeek-R1-Distill-Qwen-14B-AWQ"
+      "research": "casperhansen/deepseek-r1-distill-qwen-14b-awq"
     }
   },
   "brigades": {

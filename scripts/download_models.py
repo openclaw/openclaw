@@ -9,7 +9,7 @@ MODELS = [
     # General / code / pipeline roles
     ("Qwen/Qwen2.5-Coder-14B-Instruct-AWQ", "General, tool execution, code tasks"),
     # Deep Research — reasoning model (AWQ, fits 16GB VRAM)
-    ("bartowski/DeepSeek-R1-Distill-Qwen-14B-AWQ", "Deep Research: fact verification, synthesis, self-critique"),
+    ("casperhansen/deepseek-r1-distill-qwen-14b-awq", "Deep Research: fact verification, synthesis, self-critique"),
 ]
 
 for model_id, description in MODELS:
