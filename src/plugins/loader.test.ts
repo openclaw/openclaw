@@ -363,6 +363,44 @@ function expectNoUnwiredBundleDiagnostic(
   ).toBe(false);
 }
 
+function resolveLoadedPluginSource(
+  registry: ReturnType<typeof loadOpenClawPlugins>,
+  pluginId: string,
+) {
+  return fs.realpathSync(registry.plugins.find((entry) => entry.id === pluginId)?.source ?? "");
+}
+
+function expectCachePartitionByPluginSource(params: {
+  pluginId: string;
+  loadFirst: () => ReturnType<typeof loadOpenClawPlugins>;
+  loadSecond: () => ReturnType<typeof loadOpenClawPlugins>;
+  expectedFirstSource: string;
+  expectedSecondSource: string;
+}) {
+  const first = params.loadFirst();
+  const second = params.loadSecond();
+
+  expect(second).not.toBe(first);
+  expect(resolveLoadedPluginSource(first, params.pluginId)).toBe(
+    fs.realpathSync(params.expectedFirstSource),
+  );
+  expect(resolveLoadedPluginSource(second, params.pluginId)).toBe(
+    fs.realpathSync(params.expectedSecondSource),
+  );
+}
+
+function expectCacheMissThenHit(params: {
+  loadFirst: () => ReturnType<typeof loadOpenClawPlugins>;
+  loadVariant: () => ReturnType<typeof loadOpenClawPlugins>;
+}) {
+  const first = params.loadFirst();
+  const second = params.loadVariant();
+  const third = params.loadVariant();
+
+  expect(second).not.toBe(first);
+  expect(third).toBe(second);
+}
+
 afterEach(() => {
   clearPluginLoaderCache();
   if (prevBundledDir === undefined) {
@@ -885,117 +923,131 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     resetGlobalHookRunner();
   });
 
-  it("does not reuse cached bundled plugin registries across env changes", () => {
-    const bundledA = makeTempDir();
-    const bundledB = makeTempDir();
-    const pluginA = writePlugin({
-      id: "cache-root",
-      dir: path.join(bundledA, "cache-root"),
-      filename: "index.cjs",
-      body: `module.exports = { id: "cache-root", register() {} };`,
-    });
-    const pluginB = writePlugin({
-      id: "cache-root",
-      dir: path.join(bundledB, "cache-root"),
-      filename: "index.cjs",
-      body: `module.exports = { id: "cache-root", register() {} };`,
-    });
+  it.each([
+    {
+      name: "does not reuse cached bundled plugin registries across env changes",
+      pluginId: "cache-root",
+      setup: () => {
+        const bundledA = makeTempDir();
+        const bundledB = makeTempDir();
+        const pluginA = writePlugin({
+          id: "cache-root",
+          dir: path.join(bundledA, "cache-root"),
+          filename: "index.cjs",
+          body: `module.exports = { id: "cache-root", register() {} };`,
+        });
+        const pluginB = writePlugin({
+          id: "cache-root",
+          dir: path.join(bundledB, "cache-root"),
+          filename: "index.cjs",
+          body: `module.exports = { id: "cache-root", register() {} };`,
+        });
 
-    const options = {
-      config: {
-        plugins: {
-          allow: ["cache-root"],
-          entries: {
-            "cache-root": { enabled: true },
+        const options = {
+          config: {
+            plugins: {
+              allow: ["cache-root"],
+              entries: {
+                "cache-root": { enabled: true },
+              },
+            },
           },
-        },
+        };
+
+        return {
+          expectedFirstSource: pluginA.file,
+          expectedSecondSource: pluginB.file,
+          loadFirst: () =>
+            loadOpenClawPlugins({
+              ...options,
+              env: {
+                ...process.env,
+                OPENCLAW_BUNDLED_PLUGINS_DIR: bundledA,
+              },
+            }),
+          loadSecond: () =>
+            loadOpenClawPlugins({
+              ...options,
+              env: {
+                ...process.env,
+                OPENCLAW_BUNDLED_PLUGINS_DIR: bundledB,
+              },
+            }),
+        };
       },
-    };
+    },
+    {
+      name: "does not reuse cached load-path plugin registries across env home changes",
+      pluginId: "demo",
+      setup: () => {
+        const homeA = makeTempDir();
+        const homeB = makeTempDir();
+        const stateDir = makeTempDir();
+        const bundledDir = makeTempDir();
+        const pluginA = writePlugin({
+          id: "demo",
+          dir: path.join(homeA, "plugins", "demo"),
+          filename: "index.cjs",
+          body: `module.exports = { id: "demo", register() {} };`,
+        });
+        const pluginB = writePlugin({
+          id: "demo",
+          dir: path.join(homeB, "plugins", "demo"),
+          filename: "index.cjs",
+          body: `module.exports = { id: "demo", register() {} };`,
+        });
 
-    const first = loadOpenClawPlugins({
-      ...options,
-      env: {
-        ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledA,
-      },
-    });
-    const second = loadOpenClawPlugins({
-      ...options,
-      env: {
-        ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledB,
-      },
-    });
-
-    expect(second).not.toBe(first);
-    expect(
-      fs.realpathSync(first.plugins.find((entry) => entry.id === "cache-root")?.source ?? ""),
-    ).toBe(fs.realpathSync(pluginA.file));
-    expect(
-      fs.realpathSync(second.plugins.find((entry) => entry.id === "cache-root")?.source ?? ""),
-    ).toBe(fs.realpathSync(pluginB.file));
-  });
-
-  it("does not reuse cached load-path plugin registries across env home changes", () => {
-    const homeA = makeTempDir();
-    const homeB = makeTempDir();
-    const stateDir = makeTempDir();
-    const bundledDir = makeTempDir();
-    const pluginA = writePlugin({
-      id: "demo",
-      dir: path.join(homeA, "plugins", "demo"),
-      filename: "index.cjs",
-      body: `module.exports = { id: "demo", register() {} };`,
-    });
-    const pluginB = writePlugin({
-      id: "demo",
-      dir: path.join(homeB, "plugins", "demo"),
-      filename: "index.cjs",
-      body: `module.exports = { id: "demo", register() {} };`,
-    });
-
-    const options = {
-      config: {
-        plugins: {
-          allow: ["demo"],
-          entries: {
-            demo: { enabled: true },
+        const options = {
+          config: {
+            plugins: {
+              allow: ["demo"],
+              entries: {
+                demo: { enabled: true },
+              },
+              load: {
+                paths: ["~/plugins/demo"],
+              },
+            },
           },
-          load: {
-            paths: ["~/plugins/demo"],
-          },
-        },
-      },
-    };
+        };
 
-    const first = loadOpenClawPlugins({
-      ...options,
-      env: {
-        ...process.env,
-        HOME: homeA,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+        return {
+          expectedFirstSource: pluginA.file,
+          expectedSecondSource: pluginB.file,
+          loadFirst: () =>
+            loadOpenClawPlugins({
+              ...options,
+              env: {
+                ...process.env,
+                HOME: homeA,
+                OPENCLAW_HOME: undefined,
+                OPENCLAW_STATE_DIR: stateDir,
+                OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+              },
+            }),
+          loadSecond: () =>
+            loadOpenClawPlugins({
+              ...options,
+              env: {
+                ...process.env,
+                HOME: homeB,
+                OPENCLAW_HOME: undefined,
+                OPENCLAW_STATE_DIR: stateDir,
+                OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+              },
+            }),
+        };
       },
+    },
+  ])("$name", ({ pluginId, setup }) => {
+    const { expectedFirstSource, expectedSecondSource, loadFirst, loadSecond } = setup();
+    expectCachePartitionByPluginSource({
+      pluginId,
+      loadFirst,
+      loadSecond,
+      expectedFirstSource,
+      expectedSecondSource,
     });
-    const second = loadOpenClawPlugins({
-      ...options,
-      env: {
-        ...process.env,
-        HOME: homeB,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-      },
-    });
-
-    expect(second).not.toBe(first);
-    expect(fs.realpathSync(first.plugins.find((entry) => entry.id === "demo")?.source ?? "")).toBe(
-      fs.realpathSync(pluginA.file),
-    );
-    expect(fs.realpathSync(second.plugins.find((entry) => entry.id === "demo")?.source ?? "")).toBe(
-      fs.realpathSync(pluginB.file),
-    );
   });
 
   it("does not reuse cached registries when env-resolved install paths change", () => {
@@ -1028,17 +1080,6 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
       },
     };
 
-    const first = loadOpenClawPlugins({
-      ...options,
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: openclawHome,
-        HOME: ignoredHome,
-        OPENCLAW_STATE_DIR: stateDir,
-        CLAWDBOT_STATE_DIR: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
-    });
     const secondHome = makeTempDir();
     const secondOptions = {
       ...options,
@@ -1051,11 +1092,21 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
         OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
       },
     };
-    const second = loadOpenClawPlugins(secondOptions);
-    const third = loadOpenClawPlugins(secondOptions);
-
-    expect(second).not.toBe(first);
-    expect(third).toBe(second);
+    expectCacheMissThenHit({
+      loadFirst: () =>
+        loadOpenClawPlugins({
+          ...options,
+          env: {
+            ...process.env,
+            OPENCLAW_HOME: openclawHome,
+            HOME: ignoredHome,
+            OPENCLAW_STATE_DIR: stateDir,
+            CLAWDBOT_STATE_DIR: undefined,
+            OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+          },
+        }),
+      loadVariant: () => loadOpenClawPlugins(secondOptions),
+    });
   });
 
   it("does not reuse cached registries across gateway subagent binding modes", () => {
@@ -1078,22 +1129,16 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
       },
     };
 
-    const defaultRegistry = loadOpenClawPlugins(options);
-    const gatewayBindableRegistry = loadOpenClawPlugins({
-      ...options,
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
+    expectCacheMissThenHit({
+      loadFirst: () => loadOpenClawPlugins(options),
+      loadVariant: () =>
+        loadOpenClawPlugins({
+          ...options,
+          runtimeOptions: {
+            allowGatewaySubagentBinding: true,
+          },
+        }),
     });
-    const gatewayBindableAgain = loadOpenClawPlugins({
-      ...options,
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-    });
-
-    expect(gatewayBindableRegistry).not.toBe(defaultRegistry);
-    expect(gatewayBindableAgain).toBe(gatewayBindableRegistry);
   });
 
   it("evicts least recently used registries when the loader cache exceeds its cap", () => {
