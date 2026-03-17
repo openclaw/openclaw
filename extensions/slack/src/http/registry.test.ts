@@ -85,4 +85,19 @@ describe("registerSlackHttpHandler", () => {
       'slack: webhook path /slack/events already registered for account "duplicate"',
     );
   });
+
+  it("shares the route map via globalThis singleton", () => {
+    const key = Symbol.for("openclaw.slack.httpRoutes");
+    const globalMap = (globalThis as Record<PropertyKey, unknown>)[key] as Map<string, unknown>;
+    expect(globalMap).toBeInstanceOf(Map);
+
+    const handler = vi.fn();
+    const unregister = registerSlackHttpHandler({ path: "/test-global", handler });
+    unregisters.push(unregister);
+
+    expect(globalMap.has("/test-global")).toBe(true);
+
+    unregister();
+    expect(globalMap.has("/test-global")).toBe(false);
+  });
 });
