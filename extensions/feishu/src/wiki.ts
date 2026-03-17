@@ -174,6 +174,7 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
   api.registerTool(
     (ctx) => {
       const defaultAccountId = ctx.agentAccountId;
+      const messageChannel = ctx.messageChannel;
       return {
         name: "feishu_wiki",
         label: "Feishu Wiki",
@@ -187,6 +188,7 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
               api,
               executeParams: p,
               defaultAccountId,
+              messageChannel,
             });
             switch (p.action) {
               case "spaces":
