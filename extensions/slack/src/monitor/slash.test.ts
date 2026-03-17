@@ -184,6 +184,8 @@ let registerSlackMonitorSlashCommands: RegisterFn;
 
 const { dispatchMock } = getSlackSlashMocks();
 
+resetSlackSlashMocks();
+
 beforeAll(async () => {
   ({ registerSlackMonitorSlashCommands } = (await import("./slash.js")) as unknown as {
     registerSlackMonitorSlashCommands: RegisterFn;
