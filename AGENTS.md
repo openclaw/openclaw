@@ -215,6 +215,8 @@
 
 - Known Failure Pattern (Telegram live checks):
   - Code/tests can be correct while live results are false if Telegram is handled by the wrong runtime process (not the current worktree). Always verify runtime ownership first.
+  - DM threaded E2E does not use plain DM message ids as thread ids. The real DM thread anchor is the topic-create service message (`MessageActionTopicCreate`), and thread-scoped commands/replies carry that anchor in `reply_to_top_id`.
+  - If you need to automate DM threaded E2E, inspect recent MTProto messages to find topic-create anchors, or create a fresh DM topic with MTProto `messages.CreateForumTopicRequest` before sending `/model` into it. Do not guess anchors from visible text messages.
 
 - Worktree credential bootstrap (Telegram live checks):
   - Source of truth is the main checkout at `/Users/user/Programming_Projects/openclaw`.
