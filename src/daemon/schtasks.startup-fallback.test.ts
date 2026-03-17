@@ -115,25 +115,11 @@ beforeEach(() => {
   spawn.mockClear();
   spawnSync.mockClear();
   childUnref.mockClear();
-  findVerifiedGatewayListenerPidsOnPortSync.mockReset();
-  findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-function expectGatewayTermination(pid: number) {
-  if (process.platform === "win32") {
-    expect(spawnSync).toHaveBeenCalledWith(
-      expect.stringMatching(/taskkill\.exe$/i),
-      ["/T", "/PID", String(pid)],
-      expect.objectContaining({ stdio: "ignore", timeout: 5_000, windowsHide: true }),
-    );
-    return;
-  }
-  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
-}
 
 describe("Windows startup fallback", () => {
   it("falls back to a Startup-folder launcher when schtasks create is denied", async () => {
