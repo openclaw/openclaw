@@ -89,10 +89,6 @@ RUN pnpm canvas:a2ui:bundle || \
      echo "stub" > src/canvas-host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
 RUN pnpm build:docker
-# Pre-compile extension TypeScript to JavaScript so Jiti loads plain JS at runtime.
-# Without this, Jiti compiles every .ts file on first import (~5-10 min on shared-cpu).
-RUN node scripts/precompile-extensions.cjs && \
-    ls extensions/whatsapp/index.js && echo "PRECOMPILE_OK"
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
@@ -146,13 +142,12 @@ COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
 COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-# Extensions are pre-compiled to JS during build (see above), so Jiti loads
-# them instantly at runtime. Only copy the ones Blink Claw actually uses +
-# those that src/ has hardcoded imports to (signal, imessage).
+# Only copy extensions that work on Fly.io shared-cpu machines.
+# WhatsApp excluded: Baileys native deps hang Jiti compilation for 10+ min.
+# signal + imessage: not active channels but src/ has hardcoded imports to them.
 COPY --from=runtime-assets --chown=node:node /app/extensions/telegram ./extensions/telegram
 COPY --from=runtime-assets --chown=node:node /app/extensions/discord ./extensions/discord
 COPY --from=runtime-assets --chown=node:node /app/extensions/slack ./extensions/slack
-COPY --from=runtime-assets --chown=node:node /app/extensions/whatsapp ./extensions/whatsapp
 COPY --from=runtime-assets --chown=node:node /app/extensions/signal ./extensions/signal
 COPY --from=runtime-assets --chown=node:node /app/extensions/imessage ./extensions/imessage
 COPY --from=runtime-assets --chown=node:node /app/extensions/shared ./extensions/shared
