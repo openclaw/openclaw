@@ -31,7 +31,7 @@ Subcommands (mutation — require DUNE_ALLOW_MUTATIONS=1):
 All subcommands accept: --output text|json (default: json)
 
 Env:
-  DUNE_API_KEY          (required; falls back to Vault)
+  DUNE_API_KEY          (required; fallback: Vault cached token -> Vault K8s JWT auth)
   VAULT_ADDR            (optional; enables Vault credential lookup)
   VAULT_TOKEN           (optional; reuses existing Vault token)
   DUNE_VAULT_SECRET_PATH (optional; default: secret/data/openclaw-sre)
@@ -89,11 +89,11 @@ load_api_key_from_vault_token() {
     curl -fsS \
       -H "X-Vault-Token: ${vault_token}" \
       "${vault_addr%/}/v1/${secret_path}"
-  )" || return 1
+  )" || { echo "dune-cli:warning vault secret fetch failed at ${secret_path}" >&2; return 1; }
 
   local api_key
   api_key="$(printf '%s\n' "$secret_json" | jq -r '.data.data.DUNE_API_KEY // empty')"
-  [[ -n "$api_key" ]] || return 1
+  [[ -n "$api_key" ]] || { echo "dune-cli:warning DUNE_API_KEY not found in vault path ${secret_path}" >&2; return 1; }
 
   DUNE_API_KEY="$api_key"
   DUNE_CREDENTIAL_SOURCE="vault:${secret_path} (cached token)"
@@ -110,38 +110,40 @@ load_api_key_from_vault_jwt() {
   [[ -n "$vault_addr" ]] || return 1
 
   local jwt_file
-  jwt_file="$(detect_service_account_jwt)" || return 1
+  jwt_file="$(detect_service_account_jwt)" || { echo "dune-cli:warning K8s service account token not available" >&2; return 1; }
   local jwt
   jwt="$(tr -d '\r\n' <"$jwt_file")"
-  [[ -n "$jwt" ]] || return 1
+  [[ -n "$jwt" ]] || { echo "dune-cli:warning K8s service account token is empty" >&2; return 1; }
 
   command -v curl >/dev/null 2>&1 || return 1
   command -v jq >/dev/null 2>&1 || return 1
 
   local login_payload
-  login_payload="$(jq -nc --arg role "$role" --arg jwt "$jwt" '{role:$role,jwt:$jwt}')"
+  login_payload="$(jq -nc --arg role "$role" --arg jwt "$jwt" '{role:$role,jwt:$jwt}')" || {
+    echo "dune-cli:warning failed to create vault login payload" >&2; return 1;
+  }
   local login_json
   login_json="$(
     curl -fsS \
       -H 'Content-Type: application/json' \
       --data "$login_payload" \
       "${vault_addr%/}/v1/auth/${auth_path}/login"
-  )" || return 1
+  )" || { echo "dune-cli:warning vault JWT auth failed (role=${role}, auth_path=${auth_path})" >&2; return 1; }
 
   local vault_token
   vault_token="$(printf '%s\n' "$login_json" | jq -r '.auth.client_token // empty')"
-  [[ -n "$vault_token" ]] || return 1
+  [[ -n "$vault_token" ]] || { echo "dune-cli:warning vault returned empty token" >&2; return 1; }
 
   local secret_json
   secret_json="$(
     curl -fsS \
       -H "X-Vault-Token: ${vault_token}" \
       "${vault_addr%/}/v1/${secret_path}"
-  )" || return 1
+  )" || { echo "dune-cli:warning vault secret fetch failed at ${secret_path}" >&2; return 1; }
 
   local api_key
   api_key="$(printf '%s\n' "$secret_json" | jq -r '.data.data.DUNE_API_KEY // empty')"
-  [[ -n "$api_key" ]] || return 1
+  [[ -n "$api_key" ]] || { echo "dune-cli:warning DUNE_API_KEY not found in vault path ${secret_path}" >&2; return 1; }
 
   DUNE_API_KEY="$api_key"
   DUNE_CREDENTIAL_SOURCE="vault:${secret_path} (jwt auth)"
@@ -159,17 +161,23 @@ load_api_key() {
     die "missing DUNE_API_KEY (Vault lookup skipped via DUNE_SKIP_VAULT=1)"
   fi
 
+  local vault_path="${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre}"
+
   # 2. Vault with existing token (fast path — reuses start-gateway.sh token)
-  if load_api_key_from_vault_token; then
-    return 0
+  if [[ -n "${VAULT_ADDR:-}" ]]; then
+    if load_api_key_from_vault_token; then
+      return 0
+    fi
+
+    # 3. Vault with K8s JWT auth (slow path — re-authenticates)
+    if load_api_key_from_vault_jwt; then
+      return 0
+    fi
+
+    die "missing DUNE_API_KEY; env unset, Vault lookups failed at ${vault_path} (see warnings above)"
   fi
 
-  # 3. Vault with K8s JWT auth (slow path — re-authenticates)
-  if load_api_key_from_vault_jwt; then
-    return 0
-  fi
-
-  die "missing DUNE_API_KEY; tried env, Vault token, and Vault JWT auth at ${DUNE_VAULT_SECRET_PATH:-secret/data/openclaw-sre}"
+  die "missing DUNE_API_KEY; env unset and VAULT_ADDR not configured"
 }
 
 probe_auth() {
@@ -244,11 +252,12 @@ check_mutation_guard "$@"
 load_api_key
 export DUNE_API_KEY
 
-# Default to JSON output for machine readability unless user specifies otherwise
+# Default to JSON output for machine readability unless user specifies otherwise.
+# Match all forms: -o, -ojson, --output, --output=json
 has_output_flag=0
 for arg in "$@"; do
   case "$arg" in
-    -o|--output) has_output_flag=1 ;;
+    -o|-o*|--output|--output=*) has_output_flag=1 ;;
   esac
 done
 
