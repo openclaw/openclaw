@@ -49,6 +49,8 @@ describe("plugin-sdk subpath exports", () => {
 
   it("keeps core focused on generic shared exports", () => {
     expect(typeof coreSdk.emptyPluginConfigSchema).toBe("function");
+    expect(typeof coreSdk.defineChannelPluginEntry).toBe("function");
+    expect(typeof coreSdk.defineSetupPluginEntry).toBe("function");
     expect("runPassiveAccountLifecycle" in asExports(coreSdk)).toBe(false);
     expect("createLoggerBackedRuntime" in asExports(coreSdk)).toBe(false);
     expect("registerSandboxBackend" in asExports(coreSdk)).toBe(false);

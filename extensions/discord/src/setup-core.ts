@@ -1,10 +1,7 @@
 import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-runtime";
 import {
-  applyAccountNameToChannelSection,
-  createPatchedAccountSetupAdapter,
   DEFAULT_ACCOUNT_ID,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
+  createEnvPatchedAccountSetupAdapter,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
@@ -74,71 +71,13 @@ export function parseDiscordAllowFromId(value: string): string | null {
   });
 }
 
-export const discordSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
-  validateInput: ({ accountId, input }) => {
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "DISCORD_BOT_TOKEN can only be used for the default account.";
-    }
-    if (!input.useEnv && !input.token) {
-      return "Discord requires token (or --use-env).";
-    }
-    return null;
-  },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    if (accountId === DEFAULT_ACCOUNT_ID) {
-      return {
-        ...next,
-        channels: {
-          ...next.channels,
-          discord: {
-            ...next.channels?.discord,
-            enabled: true,
-            ...(input.useEnv ? {} : input.token ? { token: input.token } : {}),
-          },
-        },
-      };
-    }
-    return {
-      ...next,
-      channels: {
-        ...next.channels,
-        discord: {
-          ...next.channels?.discord,
-          enabled: true,
-          accounts: {
-            ...next.channels?.discord?.accounts,
-            [accountId]: {
-              ...next.channels?.discord?.accounts?.[accountId],
-              enabled: true,
-              ...(input.token ? { token: input.token } : {}),
-            },
-          },
-        },
-      },
-    };
-  },
-};
+export const discordSetupAdapter: ChannelSetupAdapter = createEnvPatchedAccountSetupAdapter({
+  channelKey: channel,
+  defaultAccountOnlyEnvError: "DISCORD_BOT_TOKEN can only be used for the default account.",
+  missingCredentialError: "Discord requires token (or --use-env).",
+  hasCredentials: (input) => Boolean(input.token),
+  buildPatch: (input) => (input.token ? { token: input.token } : {}),
+});
 
 export function createDiscordSetupWizardBase(handlers: {
   promptAllowFrom: NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>;
