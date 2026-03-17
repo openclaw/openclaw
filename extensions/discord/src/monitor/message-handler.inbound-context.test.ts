@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inboundCtxCapture as capture } from "../../../../src/channels/plugins/contracts/inbound-contract-dispatch-mock.js";
+import { inboundCtxCapture as capture } from "../../../../src/channels/plugins/contracts/inbound-testkit.js";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../src/channels/plugins/contracts/suites.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { processDiscordMessage } from "./message-handler.process.js";
