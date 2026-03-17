@@ -695,6 +695,17 @@ export async function spawnAcpDirect(
       emitStartNotice: false,
     });
   }
+
+  // Emit lifecycle hook: agent:dispatch - fires BEFORE the actual dispatch attempt
+  emitLifecycleHook("agent:dispatch", {
+    sessionKey,
+    taskId: undefined, // Will be populated after successful dispatch
+    agentId: targetAgentId,
+    contextKeys: parentSessionKey ? [parentSessionKey] : undefined,
+    runtime: runtimeMode,
+    mode: spawnMode,
+  });
+
   try {
     const response = await callGateway<{ runId?: string }>({
       method: "agent",

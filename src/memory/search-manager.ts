@@ -54,6 +54,7 @@ export async function getMemorySearchManager(params: {
         const wrapper = new FallbackMemoryManager(
           {
             primary,
+            agentId: params.agentId,
             fallbackFactory: async () => {
               const { MemoryIndexManager } = await loadManagerRuntime();
               return await MemoryIndexManager.get(params);
@@ -79,7 +80,17 @@ export async function getMemorySearchManager(params: {
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
-    return { manager };
+    
+    // Wrap builtin manager to emit memory:retrieve hook
+    const wrapper = new FallbackMemoryManager(
+      {
+        primary: manager,
+        agentId: params.agentId,
+        fallbackFactory: async () => null,
+      },
+      undefined,
+    );
+    return { manager: wrapper };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { manager: null, error: message };
@@ -107,14 +118,18 @@ class FallbackMemoryManager implements MemorySearchManager {
   private primaryFailed = false;
   private lastError?: string;
   private cacheEvicted = false;
+  private readonly agentId: string;
 
   constructor(
     private readonly deps: {
       primary: MemorySearchManager;
+      agentId: string;
       fallbackFactory: () => Promise<MemorySearchManager | null>;
     },
     private readonly onClose?: () => void,
-  ) {}
+  ) {
+    this.agentId = deps.agentId;
+  }
 
   async search(
     query: string,
