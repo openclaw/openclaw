@@ -7,6 +7,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;
+const REMOTE_DEBUGGING_PAGES = [
+  "chrome://inspect/#remote-debugging",
+  "brave://inspect/#remote-debugging",
+  "edge://inspect/#remote-debugging",
+].join(", ");
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -14,33 +19,40 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function collectChromeMcpProfileNames(cfg: OpenClawConfig): string[] {
+type ExistingSessionProfile = {
+  name: string;
+  userDataDir?: string;
+};
+
+function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[] {
   const browser = asRecord(cfg.browser);
   if (!browser) {
     return [];
   }
 
-  const names = new Set<string>();
+  const profiles = new Map<string, ExistingSessionProfile>();
   const defaultProfile =
     typeof browser.defaultProfile === "string" ? browser.defaultProfile.trim() : "";
   if (defaultProfile === "user") {
-    names.add("user");
+    profiles.set("user", { name: "user" });
   }
 
-  const profiles = asRecord(browser.profiles);
-  if (!profiles) {
-    return [...names];
+  const configuredProfiles = asRecord(browser.profiles);
+  if (!configuredProfiles) {
+    return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
   }
 
-  for (const [profileName, rawProfile] of Object.entries(profiles)) {
+  for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
     const profile = asRecord(rawProfile);
     const driver = typeof profile?.driver === "string" ? profile.driver.trim() : "";
     if (driver === "existing-session") {
-      names.add(profileName);
+      const userDataDir =
+        typeof profile?.userDataDir === "string" ? profile.userDataDir.trim() : undefined;
+      profiles.set(profileName, { name: profileName, userDataDir: userDataDir || undefined });
     }
   }
 
-  return [...names].toSorted((a, b) => a.localeCompare(b));
+  return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function noteChromeMcpBrowserReadiness(
@@ -52,7 +64,7 @@ export async function noteChromeMcpBrowserReadiness(
     readVersion?: (executablePath: string) => string | null;
   },
 ) {
-  const profiles = collectChromeMcpProfileNames(cfg);
+  const profiles = collectChromeMcpProfiles(cfg);
   if (profiles.length === 0) {
     return;
   }
@@ -62,21 +74,44 @@ export async function noteChromeMcpBrowserReadiness(
   const resolveChromeExecutable =
     deps?.resolveChromeExecutable ?? resolveGoogleChromeExecutableForPlatform;
   const readVersion = deps?.readVersion ?? readBrowserVersion;
-  const chrome = resolveChromeExecutable(platform);
-  const profileLabel = profiles.join(", ");
+  const explicitProfiles = profiles.filter((profile) => profile.userDataDir);
+  const autoConnectProfiles = profiles.filter((profile) => !profile.userDataDir);
+  const profileLabel = profiles.map((profile) => profile.name).join(", ");
 
-  if (!chrome) {
+  if (autoConnectProfiles.length === 0) {
     noteFn(
       [
         `- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`,
-        "- Google Chrome was not found on this host. OpenClaw does not bundle Chrome.",
-        `- Install Google Chrome ${CHROME_MCP_MIN_MAJOR}+ on the same host as the Gateway or node.`,
-        "- In Chrome, enable remote debugging at chrome://inspect/#remote-debugging.",
-        "- Keep Chrome running and accept the attach consent prompt the first time OpenClaw connects.",
-        "- Docker, headless, and sandbox browser flows stay on raw CDP; this check only applies to host-local Chrome MCP attach.",
+        "- These profiles use an explicit Chromium user data directory instead of Chrome's default auto-connect path.",
+        `- Verify the matching Chromium-based browser is version ${CHROME_MCP_MIN_MAJOR}+ on the same host as the Gateway or node.`,
+        `- Enable remote debugging in that browser's inspect page (${REMOTE_DEBUGGING_PAGES}).`,
+        "- Keep the browser running and accept the attach consent prompt the first time OpenClaw connects.",
       ].join("\n"),
       "Browser",
     );
+    return;
+  }
+
+  const chrome = resolveChromeExecutable(platform);
+  const autoProfileLabel = autoConnectProfiles.map((profile) => profile.name).join(", ");
+
+  if (!chrome) {
+    const lines = [
+      `- Chrome MCP existing-session is configured for profile(s): ${profileLabel}.`,
+      `- Google Chrome was not found on this host for auto-connect profile(s): ${autoProfileLabel}. OpenClaw does not bundle Chrome.`,
+      `- Install Google Chrome ${CHROME_MCP_MIN_MAJOR}+ on the same host as the Gateway or node, or set browser.profiles.<name>.userDataDir for a different Chromium-based browser.`,
+      `- Enable remote debugging in the browser inspect page (${REMOTE_DEBUGGING_PAGES}).`,
+      "- Keep the browser running and accept the attach consent prompt the first time OpenClaw connects.",
+      "- Docker, headless, and sandbox browser flows stay on raw CDP; this check only applies to host-local Chrome MCP attach.",
+    ];
+    if (explicitProfiles.length > 0) {
+      lines.push(
+        `- Profiles with explicit userDataDir skip Chrome auto-detection: ${explicitProfiles
+          .map((profile) => profile.name)
+          .join(", ")}.`,
+      );
+    }
+    noteFn(lines.join("\n"), "Browser");
     return;
   }
 
@@ -99,10 +134,17 @@ export async function noteChromeMcpBrowserReadiness(
     lines.push(`- Detected Chrome ${versionRaw}.`);
   }
 
-  lines.push("- In Chrome, enable remote debugging at chrome://inspect/#remote-debugging.");
+  lines.push(`- Enable remote debugging in the browser inspect page (${REMOTE_DEBUGGING_PAGES}).`);
   lines.push(
-    "- Keep Chrome running and accept the attach consent prompt the first time OpenClaw connects.",
+    "- Keep the browser running and accept the attach consent prompt the first time OpenClaw connects.",
   );
+  if (explicitProfiles.length > 0) {
+    lines.push(
+      `- Profiles with explicit userDataDir still need manual validation of the matching Chromium-based browser: ${explicitProfiles
+        .map((profile) => profile.name)
+        .join(", ")}.`,
+    );
+  }
 
   noteFn(lines.join("\n"), "Browser");
 }

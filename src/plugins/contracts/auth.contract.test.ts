@@ -14,11 +14,11 @@ import type {
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 
 type LoginOpenAICodexOAuth =
-  (typeof import("../../commands/openai-codex-oauth.js"))["loginOpenAICodexOAuth"];
+  (typeof import("openclaw/plugin-sdk/provider-auth"))["loginOpenAICodexOAuth"];
 type LoginQwenPortalOAuth =
   (typeof import("../../../extensions/qwen-portal-auth/oauth.js"))["loginQwenPortalOAuth"];
 type GithubCopilotLoginCommand =
-  (typeof import("../../providers/github-copilot-auth.js"))["githubCopilotLoginCommand"];
+  (typeof import("openclaw/plugin-sdk/provider-auth"))["githubCopilotLoginCommand"];
 type CreateVpsAwareHandlers =
   (typeof import("../../commands/oauth-flow.js"))["createVpsAwareOAuthHandlers"];
 
@@ -26,21 +26,38 @@ const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>(
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn<LoginQwenPortalOAuth>());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn<GithubCopilotLoginCommand>());
 
-vi.mock("../../commands/openai-codex-oauth.js", () => ({
-  loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
-}));
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
+  return {
+    ...actual,
+    loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
+    githubCopilotLoginCommand: githubCopilotLoginCommandMock,
+  };
+});
 
 vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
   loginQwenPortalOAuth: loginQwenPortalOAuthMock,
 }));
 
-vi.mock("../../providers/github-copilot-auth.js", () => ({
-  githubCopilotLoginCommand: githubCopilotLoginCommandMock,
-}));
-
 const openAIPlugin = (await import("../../../extensions/openai/index.js")).default;
 const qwenPortalPlugin = (await import("../../../extensions/qwen-portal-auth/index.js")).default;
 const githubCopilotPlugin = (await import("../../../extensions/github-copilot/index.js")).default;
+
+function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
+  const captured = createCapturedPluginRegistration();
+  for (const plugin of plugins) {
+    plugin.register(captured.api);
+  }
+  return captured.providers;
+}
+
+function requireProvider(providers: ProviderPlugin[], providerId: string) {
+  const provider = providers.find((entry) => entry.id === providerId);
+  if (!provider) {
+    throw new Error(`provider ${providerId} missing`);
+  }
+  return provider;
+}
 
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {
@@ -76,22 +93,6 @@ function buildAuthContext() {
       createVpsAwareHandlers: vi.fn<CreateVpsAwareHandlers>(),
     },
   };
-}
-
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
 }
 
 describe("provider auth contract", () => {
