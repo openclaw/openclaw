@@ -149,6 +149,9 @@ COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 # They import from relative paths like "../../../src/infra/outbound/send-deps.js", which
 # Jiti resolves to /app/src/. Without src/ here, all extension plugins fail to load.
 COPY --from=runtime-assets --chown=node:node /app/src ./src
+# WhatsApp plugin transitively imports tool-display.json from the shared iOS/macOS resources.
+# Without this path, the whatsapp extension fails to load at runtime.
+COPY --from=runtime-assets --chown=node:node /app/apps/shared/OpenClawKit/Sources/OpenClawKit/Resources ./apps/shared/OpenClawKit/Sources/OpenClawKit/Resources
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
