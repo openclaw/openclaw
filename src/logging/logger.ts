@@ -31,15 +31,19 @@ function canUseNodeFs(): boolean {
   }
 }
 
-function resolveDefaultLogDir(): string {
+export function resolveDefaultLogDir(): string {
   if (process.env.OPENCLAW_LOG_DIR) {
     return process.env.OPENCLAW_LOG_DIR;
   }
   return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
 }
 
+export function resolveDefaultLogFile(): string {
+  return path.join(resolveDefaultLogDir(), "openclaw.log");
+}
+
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
-export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
+export const DEFAULT_LOG_FILE = resolveDefaultLogFile(); // legacy single-file path
 
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
@@ -100,7 +104,7 @@ function resolveSettings(): ResolvedSettings {
   if (!canUseNodeFs()) {
     return {
       level: "silent",
-      file: DEFAULT_LOG_FILE,
+      file: resolveDefaultLogFile(),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
     };
   }
@@ -342,7 +346,7 @@ function formatLocalDate(date: Date): string {
 
 function defaultRollingPathForToday(): string {
   const today = formatLocalDate(new Date());
-  return path.join(DEFAULT_LOG_DIR, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
+  return path.join(resolveDefaultLogDir(), `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
 }
 
 function isRollingPath(file: string): boolean {
