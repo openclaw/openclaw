@@ -152,4 +152,23 @@ describe("gateway probe endpoints", () => {
       },
     });
   });
+
+  it("keeps GET /health with query strings unauthenticated for liveness probes", async () => {
+    await withGatewayServer({
+      prefix: "probe-health-query",
+      resolvedAuth: AUTH_TOKEN,
+      run: async (server) => {
+        const req = createRequest({
+          path: "/health?source=fly",
+          remoteAddress: "10.0.0.8",
+          host: "gateway.test",
+        });
+        const { res, getBody } = createResponse();
+        await dispatchRequest(server, req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({ ok: true, status: "live" });
+      },
+    });
+  });
 });

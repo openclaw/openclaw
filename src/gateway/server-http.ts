@@ -768,12 +768,6 @@ export function createGatewayHttpServer(opts: {
       return;
     }
 
-    // Unauthenticated health check for Fly.io liveness probes.
-    if (req.method === "GET" && req.url === "/health") {
-      sendJson(res, 200, { ok: true, ts: Date.now() });
-      return;
-    }
-
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
