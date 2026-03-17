@@ -128,16 +128,17 @@ export async function runCli(argv: string[] = process.argv) {
 
     const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
 
-    // Route logs to stderr for ACP gateway mode as soon as we know the target
-    // command, to keep stdout protocol-safe during command registration.
-    const [routePathPrimary, routePathSecondary] = getCommandPathWithRootOptions(parseArgv, 2);
-    if (routePathPrimary === "acp" && routePathSecondary === undefined) {
+    // Determine primary command first, so ACP protocol-safe routing happens before registration side-effects.
+    const primary = getPrimaryCommand(parseArgv);
+
+    // Route logs to stderr for ACP mode before registration side-effects,
+    // so stdout remains clean for protocol clients even when acp has option args.
+    if (primary === "acp") {
       routeLogsToStderr();
     }
 
     // Register the primary command (builtin or subcli) so help and command parsing
     // are correct even with lazy command registration.
-    const primary = getPrimaryCommand(parseArgv);
     if (primary) {
       const { getProgramContext } = await import("./program/program-context.js");
       const ctx = getProgramContext(program);

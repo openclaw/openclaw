@@ -71,6 +71,9 @@ vi.mock("./program/command-registry.js", () => ({
 vi.mock("./program/register.subclis.js", () => ({
   registerSubCliByName: registerSubCliByNameMock,
   loadValidatedConfigForPluginRegistration: loadValidatedConfigForPluginRegistrationMock,
+}));
+
+vi.mock("../plugins/cli.js", () => ({
   registerPluginCliCommands: registerPluginCliCommandsMock,
 }));
 
@@ -153,5 +156,15 @@ describe("runCli exit behavior", () => {
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
     expect(registerCoreCliByNameMock).toHaveBeenCalled();
+  });
+
+  it("routes ACP stdout logging even when acp includes option values", async () => {
+    registerSubCliByNameMock.mockImplementation(() => {});
+
+    loadValidatedConfigForPluginRegistrationMock.mockResolvedValue({});
+
+    await runCli(["node", "openclaw", "acp", "--url", "wss://example.local"]);
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
   });
 });
