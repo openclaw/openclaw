@@ -26,7 +26,8 @@ misconfiguration safety), under explicit assumptions.
 
 ## Where the models live
 
-Models are maintained in a separate repo: [vignesh07/openclaw-formal-models](https://github.com/vignesh07/openclaw-formal-models).
+The formal model sources are currently maintained out-of-tree and are not yet published as a standalone public repo.
+Until that lands, this page is the source of truth for the current model names and expected green/red runs.
 
 ## Important caveats
 
@@ -36,22 +37,12 @@ Models are maintained in a separate repo: [vignesh07/openclaw-formal-models](htt
 
 ## Reproducing results
 
-Today, results are reproduced by cloning the models repo locally and running TLC (see below). A future iteration could offer:
+Today, maintainers reproduce results from the formal-model workspace locally and run TLC against the targets listed below.
+A future iteration could offer:
 
 - CI-run models with public artifacts (counterexample traces, run logs)
+- a public models repo with copy-paste reproduction steps
 - a hosted “run this model” workflow for small, bounded checks
-
-Getting started:
-
-```bash
-git clone https://github.com/vignesh07/openclaw-formal-models
-cd openclaw-formal-models
-
-# Java 11+ required (TLC runs on the JVM).
-# The repo vendors a pinned `tla2tools.jar` (TLA+ tools) and provides `bin/tlc` + Make targets.
-
-make <target>
-```
 
 ### Gateway exposure and open gateway misconfiguration
 
@@ -62,8 +53,6 @@ make <target>
   - `make gateway-exposure-v2-protected`
 - Red (expected):
   - `make gateway-exposure-v2-negative`
-
-See also: `docs/gateway-exposure-matrix.md` in the models repo.
 
 ### Nodes.run pipeline (highest-risk capability)
 
