@@ -2,15 +2,16 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
 const DEFAULTS = {
   outputDir: path.join(process.cwd(), ".local", "gateway-watch-regression"),
-  windowMs: 8_000,
+  windowMs: 10_000,
   sigkillGraceMs: 10_000,
-  startupReadyWarnMs: 5_000,
-  startupReadyFailMs: 8_000,
+  cpuWarnMs: 1_000,
+  cpuFailMs: 8_000,
   distRuntimeFileGrowthMax: 200,
   distRuntimeByteGrowthMax: 2 * 1024 * 1024,
   keepLogs: true,
@@ -39,11 +40,11 @@ function parseArgs(argv) {
       case "--sigkill-grace-ms":
         options.sigkillGraceMs = Number(readValue());
         break;
-      case "--startup-ready-warn-ms":
-        options.startupReadyWarnMs = Number(readValue());
+      case "--cpu-warn-ms":
+        options.cpuWarnMs = Number(readValue());
         break;
-      case "--startup-ready-fail-ms":
-        options.startupReadyFailMs = Number(readValue());
+      case "--cpu-fail-ms":
+        options.cpuFailMs = Number(readValue());
         break;
       case "--dist-runtime-file-growth-max":
         options.distRuntimeFileGrowthMax = Number(readValue());
@@ -210,34 +211,79 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir) {
+  const shellSource = [
+    'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
+    "exec node scripts/watch-node.mjs gateway --force --allow-unconfigured",
+  ].join("\n");
+  const env = {
+    OPENCLAW_WATCH_PID_FILE: pidFilePath,
+    HOME: isolatedHomeDir,
+    OPENCLAW_HOME: isolatedHomeDir,
+  };
+
+  if (process.platform === "darwin") {
+    return {
+      command: "/usr/bin/time",
+      args: ["-lp", "-o", timeFilePath, "/bin/sh", "-lc", shellSource],
+      env,
+    };
+  }
+
+  return {
+    command: "/usr/bin/time",
+    args: [
+      "-f",
+      "__TIMING__ user=%U sys=%S elapsed=%e",
+      "-o",
+      timeFilePath,
+      "/bin/sh",
+      "-lc",
+      shellSource,
+    ],
+    env,
+  };
+}
+
+function parseTimingFile(timeFilePath) {
+  const text = fs.readFileSync(timeFilePath, "utf8");
+  if (process.platform === "darwin") {
+    const user = Number(text.match(/^user\s+([0-9.]+)/m)?.[1] ?? "NaN");
+    const sys = Number(text.match(/^sys\s+([0-9.]+)/m)?.[1] ?? "NaN");
+    const elapsed = Number(text.match(/^real\s+([0-9.]+)/m)?.[1] ?? "NaN");
+    return {
+      userSeconds: user,
+      sysSeconds: sys,
+      elapsedSeconds: elapsed,
+    };
+  }
+
+  const match = text.match(/__TIMING__ user=([0-9.]+) sys=([0-9.]+) elapsed=([0-9.]+)/);
+  return {
+    userSeconds: Number(match?.[1] ?? "NaN"),
+    sysSeconds: Number(match?.[2] ?? "NaN"),
+    elapsedSeconds: Number(match?.[3] ?? "NaN"),
+  };
+}
+
 async function runTimedWatch(options, outputDir) {
+  const pidFilePath = path.join(outputDir, "watch.pid");
+  const timeFilePath = path.join(outputDir, "watch.time.log");
+  const isolatedHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-watch-"));
+  fs.writeFileSync(path.join(outputDir, "watch.home.txt"), `${isolatedHomeDir}\n`, "utf8");
   const stdoutPath = path.join(outputDir, "watch.stdout.log");
   const stderrPath = path.join(outputDir, "watch.stderr.log");
-  const startedAt = Date.now();
-  let startupReadyMs = null;
-  const child = spawn(
-    process.execPath,
-    ["scripts/watch-node.mjs", "gateway", "--force", "--allow-unconfigured"],
-    {
-      cwd: process.cwd(),
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-    },
-  );
-  const watchPid = child.pid;
-  if (typeof watchPid !== "number") {
-    throw new Error("Failed to spawn pnpm gateway:watch");
-  }
+  const { command, args, env } = buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir);
+  const child = spawn(command, args, {
+    cwd: process.cwd(),
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk) => {
-    const chunkText = String(chunk);
-    stdout += chunkText;
-    if (startupReadyMs === null && chunkText.includes("[gateway] listening on ws://")) {
-      startupReadyMs = Date.now() - startedAt;
-    }
+    stdout += String(chunk);
   });
   child.stderr?.on("data", (chunk) => {
     stderr += String(chunk);
@@ -247,12 +293,23 @@ async function runTimedWatch(options, outputDir) {
     child.on("exit", (code, signal) => resolve({ code, signal }));
   });
 
+  let watchPid = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (fs.existsSync(pidFilePath)) {
+      watchPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
+      break;
+    }
+    await sleep(100);
+  }
+
   await sleep(options.windowMs);
 
-  try {
-    process.kill(-watchPid, "SIGTERM");
-  } catch {
-    // ignore
+  if (watchPid) {
+    try {
+      process.kill(watchPid, "SIGTERM");
+    } catch {
+      // ignore
+    }
   }
 
   const gracefulExit = await Promise.race([
@@ -261,22 +318,28 @@ async function runTimedWatch(options, outputDir) {
   ]);
 
   if (gracefulExit === null) {
-    try {
-      process.kill(-watchPid, "SIGKILL");
-    } catch {
-      // ignore
+    if (watchPid) {
+      try {
+        process.kill(watchPid, "SIGKILL");
+      } catch {
+        // ignore
+      }
     }
   }
 
   const exit = (await exitPromise) ?? { code: null, signal: null };
   fs.writeFileSync(stdoutPath, stdout, "utf8");
   fs.writeFileSync(stderrPath, stderr, "utf8");
+  const timing = fs.existsSync(timeFilePath)
+    ? parseTimingFile(timeFilePath)
+    : { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN };
 
   return {
     exit,
-    startupReadyMs,
+    timing,
     stdoutPath,
     stderrPath,
+    timeFilePath,
   };
 }
 
@@ -330,7 +393,7 @@ async function main() {
   const distRuntimeAddedPaths = diff.added.filter((entry) =>
     entry.startsWith("dist-runtime/"),
   ).length;
-  const startupReadyMs = watchResult.startupReadyMs;
+  const cpuMs = Math.round((watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000);
   const watchTriggeredBuild =
     fs
       .readFileSync(watchResult.stderrPath, "utf8")
@@ -342,9 +405,9 @@ async function main() {
   const summary = {
     windowMs: options.windowMs,
     watchTriggeredBuild,
-    startupReadyMs,
-    startupReadyWarnMs: options.startupReadyWarnMs,
-    startupReadyFailMs: options.startupReadyFailMs,
+    cpuMs,
+    cpuWarnMs: options.cpuWarnMs,
+    cpuFailMs: options.cpuFailMs,
     distRuntimeFileGrowth,
     distRuntimeFileGrowthMax: options.distRuntimeFileGrowthMax,
     distRuntimeByteGrowth,
@@ -353,6 +416,7 @@ async function main() {
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,
+    timing: watchResult.timing,
   };
   fs.writeFileSync(
     path.join(options.outputDir, "summary.json"),
@@ -372,17 +436,15 @@ async function main() {
       `dist-runtime apparent byte growth ${distRuntimeByteGrowth} exceeded max ${options.distRuntimeByteGrowthMax}`,
     );
   }
-  if (!Number.isFinite(startupReadyMs)) {
+  if (!Number.isFinite(cpuMs)) {
+    failures.push("failed to parse CPU timing from the bounded gateway:watch run");
+  } else if (cpuMs > options.cpuFailMs) {
     failures.push(
-      "gateway:watch never reached the gateway listening state in the measurement window",
+      `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
     );
-  } else if (startupReadyMs > options.startupReadyFailMs) {
+  } else if (cpuMs > options.cpuWarnMs) {
     failures.push(
-      `LOUD ALARM: gateway:watch took ${startupReadyMs}ms to reach the listening state after pnpm build, above loud-alarm threshold ${options.startupReadyFailMs}ms`,
-    );
-  } else if (startupReadyMs > options.startupReadyWarnMs) {
-    failures.push(
-      `gateway:watch took ${startupReadyMs}ms to reach the listening state after pnpm build, above target ${options.startupReadyWarnMs}ms`,
+      `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
     );
   }
 
