@@ -162,6 +162,42 @@ describe("composeSystemPromptWithHookContext", () => {
       }),
     ).toBe("append only");
   });
+
+  it("keeps hook-composed system prompt stable when bootstrap warnings only change the user prompt", () => {
+    const baseSystemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "AGENTS.md", content: "Follow AGENTS guidance." }],
+      toolNames: ["read"],
+    });
+    const composedSystemPrompt = composeSystemPromptWithHookContext({
+      baseSystemPrompt,
+      appendSystemContext: "hook system context",
+    });
+    const turns = [
+      {
+        systemPrompt: composedSystemPrompt,
+        prompt: appendBootstrapPromptWarning("hello", ["AGENTS.md: 200 raw -> 0 injected"]),
+      },
+      {
+        systemPrompt: composedSystemPrompt,
+        prompt: appendBootstrapPromptWarning("hello again", []),
+      },
+      {
+        systemPrompt: composedSystemPrompt,
+        prompt: appendBootstrapPromptWarning("hello once more", [
+          "AGENTS.md: 200 raw -> 0 injected",
+        ]),
+      },
+    ];
+
+    expect(turns[0]?.systemPrompt).toBe(turns[1]?.systemPrompt);
+    expect(turns[1]?.systemPrompt).toBe(turns[2]?.systemPrompt);
+    expect(turns[0]?.prompt.startsWith("hello")).toBe(true);
+    expect(turns[1]?.prompt).toBe("hello again");
+    expect(turns[2]?.prompt.startsWith("hello once more")).toBe(true);
+    expect(turns[0]?.prompt).toContain("[Bootstrap truncation warning]");
+    expect(turns[2]?.prompt).toContain("[Bootstrap truncation warning]");
+  });
 });
 
 describe("resolvePromptModeForSession", () => {

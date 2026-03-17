@@ -350,7 +350,7 @@ export function prependBootstrapPromptWarning(
     "Treat Project Context as partial and read the relevant files directly if details seem missing.",
     ...normalizedLines.map((line) => `- ${line}`),
   ].join("\n");
-  return prompt ? `${warningBlock}\n\n${prompt}` : warningBlock;
+  return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
 }
 
 export function buildBootstrapTruncationReportMeta(params: {

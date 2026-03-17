@@ -116,19 +116,20 @@ describe("bootstrap prompt warnings", () => {
     expect(prompt).toContain("Please continue.");
   });
 
-  it("preserves raw prompt whitespace when prepending warning details", () => {
-    const prompt = prependBootstrapPromptWarning("  indented\nkeep tail  ", [
+  it("preserves raw prompt whitespace when appending warning details", () => {
+    const prompt = appendBootstrapPromptWarning("  indented\nkeep tail  ", [
       "AGENTS.md: 200 raw -> 0 injected",
     ]);
 
-    expect(prompt.endsWith("  indented\nkeep tail  ")).toBe(true);
+    expect(prompt).toContain("  indented\nkeep tail  ");
+    expect(prompt.indexOf("  indented\nkeep tail  ")).toBe(0);
   });
 
-  it("preserves exact heartbeat prompts without warning prefixes", () => {
+  it("preserves exact heartbeat prompts without warning suffixes", () => {
     const heartbeatPrompt = "Read HEARTBEAT.md. Reply HEARTBEAT_OK.";
 
     expect(
-      prependBootstrapPromptWarning(heartbeatPrompt, ["AGENTS.md: 200 raw -> 0 injected"], {
+      appendBootstrapPromptWarning(heartbeatPrompt, ["AGENTS.md: 200 raw -> 0 injected"], {
         preserveExactPrompt: heartbeatPrompt,
       }),
     ).toBe(heartbeatPrompt);
