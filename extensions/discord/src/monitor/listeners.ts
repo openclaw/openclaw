@@ -797,6 +797,8 @@ export class DiscordTypingListener extends BaseListener {
       const logger = this.logger ?? discordEventQueueLog;
       logger.error(danger(`discord typing handler failed: ${String(err)}`));
     }
+  }
+}
 
 type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
 
