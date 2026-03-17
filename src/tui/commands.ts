@@ -19,6 +19,7 @@ export type SlashCommandOptions = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  aliases?: Record<string, string>;
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
@@ -114,6 +115,22 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       getArgumentCompletions: activationCompletions,
     },
     { name: "abort", description: "Abort active run" },
+    {
+      name: "alias",
+      description: "Save, list, or run a prompt alias",
+      getArgumentCompletions: (prefix) =>
+        Object.keys(options.aliases ?? {})
+          .filter((value) => value.startsWith(prefix.toLowerCase()))
+          .map((value) => ({ value, label: value })),
+    },
+    {
+      name: "unalias",
+      description: "Delete a saved prompt alias",
+      getArgumentCompletions: (prefix) =>
+        Object.keys(options.aliases ?? {})
+          .filter((value) => value.startsWith(prefix.toLowerCase()))
+          .map((value) => ({ value, label: value })),
+    },
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
     { name: "settings", description: "Open settings" },
@@ -158,6 +175,8 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/activation <mention|always>",
     "/new or /reset",
     "/abort",
+    "/alias [name] [prompt]",
+    "/unalias <name>",
     "/settings",
     "/exit",
   ].join("\n");
