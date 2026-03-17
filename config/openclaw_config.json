@@ -6,7 +6,7 @@
       "target_gpu": "NVIDIA RTX 5060 Ti (16GB, Blackwell GB206)",
       "vram_limit_gb": 16,
       "inference_engine": "vllm",
-      "dynamic_swapping_enabled": true,
+      "dynamic_swapping_enabled": false,
       "max_concurrent_models": 1
     },
     "memory": {
@@ -20,10 +20,19 @@
     },
     "vllm_base_url": "http://localhost:8000/v1",
     "vllm_port": 8000,
-    "vllm_gpu_memory_utilization": 0.90,
-    "vllm_max_model_len": 8192,
+    "vllm_gpu_memory_utilization": 0.92,
+    "vllm_max_model_len": 32768,
     "vllm_quantization": null,
-    "vllm_extra_args": ["--enable-prefix-caching", "--enable-auto-tool-choice", "--tool-call-parser", "hermes"],
+    "vllm_extra_args": [
+      "--enable-prefix-caching",
+      "--enable-auto-tool-choice",
+      "--tool-call-parser",
+      "hermes",
+      "--kv-cache-dtype",
+      "fp8",
+      "--speculative-config",
+      "{\"method\": \"ngram\", \"num_speculative_tokens\": 5, \"prompt_lookup_max\": 4}"
+    ],
     "polling_gateway_url": "",
     "polling_interval": 30,
     "session_management": {
@@ -31,10 +40,11 @@
       "auto_reset_context_messages": 15
     },
     "model_router": {
-      "risk_analysis": "casperhansen/deepseek-r1-distill-qwen-14b-awq",
-      "tool_execution": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ",
-      "data_parsing": "casperhansen/deepseek-r1-distill-qwen-14b-awq",
-      "general": "Qwen/Qwen2.5-14B-Instruct-AWQ"
+      "risk_analysis": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+      "tool_execution": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+      "data_parsing": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+      "general": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+      "research": "bartowski/DeepSeek-R1-Distill-Qwen-14B-AWQ"
     }
   },
   "brigades": {
@@ -42,32 +52,172 @@
       "workspace_dir": "D:/Dmarket_bot/",
       "description": "HFT and API connection bot operators.",
       "roles": {
-        "Planner": { "model": "Qwen/Qwen2.5-14B-Instruct-AWQ", "num_ctx": 16384, "temperature": 0.1, "timeout_sec": 450, "system_prompt": "Ты Спокойный и Рассудительный Стратег 🧠🗺️. Создаешь глобальные планы и резюме.", "description": "Reads prompt, creates global plan, and generates self-summary." },
-        "Foreman": { "model": "casperhansen/deepseek-r1-distill-qwen-14b-awq", "num_ctx": 16384, "temperature": 0.1, "timeout_sec": 90, "system_prompt": "Ты Требовательный Бригадир 👷‍♂️📋. Распределяешь задачи и контролируешь исполнителей.", "description": "Refines tasks and assigns them to specific Executor models." },
-        "Executor_API": { "model": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ", "num_ctx": 8192, "temperature": 0.2, "timeout_sec": 90, "system_prompt": "Ты Дерзкий Хакер-Технарь ⚡💻. Твоя задача - молниеносная интеграция API.", "description": "Integrates Dmarket API." },
-        "Executor_Parser": { "model": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ", "num_ctx": 8192, "temperature": 0.2, "timeout_sec": 90, "system_prompt": "Ты Педантичный Парсер 👓📊. Анализируешь потоки рыночных данных.", "description": "Parses incoming market data." },
-        "Executor_Logic": { "model": "casperhansen/deepseek-r1-distill-qwen-14b-awq", "num_ctx": 16384, "temperature": 0.1, "timeout_sec": 90, "system_prompt": "Ты Холоднокровный Трейдер 💼🦈. Твоя цель - реализовать логику торговли без эмоций.", "description": "Implements trading logic and conditions." },
-        "Auditor": { "model": "casperhansen/deepseek-r1-distill-qwen-14b-awq", "num_ctx": 16384, "temperature": 0.1, "timeout_sec": 120, "system_prompt": "Ты Строгий Аудитор 🕵️‍♂️⚖️. Всегда ищешь ошибки в коде и песочнице.", "description": "Runs code in isolated sandbox, compares with requirements." },
-        "Archivist": { "model": "pytorch/gemma-3-12b-it-AWQ-INT4", "num_ctx": 4096, "temperature": 0.5, "timeout_sec": 60, "system_prompt": "Ты Дружелюбный Библиотекарь 📚✍️. Твоя задача - красиво оформлять логи для Telegram.", "description": "Summarizes tech logs into human language for Telegram." },
-        "Risk_Analyst": { "model": "casperhansen/deepseek-r1-distill-qwen-14b-awq", "num_ctx": 16384, "temperature": 0.0, "timeout_sec": 90, "system_prompt": "Ты Требовательный Бухгалтер 📉⚠️. Везде видишь риски и жестко контролируешь просадки.", "description": "Evaluates trade risks, calculates drawdowns, enforces stop-loss logic." },
-        "Latency_Optimizer": { "model": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ", "num_ctx": 8192, "temperature": 0.2, "timeout_sec": 60, "system_prompt": "Ты Спидраннер 🏎️⏱️. Одержим оптимизацией задержек для HFT алгоритмов.", "description": "Focuses strictly on reducing execution time for High-Frequency Trading." },
-        "Market_Trend_Extrapolator": { "model": "casperhansen/deepseek-r1-distill-qwen-14b-awq", "num_ctx": 16384, "temperature": 0.1, "timeout_sec": 60, "system_prompt": "Ты Эзотерик-Прогнозист 🔮📈. Экстраполируешь микро-тренды рынка.", "description": "Analyzes micro-trends and outputs short-term predictions to the planner." }
+        "Planner": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.1,
+          "timeout_sec": 300,
+          "system_prompt": "Ты Спокойный и Рассудительный Стратег 🧠🗺️. Создаешь глобальные планы и резюме.",
+          "description": "Reads prompt, creates global plan, and generates self-summary."
+        },
+        "Foreman": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.1,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Требовательный Бригадир 👷‍♂️📋. Распределяешь задачи и контролируешь исполнителей.",
+          "description": "Refines tasks and assigns them to specific Executor models."
+        },
+        "Executor_API": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.2,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Дерзкий Хакер-Технарь ⚡💻. Твоя задача - молниеносная интеграция API.",
+          "description": "Integrates Dmarket API."
+        },
+        "Executor_Parser": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.2,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Педантичный Парсер 👓📊. Анализируешь потоки рыночных данных.",
+          "description": "Parses incoming market data."
+        },
+        "Executor_Logic": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.1,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Холоднокровный Трейдер 💼🦈. Твоя цель - реализовать логику торговли без эмоций.",
+          "description": "Implements trading logic and conditions."
+        },
+        "Auditor": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.1,
+          "timeout_sec": 120,
+          "system_prompt": "Ты Строгий Аудитор 🕵️‍♂️⚖️. Всегда ищешь ошибки в коде и песочнице.",
+          "description": "Runs code in isolated sandbox, compares with requirements."
+        },
+        "Archivist": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.5,
+          "timeout_sec": 60,
+          "system_prompt": "Ты Дружелюбный Библиотекарь 📚✍️. Твоя задача - красиво оформлять логи для Telegram.",
+          "description": "Summarizes tech logs into human language for Telegram."
+        },
+        "Risk_Analyst": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.0,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Требовательный Бухгалтер 📉⚠️. Везде видишь риски и жестко контролируешь просадки.",
+          "description": "Evaluates trade risks, calculates drawdowns, enforces stop-loss logic."
+        },
+        "Latency_Optimizer": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.2,
+          "timeout_sec": 60,
+          "system_prompt": "Ты Спидраннер 🏎️⏱️. Одержим оптимизацией задержек для HFT алгоритмов.",
+          "description": "Focuses strictly on reducing execution time for High-Frequency Trading."
+        },
+        "Data_Analyst": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.1,
+          "timeout_sec": 60,
+          "system_prompt": "Ты Аналитик Данных 📊🔍. Анализируешь переданные рыночные данные, выявляешь паттерны и аномалии. Не предсказываешь — только факты из данных.",
+          "description": "Analyzes provided market data, identifies patterns and anomalies."
+        },
+        "Debugger": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.1,
+          "timeout_sec": 120,
+          "system_prompt": "Ты Детектив Ошибок 🔬🐛. Разбираешь runtime-трейсбэки, находишь корневую причину и предлагаешь минимальный фикс.",
+          "description": "Analyzes runtime errors, tracebacks, and logs to find root cause and minimal fix."
+        }
       }
     },
     "OpenClaw": {
       "workspace_dir": "./",
       "description": "Framework self-improvement and swarm operators.",
       "roles": {
-        "Planner": { "model": "Qwen/Qwen2.5-14B-Instruct-AWQ", "num_ctx": 16384, "temperature": 0.1, "timeout_sec": 450, "system_prompt": "Ты Архитектор Системы 🏛️📐. Смотришь на фреймворк с высоты птичьего полета.", "description": "Plans major framework upgrades and infrastructure changes." },
-        "Foreman": { "model": "casperhansen/deepseek-r1-distill-qwen-14b-awq", "num_ctx": 16384, "temperature": 0.1, "timeout_sec": 90, "system_prompt": "Ты Строгий Надзиратель 🚧🛠️. Превращаешь архитектурные планы в таски.", "description": "Translates structural updates to actionable tasks." },
-        "Executor_Architect": { "model": "Qwen/Qwen2.5-14B-Instruct-AWQ", "num_ctx": 16384, "temperature": 0.2, "timeout_sec": 90, "system_prompt": "Ты Мастер Кода 🧙‍♂️⌨️. Разработчик ядра и структуры базы.", "description": "Writes the core structural code." },
-        "Executor_Tools": { "model": "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ", "num_ctx": 8192, "temperature": 0.2, "timeout_sec": 90, "system_prompt": "Ты Инженер-Изобретатель ⚙️🔧. Создаешь новые скрипты и инструменты.", "description": "Builds and implements tools for the agents." },
-        "Executor_Swarm": { "model": "pytorch/gemma-3-12b-it-AWQ-INT4", "num_ctx": 4096, "temperature": 0.3, "timeout_sec": 60, "system_prompt": "Ты Повелитель Роя 🐝🕸️. Оптимизируешь параллельное взаимодействие агентов.", "description": "Optimizes prompt chains and parallel logic." },
-        "Auditor": { "model": "casperhansen/deepseek-r1-distill-qwen-14b-awq", "num_ctx": 16384, "temperature": 0.1, "timeout_sec": 120, "system_prompt": "Ты Циничный Безопасник 👮‍♂️🛡️. Ищешь дыры и уязвимости в любом коде.", "description": "Checks the framework code for stability and vulnerabilities." },
-        "Archivist": { "model": "pytorch/gemma-3-12b-it-AWQ-INT4", "num_ctx": 4096, "temperature": 0.5, "timeout_sec": 60, "system_prompt": "Ты Дотошный Летописец 📜🖋️. Ведешь журнал коммитов и обновлений системы.", "description": "Creates system updates, readmes, and git commits." },
-        "State_Manager": { "model": "pytorch/gemma-3-12b-it-AWQ-INT4", "num_ctx": 4096, "temperature": 0.2, "timeout_sec": 90, "system_prompt": "Ты Хранитель Памяти 🧠💾. Управляешь контекстом VectorDB без потери смысла.", "description": "Manages VectorDB short summaries so context doesn't bloat." },
-        "Hardware_Optimizer": { "model": "Qwen/Qwen2.5-14B-Instruct-AWQ", "num_ctx": 4096, "temperature": 0.2, "timeout_sec": 60, "system_prompt": "Ты Алчный Майнер ⛏️💻. Считаешь каждый мегабайт VRAM и оптимизируешь нагрузку GPU.", "description": "Monitors VRAM usage, ensuring smooth dynamic swapping on NVIDIA CUDA." },
-        "Sandbox_Guardian": { "model": "Qwen/Qwen2.5-14B-Instruct-AWQ", "num_ctx": 4096, "temperature": 0.1, "timeout_sec": 60, "system_prompt": "Ты Суровый Страж 🚷🔥. Готовишь и очищаешь изолированную среду песочницы.", "description": "Prepares and sanitizes the execution environment for the Auditor." }
+        "Planner": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.1,
+          "timeout_sec": 300,
+          "system_prompt": "Ты Архитектор Системы 🏛️📐. Смотришь на фреймворк с высоты птичьего полета.",
+          "description": "Plans major framework upgrades and infrastructure changes."
+        },
+        "Foreman": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.1,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Строгий Надзиратель 🚧🛠️. Превращаешь архитектурные планы в таски.",
+          "description": "Translates structural updates to actionable tasks."
+        },
+        "Executor_Architect": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.2,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Мастер Кода 🧙‍♂️⌨️. Разработчик ядра и структуры базы.",
+          "description": "Writes the core structural code."
+        },
+        "Executor_Tools": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.2,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Инженер-Изобретатель ⚙️🔧. Создаешь новые скрипты и инструменты.",
+          "description": "Builds and implements tools for the agents."
+        },
+        "Executor_Integration": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.3,
+          "timeout_sec": 60,
+          "system_prompt": "Ты Системный Интегратор 🔗⚙️. Связываешь компоненты фреймворка, оптимизируешь взаимодействие модулей и промпт-цепочки.",
+          "description": "Integrates framework components, optimizes module interaction and prompt chains."
+        },
+        "Auditor": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.1,
+          "timeout_sec": 120,
+          "system_prompt": "Ты Циничный Безопасник 👮‍♂️🛡️. Ищешь дыры и уязвимости в любом коде.",
+          "description": "Checks the framework code for stability and vulnerabilities."
+        },
+        "Archivist": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.5,
+          "timeout_sec": 60,
+          "system_prompt": "Ты Дотошный Летописец 📜🖋️. Ведешь журнал коммитов и обновлений системы.",
+          "description": "Creates system updates, readmes, and git commits."
+        },
+        "State_Manager": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.2,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Хранитель Памяти 🧠💾. Управляешь контекстом VectorDB без потери смысла.",
+          "description": "Manages VectorDB short summaries so context doesn't bloat."
+        },
+        "Test_Writer": {
+          "model": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+          "num_ctx": 32768,
+          "temperature": 0.2,
+          "timeout_sec": 90,
+          "system_prompt": "Ты Тестировщик-Перфекционист 🧪✅. Пишешь юнит-тесты, edge-case сценарии и проверяешь покрытие кода.",
+          "description": "Writes unit tests, edge-case scenarios, and validates code coverage."
+        }
       }
     }
   },
