@@ -104,4 +104,51 @@ describe("line setup wizard", () => {
     expect(resolved.channelAccessToken).toBe("fresh-token");
     expect(resolved.channelSecret).toBe("fresh-secret");
   });
+
+  it("updates an existing case-variant default account entry when rerunning setup", async () => {
+    const prompter = createPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Enter LINE channel access token") {
+          return "fresh-token";
+        }
+        if (message === "Enter LINE channel secret") {
+          return "fresh-secret";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await lineConfigureAdapter.configure({
+      cfg: {
+        channels: {
+          line: {
+            enabled: true,
+            accounts: {
+              Default: {
+                enabled: false,
+                channelAccessToken: "stale-token",
+                channelSecret: "stale-secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime: createRuntimeEnv(),
+      prompter,
+      options: {},
+      accountOverrides: {},
+      shouldPromptAccountIds: false,
+      forceAllowFrom: false,
+    });
+
+    expect(result.cfg.channels?.line?.accounts?.Default?.enabled).toBe(true);
+    expect(result.cfg.channels?.line?.accounts?.Default?.channelAccessToken).toBe("fresh-token");
+    expect(result.cfg.channels?.line?.accounts?.Default?.channelSecret).toBe("fresh-secret");
+    expect(result.cfg.channels?.line?.accounts?.default).toBeUndefined();
+
+    const resolved = resolveLineAccount({ cfg: result.cfg, accountId: "default" });
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.channelAccessToken).toBe("fresh-token");
+    expect(resolved.channelSecret).toBe("fresh-secret");
+  });
 });
