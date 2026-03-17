@@ -317,6 +317,7 @@ describe("fetchRemoteMedia telegram network policy", () => {
       cause: expect.objectContaining({
         name: "Error",
         cause: fallbackError,
+        attemptErrors: [primaryError, ipv4Error, fallbackError],
         primaryError,
       }),
     });

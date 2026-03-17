@@ -1,7 +1,11 @@
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
-import { hasEnvHttpProxyConfigured, resolveFetch } from "openclaw/plugin-sdk/infra-runtime";
-import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  createPinnedLookup,
+  hasEnvHttpProxyConfigured,
+  resolveFetch,
+  type PinnedDispatcherPolicy,
+} from "openclaw/plugin-sdk/infra-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import {
@@ -112,58 +116,6 @@ function createDnsResultOrderLookup(
     };
     lookup(hostname, lookupOptions, callback);
   };
-}
-
-function createPinnedHostnameLookup(
-  pinnedHostname: NonNullable<PinnedDispatcherPolicy["pinnedHostname"]>,
-) {
-  const fallback = dns.lookup as unknown as (
-    hostname: string,
-    options: LookupOptions,
-    callback: LookupCallback,
-  ) => void;
-  return ((hostname, options, callback) => {
-    const resolvedCallback = typeof options === "function" ? (options as LookupCallback) : callback;
-    if (hostname !== pinnedHostname.hostname) {
-      const baseOptions: LookupOptions =
-        typeof options === "number"
-          ? { family: options }
-          : typeof options === "function"
-            ? {}
-            : options
-              ? { ...(options as LookupOptions) }
-              : {};
-      fallback(hostname, baseOptions, resolvedCallback);
-      return;
-    }
-
-    const records = pinnedHostname.addresses.map((address) => ({
-      address,
-      family: address.includes(":") ? 6 : 4,
-    }));
-    const opts =
-      typeof options === "number"
-        ? { family: options }
-        : ((options ?? {}) as { all?: boolean; family?: number });
-    const family = typeof opts.family === "number" ? opts.family : 0;
-    const usable =
-      family === 4 || family === 6 ? records.filter((record) => record.family === family) : records;
-    const selected = usable.length > 0 ? usable : records;
-
-    if ("all" in opts && opts.all) {
-      (callback as (err: null, addresses: dns.LookupAddress[]) => void)(
-        null,
-        selected as dns.LookupAddress[],
-      );
-      return;
-    }
-    const first = selected[0];
-    (resolvedCallback as (err: null, address: string, family: number) => void)(
-      null,
-      first.address,
-      first.family,
-    );
-  }) as LookupFunction;
 }
 
 function buildTelegramConnectOptions(params: {
@@ -288,7 +240,11 @@ function withPinnedLookup(
   if (!pinnedHostname) {
     return options ? { ...options } : undefined;
   }
-  const lookup = createPinnedHostnameLookup(pinnedHostname);
+  const lookup = createPinnedLookup({
+    hostname: pinnedHostname.hostname,
+    addresses: [...pinnedHostname.addresses],
+    fallback: dns.lookup,
+  });
   return options ? { ...options, lookup } : { lookup };
 }
 

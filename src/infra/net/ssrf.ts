@@ -198,6 +198,9 @@ export function createPinnedLookup(params: {
   fallback?: typeof dnsLookupCb;
 }): typeof dnsLookupCb {
   const normalizedHost = normalizeHostname(params.hostname);
+  if (params.addresses.length === 0) {
+    throw new Error(`Pinned lookup requires at least one address for ${params.hostname}`);
+  }
   const fallback = params.fallback ?? dnsLookupCb;
   const fallbackLookup = fallback as unknown as (
     hostname: string,

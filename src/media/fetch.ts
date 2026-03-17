@@ -130,8 +130,8 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       }),
     );
   try {
-    let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
-    let primaryError: unknown;
+    let result!: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    const attemptErrors: unknown[] = [];
     for (let i = 0; i < attempts.length; i += 1) {
       try {
         result = await runGuardedFetch(attempts[i]);
@@ -142,21 +142,27 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
           !shouldRetryFetchError(err) ||
           i === attempts.length - 1
         ) {
-          if (primaryError !== undefined) {
+          if (attemptErrors.length > 0) {
             const combined = new Error(
               `Primary fetch failed and fallback fetch also failed for ${sourceUrl}`,
               { cause: err },
             );
-            (combined as Error & { primaryError?: unknown }).primaryError = primaryError;
+            (
+              combined as Error & {
+                primaryError?: unknown;
+                attemptErrors?: unknown[];
+              }
+            ).primaryError = attemptErrors[0];
+            (combined as Error & { attemptErrors?: unknown[] }).attemptErrors = [
+              ...attemptErrors,
+              err,
+            ];
             throw combined;
           }
           throw err;
         }
-        primaryError ??= err;
+        attemptErrors.push(err);
       }
-    }
-    if (!result) {
-      throw new Error(`Media fetch did not produce a response for ${sourceUrl}`);
     }
     res = result.response;
     finalUrl = result.finalUrl;
