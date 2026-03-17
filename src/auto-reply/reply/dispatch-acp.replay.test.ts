@@ -516,4 +516,97 @@ describe("AcpDurableProjectionService", () => {
       deliveredEffectCount: 2,
     });
   });
+
+  it("converges after synthetic final send succeeds but the durable checkpoint write fails once", async () => {
+    const store = await createStore();
+    await seedTerminalRun({
+      store,
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-final-checkpoint",
+      channel: "telegram",
+      to: "telegram:thread-checkpoint",
+      text: "checkpoint failure should still converge",
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+      now: 10,
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        kind: string;
+        payload: { text?: string };
+      };
+      if (
+        params.kind === "final" &&
+        params.payload.text === "checkpoint failure should still converge"
+      ) {
+        return {
+          mediaUrl: "https://example.com/checkpoint-final-tts.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+
+    const originalRecordProjectorCheckpoint = store.recordProjectorCheckpoint.bind(store);
+    let failFinalCheckpointOnce = true;
+    vi.spyOn(store, "recordProjectorCheckpoint").mockImplementation(async (params) => {
+      if (
+        failFinalCheckpointOnce &&
+        params.runId === "run-final-checkpoint" &&
+        params.deliveredEffectCount === 2
+      ) {
+        failFinalCheckpointOnce = false;
+        throw new Error("synthetic final checkpoint failed");
+      }
+      return await originalRecordProjectorCheckpoint(params);
+    });
+
+    const cfg = createAcpTestConfig();
+    const service = new AcpDurableProjectionService({
+      store,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    await service.ensureProjection({
+      cfg,
+      target: (await store.getRunDeliveryTarget("run-final-checkpoint", "primary"))!,
+      shouldSendToolSummaries: true,
+      restartMode: true,
+      retryDelayMs: 1,
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "checkpoint failure should still converge",
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/checkpoint-final-tts.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+    expect(await store.getCheckpoint("projector:run-final-checkpoint:primary")).toMatchObject({
+      runId: "run-final-checkpoint",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
+    });
+  });
 });

@@ -278,6 +278,8 @@ export class AcpGatewayStore {
     cursorSeq: number;
     targetId?: string;
     deliveredEffectCount?: number;
+    pendingSyntheticFinalEffectCount?: number;
+    pendingSyntheticFinalCursorSeq?: number;
     now?: number;
   }): Promise<AcpGatewayCheckpointRecord> {
     const now = params.now ?? Date.now();
@@ -290,6 +292,12 @@ export class AcpGatewayStore {
         ...(params.targetId ? { targetId: params.targetId } : {}),
         ...(typeof params.deliveredEffectCount === "number"
           ? { deliveredEffectCount: params.deliveredEffectCount }
+          : {}),
+        ...(typeof params.pendingSyntheticFinalEffectCount === "number"
+          ? { pendingSyntheticFinalEffectCount: params.pendingSyntheticFinalEffectCount }
+          : {}),
+        ...(typeof params.pendingSyntheticFinalCursorSeq === "number"
+          ? { pendingSyntheticFinalCursorSeq: params.pendingSyntheticFinalCursorSeq }
           : {}),
         updatedAt: now,
       };
@@ -396,6 +404,32 @@ export class AcpGatewayStore {
       cursorSeq: params.cursorSeq,
       targetId,
       deliveredEffectCount: params.deliveredEffectCount,
+      now: params.now,
+    });
+  }
+
+  async recordProjectorPendingSyntheticFinal(params: {
+    sessionKey: string;
+    runId: string;
+    targetId?: string;
+    cursorSeq: number;
+    deliveredEffectCount: number;
+    now?: number;
+  }): Promise<AcpGatewayCheckpointRecord> {
+    const targetId = params.targetId?.trim() || "primary";
+    const checkpointKey = makeProjectorCheckpointKey(params.runId, targetId);
+    const existing = await this.getCheckpoint(checkpointKey);
+    return await this.recordCheckpoint({
+      checkpointKey,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      cursorSeq: existing?.cursorSeq ?? params.cursorSeq,
+      targetId,
+      ...(typeof existing?.deliveredEffectCount === "number"
+        ? { deliveredEffectCount: existing.deliveredEffectCount }
+        : {}),
+      pendingSyntheticFinalEffectCount: params.deliveredEffectCount,
+      pendingSyntheticFinalCursorSeq: params.cursorSeq,
       now: params.now,
     });
   }

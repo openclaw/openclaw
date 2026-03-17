@@ -412,13 +412,14 @@ export async function tryDispatchAcpReply(params: {
       await projector.flush(true);
     }
     try {
-      const ttsSyntheticReply = await delivery.resolveSyntheticFinalPayload();
-      if (ttsSyntheticReply) {
-        const delivered = await delivery.deliver("final", ttsSyntheticReply);
-        if (delivered) {
-          delivery.markSyntheticFinalDelivered();
+      const finalAlreadyDelivered =
+        delivery.getRoutedCounts().final > 0 || params.dispatcher.getQueuedCounts().final > 0;
+      if (!finalAlreadyDelivered) {
+        const ttsSyntheticReply = await delivery.resolveSyntheticFinalPayload();
+        if (ttsSyntheticReply) {
+          const delivered = await delivery.deliver("final", ttsSyntheticReply);
+          queuedFinal = queuedFinal || delivered;
         }
-        queuedFinal = queuedFinal || delivered;
       }
     } catch (err) {
       logVerbose(

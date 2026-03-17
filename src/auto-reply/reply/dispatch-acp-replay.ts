@@ -260,13 +260,31 @@ class AcpDurableProjectionRunner {
     decrementSkipRemaining: () => void;
     cursorSeq: number;
   }): Promise<void> {
+    const nextEffectCount = params.deliveredEffectCountRef() + 1;
+    const checkpoint = await this.params.store.getCheckpoint(
+      `projector:${this.params.target.runId}:${this.params.target.targetId}`,
+    );
+    if (
+      checkpoint?.pendingSyntheticFinalEffectCount === nextEffectCount &&
+      checkpoint.pendingSyntheticFinalCursorSeq === params.cursorSeq
+    ) {
+      params.incrementDeliveredEffectCount();
+      await this.params.store.recordProjectorCheckpoint({
+        sessionKey: this.params.target.sessionKey,
+        runId: this.params.target.runId,
+        targetId: this.params.target.targetId,
+        cursorSeq: params.cursorSeq,
+        deliveredEffectCount: params.deliveredEffectCountRef(),
+      });
+      return;
+    }
+
     const syntheticFinalPayload = await params.coordinator.resolveSyntheticFinalPayload();
     if (!syntheticFinalPayload) {
       return;
     }
     params.incrementDeliveredEffectCount();
     if (params.skipRemainingRef() > 0) {
-      params.coordinator.markSyntheticFinalDelivered();
       params.decrementSkipRemaining();
       return;
     }
@@ -274,7 +292,13 @@ class AcpDurableProjectionRunner {
     if (!delivered) {
       throw new Error("ACP durable final-TTS delivery failed.");
     }
-    params.coordinator.markSyntheticFinalDelivered();
+    await this.params.store.recordProjectorPendingSyntheticFinal({
+      sessionKey: this.params.target.sessionKey,
+      runId: this.params.target.runId,
+      targetId: this.params.target.targetId,
+      cursorSeq: params.cursorSeq,
+      deliveredEffectCount: params.deliveredEffectCountRef(),
+    });
     await this.params.store.recordProjectorCheckpoint({
       sessionKey: this.params.target.sessionKey,
       runId: this.params.target.runId,

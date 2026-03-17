@@ -26,7 +26,6 @@ type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
   accumulatedBlockText: string;
   blockCount: number;
-  syntheticFinalDelivered: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
@@ -36,7 +35,6 @@ export function createAcpDispatchDeliveryState(): AcpDispatchDeliveryState {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
     blockCount: 0,
-    syntheticFinalDelivered: false,
     routedCounts: {
       tool: 0,
       block: 0,
@@ -56,7 +54,6 @@ export type AcpDispatchDeliveryCoordinator = {
   getBlockCount: () => number;
   getAccumulatedBlockText: () => string;
   resolveSyntheticFinalPayload: () => Promise<ReplyPayload | null>;
-  markSyntheticFinalDelivered: () => void;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -329,22 +326,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     deliver,
     getBlockCount: () => state.blockCount,
     getAccumulatedBlockText: () => state.accumulatedBlockText,
-    resolveSyntheticFinalPayload: async () => {
-      if (state.syntheticFinalDelivered) {
-        return null;
-      }
-      return await resolveAcpSyntheticFinalTtsPayload({
+    resolveSyntheticFinalPayload: async () =>
+      await resolveAcpSyntheticFinalTtsPayload({
         cfg: params.cfg,
         accumulatedBlockText: state.accumulatedBlockText,
         blockCount: state.blockCount,
         inboundAudio,
         sessionTtsAuto,
         ttsChannel,
-      });
-    },
-    markSyntheticFinalDelivered: () => {
-      state.syntheticFinalDelivered = true;
-    },
+      }),
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;
