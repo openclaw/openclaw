@@ -174,8 +174,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 
 - `wiz-api.sh` authenticates via OAuth2 client credentials and queries the Wiz
   GraphQL API directly at `https://api.eu26.app.wiz.io/graphql`.
-- Credential resolution: Vault `secret/wiz/api-token` > `WIZ_CLIENT_ID`/`WIZ_CLIENT_SECRET`.
-- Uses the same Vault secret as `wiz-mcp.sh` — no separate credentials needed.
+- Credential resolution: Vault `secret/data/wiz/api-token` (KV v2 API path) > `WIZ_CLIENT_ID`/`WIZ_CLIENT_SECRET`.
 - Token is cached at `/tmp/wiz-api-token.json` (chmod 600) and auto-refreshed.
 - Pre-built subcommands auto-paginate (default max 10 pages).
 - Raw `query` subcommand does not auto-paginate.
@@ -192,19 +191,19 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 /home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh query '{ issues(first: 5) { nodes { id severity } } }'
 
 # Vulnerabilities - critical + high, with known fix
-/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh vulns --severity critical,high --has-fix
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh vulns --severity CRITICAL,HIGH --has-fix
 
 # Issues - open critical
-/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh issues --severity critical --status open
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh issues --severity CRITICAL --status OPEN
 
 # Cloud config findings
-/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh cloud-config --severity critical,high
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh cloud-config --severity CRITICAL,HIGH
 
 # Kubernetes cluster posture
 /home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh k8s
 
 # Runtime security events
-/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh runtime --severity critical,high
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh runtime --severity CRITICAL,HIGH
 
 # Full posture summary (counts by severity)
 /home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh summary | jq

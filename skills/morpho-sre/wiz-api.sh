@@ -42,6 +42,11 @@ has_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# Normalize comma-separated enum values: uppercase + trim whitespace
+normalize_csv_upper() {
+  printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '\n' ',' | sed 's/,$//'
+}
+
 detect_service_account_jwt() {
   local jwt_file="${WIZ_API_VAULT_JWT_FILE:-/var/run/secrets/kubernetes.io/serviceaccount/token}"
   [[ -f "$jwt_file" ]] || return 1
@@ -153,8 +158,9 @@ authenticate() {
       "$WIZ_AUTH_URL"
   )" || die "auth request failed"
 
+  printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -e . >/dev/null 2>&1 || die "auth response is not valid JSON: $(printf '%s' "$response" | head -c 200)"
   access_token="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.access_token // empty')"
-  [[ -n "$access_token" ]] || die "auth response missing access_token"
+  [[ -n "$access_token" ]] || die "auth failed: $(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.error_description // .error // "missing access_token"')"
   expires_in="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.expires_in // 3600')"
 
   save_cached_token "$access_token" "$expires_in"
@@ -182,7 +188,7 @@ wiz_graphql_with_retry() {
   )" || die "failed to build GraphQL payload"
 
   ensure_tmp_dir
-  tmp_body="${WIZ_API_TMP_DIR}/body.$$.$RANDOM"
+  tmp_body="$(mktemp "${WIZ_API_TMP_DIR}/body.XXXXXX")"
 
   http_code="$(
     "$WIZ_API_CURL_BIN" -sS --max-time "$WIZ_API_TIMEOUT" \
@@ -205,7 +211,7 @@ wiz_graphql_with_retry() {
     WIZ_API_BEARER_TOKEN=""
     authenticate
 
-    tmp_body="${WIZ_API_TMP_DIR}/body.$$.$RANDOM"
+    tmp_body="$(mktemp "${WIZ_API_TMP_DIR}/body.XXXXXX")"
     http_code="$(
       "$WIZ_API_CURL_BIN" -sS --max-time "$WIZ_API_TIMEOUT" \
         -o "$tmp_body" -w '%{http_code}' \
@@ -347,15 +353,18 @@ cmd_issues() {
     esac
   done
 
-  # Build filter JSON via jq — enum values passed as variables, not inline strings
+  # Build filter JSON via jq — enum values normalized to uppercase
   local filter_json="{}"
   if [[ -n "$severity" ]]; then
+    severity="$(normalize_csv_upper "$severity")"
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
   if [[ -n "$status" ]]; then
+    status="$(normalize_csv_upper "$status")"
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$status" '. + {status: ($s | split(","))}')"
   fi
   if [[ -n "$issue_type" ]]; then
+    issue_type="$(normalize_csv_upper "$issue_type")"
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$issue_type" '. + {type: ($s | split(","))}')"
   fi
   if [[ -n "$entity_type" ]]; then
@@ -403,9 +412,10 @@ cmd_vulns() {
     esac
   done
 
-  # Build filter JSON via jq — enum values passed as variables, not inline strings
+  # Build filter JSON via jq — enum values normalized to uppercase
   local filter_json="{}"
   if [[ -n "$severity" ]]; then
+    severity="$(normalize_csv_upper "$severity")"
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
   if [[ -n "$image" ]]; then
@@ -509,15 +519,17 @@ cmd_cloud_config() {
     esac
   done
 
-  # Build filter JSON via jq — enum values passed as variables, not inline strings
+  # Build filter JSON via jq — enum values normalized to uppercase
   local filter_json="{}"
   if [[ -n "$severity" ]]; then
+    severity="$(normalize_csv_upper "$severity")"
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
   if [[ -n "$rule" ]]; then
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg v "$rule" '. + {rule: $v}')"
   fi
   if [[ -n "$status" ]]; then
+    status="$(normalize_csv_upper "$status")"
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$status" '. + {status: ($s | split(","))}')"
   fi
 
@@ -599,9 +611,10 @@ cmd_runtime() {
     esac
   done
 
-  # Build filter JSON via jq — enum values passed as variables, not inline strings
+  # Build filter JSON via jq — enum values normalized to uppercase
   local filter_json="{}"
   if [[ -n "$severity" ]]; then
+    severity="$(normalize_csv_upper "$severity")"
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$severity" '. + {severity: ($s | split(","))}')"
   fi
 
