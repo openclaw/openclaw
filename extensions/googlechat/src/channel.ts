@@ -19,7 +19,6 @@ import {
   resolveChannelMediaMaxBytes,
   resolveGoogleChatGroupRequireMention,
   runPassiveAccountLifecycle,
-  type ChannelDock,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ChannelStatusIssue,
@@ -93,33 +92,6 @@ const resolveGoogleChatDmPolicy = createScopedDmSecurityResolver<ResolvedGoogleC
   allowFromPathSuffix: "dm.",
   normalizeEntry: (raw) => formatAllowFromEntry(raw),
 });
-
-export const googlechatDock: ChannelDock = {
-  id: "googlechat",
-  capabilities: {
-    chatTypes: ["direct", "group", "thread"],
-    reactions: true,
-    media: true,
-    threads: true,
-    blockStreaming: true,
-  },
-  outbound: { textChunkLimit: 4000 },
-  config: googleChatConfigAccessors,
-  groups: {
-    resolveRequireMention: resolveGoogleChatGroupRequireMention,
-  },
-  threading: {
-    resolveReplyToMode: ({ cfg }) => cfg.channels?.["googlechat"]?.replyToMode ?? "off",
-    buildToolContext: ({ context, hasRepliedRef }) => {
-      const threadId = context.MessageThreadId ?? context.ReplyToId;
-      return {
-        currentChannelId: context.To?.trim() || undefined,
-        currentThreadTs: threadId != null ? String(threadId) : undefined,
-        hasRepliedRef,
-      };
-    },
-  },
-};
 
 const googlechatActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => googlechatMessageActions.listActions?.(ctx) ?? [],

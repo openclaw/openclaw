@@ -345,6 +345,12 @@ export type ChannelThreadingToolContext = {
 
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  parseExplicitTarget?: (params: { raw: string }) => {
+    to: string;
+    threadId?: string | number;
+    chatType?: ChatType;
+  } | null;
+  inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
   buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
   enableInteractiveReplies?: (params: {
     cfg: OpenClawConfig;

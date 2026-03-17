@@ -13,13 +13,28 @@ vi.mock("../../commands/auth-choice-options.static.js", () => ({
   formatStaticAuthChoiceChoicesForCli: () => "token|oauth",
 }));
 
-vi.mock("../../commands/onboard-provider-auth-flags.js", () => ({
-  ONBOARD_PROVIDER_AUTH_FLAGS: [
+vi.mock("../../commands/auth-choice-options.js", () => ({
+  formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
+}));
+
+vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
+  CORE_ONBOARD_AUTH_FLAGS: [
     {
       cliOption: "--mistral-api-key <key>",
       description: "Mistral API key",
+      optionKey: "mistralApiKey",
     },
-  ] as Array<{ cliOption: string; description: string }>,
+  ] as Array<{ cliOption: string; description: string; optionKey: string }>,
+}));
+
+vi.mock("../../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderOnboardAuthFlags: () => [
+    {
+      cliOption: "--openai-api-key <key>",
+      description: "OpenAI API key",
+      optionKey: "openaiApiKey",
+    },
+  ],
 }));
 
 vi.mock("../../commands/onboard.js", () => ({
