@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
+  buildAllPluginInspectReports,
   buildPluginInspectReport,
   buildPluginStatusReport,
   type PluginStatusReport,
@@ -46,6 +47,22 @@ function buildPluginInspectJson(params: {
     inspect,
     install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
   };
+}
+
+function buildAllPluginInspectJson(params: {
+  config: OpenClawConfig;
+  report: PluginStatusReport;
+}): Array<{
+  inspect: ReturnType<typeof buildAllPluginInspectReports>[number];
+  install: PluginInstallRecord | null;
+}> {
+  return buildAllPluginInspectReports({
+    config: params.config,
+    report: params.report,
+  }).map((inspect) => ({
+    inspect,
+    install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
+  }));
 }
 
 function formatPluginLabel(plugin: PluginRecord): string {
@@ -162,6 +179,14 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
       return {
         shouldContinue: false,
         reply: { text: formatPluginsList(loaded.report) },
+      };
+    }
+    if (pluginsCommand.name.toLowerCase() === "all") {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: renderJsonBlock("🔌 Plugins", buildAllPluginInspectJson(loaded)),
+        },
       };
     }
     const payload = buildPluginInspectJson({
