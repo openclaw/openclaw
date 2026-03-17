@@ -6,29 +6,9 @@ import {
   resolveDefaultLineAccountId,
   resolveLineAccount,
 } from "../../../src/line/accounts.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import { createTestWizardPrompter, type WizardPrompter } from "../../test-utils/setup-wizard.js";
 import { lineSetupAdapter, lineSetupWizard } from "./setup-surface.js";
-
-function createPrompter(overrides: Partial<WizardPrompter> = {}): WizardPrompter {
-  return {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select: vi.fn(async ({ options }: { options: Array<{ value: string }> }) => {
-      const first = options[0];
-      if (!first) {
-        throw new Error("no options");
-      }
-      return first.value;
-    }) as WizardPrompter["select"],
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => "") as WizardPrompter["text"],
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    ...overrides,
-  };
-}
 
 const lineConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: {
@@ -47,7 +27,7 @@ const lineConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
 
 describe("line setup wizard", () => {
   it("configures token and secret for the default account", async () => {
-    const prompter = createPrompter({
+    const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "Enter LINE channel access token") {
           return "line-token";
