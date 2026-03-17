@@ -163,7 +163,7 @@ authenticate() {
   printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -e . >/dev/null 2>&1 || die "auth response is not valid JSON: $(printf '%s' "$response" | head -c 200)"
   access_token="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.access_token // empty')"
   [[ -n "$access_token" ]] || die "auth failed: $(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.error_description // .error // "missing access_token"')"
-  expires_in="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.expires_in // 3600')"
+  expires_in="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.expires_in // 3600 | floor')"
 
   save_cached_token "$access_token" "$expires_in"
   WIZ_API_BEARER_TOKEN="$access_token"
@@ -370,6 +370,7 @@ cmd_issues() {
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$issue_type" '. + {type: ($s | split(","))}')"
   fi
   if [[ -n "$entity_type" ]]; then
+    entity_type="$(normalize_csv_upper "$entity_type")"
     filter_json="$(printf '%s' "$filter_json" | "$WIZ_API_JQ_BIN" -c --arg s "$entity_type" '. + {entityType: ($s | split(","))}')"
   fi
 
@@ -742,6 +743,9 @@ EOF
 main() {
   require_cmd "$WIZ_API_JQ_BIN"
   require_cmd "$WIZ_API_CURL_BIN"
+
+  [[ "$WIZ_API_MAX_PAGES" =~ ^[0-9]+$ ]] || die "WIZ_API_MAX_PAGES must be an integer (got: ${WIZ_API_MAX_PAGES})"
+  [[ "$WIZ_API_TIMEOUT" =~ ^[0-9]+$ ]] || die "WIZ_API_TIMEOUT must be an integer (got: ${WIZ_API_TIMEOUT})"
 
   [[ "$#" -ge 1 ]] || { usage; exit 1; }
 

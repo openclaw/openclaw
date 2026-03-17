@@ -336,7 +336,7 @@ done
 for arg in "$@"; do
   case "$arg" in
     */oauth/token)
-      printf '{"access_token":"retry-token-%s","expires_in":3600}\n' "$(date +%s%N)"
+      printf '{"access_token":"retry-token-%s-%s","expires_in":3600}\n' "$(date +%s)" "$RANDOM"
       exit 0
       ;;
   esac
