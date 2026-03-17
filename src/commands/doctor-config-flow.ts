@@ -40,6 +40,7 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
+import { describeUnknownError } from "../secrets/shared.js";
 import {
   isDiscordMutableAllowEntry,
   isGoogleChatMutableAllowEntry,
@@ -334,10 +335,23 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     const inspected = inspectTelegramAccount({ cfg, accountId });
     return inspected.enabled && inspected.tokenStatus === "configured_unavailable";
   });
+  const tokenResolutionWarnings: string[] = [];
   const tokens = Array.from(
     new Set(
       listTelegramAccountIds(resolvedConfig)
-        .map((accountId) => resolveTelegramAccount({ cfg: resolvedConfig, accountId }))
+        .map((accountId) => {
+          try {
+            return resolveTelegramAccount({ cfg: resolvedConfig, accountId });
+          } catch (error) {
+            tokenResolutionWarnings.push(
+              `- Telegram account ${accountId}: failed to inspect bot token (${describeUnknownError(error)}).`,
+            );
+            return null;
+          }
+        })
+        .filter((account): account is NonNullable<ReturnType<typeof resolveTelegramAccount>> =>
+          Boolean(account),
+        )
         .map((account) => (account.tokenSource === "none" ? "" : account.token))
         .map((token) => token.trim())
         .filter(Boolean),
@@ -348,6 +362,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     return {
       config: cfg,
       changes: [
+        ...tokenResolutionWarnings,
         hasConfiguredUnavailableToken
           ? `- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve (start the gateway or make the secret source available, then rerun doctor --fix).`
           : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
