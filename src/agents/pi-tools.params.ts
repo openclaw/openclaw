@@ -8,8 +8,20 @@ export type RequiredParamGroup = {
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
 
-function parameterValidationError(message: string): Error {
-  return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
+// Tool-specific hints included in validation errors so the caller knows which
+// parameters are accepted (including Claude Code aliases) and when to pick a
+// different tool.
+const TOOL_HINTS: Record<string, string> = {
+  edit: "The edit tool requires 'path' (or 'file_path'), 'oldText' (or 'old_string'), and 'newText' (or 'new_string'). For full-file rewrites, consider using 'write' instead.",
+  write:
+    "The write tool requires 'path' (or 'file_path') and 'content'. For surgical changes, consider using 'edit' instead.",
+  read: "The read tool requires 'path' (or 'file_path').",
+};
+
+function parameterValidationError(message: string, toolName?: string): Error {
+  const hint = toolName ? TOOL_HINTS[toolName] : undefined;
+  const suffix = hint ? ` Hint: ${hint}` : "";
+  return new Error(`${message}.${suffix}${RETRY_GUIDANCE_SUFFIX}`);
 }
 
 export const CLAUDE_PARAM_GROUPS = {
@@ -171,7 +183,7 @@ export function assertRequiredParams(
   toolName: string,
 ): void {
   if (!record || typeof record !== "object") {
-    throw parameterValidationError(`Missing parameters for ${toolName}`);
+    throw parameterValidationError(`Missing parameters for ${toolName}`, toolName);
   }
 
   const missingLabels: string[] = [];
@@ -199,7 +211,7 @@ export function assertRequiredParams(
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
     const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
+    throw parameterValidationError(`Missing required ${noun}: ${joined}`, toolName);
   }
 }
 
