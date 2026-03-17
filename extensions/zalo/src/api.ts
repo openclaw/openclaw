@@ -33,7 +33,10 @@ export type ZaloMessage = {
   };
   date: number;
   text?: string;
+  /** Legacy/local field name used by outbound sendPhoto payloads. */
   photo?: string;
+  /** Actual inbound image field observed from Zalo Bot API events. */
+  photo_url?: string;
   caption?: string;
   sticker?: string;
 };

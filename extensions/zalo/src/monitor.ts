@@ -105,6 +105,10 @@ type ZaloImageMessageParams = ZaloProcessingContext & {
   mediaMaxMb: number;
 };
 
+export function resolveInboundZaloPhotoUrl(message: ZaloMessage): string | undefined {
+  return message.photo_url?.trim() || message.photo?.trim() || undefined;
+}
+
 function formatZaloError(error: unknown): string {
   if (error instanceof Error) {
     return error.stack ?? `${error.name}: ${error.message}`;
@@ -290,15 +294,16 @@ async function handleTextMessage(
 
 async function handleImageMessage(params: ZaloImageMessageParams): Promise<void> {
   const { message, mediaMaxMb, account, core, runtime } = params;
-  const { photo, caption } = message;
+  const { caption } = message;
+  const photoUrl = resolveInboundZaloPhotoUrl(message);
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
 
-  if (photo) {
+  if (photoUrl) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo, maxBytes });
+      const fetched = await core.channel.media.fetchRemoteMedia({ url: photoUrl, maxBytes });
       const saved = await core.channel.media.saveMediaBuffer(
         fetched.buffer,
         fetched.contentType,
