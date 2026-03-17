@@ -209,7 +209,6 @@ function resolveRequestedFallbackModelRef(params: {
   }
   return `${parsed.provider}/${parsed.model}`;
 }
-
 // ── Internal gateway dispatch for plugin runtime ────────────────────
 
 function createSyntheticOperatorClient(params?: {

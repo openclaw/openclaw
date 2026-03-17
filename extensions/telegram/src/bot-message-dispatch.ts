@@ -909,7 +909,6 @@ export const dispatchTelegramMessage = async ({
     return;
   }
 
-  // Only broadcast when there's an actual agent response, not just fallback
   if (queuedFinal) {
     const ctx = getFallbackGatewayContext();
     if (ctx && ctxPayload.SessionKey) {
