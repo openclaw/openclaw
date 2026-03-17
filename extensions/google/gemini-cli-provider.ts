@@ -1,9 +1,9 @@
-import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/core";
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderFetchUsageSnapshotContext,
 } from "openclaw/plugin-sdk/core";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { loginGeminiCliOAuth } from "./oauth.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";

@@ -50,7 +50,7 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
       };
     }
     try {
-      const { transcribeFirstAudio } = await import("openclaw/plugin-sdk/media-runtime");
+      const { transcribeFirstAudio } = await import("./preflight-audio.runtime.js");
       if (params.abortSignal?.aborted) {
         return {
           hasAudioAttachment,

@@ -1,8 +1,6 @@
-import {
-  buildAccountScopedDmSecurityPolicy,
-  createAccountStatusSink,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+import { buildAccountScopedDmSecurityPolicy } from "openclaw/plugin-sdk/channel-policy";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,

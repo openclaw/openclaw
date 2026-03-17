@@ -12,7 +12,7 @@ import {
   buildAgentSessionKey,
   resolveThreadSessionKeys,
   type RoutePeer,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/routing";
 import {
   buildComputedAccountStatusSnapshot,
   DEFAULT_ACCOUNT_ID,

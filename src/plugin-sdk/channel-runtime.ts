@@ -42,6 +42,7 @@ export * from "../channels/plugins/status-issues/shared.js";
 export * from "../channels/plugins/whatsapp-heartbeat.js";
 export * from "../infra/outbound/send-deps.js";
 export * from "../utils/message-channel.js";
+export * from "./channel-lifecycle.js";
 export type {
   InteractiveButtonStyle,
   InteractiveReplyButton,

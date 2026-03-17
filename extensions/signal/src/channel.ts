@@ -5,8 +5,8 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,

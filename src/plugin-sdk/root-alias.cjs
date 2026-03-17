@@ -84,7 +84,7 @@ function loadMonolithicSdk() {
 
   const jiti = getJiti();
 
-  const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "index.js");
+  const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
   if (fs.existsSync(distCandidate)) {
     try {
       monolithicSdk = jiti(distCandidate);
@@ -94,7 +94,7 @@ function loadMonolithicSdk() {
     }
   }
 
-  monolithicSdk = jiti(path.join(__dirname, "index.ts"));
+  monolithicSdk = jiti(path.join(__dirname, "compat.ts"));
   return monolithicSdk;
 }
 
