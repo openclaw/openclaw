@@ -110,6 +110,20 @@ describe("createTelegramBot", () => {
       }),
     );
   });
+  it("passes apiServerUrl as apiRoot to grammY client", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], apiServerUrl: "http://localhost:8081" },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ apiRoot: "http://localhost:8081" }),
+      }),
+    );
+  });
   it("sequentializes updates by chat and thread", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);

@@ -191,6 +191,13 @@ export const TelegramAccountSchemaBase = z
     // Legacy key kept for automatic migration to `streaming`.
     streamMode: z.enum(["off", "partial", "block"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
+    apiServerUrl: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "Base URL for the Telegram Bot API. Set to a local Telegram Bot API Server (e.g. http://localhost:8081) to avoid routing issues when api.telegram.org is unreliable.",
+      ),
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
     network: z

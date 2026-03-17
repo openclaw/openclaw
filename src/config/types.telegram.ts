@@ -142,6 +142,14 @@ export type TelegramAccountConfig = {
   /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /**
+   * Base URL for the Telegram Bot API.
+   *
+   * Set this to a local Telegram Bot API Server (e.g. "http://localhost:8081")
+   * to avoid routing issues when api.telegram.org is unreliable.
+   * Maps to grammY's `client.apiRoot`.
+   */
+  apiServerUrl?: string;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */
