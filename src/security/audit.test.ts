@@ -1497,71 +1497,71 @@ description: test skill
     }
   });
 
-  it.each([
-    {
-      name: "warns when control UI allows insecure auth",
-      cfg: {
-        gateway: {
-          controlUi: { allowInsecureAuth: true },
-        },
-      } satisfies OpenClawConfig,
-      expectedFinding: {
-        checkId: "gateway.control_ui.insecure_auth",
-        severity: "warn",
-      },
-      expectedDangerousFlag: "gateway.controlUi.allowInsecureAuth=true",
-    },
-    {
-      name: "warns when control UI device auth is disabled",
-      cfg: {
-        gateway: {
-          controlUi: { dangerouslyDisableDeviceAuth: true },
-        },
-      } satisfies OpenClawConfig,
-      expectedFinding: {
-        checkId: "gateway.control_ui.device_auth_disabled",
-        severity: "critical",
-      },
-      expectedDangerousFlag: "gateway.controlUi.dangerouslyDisableDeviceAuth=true",
-    },
-  ])("$name", async (testCase) => {
-    const res = await audit(testCase.cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining(testCase.expectedFinding),
-        expect.objectContaining({
-          checkId: "config.insecure_or_dangerous_flags",
-          severity: "warn",
-          detail: expect.stringContaining(testCase.expectedDangerousFlag),
-        }),
-      ]),
-    );
-  });
-
-  it("warns when insecure/dangerous debug flags are enabled", async () => {
-    const cfg: OpenClawConfig = {
-      hooks: {
-        gmail: { allowUnsafeExternalContent: true },
-        mappings: [{ allowUnsafeExternalContent: true }],
-      },
-      tools: {
-        exec: {
-          applyPatch: {
-            workspaceOnly: false,
+  it("warns on insecure or dangerous flags", async () => {
+    const cases = [
+      {
+        name: "control UI allows insecure auth",
+        cfg: {
+          gateway: {
+            controlUi: { allowInsecureAuth: true },
           },
+        } satisfies OpenClawConfig,
+        expectedFinding: {
+          checkId: "gateway.control_ui.insecure_auth",
+          severity: "warn",
         },
+        expectedDangerousDetails: ["gateway.controlUi.allowInsecureAuth=true"],
       },
-    };
+      {
+        name: "control UI device auth is disabled",
+        cfg: {
+          gateway: {
+            controlUi: { dangerouslyDisableDeviceAuth: true },
+          },
+        } satisfies OpenClawConfig,
+        expectedFinding: {
+          checkId: "gateway.control_ui.device_auth_disabled",
+          severity: "critical",
+        },
+        expectedDangerousDetails: ["gateway.controlUi.dangerouslyDisableDeviceAuth=true"],
+      },
+      {
+        name: "generic insecure debug flags",
+        cfg: {
+          hooks: {
+            gmail: { allowUnsafeExternalContent: true },
+            mappings: [{ allowUnsafeExternalContent: true }],
+          },
+          tools: {
+            exec: {
+              applyPatch: {
+                workspaceOnly: false,
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        expectedDangerousDetails: [
+          "hooks.gmail.allowUnsafeExternalContent=true",
+          "hooks.mappings[0].allowUnsafeExternalContent=true",
+          "tools.exec.applyPatch.workspaceOnly=false",
+        ],
+      },
+    ] as const;
 
-    const res = await audit(cfg);
-    const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
-
-    expect(finding).toBeTruthy();
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("hooks.gmail.allowUnsafeExternalContent=true");
-    expect(finding?.detail).toContain("hooks.mappings[0].allowUnsafeExternalContent=true");
-    expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      if (testCase.expectedFinding) {
+        expect(res.findings, testCase.name).toEqual(
+          expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+        );
+      }
+      const finding = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+      expect(finding, testCase.name).toBeTruthy();
+      expect(finding?.severity, testCase.name).toBe("warn");
+      for (const detail of testCase.expectedDangerousDetails) {
+        expect(finding?.detail, `${testCase.name}:${detail}`).toContain(detail);
+      }
+    }
   });
 
   it.each([
