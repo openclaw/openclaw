@@ -1150,8 +1150,8 @@ describe("signalMessageActions", () => {
 });
 
 describe("slack actions adapter", () => {
-  it("forwards simple slack action params", async () => {
-    for (const testCase of [
+  it("forwards slack action params", async () => {
+    const cases = [
       {
         action: "read" as const,
         params: {
@@ -1174,15 +1174,6 @@ describe("slack actions adapter", () => {
           limit: 2,
         },
       },
-    ] as const) {
-      handleSlackAction.mockClear();
-      await runSlackAction(testCase.action, testCase.params);
-      expectFirstSlackAction(testCase.expected);
-    }
-  });
-
-  it("forwards blocks for send/edit actions", async () => {
-    const cases = [
       {
         action: "send" as const,
         params: {
@@ -1242,6 +1233,21 @@ describe("slack actions adapter", () => {
           content: "",
           blocks: [{ type: "section", text: { type: "mrkdwn", text: "updated" } }],
         },
+      },
+      {
+        action: "send" as const,
+        params: {
+          to: "channel:C1",
+          message: "",
+          media: "https://example.com/image.png",
+        },
+        expected: {
+          action: "sendMessage",
+          to: "channel:C1",
+          content: "",
+          mediaUrl: "https://example.com/image.png",
+        },
+        absentKeys: ["blocks"],
       },
     ] as const;
 
@@ -1249,6 +1255,10 @@ describe("slack actions adapter", () => {
       handleSlackAction.mockClear();
       await runSlackAction(testCase.action, testCase.params);
       expectFirstSlackAction(testCase.expected);
+      const [params] = handleSlackAction.mock.calls[0] ?? [];
+      for (const key of testCase.absentKeys ?? []) {
+        expect(params).not.toHaveProperty(key);
+      }
     }
   });
 
@@ -1288,25 +1298,6 @@ describe("slack actions adapter", () => {
       handleSlackAction.mockClear();
       await expectSlackSendRejected(testCase.params, testCase.error);
     }
-  });
-
-  it("does not attach empty blocks to plain media sends", async () => {
-    handleSlackAction.mockClear();
-
-    await runSlackAction("send", {
-      to: "channel:C1",
-      message: "",
-      media: "https://example.com/image.png",
-    });
-
-    const [params] = handleSlackAction.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
-      action: "sendMessage",
-      to: "channel:C1",
-      content: "",
-      mediaUrl: "https://example.com/image.png",
-    });
-    expect(params).not.toHaveProperty("blocks");
   });
 
   it("rejects edit when both message and blocks are missing", async () => {
