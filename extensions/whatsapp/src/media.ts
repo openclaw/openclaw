@@ -94,27 +94,27 @@ async function assertLocalMediaAllowed(
     resolved = path.resolve(mediaPath);
   }
 
-  // Hardening: the default allowlist includes the OpenClaw temp dir, and tests/CI may
-  // override the state dir into tmp. Avoid accidentally allowing per-agent
-  // `workspace-*` state roots via the temp-root prefix match; require explicit
-  // localRoots for those.
-  if (localRoots === undefined) {
-    const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
-    if (workspaceRoot) {
-      const stateDir = path.dirname(workspaceRoot);
-      const rel = path.relative(stateDir, resolved);
-      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
-        const firstSegment = rel.split(path.sep)[0] ?? "";
-        if (firstSegment.startsWith("workspace-")) {
-          throw new LocalMediaAccessError(
-            "path-not-allowed",
-            `Local media path is not under an allowed directory: ${mediaPath}`,
-          );
-        }
-      }
-    }
-  }
+  // NOTE: Previously blocked workspace-* directories to prevent temp-root prefix matches.
+  // Now allows all workspace subdirectories since they are legitimate user workspaces.
+  // Users can further restrict via explicit localRoots if needed.
   for (const root of roots) {
+    // Handle glob patterns like "workspace-*"
+    if (root.includes("*")) {
+      const rootDir = path.dirname(root);
+      const pattern = path.basename(root);
+      // Convert simple glob pattern to regex
+      const regexPattern = "^" + pattern.replace(/\*/g, ".*") + "$";
+      const regex = new RegExp(regexPattern);
+      const pathRelativeToStateDir = path.relative(rootDir, resolved);
+      const firstSegment = pathRelativeToStateDir.split(path.sep)[0] ?? "";
+
+      if (regex.test(firstSegment)) {
+        return; // Matches the pattern, allow it
+      }
+      continue; // Try next root
+    }
+
+    // Standard exact path matching
     let resolvedRoot: string;
     try {
       resolvedRoot = await fs.realpath(root);
@@ -131,9 +131,10 @@ async function assertLocalMediaAllowed(
       return;
     }
   }
+  const allowedDirsList = roots.map((r) => `  - ${r}`).join("\n");
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Local media path is not under an allowed directory: ${mediaPath}`,
+    `Local media path is not under an allowed directory: ${mediaPath}\n\nAllowed directories:\n${allowedDirsList}\n\nYou can:\n  - Move your file to one of the allowed directories above\n  - Configure custom allowed directories via localRoots parameter\n  - Set localRoots: "any" to disable checks (not recommended for security)`,
   );
 }
 

@@ -474,16 +474,21 @@ describe("local media root guard", () => {
     );
   });
 
-  it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
+  it("allows default OpenClaw state per-agent workspace-* roots (glob pattern support)", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
+    // Should now allow workspace-* directories via the workspace-* glob pattern
     await expect(
       loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
         maxBytes: 1024 * 1024,
         readFile,
       }),
-    ).rejects.toMatchObject({ code: "path-not-allowed" });
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: undefined,
+      }),
+    );
   });
 
   it("allows per-agent workspace-* paths with explicit local roots", async () => {
