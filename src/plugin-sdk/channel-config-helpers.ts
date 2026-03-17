@@ -10,16 +10,19 @@ import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
+/** Coerce mixed allowlist config values into plain strings without trimming or deduping. */
 export function mapAllowFromEntries(
   allowFrom: Array<string | number> | null | undefined,
 ): string[] {
   return (allowFrom ?? []).map((entry) => String(entry));
 }
 
+/** Normalize user-facing allowlist entries the same way config and doctor flows expect. */
 export function formatTrimmedAllowFromEntries(allowFrom: Array<string | number>): string[] {
   return normalizeStringEntries(allowFrom);
 }
 
+/** Collapse nullable config scalars into a trimmed optional string. */
 export function resolveOptionalConfigString(
   value: string | number | null | undefined,
 ): string | undefined {
@@ -30,6 +33,7 @@ export function resolveOptionalConfigString(
   return normalized || undefined;
 }
 
+/** Build the shared allowlist/default target adapter surface for account-scoped channel configs. */
 export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
   resolveAccount: (params: { cfg: OpenClawConfig; accountId?: string | null }) => ResolvedAccount;
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
@@ -59,6 +63,7 @@ export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
   };
 }
 
+/** Build the common CRUD/config helpers for channels that store multiple named accounts. */
 export function createScopedChannelConfigBase<
   ResolvedAccount,
   Config extends OpenClawConfig = OpenClawConfig,
@@ -104,6 +109,7 @@ export function createScopedChannelConfigBase<
   };
 }
 
+/** Convert account-specific DM security fields into the shared runtime policy resolver shape. */
 export function createScopedDmSecurityResolver<
   ResolvedAccount extends { accountId?: string | null },
 >(params: {
@@ -143,6 +149,7 @@ export function createScopedDmSecurityResolver<
     });
 }
 
+/** Read the effective WhatsApp allowlist through the active plugin contract. */
 export function resolveWhatsAppConfigAllowFrom(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -153,10 +160,12 @@ export function resolveWhatsAppConfigAllowFrom(params: {
     : [];
 }
 
+/** Format WhatsApp allowlist entries with the same normalization used by the channel plugin. */
 export function formatWhatsAppConfigAllowFromEntries(allowFrom: Array<string | number>): string[] {
   return normalizeWhatsAppAllowFromEntries(allowFrom);
 }
 
+/** Resolve the effective WhatsApp default recipient after account and root config fallback. */
 export function resolveWhatsAppConfigDefaultTo(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -167,6 +176,7 @@ export function resolveWhatsAppConfigDefaultTo(params: {
   return (account?.defaultTo ?? root?.defaultTo)?.trim() || undefined;
 }
 
+/** Read iMessage allowlist entries from the active plugin's resolved account view. */
 export function resolveIMessageConfigAllowFrom(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -178,6 +188,7 @@ export function resolveIMessageConfigAllowFrom(params: {
   return mapAllowFromEntries(account.config.allowFrom);
 }
 
+/** Resolve the effective iMessage default recipient from the plugin-resolved account config. */
 export function resolveIMessageConfigDefaultTo(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;

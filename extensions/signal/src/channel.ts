@@ -4,7 +4,7 @@ import {
   createScopedAccountConfigAccessors,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/compat";
-import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/core";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
@@ -14,23 +14,25 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   getChatChannelMeta,
-  listSignalAccountIds,
   looksLikeSignalTargetId,
   normalizeE164,
   normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
   setAccountEnabledInConfigSection,
   SignalConfigSchema,
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
-  type ResolvedSignalAccount,
 } from "openclaw/plugin-sdk/signal";
 import { resolveTextChunkLimit } from "../../../src/auto-reply/chunk.js";
 import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import {
+  listSignalAccountIds,
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+  type ResolvedSignalAccount,
+} from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import {
   looksLikeUuid,
