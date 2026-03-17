@@ -1,11 +1,7 @@
-import {
-  applyAccountNameToChannelSection,
-  DEFAULT_ACCOUNT_ID,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
-  normalizeSecretInputString,
-  type ChannelSetupAdapter,
-} from "openclaw/plugin-sdk/setup";
+import { prepareScopedSetupConfig } from "../../../src/channels/plugins/setup-helpers.js";
+import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
+import { normalizeSecretInputString } from "../../../src/config/types.secrets.js";
+import { normalizeAccountId } from "../../../src/routing/session-key.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
@@ -45,12 +41,12 @@ export function buildMatrixConfigUpdate(
 export const matrixSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
+    prepareScopedSetupConfig({
       cfg: cfg as CoreConfig,
       channelKey: channel,
       accountId,
       name,
-    }),
+    }) as CoreConfig,
   validateInput: ({ input }) => {
     if (input.useEnv) {
       return null;
@@ -75,19 +71,13 @@ export const matrixSetupAdapter: ChannelSetupAdapter = {
     return null;
   },
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
+    const next = prepareScopedSetupConfig({
       cfg: cfg as CoreConfig,
       channelKey: channel,
       accountId,
       name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
+      migrateBaseName: true,
+    }) as CoreConfig;
     if (input.useEnv) {
       return {
         ...next,
