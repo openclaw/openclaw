@@ -212,3 +212,29 @@ export function buildPluginInspectReport(params: {
     usesLegacyBeforeAgentStart: typedHooks.some((entry) => entry.name === "before_agent_start"),
   };
 }
+
+export function buildAllPluginInspectReports(params?: {
+  config?: ReturnType<typeof loadConfig>;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  report?: PluginStatusReport;
+}): PluginInspectReport[] {
+  const config = params?.config ?? loadConfig();
+  const report =
+    params?.report ??
+    buildPluginStatusReport({
+      config,
+      workspaceDir: params?.workspaceDir,
+      env: params?.env,
+    });
+
+  return report.plugins
+    .map((plugin) =>
+      buildPluginInspectReport({
+        id: plugin.id,
+        config,
+        report,
+      }),
+    )
+    .filter((entry): entry is PluginInspectReport => entry !== null);
+}
