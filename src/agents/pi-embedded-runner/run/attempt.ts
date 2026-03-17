@@ -230,10 +230,7 @@ export function resolveGigachatAuthProfileMetadata(
   );
   for (const profileId of profileIds) {
     const credential = store.profiles[profileId];
-    if (
-      credential?.type === "api_key" &&
-      (credential as ApiKeyCredential).provider === "gigachat"
-    ) {
+    if (credential?.type === "api_key" && credential.provider === "gigachat") {
       return credential.metadata;
     }
   }
@@ -1938,7 +1935,7 @@ export async function runEmbeddedAttempt(
         const gigachatStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
         const gigachatMeta = resolveGigachatAuthProfileMetadata(
           gigachatStore,
-          params.attempt.authProfileId,
+          params.authProfileId,
         );
 
         const gigachatStreamFn = createGigachatStreamFn({

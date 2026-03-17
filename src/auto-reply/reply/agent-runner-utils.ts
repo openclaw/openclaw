@@ -154,6 +154,61 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
 export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
   Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
 
+function isFollowupRunObject(value: unknown): value is FollowupRun["run"] {
+  return Boolean(value && typeof value === "object");
+}
+
+/**
+ * Accept both the current nested followup shape (`{ run: {...} }`) and the
+ * older flattened form where run fields lived at the top level.
+ */
+export function normalizeFollowupRun<T extends FollowupRun>(followupRun: T): T {
+  if (isFollowupRunObject(followupRun.run)) {
+    return followupRun;
+  }
+
+  const legacyFollowupRun = followupRun as T & Partial<FollowupRun["run"]>;
+  return {
+    ...followupRun,
+    run: {
+      agentId: legacyFollowupRun.agentId,
+      agentDir: legacyFollowupRun.agentDir,
+      sessionId: legacyFollowupRun.sessionId,
+      sessionKey: legacyFollowupRun.sessionKey,
+      messageProvider: legacyFollowupRun.messageProvider,
+      agentAccountId: legacyFollowupRun.agentAccountId,
+      groupId: legacyFollowupRun.groupId,
+      groupChannel: legacyFollowupRun.groupChannel,
+      groupSpace: legacyFollowupRun.groupSpace,
+      senderId: legacyFollowupRun.senderId,
+      senderName: legacyFollowupRun.senderName,
+      senderUsername: legacyFollowupRun.senderUsername,
+      senderE164: legacyFollowupRun.senderE164,
+      senderIsOwner: legacyFollowupRun.senderIsOwner,
+      sessionFile: legacyFollowupRun.sessionFile,
+      workspaceDir: legacyFollowupRun.workspaceDir,
+      config: legacyFollowupRun.config,
+      skillsSnapshot: legacyFollowupRun.skillsSnapshot,
+      provider: legacyFollowupRun.provider,
+      model: legacyFollowupRun.model,
+      authProfileId: legacyFollowupRun.authProfileId,
+      authProfileIdSource: legacyFollowupRun.authProfileIdSource,
+      thinkLevel: legacyFollowupRun.thinkLevel,
+      verboseLevel: legacyFollowupRun.verboseLevel,
+      reasoningLevel: legacyFollowupRun.reasoningLevel,
+      elevatedLevel: legacyFollowupRun.elevatedLevel,
+      execOverrides: legacyFollowupRun.execOverrides,
+      bashElevated: legacyFollowupRun.bashElevated,
+      timeoutMs: legacyFollowupRun.timeoutMs,
+      blockReplyBreak: legacyFollowupRun.blockReplyBreak,
+      ownerNumbers: legacyFollowupRun.ownerNumbers,
+      inputProvenance: legacyFollowupRun.inputProvenance,
+      extraSystemPrompt: legacyFollowupRun.extraSystemPrompt,
+      enforceFinalTag: legacyFollowupRun.enforceFinalTag,
+    } as FollowupRun["run"],
+  };
+}
+
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
   return {
     cfg: run.config,

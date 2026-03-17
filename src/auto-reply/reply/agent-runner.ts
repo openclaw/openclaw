@@ -44,7 +44,11 @@ import {
   hasSessionRelatedCronJobs,
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
-import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
+import {
+  appendUsageLine,
+  formatResponseUsageLine,
+  normalizeFollowupRun,
+} from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
@@ -91,9 +95,9 @@ export async function runReplyAgent(params: {
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const followupRun = normalizeFollowupRun(params.followupRun);
   const {
     commandBody,
-    followupRun,
     queueKey,
     resolvedQueue,
     shouldSteer,

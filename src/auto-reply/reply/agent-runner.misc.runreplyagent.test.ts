@@ -314,6 +314,97 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
     expect(call.authProfileId).toBeUndefined();
     expect(call.authProfileIdSource).toBeUndefined();
   });
+
+  it("accepts legacy flattened followup runs", async () => {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("anthropic", "claude-opus"),
+        provider: "anthropic",
+        model: "claude-opus",
+      }),
+    );
+    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat",
+      AccountId: "primary",
+      MessageSid: "msg",
+      Surface: "telegram",
+    } as unknown as TemplateContext;
+
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+    };
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun: {
+        prompt: "hello",
+        summaryLine: "hello",
+        enqueuedAt: Date.now(),
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude-opus",
+        authProfileId: "anthropic:openclaw",
+        authProfileIdSource: "user",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 5_000,
+        blockReplyBreak: "message_end",
+      } as unknown as FollowupRun,
+      queueKey: sessionKey,
+      resolvedQueue: { mode: "interrupt" } as unknown as QueueSettings,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath: undefined,
+      defaultModel: "anthropic/claude-opus-4-5",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      authProfileId?: unknown;
+      sessionId?: unknown;
+      provider?: unknown;
+    };
+
+    expect(call.sessionId).toBe("session");
+    expect(call.provider).toBe("anthropic");
+    expect(call.authProfileId).toBe("anthropic:openclaw");
+  });
 });
 
 describe("runReplyAgent auto-compaction token update", () => {

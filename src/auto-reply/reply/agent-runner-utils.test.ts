@@ -15,6 +15,7 @@ const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
+  normalizeFollowupRun,
   resolveModelFallbackOptions,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
@@ -154,6 +155,27 @@ describe("agent-runner-utils", () => {
       senderName: undefined,
       senderUsername: undefined,
       senderE164: undefined,
+    });
+  });
+
+  it("normalizes legacy flattened followup runs", () => {
+    const run = makeRun({
+      authProfileId: "profile-openai",
+      authProfileIdSource: "auto",
+    });
+
+    const normalized = normalizeFollowupRun({
+      prompt: "hello",
+      enqueuedAt: Date.now(),
+      ...run,
+    } as unknown as FollowupRun);
+
+    expect(normalized.run).toMatchObject({
+      sessionId: run.sessionId,
+      provider: run.provider,
+      model: run.model,
+      authProfileId: "profile-openai",
+      authProfileIdSource: "auto",
     });
   });
 
