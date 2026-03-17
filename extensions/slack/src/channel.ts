@@ -25,6 +25,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/slack";
 import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
+import { normalizeOutboundThreadId } from "../../../src/infra/outbound/thread-id.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   listEnabledSlackAccounts,
@@ -134,20 +135,6 @@ function parseSlackExplicitTarget(raw: string) {
     to: target.id,
     chatType: target.kind === "user" ? ("direct" as const) : ("channel" as const),
   };
-}
-
-function normalizeOutboundThreadId(value?: string | number | null): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return undefined;
-    }
-    return String(Math.trunc(value));
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function buildSlackBaseSessionKey(params: {
