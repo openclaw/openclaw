@@ -31,7 +31,7 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("single non-incident acknowledgment containing a concrete ETA and expected next step")
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("in any Slack context. Wait for net-new evidence")
 ' "$CONFIG" >/dev/null
 
 jq -e '
