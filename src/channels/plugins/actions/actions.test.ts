@@ -202,87 +202,102 @@ beforeEach(async () => {
 });
 
 describe("discord message actions", () => {
-  it("lists channel and upload actions by default", async () => {
-    const cfg = { channels: { discord: { token: "d0" } } } as OpenClawConfig;
-    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
-
-    expect(actions).toContain("emoji-upload");
-    expect(actions).toContain("sticker-upload");
-    expect(actions).toContain("channel-create");
-  });
-
-  it("respects disabled channel actions", async () => {
-    const cfg = {
-      channels: { discord: { token: "d0", actions: { channels: false } } },
-    } as OpenClawConfig;
-    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
-
-    expect(actions).not.toContain("channel-create");
-  });
-
-  it("lists moderation when at least one account enables it", () => {
+  it("derives discord action listings from channel and moderation gates", () => {
     const cases = [
       {
-        channels: {
-          discord: {
-            accounts: {
-              vime: { token: "d1", actions: { moderation: true } },
-            },
-          },
-        },
+        name: "defaults",
+        cfg: { channels: { discord: { token: "d0" } } } as OpenClawConfig,
+        expectUploads: true,
+        expectChannelCreate: true,
+        expectModeration: false,
       },
       {
-        channels: {
-          discord: {
-            accounts: {
-              ops: { token: "d1", actions: { moderation: true } },
-              chat: { token: "d2" },
+        name: "disabled channel actions",
+        cfg: {
+          channels: { discord: { token: "d0", actions: { channels: false } } },
+        } as OpenClawConfig,
+        expectUploads: true,
+        expectChannelCreate: false,
+        expectModeration: false,
+      },
+      {
+        name: "single account enables moderation",
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                vime: { token: "d1", actions: { moderation: true } },
+              },
             },
           },
-        },
+        } as OpenClawConfig,
+        expectUploads: true,
+        expectChannelCreate: true,
+        expectModeration: true,
+      },
+      {
+        name: "one of many accounts enables moderation",
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                ops: { token: "d1", actions: { moderation: true } },
+                chat: { token: "d2" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectUploads: true,
+        expectChannelCreate: true,
+        expectModeration: true,
+      },
+      {
+        name: "all accounts omit moderation",
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                ops: { token: "d1" },
+                chat: { token: "d2" },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectUploads: true,
+        expectChannelCreate: true,
+        expectModeration: false,
+      },
+      {
+        name: "account moderation override inherits disabled top-level channels",
+        cfg: createDiscordModerationOverrideCfg(),
+        expectUploads: true,
+        expectChannelCreate: false,
+        expectModeration: true,
+      },
+      {
+        name: "account override re-enables top-level disabled channels",
+        cfg: createDiscordModerationOverrideCfg({ channelsEnabled: true }),
+        expectUploads: true,
+        expectChannelCreate: true,
+        expectModeration: true,
       },
     ] as const;
 
-    for (const channelConfig of cases) {
-      const cfg = channelConfig as unknown as OpenClawConfig;
-      const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
-      expectModerationActions(actions);
+    for (const testCase of cases) {
+      const actions = discordMessageActions.listActions?.({ cfg: testCase.cfg }) ?? [];
+      if (testCase.expectUploads) {
+        expect(actions, testCase.name).toContain("emoji-upload");
+        expect(actions, testCase.name).toContain("sticker-upload");
+      }
+      expectChannelCreateAction(actions, testCase.expectChannelCreate);
+      if (testCase.expectModeration) {
+        expectModerationActions(actions);
+      } else {
+        expect(actions, testCase.name).not.toContain("timeout");
+        expect(actions, testCase.name).not.toContain("kick");
+        expect(actions, testCase.name).not.toContain("ban");
+      }
     }
-  });
-
-  it("omits moderation when all accounts omit it", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            ops: { token: "d1" },
-            chat: { token: "d2" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
-
-    // moderation defaults to false, so without explicit true it stays hidden
-    expect(actions).not.toContain("timeout");
-    expect(actions).not.toContain("kick");
-    expect(actions).not.toContain("ban");
-  });
-
-  it("inherits top-level channel gate when account overrides moderation only", () => {
-    const cfg = createDiscordModerationOverrideCfg();
-    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
-
-    expect(actions).toContain("timeout");
-    expectChannelCreateAction(actions, false);
-  });
-
-  it("allows account to explicitly re-enable top-level disabled channels", () => {
-    const cfg = createDiscordModerationOverrideCfg({ channelsEnabled: true });
-    const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
-
-    expect(actions).toContain("timeout");
-    expectChannelCreateAction(actions, true);
   });
 });
 
