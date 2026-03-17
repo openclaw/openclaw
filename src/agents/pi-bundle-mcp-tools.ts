@@ -4,6 +4,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { logDebug, logWarn } from "../logger.js";
+import { McpsSigningTransport, McpsConfig } from "mcps-openclaw";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 import {
   describeStdioMcpServerLaunchConfig,
@@ -154,6 +155,16 @@ export async function createBundleMcpToolRuntime(params: {
         cwd: launchConfig.cwd,
         stderr: "pipe",
       });
+
+      // Wrap with MCPS signing if configured
+      const mcpsOpts = McpsConfig.fromServerConfig(rawServer, serverName);
+      const activeTransport = mcpsOpts
+        ? new McpsSigningTransport(transport, mcpsOpts)
+        : transport;
+      if (mcpsOpts) {
+        logDebug(`bundle-mcp: MCPS signing enabled for "${serverName}"`);
+      }
+
       const client = new Client(
         {
           name: "openclaw-bundle-mcp",
@@ -169,7 +180,7 @@ export async function createBundleMcpToolRuntime(params: {
       };
 
       try {
-        await client.connect(transport);
+        await client.connect(activeTransport);
         const listedTools = await listAllTools(client);
         sessions.push(session);
         for (const tool of listedTools) {
