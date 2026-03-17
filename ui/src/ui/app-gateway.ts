@@ -75,7 +75,11 @@ function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string):
     }
     const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
       .chatStreamStartedAt;
-    if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)) {
+    if (
+      host.chatRunId ||
+      host.chatStream ||
+      (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)
+    ) {
       return;
     }
     void loadChatHistory(host as unknown as OpenClawApp);
@@ -90,7 +94,11 @@ function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string):
     }
     const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
       .chatStreamStartedAt;
-    if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)) {
+    if (
+      host.chatRunId ||
+      host.chatStream ||
+      (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)
+    ) {
       return;
     }
     void loadChatHistory(host as unknown as OpenClawApp);
@@ -422,7 +430,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         // Skip if a new run started during the delay window
         const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
           .chatStreamStartedAt;
-        if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)) {
+        if (
+          host.chatRunId ||
+          host.chatStream ||
+          (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)
+        ) {
           return;
         }
         void loadChatHistory(host as unknown as OpenClawApp);
