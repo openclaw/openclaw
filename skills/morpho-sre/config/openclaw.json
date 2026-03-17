@@ -13,8 +13,10 @@
         "mode": "off"
       },
       "model": {
-        "primary": "openai-codex/gpt-5.4",
-        "fallbacks": ["anthropic/claude-opus-4-6"]
+        "primary": "anthropic/claude-opus-4-6",
+        "fallbacks": [
+          "openai-codex/gpt-5.4"
+        ]
       },
       "models": {
         "openai-codex/gpt-5.4": {
@@ -31,7 +33,10 @@
       },
       "memorySearch": {
         "enabled": true,
-        "sources": ["memory", "sessions"],
+        "sources": [
+          "memory",
+          "sessions"
+        ],
         "extraPaths": [
           "/srv/openclaw/repos/morpho-infra",
           "/srv/openclaw/repos/morpho-infra-helm",
@@ -61,7 +66,11 @@
         "default": true,
         "workspace": "~/.openclaw/workspace",
         "subagents": {
-          "allowAgents": ["sre-k8s", "sre-observability", "sre-release"]
+          "allowAgents": [
+            "sre-k8s",
+            "sre-observability",
+            "sre-release"
+          ]
         }
       },
       {
@@ -110,7 +119,9 @@
           "elevated": {
             "enabled": true,
             "allowFrom": {
-              "slack": ["*"]
+              "slack": [
+                "*"
+              ]
             }
           },
           "exec": {
@@ -120,57 +131,103 @@
           }
         },
         "model": {
-          "primary": "openai-codex/gpt-5.4"
+          "primary": "anthropic/claude-opus-4-6"
         },
-        "skills": ["morpho-sre", "foundry-evm-debug"]
+        "skills": [
+          "morpho-sre",
+          "foundry-evm-debug"
+        ]
       },
       {
         "id": "sre-k8s",
         "name": "SRE K8s",
-        "skills": ["morpho-sre", "eks-troubleshoot", "argocd-diff"],
+        "skills": [
+          "morpho-sre",
+          "eks-troubleshoot",
+          "argocd-diff"
+        ],
         "tools": {
-          "deny": ["gateway", "nodes"]
+          "deny": [
+            "gateway",
+            "nodes"
+          ]
         }
       },
       {
         "id": "sre-observability",
         "name": "SRE Observability",
-        "skills": ["morpho-sre", "go-memory-profiling", "grafana-metrics-best-practices"],
+        "skills": [
+          "morpho-sre",
+          "go-memory-profiling",
+          "grafana-metrics-best-practices"
+        ],
         "tools": {
-          "deny": ["gateway", "nodes"]
+          "deny": [
+            "gateway",
+            "nodes"
+          ]
         }
       },
       {
         "id": "sre-release",
         "name": "SRE Release",
-        "skills": ["morpho-sre", "terraform-ci-review", "foundry-evm-debug"],
+        "skills": [
+          "morpho-sre",
+          "terraform-ci-review",
+          "foundry-evm-debug"
+        ],
         "tools": {
-          "deny": ["gateway", "nodes"]
+          "deny": [
+            "gateway",
+            "nodes"
+          ]
         }
       },
       {
         "id": "sre-repo-runtime",
         "name": "SRE Repo Runtime",
         "workspace": "/srv/openclaw/repos/openclaw-sre",
-        "skills": ["morpho-sre", "foundry-evm-debug"],
+        "skills": [
+          "morpho-sre",
+          "foundry-evm-debug"
+        ],
         "tools": {
-          "deny": ["gateway", "nodes", "browser", "canvas", "message", "cron"]
+          "deny": [
+            "gateway",
+            "nodes",
+            "browser",
+            "canvas",
+            "message",
+            "cron"
+          ]
         }
       },
       {
         "id": "sre-repo-helm",
         "name": "SRE Repo Helm",
         "workspace": "/srv/openclaw/repos/morpho-infra-helm",
-        "skills": ["morpho-sre"],
+        "skills": [
+          "morpho-sre"
+        ],
         "tools": {
-          "deny": ["gateway", "nodes", "browser", "canvas", "message", "cron"]
+          "deny": [
+            "gateway",
+            "nodes",
+            "browser",
+            "canvas",
+            "message",
+            "cron"
+          ]
         }
       },
       {
         "id": "sre-verifier",
         "name": "SRE Verifier",
         "workspace": "~/.openclaw/workspace-sre",
-        "skills": ["morpho-sre", "foundry-evm-debug"],
+        "skills": [
+          "morpho-sre",
+          "foundry-evm-debug"
+        ],
         "tools": {
           "allow": [
             "exec",
@@ -212,7 +269,9 @@
     "elevated": {
       "enabled": true,
       "allowFrom": {
-        "slack": ["*"]
+        "slack": [
+          "*"
+        ]
       }
     },
     "exec": {
@@ -245,7 +304,9 @@
         "uniq": {},
         "wc": {}
       },
-      "safeBinTrustedDirs": ["/usr/local/bin"]
+      "safeBinTrustedDirs": [
+        "/usr/local/bin"
+      ]
     },
     "allow": [
       "edit",
@@ -264,13 +325,20 @@
       "web_search",
       "write"
     ],
-    "deny": ["gateway", "nodes"],
+    "deny": [
+      "gateway",
+      "nodes"
+    ],
     "loopDetection": {
       "enabled": true
     },
     "agentToAgent": {
       "enabled": true,
-      "allow": ["sre-k8s", "sre-observability", "sre-release"]
+      "allow": [
+        "sre-k8s",
+        "sre-observability",
+        "sre-release"
+      ]
     }
   },
   "bindings": [
@@ -388,7 +456,9 @@
           "allowImplicitMention": false,
           "incidentRootOnly": true,
           "allowBots": true,
-          "skills": ["morpho-sre"],
+          "skills": [
+            "morpho-sre"
+          ],
           "systemPrompt": "Bug-report intake mode:\n- Scope: new root bug-report form/messages in this channel.\n- Auto-respond only to new root bug-report form/messages here.\n- Always reply in the same thread; never post triage in channel root.\n- Human follow-up RCA should come as a new root bug-report or a dedicated incident thread until thread-followup intake is supported here.\n- Deterministic first: run /home/node/.openclaw/skills/morpho-sre/scripts/bug-report-triage.sh plan on the root report text before freeform analysis.\n- If the thread already contains a Linear issue link, reuse it and do not create a duplicate.\n- Otherwise run /home/node/.openclaw/skills/morpho-sre/scripts/bug-report-triage.sh create-issue to create the ticket in Linear, assign the routed owner when available, and attach the Slack thread URL when it is available.\n- The planner is the default source of truth for team, priority, labels, owner, and whether deep analysis is needed.\n- If owner rotation is missing in config, say exactly: Owner rotation missing in bug-report config; manual assignment needed.\n- Default reply shape: `*Linear:*`, `*Route:*`, `*Owner:*`, `*Summary:*`, `*Signals:*`, `*Next:*`.\n- Keep the default reply to 6-10 lines. No RCA wall for light-triage bug intake.\n- Never stream drafts or progress updates into bug-report threads; send one final evidence-backed reply only.\n- Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking...`) in any Slack thread unless it is a single non-incident acknowledgment containing a concrete ETA and expected next step. In all other cases, wait for net-new evidence, mitigation, validation, or a PR URL.\n- Never expose tool-call JSON, exec-approval warnings, or command-construction errors in-thread; retry quietly and mention only the final relevant blocked command/error inside Evidence when it changes the recommendation.\n- For chain-backed SDK regressions or forked test reproductions, use the foundry-evm-debug skill with cached Morpho RPC (`/home/node/.openclaw/skills/foundry-evm-debug/scripts/rpc-url.sh <chainId>`) first. Treat HTTP 429 / rate-limit errors as RPC-path noise, not application logic. If a forked run hits rate limits, switch to cached Morpho RPC before concluding anything about the bug.\n- Deep RCA only when the planner says `analysisMode=deep`, a human explicitly asks for analysis, or a new severe clue appears.\n- For consumer app approval / permit / wallet / repay bugs and only in deep RCA mode: preserve the strongest workaround clue, run /home/node/.openclaw/skills/morpho-sre/scripts/consumer-bug-preflight.sh before any capability disclaimer, search recent Linear / GitHub matches before new root-cause claims, and separate the primary app bug from secondary user state.\n- If a human asks whether the issue is DB, RPC/eRPC, or queue/backpressure, answer those branches explicitly from fresh evidence before ending the update.\n- Never claim no Sentry, PostHog, Linear, or Foundry access without a live probe and the exact error.\n- Before claiming repo/tool access is unavailable, run one live probe (`gh repo view ...` or the target helper in dry-run mode) and quote the exact error.\n- Before accepting any task that requires repo access (PR creation, code changes, repo reads), immediately run `gh repo view <owner/repo>` and verify local clone availability. If either check fails, report the blocker in the same message as the acknowledgement.\n- For rewards/provider incidents, do not name a stale-row/write-path cause or open a PR without one live DB row/provenance fact and one exact consuming code-path fact.\n- For rewards/provider incidents where the same reward token appears on both supply and borrow, prove the provider-side truth for that token, quote the live reward row/provenance, and reconcile `_fetchMerklSingleRates()` / the merged reward row before stale-row theories or PRs.\n- Never say root cause confirmed if the finding only explains a later direct contract call and not the original in-app failure.\n- If a human challenges or contradicts a technical claim in any thread, immediately re-investigate with fresh live evidence. If a human questions the proposed fix or PR in-thread, re-open RCA before defending the fix.\n- If current code, query output, or live evidence disproves an earlier theory, say `Disproved theory:` before the replacement cause or PR.\n- If the fix is plausible but the PR gate is not open yet, still name 1-2 concrete PR suggestions with repo/path/title/validation.\n- Create or reuse a Linear follow-up ticket for code/config work; use the ticket `gitBranchName` as the PR branch, and attach the PR URL back to the ticket.\n- When confidence is high and fix is scoped/reversible, run /home/node/.openclaw/skills/morpho-sre/scripts/autofix-pr.sh and include the PR URL in-thread.\n- Include <@U07KE3NALTX> only for P1/P2 bug reports, deep-RCA replies, or autofix PR updates.\n- Never reveal secrets or token values."
         },
         "#platform-monitoring": {
@@ -400,7 +470,9 @@
           "incidentIgnoreResolved": true,
           "incidentDedupeWindowSeconds": 21600,
           "allowBots": true,
-          "skills": ["morpho-sre"],
+          "skills": [
+            "morpho-sre"
+          ],
           "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
         },
         "#staging-infra-monitoring": {
@@ -412,7 +484,9 @@
           "incidentIgnoreResolved": true,
           "incidentDedupeWindowSeconds": 21600,
           "allowBots": true,
-          "skills": ["morpho-sre"],
+          "skills": [
+            "morpho-sre"
+          ],
           "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
         },
         "#public-api-monitoring": {
@@ -424,16 +498,22 @@
           "incidentIgnoreResolved": true,
           "incidentDedupeWindowSeconds": 21600,
           "allowBots": true,
-          "skills": ["morpho-sre"],
+          "skills": [
+            "morpho-sre"
+          ],
           "systemPrompt": "__START_GATEWAY_MONITORING_PROMPT__"
         }
       },
       "signingSecret": "${SLACK_SIGNING_SECRET}",
-      "allowFrom": ["*"],
+      "allowFrom": [
+        "*"
+      ],
       "dm": {
         "enabled": true,
         "groupEnabled": true,
-        "groupChannels": ["*"]
+        "groupChannels": [
+          "*"
+        ]
       },
       "requireMention": true,
       "replyToModeByChatType": {
@@ -466,51 +546,99 @@
           "mcpServers": {
             "posthog-dev-curator-v1": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["dev", "--project-key", "curator-v1"]
+              "args": [
+                "dev",
+                "--project-key",
+                "curator-v1"
+              ]
             },
             "posthog-dev-curator-v2": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["dev", "--project-key", "curator-v2"]
+              "args": [
+                "dev",
+                "--project-key",
+                "curator-v2"
+              ]
             },
             "posthog-dev-data": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["dev", "--project-key", "data"]
+              "args": [
+                "dev",
+                "--project-key",
+                "data"
+              ]
             },
             "posthog-dev-landing": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["dev", "--project-key", "landing"]
+              "args": [
+                "dev",
+                "--project-key",
+                "landing"
+              ]
             },
             "posthog-dev-markets-v2": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["dev", "--project-key", "markets-v2"]
+              "args": [
+                "dev",
+                "--project-key",
+                "markets-v2"
+              ]
             },
             "posthog-dev-vmv1": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["dev", "--project-key", "vmv1"]
+              "args": [
+                "dev",
+                "--project-key",
+                "vmv1"
+              ]
             },
             "posthog-prd-curator-v1": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["prd", "--project-key", "curator-v1"]
+              "args": [
+                "prd",
+                "--project-key",
+                "curator-v1"
+              ]
             },
             "posthog-prd-curator-v2": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["prd", "--project-key", "curator-v2"]
+              "args": [
+                "prd",
+                "--project-key",
+                "curator-v2"
+              ]
             },
             "posthog-prd-data": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["prd", "--project-key", "data"]
+              "args": [
+                "prd",
+                "--project-key",
+                "data"
+              ]
             },
             "posthog-prd-landing": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["prd", "--project-key", "landing"]
+              "args": [
+                "prd",
+                "--project-key",
+                "landing"
+              ]
             },
             "posthog-prd-markets-v2": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["prd", "--project-key", "markets-v2"]
+              "args": [
+                "prd",
+                "--project-key",
+                "markets-v2"
+              ]
             },
             "posthog-prd-vmv1": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
-              "args": ["prd", "--project-key", "vmv1"]
+              "args": [
+                "prd",
+                "--project-key",
+                "vmv1"
+              ]
             },
             "wiz": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh"
