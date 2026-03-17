@@ -2,19 +2,14 @@ import {
   sendMessageWhatsApp as sendMessageWhatsAppImpl,
   sendPollWhatsApp as sendPollWhatsAppImpl,
 } from "../../../extensions/whatsapp/src/send.js";
+import type { PluginRuntime } from "./types.js";
 
-type SendMessageWhatsApp =
-  typeof import("../../../extensions/whatsapp/src/send.js").sendMessageWhatsApp;
-type SendPollWhatsApp = typeof import("../../../extensions/whatsapp/src/send.js").sendPollWhatsApp;
+type RuntimeWhatsAppOutbound = Pick<
+  PluginRuntime["channel"]["whatsapp"],
+  "sendMessageWhatsApp" | "sendPollWhatsApp"
+>;
 
-export function sendMessageWhatsApp(
-  ...args: Parameters<SendMessageWhatsApp>
-): ReturnType<SendMessageWhatsApp> {
-  return sendMessageWhatsAppImpl(...args);
-}
-
-export function sendPollWhatsApp(
-  ...args: Parameters<SendPollWhatsApp>
-): ReturnType<SendPollWhatsApp> {
-  return sendPollWhatsAppImpl(...args);
-}
+export const runtimeWhatsAppOutbound = {
+  sendMessageWhatsApp: sendMessageWhatsAppImpl,
+  sendPollWhatsApp: sendPollWhatsAppImpl,
+} satisfies RuntimeWhatsAppOutbound;

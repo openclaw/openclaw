@@ -100,20 +100,21 @@ async function resolveDiscordGroupAllowlist(params: {
   });
 }
 
+<<<<<<< HEAD
 export const discordSetupWizard: ChannelSetupWizard = createDiscordSetupWizardBase({
   promptAllowFrom: promptDiscordAllowFrom,
-  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries }) =>
-    await resolveDiscordGroupAllowlist({
-      cfg,
-      accountId,
-      credentialValues,
-      entries,
-    }),
   resolveAllowFromEntries: async ({ cfg, accountId, credentialValues, entries }) =>
     await resolveDiscordAllowFromEntries({
       token:
         resolveDiscordAccount({ cfg, accountId }).token ||
         (typeof credentialValues.token === "string" ? credentialValues.token : ""),
+      entries,
+    }),
+  resolveGroupAllowlist: async ({ cfg, accountId, credentialValues, entries }) =>
+    await resolveDiscordGroupAllowlist({
+      cfg,
+      accountId,
+      credentialValues,
       entries,
     }),
 });

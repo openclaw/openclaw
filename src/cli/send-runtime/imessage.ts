@@ -1,9 +1,9 @@
 import { sendMessageIMessage as sendMessageIMessageImpl } from "../../plugin-sdk/imessage.js";
 
-type SendMessageIMessage = typeof import("../../plugin-sdk/imessage.js").sendMessageIMessage;
+type RuntimeSend = {
+  sendMessage: typeof import("../../plugin-sdk/imessage.js").sendMessageIMessage;
+};
 
-export async function sendMessageIMessage(
-  ...args: Parameters<SendMessageIMessage>
-): ReturnType<SendMessageIMessage> {
-  return await sendMessageIMessageImpl(...args);
-}
+export const runtimeSend = {
+  sendMessage: sendMessageIMessageImpl,
+} satisfies RuntimeSend;

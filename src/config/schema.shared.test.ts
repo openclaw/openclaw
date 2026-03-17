@@ -21,7 +21,7 @@ describe("schema.shared", () => {
   it("treats branch schemas as having children", () => {
     expect(
       schemaHasChildren({
-        oneOf: [{ type: "string" }, { properties: { token: { type: "string" } } }],
+        oneOf: [{}, { properties: { token: {} } }],
       }),
     ).toBe(true);
   });
