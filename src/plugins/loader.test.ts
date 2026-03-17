@@ -421,6 +421,7 @@ describe("bundle plugins", () => {
   });
 
   it("treats bundle MCP as a supported bundle surface", () => {
+    useNoBundledPlugins();
     const workspaceDir = makeTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "claude-mcp");
     mkdirSafe(path.join(bundleRoot, ".claude-plugin"));
