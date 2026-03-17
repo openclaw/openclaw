@@ -22,6 +22,28 @@ function makeEvent(
   };
 }
 
+function makeReplyEvent(
+  chatType: "p2p" | "group" | "private",
+  mentions: Array<{ key: string; name: string; id: { open_id?: string } }> | undefined,
+  text: string,
+  parentId: string,
+) {
+  return {
+    sender: {
+      sender_id: { user_id: "u1", open_id: "ou_sender" },
+    },
+    message: {
+      message_id: "msg_1",
+      chat_id: "oc_chat1",
+      chat_type: chatType,
+      message_type: "text",
+      content: JSON.stringify({ text }),
+      mentions,
+      parent_id: parentId,
+    },
+  };
+}
+
 function makePostEvent(content: unknown) {
   return {
     sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
@@ -189,5 +211,66 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     });
     const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
     expect(ctx.content).toBe("[Forwarded message: sc_abc123]");
+  });
+
+  it("returns mentionedBot=true for reply with orphaned mention key (bot dropped from mentions)", () => {
+    const event = makeReplyEvent(
+      "group",
+      [{ key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } }],
+      "@_user_1 @_user_2 hello",
+      "om_parent_msg_id",
+    );
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
+  it("returns mentionedBot=true for reply with empty mentions but mention keys in text", () => {
+    const event = makeReplyEvent("group", [], "@_user_1 hello", "om_parent_msg_id");
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
+  it("returns mentionedBot=false for reply with no orphaned mention keys", () => {
+    const event = makeReplyEvent(
+      "group",
+      [{ key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } }],
+      "@_user_1 hello",
+      "om_parent_msg_id",
+    );
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=false for non-reply message with no mentions", () => {
+    const event = makeEvent("group", [], "hello");
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("clears rootId when bot is mentioned in a reply message", () => {
+    const event = makeReplyEvent(
+      "group",
+      [{ key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } }],
+      "@_user_1 hello",
+      "om_parent_msg_id",
+    );
+    (event.message as any).root_id = "om_root_msg_id";
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+    expect(ctx.rootId).toBeUndefined();
+    expect(ctx.parentId).toBe("om_parent_msg_id");
+  });
+
+  it("preserves rootId when bot is NOT mentioned in a reply message", () => {
+    const event = makeReplyEvent(
+      "group",
+      [{ key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } }],
+      "@_user_1 hello",
+      "om_parent_msg_id",
+    );
+    (event.message as any).root_id = "om_root_msg_id";
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+    expect(ctx.rootId).toBe("om_root_msg_id");
   });
 });
