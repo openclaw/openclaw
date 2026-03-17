@@ -9,6 +9,34 @@ import * as https from "node:https";
 const MIN_SEND_INTERVAL_MS = 500;
 let lastSendTime = 0;
 
+// --- Chat user_id resolution ---
+// Synology Chat uses two different user_id spaces:
+//   - Outgoing webhook user_id: per-integration sequential ID (e.g. 1)
+//   - Chat API user_id: global internal ID (e.g. 4)
+// The chatbot API (method=chatbot) requires the Chat API user_id in the
+// user_ids array. We resolve via the user_list API and cache the result.
+
+interface ChatUser {
+  user_id: number;
+  username: string;
+  nickname: string;
+}
+
+type ChatUserCacheEntry = {
+  users: ChatUser[];
+  cachedAt: number;
+};
+
+type ChatWebhookPayload = {
+  text?: string;
+  file_url?: string;
+  user_ids?: number[];
+};
+
+// Cache user lists per bot endpoint to avoid cross-account bleed.
+const chatUserCache = new Map<string, ChatUserCacheEntry>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 /**
  * Send a text message to Synology Chat via the incoming webhook.
  *
@@ -25,16 +53,7 @@ export async function sendMessage(
 ): Promise<boolean> {
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
-  const payloadObj: Record<string, any> = { text };
-  if (userId) {
-    // userId can be numeric ID or username - if numeric, add to user_ids
-    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-    if (!isNaN(numericId)) {
-      payloadObj.user_ids = [numericId];
-    }
-  }
-  const payload = JSON.stringify(payloadObj);
-  const body = `payload=${encodeURIComponent(payload)}`;
+  const body = buildWebhookBody({ text }, userId);
 
   // Internal rate limit: min 500ms between sends
   const now = Date.now();
@@ -73,15 +92,7 @@ export async function sendFileUrl(
   userId?: string | number,
   allowInsecureSsl = true,
 ): Promise<boolean> {
-  const payloadObj: Record<string, any> = { file_url: fileUrl };
-  if (userId) {
-    const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
-    if (!isNaN(numericId)) {
-      payloadObj.user_ids = [numericId];
-    }
-  }
-  const payload = JSON.stringify(payloadObj);
-  const body = `payload=${encodeURIComponent(payload)}`;
+  const body = buildWebhookBody({ file_url: fileUrl }, userId);
 
   try {
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
@@ -90,6 +101,123 @@ export async function sendFileUrl(
   } catch {
     return false;
   }
+}
+
+/**
+ * Fetch the list of Chat users visible to this bot via the user_list API.
+ * Results are cached for CACHE_TTL_MS to avoid excessive API calls.
+ *
+ * The user_list endpoint uses the same base URL as the chatbot API but
+ * with method=user_list instead of method=chatbot.
+ */
+export async function fetchChatUsers(
+  incomingUrl: string,
+  allowInsecureSsl = true,
+  log?: { warn: (...args: unknown[]) => void },
+): Promise<ChatUser[]> {
+  const now = Date.now();
+  const listUrl = incomingUrl.replace(/method=\w+/, "method=user_list");
+  const cached = chatUserCache.get(listUrl);
+  if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
+    return cached.users;
+  }
+
+  return new Promise((resolve) => {
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(listUrl);
+    } catch {
+      log?.warn("fetchChatUsers: invalid user_list URL, using cached data");
+      resolve(cached?.users ?? []);
+      return;
+    }
+    const transport = parsedUrl.protocol === "https:" ? https : http;
+
+    transport
+      .get(listUrl, { rejectUnauthorized: !allowInsecureSsl } as any, (res) => {
+        let data = "";
+        res.on("data", (c: Buffer) => {
+          data += c.toString();
+        });
+        res.on("end", () => {
+          try {
+            const result = JSON.parse(data);
+            if (result.success && result.data?.users) {
+              const users = result.data.users.map((u: any) => ({
+                user_id: u.user_id,
+                username: u.username || "",
+                nickname: u.nickname || "",
+              }));
+              chatUserCache.set(listUrl, {
+                users,
+                cachedAt: now,
+              });
+              resolve(users);
+            } else {
+              log?.warn(
+                `fetchChatUsers: API returned success=${result.success}, using cached data`,
+              );
+              resolve(cached?.users ?? []);
+            }
+          } catch {
+            log?.warn("fetchChatUsers: failed to parse user_list response");
+            resolve(cached?.users ?? []);
+          }
+        });
+      })
+      .on("error", (err) => {
+        log?.warn(`fetchChatUsers: HTTP error — ${err instanceof Error ? err.message : err}`);
+        resolve(cached?.users ?? []);
+      });
+  });
+}
+
+/**
+ * Resolve a webhook username to the correct Chat API user_id.
+ *
+ * Synology Chat outgoing webhooks send a user_id that may NOT match the
+ * Chat-internal user_id needed by the chatbot API (method=chatbot).
+ * The webhook's "username" field corresponds to the Chat user's "nickname".
+ *
+ * @param incomingUrl - Bot incoming webhook URL (used to derive user_list URL)
+ * @param webhookUsername - The username from the outgoing webhook payload
+ * @param allowInsecureSsl - Skip TLS verification
+ * @returns The correct Chat user_id, or undefined if not found
+ */
+export async function resolveChatUserId(
+  incomingUrl: string,
+  webhookUsername: string,
+  allowInsecureSsl = true,
+  log?: { warn: (...args: unknown[]) => void },
+): Promise<number | undefined> {
+  const users = await fetchChatUsers(incomingUrl, allowInsecureSsl, log);
+  const lower = webhookUsername.toLowerCase();
+
+  // Match by nickname first (webhook "username" field = Chat "nickname")
+  const byNickname = users.find((u) => u.nickname.toLowerCase() === lower);
+  if (byNickname) return byNickname.user_id;
+
+  // Then by username
+  const byUsername = users.find((u) => u.username.toLowerCase() === lower);
+  if (byUsername) return byUsername.user_id;
+
+  return undefined;
+}
+
+function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {
+  const numericId = parseNumericUserId(userId);
+  if (numericId !== undefined) {
+    payload.user_ids = [numericId];
+  }
+  return `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+}
+
+function parseNumericUserId(userId?: string | number): number | undefined {
+  if (userId === undefined) {
+    return undefined;
+  }
+  const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+  return Number.isNaN(numericId) ? undefined : numericId;
 }
 
 function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {

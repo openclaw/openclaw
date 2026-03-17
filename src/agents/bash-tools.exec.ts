@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExecHost, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
@@ -324,7 +324,8 @@ export function createExecTool(
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
-      const configuredAsk = defaults?.ask ?? "on-miss";
+      // Keep local exec defaults in sync with exec-approvals.json when tools.exec.ask is unset.
+      const configuredAsk = defaults?.ask ?? loadExecApprovals().defaults?.ask ?? "on-miss";
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
       const bypassApprovals = elevatedRequested && elevatedMode === "full";
@@ -407,6 +408,10 @@ export function createExecTool(
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
           agentId,
           security,
           ask,
@@ -424,6 +429,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
+          requestedEnv: params.env,
           pty: params.pty === true && !sandbox,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
@@ -433,6 +439,10 @@ export function createExecTool(
           safeBinProfiles,
           agentId,
           sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
           scopeKey: defaults?.scopeKey,
           warnings,
           notifySessionKey,

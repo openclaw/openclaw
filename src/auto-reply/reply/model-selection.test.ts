@@ -6,7 +6,7 @@ vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
     { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
     { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
-    { provider: "kimi-coding", id: "k2p5", name: "Kimi K2.5" },
+    { provider: "kimi", id: "kimi-code", name: "Kimi Code" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
     { provider: "openai", id: "gpt-4o", name: "GPT-4o" },
   ]),
@@ -68,6 +68,28 @@ describe("createModelSelectionState parent inheritance", () => {
     });
   }
 
+  async function resolveStateWithParent(params: {
+    cfg: OpenClawConfig;
+    parentKey: string;
+    sessionKey: string;
+    parentEntry: ReturnType<typeof makeEntry>;
+    sessionEntry?: ReturnType<typeof makeEntry>;
+    parentSessionKey?: string;
+  }) {
+    const sessionEntry = params.sessionEntry ?? makeEntry();
+    const sessionStore = {
+      [params.parentKey]: params.parentEntry,
+      [params.sessionKey]: sessionEntry,
+    };
+    return resolveState({
+      cfg: params.cfg,
+      sessionEntry,
+      sessionStore,
+      sessionKey: params.sessionKey,
+      parentSessionKey: params.parentSessionKey,
+    });
+  }
+
   it("inherits parent override from explicit parentSessionKey", async () => {
     const cfg = {} as OpenClawConfig;
     const parentKey = "agent:main:discord:channel:c1";
@@ -76,17 +98,11 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "openai",
       modelOverride: "gpt-4o",
     });
-    const sessionEntry = makeEntry();
-    const sessionStore = {
-      [parentKey]: parentEntry,
-      [sessionKey]: sessionEntry,
-    };
-
-    const state = await resolveState({
+    const state = await resolveStateWithParent({
       cfg,
-      sessionEntry,
-      sessionStore,
+      parentKey,
       sessionKey,
+      parentEntry,
       parentSessionKey: parentKey,
     });
 
@@ -102,17 +118,11 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "openai",
       modelOverride: "gpt-4o",
     });
-    const sessionEntry = makeEntry();
-    const sessionStore = {
-      [parentKey]: parentEntry,
-      [sessionKey]: sessionEntry,
-    };
-
-    const state = await resolveState({
+    const state = await resolveStateWithParent({
       cfg,
-      sessionEntry,
-      sessionStore,
+      parentKey,
       sessionKey,
+      parentEntry,
     });
 
     expect(state.provider).toBe("openai");
@@ -131,15 +141,11 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-5",
     });
-    const sessionStore = {
-      [parentKey]: parentEntry,
-      [sessionKey]: sessionEntry,
-    };
-
-    const state = await resolveState({
+    const state = await resolveStateWithParent({
       cfg,
+      parentKey,
+      parentEntry,
       sessionEntry,
-      sessionStore,
       sessionKey,
     });
 
@@ -163,17 +169,11 @@ describe("createModelSelectionState parent inheritance", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-5",
     });
-    const sessionEntry = makeEntry();
-    const sessionStore = {
-      [parentKey]: parentEntry,
-      [sessionKey]: sessionEntry,
-    };
-
-    const state = await resolveState({
+    const state = await resolveStateWithParent({
       cfg,
-      sessionEntry,
-      sessionStore,
+      parentKey,
       sessionKey,
+      parentEntry,
     });
 
     expect(state.provider).toBe(defaultProvider);
@@ -222,12 +222,12 @@ describe("createModelSelectionState respects session model override", () => {
     const state = await resolveState(
       makeEntry({
         providerOverride: "kimi-coding",
-        modelOverride: "k2p5",
+        modelOverride: "kimi-code",
       }),
     );
 
-    expect(state.provider).toBe("kimi-coding");
-    expect(state.model).toBe("k2p5");
+    expect(state.provider).toBe("kimi");
+    expect(state.model).toBe("kimi-code");
   });
 
   it("falls back to default when no modelOverride is set", async () => {
@@ -241,8 +241,8 @@ describe("createModelSelectionState respects session model override", () => {
     // From issue #14783: stored override should beat last-used fallback model.
     const state = await resolveState(
       makeEntry({
-        model: "k2p5",
-        modelProvider: "kimi-coding",
+        model: "kimi-code",
+        modelProvider: "kimi",
         contextTokens: 262_000,
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-5",

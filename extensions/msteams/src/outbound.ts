@@ -1,4 +1,5 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/msteams";
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
@@ -10,15 +11,33 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
   pollMaxOptions: 12,
   sendText: async ({ cfg, to, text, deps }) => {
-    const send = deps?.sendMSTeams ?? ((to, text) => sendMessageMSTeams({ cfg, to, text }));
+    type SendFn = (
+      to: string,
+      text: string,
+    ) => Promise<{ messageId: string; conversationId: string }>;
+    const send =
+      resolveOutboundSendDep<SendFn>(deps, "msteams") ??
+      ((to, text) => sendMessageMSTeams({ cfg, to, text }));
     const result = await send(to, text);
     return { channel: "msteams", ...result };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, deps }) => {
+  sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, deps }) => {
+    type SendFn = (
+      to: string,
+      text: string,
+      opts?: { mediaUrl?: string; mediaLocalRoots?: readonly string[] },
+    ) => Promise<{ messageId: string; conversationId: string }>;
     const send =
-      deps?.sendMSTeams ??
-      ((to, text, opts) => sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }));
-    const result = await send(to, text, { mediaUrl });
+      resolveOutboundSendDep<SendFn>(deps, "msteams") ??
+      ((to, text, opts) =>
+        sendMessageMSTeams({
+          cfg,
+          to,
+          text,
+          mediaUrl: opts?.mediaUrl,
+          mediaLocalRoots: opts?.mediaLocalRoots,
+        }));
+    const result = await send(to, text, { mediaUrl, mediaLocalRoots });
     return { channel: "msteams", ...result };
   },
   sendPoll: async ({ cfg, to, poll }) => {

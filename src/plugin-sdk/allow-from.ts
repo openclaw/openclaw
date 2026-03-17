@@ -1,3 +1,4 @@
+/** Lowercase and optionally strip prefixes from allowlist entries before sender comparisons. */
 export function formatAllowFromLowercase(params: {
   allowFrom: Array<string | number>;
   stripPrefixRe?: RegExp;
@@ -9,6 +10,19 @@ export function formatAllowFromLowercase(params: {
     .map((entry) => entry.toLowerCase());
 }
 
+/** Normalize allowlist entries through a channel-provided parser or canonicalizer. */
+export function formatNormalizedAllowFromEntries(params: {
+  allowFrom: Array<string | number>;
+  normalizeEntry: (entry: string) => string | undefined | null;
+}): string[] {
+  return params.allowFrom
+    .map((entry) => String(entry).trim())
+    .filter(Boolean)
+    .map((entry) => params.normalizeEntry(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+/** Check whether a sender id matches a simple normalized allowlist with wildcard support. */
 export function isNormalizedSenderAllowed(params: {
   senderId: string | number;
   allowFrom: Array<string | number>;
@@ -34,6 +48,7 @@ type ParsedChatAllowTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; handle: string };
 
+/** Match chat-aware allowlist entries against sender, chat id, guid, or identifier fields. */
 export function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params: {
   allowFrom: Array<string | number>;
   sender: string;

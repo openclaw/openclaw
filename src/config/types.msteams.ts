@@ -4,8 +4,12 @@ import type {
   GroupPolicy,
   MarkdownConfig,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
@@ -59,7 +63,7 @@ export type MSTeamsConfig = {
   /** Azure Bot App ID (from Azure Bot registration). */
   appId?: string;
   /** Azure Bot App Password / Client Secret. */
-  appPassword?: string;
+  appPassword?: SecretInput;
   /** Azure AD Tenant ID (for single-tenant bots). */
   tenantId?: string;
   /** Webhook server configuration. */
@@ -113,6 +117,8 @@ export type MSTeamsConfig = {
   sharePointSiteId?: string;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
 };

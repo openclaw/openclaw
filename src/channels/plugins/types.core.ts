@@ -1,12 +1,15 @@
+import type { TopLevelComponents } from "@buape/carbon";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { ChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
+import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type ChannelId = ChatChannelId | (string & {});
 
@@ -21,6 +24,7 @@ export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => Chan
 export type ChannelSetupInput = {
   name?: string;
   token?: string;
+  privateKey?: string;
   tokenFile?: string;
   botToken?: string;
   appToken?: string;
@@ -46,6 +50,7 @@ export type ChannelSetupInput = {
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
+  relayUrls?: string;
   code?: string;
   groupChannels?: string[];
   dmAllowlist?: string[];
@@ -102,6 +107,7 @@ export type ChannelAccountSnapshot = {
   linked?: boolean;
   running?: boolean;
   connected?: boolean;
+  restartPending?: boolean;
   reconnectAttempts?: number;
   lastConnectedAt?: number | null;
   lastDisconnect?:
@@ -120,12 +126,21 @@ export type ChannelAccountSnapshot = {
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
+  busy?: boolean;
+  activeRuns?: number;
+  lastRunActivityAt?: number | null;
   mode?: string;
   dmPolicy?: string;
   allowFrom?: string[];
   tokenSource?: string;
   botTokenSource?: string;
   appTokenSource?: string;
+  signingSecretSource?: string;
+  tokenStatus?: string;
+  botTokenStatus?: string;
+  appTokenStatus?: string;
+  signingSecretStatus?: string;
+  userTokenStatus?: string;
   credentialSource?: string;
   secretSource?: string;
   audienceType?: string;
@@ -199,6 +214,11 @@ export type ChannelSecurityContext<ResolvedAccount = unknown> = {
 };
 
 export type ChannelMentionAdapter = {
+  stripRegexes?: (params: {
+    ctx: MsgContext;
+    cfg: OpenClawConfig | undefined;
+    agentId?: string;
+  }) => RegExp[];
   stripPatterns?: (params: {
     ctx: MsgContext;
     cfg: OpenClawConfig | undefined;
@@ -217,6 +237,38 @@ export type ChannelStreamingAdapter = {
     minChars: number;
     idleMs: number;
   };
+};
+
+export type ChannelCrossContextComponentsFactory = (params: {
+  originLabel: string;
+  message: string;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) => TopLevelComponents[];
+
+export type ChannelReplyTransport = {
+  replyToId?: string | null;
+  threadId?: string | number | null;
+};
+
+export type ChannelFocusedBindingContext = {
+  conversationId: string;
+  parentConversationId?: string;
+  placement: "current" | "child";
+  labelNoun: string;
+};
+
+export type ChannelOutboundSessionRoute = {
+  sessionKey: string;
+  baseSessionKey: string;
+  peer: {
+    kind: ChatType;
+    id: string;
+  };
+  chatType: "direct" | "group" | "channel";
+  from: string;
+  to: string;
+  threadId?: string | number;
 };
 
 export type ChannelThreadingAdapter = {
@@ -242,6 +294,24 @@ export type ChannelThreadingAdapter = {
     context: ChannelThreadingContext;
     hasRepliedRef?: { value: boolean };
   }) => ChannelThreadingToolContext | undefined;
+  resolveAutoThreadId?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    to: string;
+    toolContext?: ChannelThreadingToolContext;
+    replyToId?: string | null;
+  }) => string | undefined;
+  resolveReplyTransport?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    threadId?: string | number | null;
+    replyToId?: string | null;
+  }) => ChannelReplyTransport | null;
+  resolveFocusedBinding?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    context: ChannelThreadingContext;
+  }) => ChannelFocusedBindingContext | null;
 };
 
 export type ChannelThreadingContext = {
@@ -254,6 +324,8 @@ export type ChannelThreadingContext = {
   ReplyToIdFull?: string;
   ThreadLabel?: string;
   MessageThreadId?: string | number;
+  /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
+  NativeChannelId?: string;
 };
 
 export type ChannelThreadingToolContext = {
@@ -273,15 +345,53 @@ export type ChannelThreadingToolContext = {
 
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  parseExplicitTarget?: (params: { raw: string }) => {
+    to: string;
+    threadId?: string | number;
+    chatType?: ChatType;
+  } | null;
+  inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
+  buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
+  enableInteractiveReplies?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => boolean;
+  hasStructuredReplyPayload?: (params: { payload: ReplyPayload }) => boolean;
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+    resolveTarget?: (params: {
+      cfg: OpenClawConfig;
+      accountId?: string | null;
+      input: string;
+      normalized: string;
+      preferredKind?: ChannelDirectoryEntryKind | "channel";
+    }) => Promise<{
+      to: string;
+      kind: ChannelDirectoryEntryKind | "channel";
+      display?: string;
+      source?: "normalized" | "directory";
+    } | null>;
   };
   formatTargetDisplay?: (params: {
     target: string;
     display?: string;
     kind?: ChannelDirectoryEntryKind;
   }) => string;
+  resolveOutboundSessionRoute?: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    accountId?: string | null;
+    target: string;
+    resolvedTarget?: {
+      to: string;
+      kind: ChannelDirectoryEntryKind | "channel";
+      display?: string;
+      source: "normalized" | "directory";
+    };
+    replyToId?: string | null;
+    threadId?: string | number | null;
+  }) => ChannelOutboundSessionRoute | Promise<ChannelOutboundSessionRoute | null> | null;
 };
 
 export type ChannelAgentPromptAdapter = {
@@ -329,13 +439,23 @@ export type ChannelMessageActionContext = {
 export type ChannelToolSend = {
   to: string;
   accountId?: string | null;
+  threadId?: string | null;
 };
 
 export type ChannelMessageActionAdapter = {
+  /**
+   * Advertise agent-discoverable actions for this channel.
+   * Keep this aligned with any gated capability checks. Poll discovery is
+   * not inferred from `outbound.sendPoll`, so channels that want agents to
+   * create polls should include `"poll"` here when enabled.
+   */
   listActions?: (params: { cfg: OpenClawConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
-  supportsButtons?: (params: { cfg: OpenClawConfig }) => boolean;
-  supportsCards?: (params: { cfg: OpenClawConfig }) => boolean;
+  getCapabilities?: (params: { cfg: OpenClawConfig }) => readonly ChannelMessageCapability[];
+  requiresTrustedRequesterSender?: (params: {
+    action: ChannelMessageActionName;
+    toolContext?: ChannelThreadingToolContext;
+  }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -83,6 +84,19 @@ const createHandleInlineActionsInput = (params: {
   };
 };
 
+async function expectInlineActionSkipped(params: {
+  ctx: ReturnType<typeof buildTestCtx>;
+  typing: TypingController;
+  cleanedBody: string;
+  command?: Partial<HandleInlineActionsInput["command"]>;
+  overrides?: Partial<Omit<HandleInlineActionsInput, "ctx" | "sessionCtx" | "typing" | "command">>;
+}) {
+  const result = await handleInlineActions(createHandleInlineActionsInput(params));
+  expect(result).toEqual({ kind: "reply", reply: undefined });
+  expect(params.typing.cleanup).toHaveBeenCalled();
+  expect(handleCommandsMock).not.toHaveBeenCalled();
+}
+
 describe("handleInlineActions", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
@@ -96,18 +110,12 @@ describe("handleInlineActions", () => {
       To: "whatsapp:+123",
       Body: "hi",
     });
-    const result = await handleInlineActions(
-      createHandleInlineActionsInput({
-        ctx,
-        typing,
-        cleanedBody: "hi",
-        command: { to: "whatsapp:+123" },
-      }),
-    );
-
-    expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(typing.cleanup).toHaveBeenCalled();
-    expect(handleCommandsMock).not.toHaveBeenCalled();
+    await expectInlineActionSkipped({
+      ctx,
+      typing,
+      cleanedBody: "hi",
+      command: { to: "whatsapp:+123" },
+    });
   });
 
   it("forwards agentDir into handleCommands", async () => {
@@ -145,5 +153,73 @@ describe("handleInlineActions", () => {
         agentDir,
       }),
     );
+  });
+
+  it("skips stale queued messages that are at or before the /stop cutoff", async () => {
+    const typing = createTypingController();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      abortCutoffMessageSid: "42",
+      abortedLastRun: true,
+    };
+    const sessionStore = { "s:main": sessionEntry };
+    const ctx = buildTestCtx({
+      Body: "old queued message",
+      CommandBody: "old queued message",
+      MessageSid: "41",
+    });
+
+    await expectInlineActionSkipped({
+      ctx,
+      typing,
+      cleanedBody: "old queued message",
+      command: {
+        rawBodyNormalized: "old queued message",
+        commandBodyNormalized: "old queued message",
+      },
+      overrides: {
+        sessionEntry,
+        sessionStore,
+      },
+    });
+  });
+
+  it("clears /stop cutoff when a newer message arrives", async () => {
+    const typing = createTypingController();
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-2",
+      updatedAt: Date.now(),
+      abortCutoffMessageSid: "42",
+      abortedLastRun: true,
+    };
+    const sessionStore = { "s:main": sessionEntry };
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "ok" } });
+    const ctx = buildTestCtx({
+      Body: "new message",
+      CommandBody: "new message",
+      MessageSid: "43",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "new message",
+        command: {
+          rawBodyNormalized: "new message",
+          commandBodyNormalized: "new message",
+        },
+        overrides: {
+          sessionEntry,
+          sessionStore,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "ok" } });
+    expect(sessionStore["s:main"]?.abortCutoffMessageSid).toBeUndefined();
+    expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();
+    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
   });
 });

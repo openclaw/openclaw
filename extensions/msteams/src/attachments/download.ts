@@ -6,11 +6,12 @@ import {
   isDownloadableAttachment,
   isRecord,
   isUrlAllowed,
+  type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
+  resolveMediaSsrfPolicy,
+  resolveAttachmentFetchPolicy,
   resolveRequestUrl,
-  resolveAuthAllowedHosts,
-  resolveAllowedHosts,
-  safeFetch,
+  safeFetchWithPolicy,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -85,25 +86,22 @@ function scopeCandidatesForUrl(url: string): string[] {
   }
 }
 
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
 async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  allowHosts: string[];
-  authAllowHosts: string[];
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  policy: MSTeamsAttachmentFetchPolicy;
 }): Promise<Response> {
-  const fetchFn = params.fetchFn ?? fetch;
-
-  // Use safeFetch for the initial attempt — redirect: "manual" with
-  // allowlist + DNS/IP validation on every hop (prevents SSRF via redirect).
-  const firstAttempt = await safeFetch({
+  const firstAttempt = await safeFetchWithPolicy({
     url: params.url,
-    allowHosts: params.allowHosts,
-    fetchFn,
+    policy: params.policy,
+    fetchFn: params.fetchFn,
     requestInit: params.requestInit,
-    resolveFn: params.resolveFn,
   });
   if (firstAttempt.ok) {
     return firstAttempt;
@@ -114,50 +112,36 @@ async function fetchWithAuthFallback(params: {
   if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
     return firstAttempt;
   }
-  if (!isUrlAllowed(params.url, params.authAllowHosts)) {
+  if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
     return firstAttempt;
   }
 
   const scopes = scopeCandidatesForUrl(params.url);
+  const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
       const authHeaders = new Headers(params.requestInit?.headers);
       authHeaders.set("Authorization", `Bearer ${token}`);
-      const authAttempt = await safeFetch({
+      const authAttempt = await safeFetchWithPolicy({
         url: params.url,
-        allowHosts: params.allowHosts,
+        policy: params.policy,
         fetchFn,
         requestInit: {
           ...params.requestInit,
           headers: authHeaders,
         },
-        resolveFn: params.resolveFn,
       });
       if (authAttempt.ok) {
         return authAttempt;
       }
+      if (isRedirectStatus(authAttempt.status)) {
+        // Redirects in guarded fetch mode must propagate to the outer guard.
+        return authAttempt;
+      }
       if (authAttempt.status !== 401 && authAttempt.status !== 403) {
+        // Preserve scope fallback semantics for non-auth failures.
         continue;
-      }
-
-      const finalUrl =
-        typeof authAttempt.url === "string" && authAttempt.url ? authAttempt.url : "";
-      if (!finalUrl || finalUrl === params.url || !isUrlAllowed(finalUrl, params.authAllowHosts)) {
-        continue;
-      }
-      const redirectedAuthAttempt = await safeFetch({
-        url: finalUrl,
-        allowHosts: params.allowHosts,
-        fetchFn,
-        requestInit: {
-          ...params.requestInit,
-          headers: authHeaders,
-        },
-        resolveFn: params.resolveFn,
-      });
-      if (redirectedAuthAttempt.ok) {
-        return redirectedAuthAttempt;
       }
     } catch {
       // Try the next scope.
@@ -180,15 +164,17 @@ export async function downloadMSTeamsAttachments(params: {
   fetchFn?: typeof fetch;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
-  /** Override DNS resolver for testing (anti-SSRF IP validation). */
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
 }): Promise<MSTeamsInboundMedia[]> {
   const list = Array.isArray(params.attachments) ? params.attachments : [];
   if (list.length === 0) {
     return [];
   }
-  const allowHosts = resolveAllowedHosts(params.allowHosts);
-  const authAllowHosts = resolveAuthAllowedHosts(params.authAllowHosts);
+  const policy = resolveAttachmentFetchPolicy({
+    allowHosts: params.allowHosts,
+    authAllowHosts: params.authAllowHosts,
+  });
+  const allowHosts = policy.allowHosts;
+  const ssrfPolicy = resolveMediaSsrfPolicy(allowHosts);
 
   // Download ANY downloadable attachment (not just images)
   const downloadable = list.filter(isDownloadableAttachment);
@@ -257,15 +243,14 @@ export async function downloadMSTeamsAttachments(params: {
         contentTypeHint: candidate.contentTypeHint,
         placeholder: candidate.placeholder,
         preserveFilenames: params.preserveFilenames,
+        ssrfPolicy,
         fetchImpl: (input, init) =>
           fetchWithAuthFallback({
             url: resolveRequestUrl(input),
             tokenProvider: params.tokenProvider,
             fetchFn: params.fetchFn,
             requestInit: init,
-            allowHosts,
-            authAllowHosts,
-            resolveFn: params.resolveFn,
+            policy,
           }),
       });
       out.push(media);

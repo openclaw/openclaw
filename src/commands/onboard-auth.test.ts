@@ -3,40 +3,57 @@ import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  applyMinimaxApiConfig,
+  applyMinimaxApiProviderConfig,
+} from "../../extensions/minimax/onboard.js";
+import {
+  applyMistralConfig,
+  applyMistralProviderConfig,
+} from "../../extensions/mistral/onboard.js";
+import {
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
+} from "../../extensions/opencode-go/onboard.js";
+import {
+  applyOpencodeZenConfig,
+  applyOpencodeZenProviderConfig,
+} from "../../extensions/opencode/onboard.js";
+import {
+  applyOpenrouterConfig,
+  applyOpenrouterProviderConfig,
+} from "../../extensions/openrouter/onboard.js";
+import {
+  applySyntheticConfig,
+  applySyntheticProviderConfig,
+  SYNTHETIC_DEFAULT_MODEL_REF,
+} from "../../extensions/synthetic/onboard.js";
+import {
+  applyXaiConfig,
+  applyXaiProviderConfig,
+  XAI_DEFAULT_MODEL_REF,
+} from "../../extensions/xai/onboard.js";
+import { applyXiaomiConfig, applyXiaomiProviderConfig } from "../../extensions/xiaomi/onboard.js";
+import { applyZaiConfig, applyZaiProviderConfig } from "../../extensions/zai/onboard.js";
+import { SYNTHETIC_DEFAULT_MODEL_ID } from "../agents/synthetic-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import type { ModelApi } from "../config/types.models.js";
 import {
-  applyAuthProfileConfig,
-  applyLitellmProviderConfig,
-  applyMistralConfig,
-  applyMistralProviderConfig,
-  applyMinimaxApiConfig,
-  applyMinimaxApiProviderConfig,
-  applyOpencodeZenConfig,
-  applyOpencodeZenProviderConfig,
-  applyOpenrouterConfig,
-  applyOpenrouterProviderConfig,
-  applySyntheticConfig,
-  applySyntheticProviderConfig,
-  applyXaiConfig,
-  applyXaiProviderConfig,
-  applyXiaomiConfig,
-  applyXiaomiProviderConfig,
-  applyZaiConfig,
-  applyZaiProviderConfig,
-  OPENROUTER_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
-  SYNTHETIC_DEFAULT_MODEL_ID,
-  SYNTHETIC_DEFAULT_MODEL_REF,
-  XAI_DEFAULT_MODEL_REF,
-  setMinimaxApiKey,
-  writeOAuthCredentials,
   ZAI_CODING_CN_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
-} from "./onboard-auth.js";
+} from "../plugin-sdk/provider-models.js";
+import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
+import {
+  OPENROUTER_DEFAULT_MODEL_REF,
+  setMinimaxApiKey,
+  writeOAuthCredentials,
+} from "../plugins/provider-auth-storage.js";
+import { applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
@@ -45,7 +62,7 @@ import {
 
 function createLegacyProviderConfig(params: {
   providerId: string;
-  api: "anthropic-messages" | "openai-completions" | "openai-responses";
+  api: ModelApi;
   modelId?: string;
   modelName?: string;
   baseUrl?: string;
@@ -365,12 +382,13 @@ describe("applyMinimaxApiConfig", () => {
     expect(cfg.models?.providers?.minimax).toMatchObject({
       baseUrl: "https://api.minimax.io/anthropic",
       api: "anthropic-messages",
+      authHeader: true,
     });
   });
 
-  it("does not set reasoning for non-reasoning models", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
-    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
+  it("keeps reasoning enabled for MiniMax-M2.5", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.5");
+    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
   });
 
   it("preserves existing model params when adding alias", () => {
@@ -379,7 +397,7 @@ describe("applyMinimaxApiConfig", () => {
         agents: {
           defaults: {
             models: {
-              "minimax/MiniMax-M2.1": {
+              "minimax/MiniMax-M2.5": {
                 alias: "MiniMax",
                 params: { custom: "value" },
               },
@@ -387,9 +405,9 @@ describe("applyMinimaxApiConfig", () => {
           },
         },
       },
-      "MiniMax-M2.1",
+      "MiniMax-M2.5",
     );
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.1"]).toMatchObject({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.5"]).toMatchObject({
       alias: "Minimax",
       params: { custom: "value" },
     });
@@ -404,6 +422,7 @@ describe("applyMinimaxApiConfig", () => {
     );
     expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.minimax?.authHeader).toBe(true);
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
       "old-model",
@@ -417,7 +436,7 @@ describe("applyMinimaxApiConfig", () => {
         providers: {
           anthropic: {
             baseUrl: "https://api.anthropic.com",
-            apiKey: "anthropic-key",
+            apiKey: "anthropic-key", // pragma: allowlist secret
             api: "anthropic-messages",
             models: [
               {
@@ -462,12 +481,13 @@ describe("applyZaiConfig", () => {
   it("adds zai provider with correct settings", () => {
     const cfg = applyZaiConfig({});
     expect(cfg.models?.providers?.zai).toMatchObject({
-      // Default: general (non-coding) endpoint. Coding Plan endpoint is detected during onboarding.
+      // Default: general (non-coding) endpoint. Coding Plan endpoint is detected during setup.
       baseUrl: ZAI_GLOBAL_BASE_URL,
       api: "openai-completions",
     });
     const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
     expect(ids).toContain("glm-5");
+    expect(ids).toContain("glm-5-turbo");
     expect(ids).toContain("glm-4.7");
     expect(ids).toContain("glm-4.7-flash");
     expect(ids).toContain("glm-4.7-flashx");
@@ -511,8 +531,8 @@ describe("primary model defaults", () => {
   it("sets correct primary model", () => {
     const configCases = [
       {
-        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1-lightning"),
-        primaryModel: "minimax/MiniMax-M2.1-lightning",
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-highspeed"),
+        primaryModel: "minimax/MiniMax-M2.5-highspeed",
       },
       {
         getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
@@ -642,8 +662,8 @@ describe("provider alias defaults", () => {
   it("adds expected alias for provider defaults", () => {
     const aliasCases = [
       {
-        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1"),
-        modelRef: "minimax/MiniMax-M2.1",
+        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5"),
+        modelRef: "minimax/MiniMax-M2.5",
         alias: "Minimax",
       },
       {
@@ -671,6 +691,11 @@ describe("allowlist provider helpers", () => {
         applyConfig: applyOpencodeZenProviderConfig,
         modelRef: "opencode/claude-opus-4-6",
         alias: "My Opus",
+      },
+      {
+        applyConfig: applyOpencodeGoProviderConfig,
+        modelRef: "opencode-go/kimi-k2.5",
+        alias: "Kimi",
       },
       {
         applyConfig: applyOpenrouterProviderConfig,
@@ -725,6 +750,10 @@ describe("default-model config helpers", () => {
       {
         applyConfig: applyOpencodeZenConfig,
         primaryModel: "opencode/claude-opus-4-6",
+      },
+      {
+        applyConfig: applyOpencodeGoConfig,
+        primaryModel: "opencode-go/kimi-k2.5",
       },
       {
         applyConfig: applyOpenrouterConfig,

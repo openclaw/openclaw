@@ -9,6 +9,7 @@ import Darwin
 import OpenClawKit
 import Network
 import Observation
+import os
 import Photos
 import ReplayKit
 import Security
@@ -100,6 +101,7 @@ final class GatewayConnectionController {
             return "Missing instanceId (node.instanceId). Try restarting the app."
         }
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
 
         // Resolve the service endpoint (SRV/A/AAAA). TXT is unauthenticated; do not route via TXT.
@@ -150,6 +152,7 @@ final class GatewayConnectionController {
             gatewayStableID: stableID,
             tls: tlsParams,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password)
         return nil
     }
@@ -162,6 +165,7 @@ final class GatewayConnectionController {
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
         let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
@@ -202,6 +206,7 @@ final class GatewayConnectionController {
             gatewayStableID: stableID,
             tls: tlsParams,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password)
     }
 
@@ -212,7 +217,7 @@ final class GatewayConnectionController {
             await self.connectManual(host: host, port: port, useTLS: useTLS)
         case let .discovered(stableID, _):
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else { return }
-            await self.connectDiscoveredGateway(gateway)
+            _ = await self.connectDiscoveredGateway(gateway)
         }
     }
 
@@ -228,6 +233,7 @@ final class GatewayConnectionController {
             stableID: cfg.stableID,
             tls: cfg.tls,
             token: cfg.token,
+            bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             nodeOptions: self.makeConnectOptions(stableID: cfg.stableID))
         appModel.applyGatewayConnectConfig(refreshedConfig)
@@ -260,6 +266,7 @@ final class GatewayConnectionController {
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
         let tlsParams = GatewayTLSParams(
             required: true,
@@ -273,6 +280,7 @@ final class GatewayConnectionController {
             gatewayStableID: pending.stableID,
             tls: tlsParams,
             token: token,
+            bootstrapToken: bootstrapToken,
             password: password)
     }
 
@@ -318,6 +326,7 @@ final class GatewayConnectionController {
         guard !instanceId.isEmpty else { return }
 
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
 
         if manualEnabled {
@@ -352,6 +361,7 @@ final class GatewayConnectionController {
                 gatewayStableID: stableID,
                 tls: tlsParams,
                 token: token,
+                bootstrapToken: bootstrapToken,
                 password: password)
             return
         }
@@ -378,6 +388,7 @@ final class GatewayConnectionController {
                     gatewayStableID: stableID,
                     tls: tlsParams,
                     token: token,
+                    bootstrapToken: bootstrapToken,
                     password: password)
                 return
             }
@@ -399,7 +410,7 @@ final class GatewayConnectionController {
             self.didAutoConnect = true
             Task { [weak self] in
                 guard let self else { return }
-                await self.connectDiscoveredGateway(target)
+                _ = await self.connectDiscoveredGateway(target)
             }
             return
         }
@@ -411,7 +422,7 @@ final class GatewayConnectionController {
             self.didAutoConnect = true
             Task { [weak self] in
                 guard let self else { return }
-                await self.connectDiscoveredGateway(gateway)
+                _ = await self.connectDiscoveredGateway(gateway)
             }
             return
         }
@@ -447,6 +458,7 @@ final class GatewayConnectionController {
         gatewayStableID: String,
         tls: GatewayTLSParams?,
         token: String?,
+        bootstrapToken: String?,
         password: String?)
     {
         guard let appModel else { return }
@@ -462,6 +474,7 @@ final class GatewayConnectionController {
                 stableID: gatewayStableID,
                 tls: tls,
                 token: token,
+                bootstrapToken: bootstrapToken,
                 password: password,
                 nodeOptions: connectOptions)
             appModel.applyGatewayConnectConfig(cfg)
@@ -632,7 +645,8 @@ final class GatewayConnectionController {
                             0,
                             NI_NUMERICHOST)
                         guard rc == 0 else { return nil }
-                        return String(cString: buffer)
+                        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                        return String(bytes: bytes, encoding: .utf8)
                     }
 
                     if let host, !host.isEmpty {
@@ -889,11 +903,9 @@ final class GatewayConnectionController {
         permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
         let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] =
-            calendarStatus == .authorized || calendarStatus == .fullAccess || calendarStatus == .writeOnly
+        permissions["calendar"] = Self.hasEventKitAccess(calendarStatus)
         let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] =
-            remindersStatus == .authorized || remindersStatus == .fullAccess || remindersStatus == .writeOnly
+        permissions["reminders"] = Self.hasEventKitAccess(remindersStatus)
 
         let motionStatus = CMMotionActivityManager.authorizationStatus()
         let pedometerStatus = CMPedometer.authorizationStatus()
@@ -911,11 +923,15 @@ final class GatewayConnectionController {
 
     private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
         switch status {
-        case .authorizedAlways, .authorizedWhenInUse, .authorized:
+        case .authorizedAlways, .authorizedWhenInUse:
             return true
         default:
             return false
         }
+    }
+
+    private static func hasEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess || status == .writeOnly
     }
 
     private static func motionAvailable() -> Bool {
@@ -986,13 +1002,17 @@ extension GatewayConnectionController {
 }
 #endif
 
-private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
+private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @unchecked Sendable {
+    private struct ProbeState {
+        var didFinish = false
+        var session: URLSession?
+        var task: URLSessionWebSocketTask?
+    }
+
     private let url: URL
     private let timeoutSeconds: Double
     private let onComplete: (String?) -> Void
-    private var didFinish = false
-    private var session: URLSession?
-    private var task: URLSessionWebSocketTask?
+    private let state = OSAllocatedUnfairLock(initialState: ProbeState())
 
     init(url: URL, timeoutSeconds: Double, onComplete: @escaping (String?) -> Void) {
         self.url = url
@@ -1005,9 +1025,11 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
         config.timeoutIntervalForRequest = self.timeoutSeconds
         config.timeoutIntervalForResource = self.timeoutSeconds
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        self.session = session
         let task = session.webSocketTask(with: self.url)
-        self.task = task
+        self.state.withLock { s in
+            s.session = session
+            s.task = task
+        }
         task.resume()
 
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + self.timeoutSeconds) { [weak self] in
@@ -1033,12 +1055,18 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
     }
 
     private func finish(_ fingerprint: String?) {
-        objc_sync_enter(self)
-        defer { objc_sync_exit(self) }
-        guard !self.didFinish else { return }
-        self.didFinish = true
-        self.task?.cancel(with: .goingAway, reason: nil)
-        self.session?.invalidateAndCancel()
+        let (shouldComplete, taskToCancel, sessionToInvalidate) = self.state.withLock { s -> (Bool, URLSessionWebSocketTask?, URLSession?) in
+            guard !s.didFinish else { return (false, nil, nil) }
+            s.didFinish = true
+            let task = s.task
+            let session = s.session
+            s.task = nil
+            s.session = nil
+            return (true, task, session)
+        }
+        guard shouldComplete else { return }
+        taskToCancel?.cancel(with: .goingAway, reason: nil)
+        sessionToInvalidate?.invalidateAndCancel()
         self.onComplete(fingerprint)
     }
 

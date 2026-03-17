@@ -1,17 +1,17 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { mattermostPlugin } from "./src/channel.js";
+import { registerSlashCommandRoute } from "./src/mattermost/slash-state.js";
 import { setMattermostRuntime } from "./src/runtime.js";
 
-const plugin = {
+export default defineChannelPluginEntry({
   id: "mattermost",
   name: "Mattermost",
   description: "Mattermost channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setMattermostRuntime(api.runtime);
-    api.registerChannel({ plugin: mattermostPlugin });
+  plugin: mattermostPlugin,
+  setRuntime: setMattermostRuntime,
+  registerFull(api) {
+    // Actual slash-command registration happens after the monitor connects and
+    // knows the team id; the route itself can be wired here.
+    registerSlashCommandRoute(api);
   },
-};
-
-export default plugin;
+});

@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
@@ -82,6 +82,15 @@ describe("downloadBlueBubblesAttachment", () => {
     ).rejects.toThrow("too large");
   }
 
+  function mockSuccessfulAttachmentDownload(buffer = new Uint8Array([1])) {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(buffer.buffer),
+    });
+    return buffer;
+  }
+
   it("throws when guid is missing", async () => {
     const attachment: BlueBubblesAttachment = {};
     await expect(
@@ -159,12 +168,7 @@ describe("downloadBlueBubblesAttachment", () => {
   });
 
   it("encodes guid in URL", async () => {
-    const mockBuffer = new Uint8Array([1]);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
-    });
+    mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att/with/special chars" };
     await downloadBlueBubblesAttachment(attachment, {
@@ -244,12 +248,7 @@ describe("downloadBlueBubblesAttachment", () => {
   });
 
   it("resolves credentials from config when opts not provided", async () => {
-    const mockBuffer = new Uint8Array([1]);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
-    });
+    mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att-config" };
     const result = await downloadBlueBubblesAttachment(attachment, {
@@ -270,12 +269,7 @@ describe("downloadBlueBubblesAttachment", () => {
   });
 
   it("passes ssrfPolicy with allowPrivateNetwork when config enables it", async () => {
-    const mockBuffer = new Uint8Array([1]);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
-    });
+    mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att-ssrf" };
     await downloadBlueBubblesAttachment(attachment, {
@@ -294,13 +288,8 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
   });
 
-  it("does not pass ssrfPolicy when allowPrivateNetwork is not set", async () => {
-    const mockBuffer = new Uint8Array([1]);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
-    });
+  it("auto-allowlists serverUrl hostname when allowPrivateNetwork is not set", async () => {
+    mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att-no-ssrf" };
     await downloadBlueBubblesAttachment(attachment, {
@@ -309,7 +298,20 @@ describe("downloadBlueBubblesAttachment", () => {
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toBeUndefined();
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["localhost"] });
+  });
+
+  it("auto-allowlists private IP serverUrl hostname when allowPrivateNetwork is not set", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-private-ip" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://192.168.1.5:1234",
+      password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["192.168.1.5"] });
   });
 });
 
@@ -334,6 +336,14 @@ describe("sendBlueBubblesAttachment", () => {
     return Buffer.from(body).toString("utf8");
   }
 
+  function expectVoiceAttachmentBody() {
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).toContain('name="isAudioMessage"');
+    expect(bodyText).toContain("true");
+    return bodyText;
+  }
+
   it("marks voice memos when asVoice is true and mp3 is provided", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -349,10 +359,7 @@ describe("sendBlueBubblesAttachment", () => {
       opts: { serverUrl: "http://localhost:1234", password: "test" },
     });
 
-    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
-    const bodyText = decodeBody(body);
-    expect(bodyText).toContain('name="isAudioMessage"');
-    expect(bodyText).toContain("true");
+    const bodyText = expectVoiceAttachmentBody();
     expect(bodyText).toContain('filename="voice.mp3"');
   });
 
@@ -371,8 +378,7 @@ describe("sendBlueBubblesAttachment", () => {
       opts: { serverUrl: "http://localhost:1234", password: "test" },
     });
 
-    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
-    const bodyText = decodeBody(body);
+    const bodyText = expectVoiceAttachmentBody();
     expect(bodyText).toContain('filename="voice.mp3"');
     expect(bodyText).toContain('name="voice.mp3"');
   });

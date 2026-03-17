@@ -5,13 +5,15 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 
 const log = createSubsystemLogger("model-catalog");
 
+export type ModelInputType = "text" | "image" | "document";
+
 export type ModelCatalogEntry = {
   id: string;
   name: string;
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: ModelInputType[];
 };
 
 type DiscoveredModel = {
@@ -20,52 +22,38 @@ type DiscoveredModel = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image">;
+  input?: ModelInputType[];
 };
 
 type PiSdkModule = typeof import("./pi-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
-const defaultImportPiSdk = () => import("./pi-model-discovery.js");
+const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
+let providerRuntimePromise:
+  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
+  | undefined;
+let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
-const CODEX_PROVIDER = "openai-codex";
-const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
-function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
-  const hasSpark = models.some(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER &&
-      entry.id.toLowerCase() === OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  );
-  if (hasSpark) {
-    return;
-  }
-
-  const baseModel = models.find(
-    (entry) =>
-      entry.provider === CODEX_PROVIDER && entry.id.toLowerCase() === OPENAI_CODEX_GPT53_MODEL_ID,
-  );
-  if (!baseModel) {
-    return;
-  }
-
-  models.push({
-    ...baseModel,
-    id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-    name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
-  });
+function loadProviderRuntime() {
+  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
+  return providerRuntimePromise;
 }
 
-function normalizeConfiguredModelInput(input: unknown): Array<"text" | "image"> | undefined {
+function loadModelSuppression() {
+  modelSuppressionPromise ??= import("./model-suppression.runtime.js");
+  return modelSuppressionPromise;
+}
+
+function normalizeConfiguredModelInput(input: unknown): ModelInputType[] | undefined {
   if (!Array.isArray(input)) {
     return undefined;
   }
   const normalized = input.filter(
-    (item): item is "text" | "image" => item === "text" || item === "image",
+    (item): item is ModelInputType => item === "text" || item === "image" || item === "document",
   );
   return normalized.length > 0 ? normalized : undefined;
 }
@@ -154,14 +142,6 @@ export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModul
   importPiSdk = loader ?? defaultImportPiSdk;
 }
 
-function createAuthStorage(AuthStorageLike: unknown, path: string) {
-  const withFactory = AuthStorageLike as { create?: (path: string) => unknown };
-  if (typeof withFactory.create === "function") {
-    return withFactory.create(path);
-  }
-  return new (AuthStorageLike as { new (path: string): unknown })(path);
-}
-
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
@@ -186,17 +166,16 @@ export async function loadModelCatalog(params?: {
     try {
       const cfg = params?.config ?? loadConfig();
       await ensureOpenClawModelsJson(cfg);
-      await (
-        await import("./pi-auth-json.js")
-      ).ensurePiAuthJsonFromAuthProfiles(resolveOpenClawAgentDir());
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
       // will keep failing until restart).
       const piSdk = await importPiSdk();
       const agentDir = resolveOpenClawAgentDir();
+      const [{ shouldSuppressBuiltInModel }, { augmentModelCatalogWithProviderPlugins }] =
+        await Promise.all([loadModelSuppression(), loadProviderRuntime()]);
       const { join } = await import("node:path");
-      const authStorage = createAuthStorage(piSdk.AuthStorage, join(agentDir, "auth.json"));
+      const authStorage = piSdk.discoverAuthStorage(agentDir);
       const registry = new (piSdk.ModelRegistry as unknown as {
         new (
           authStorage: unknown,
@@ -217,6 +196,9 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
+        if (shouldSuppressBuiltInModel({ provider, id })) {
+          continue;
+        }
         const name = String(entry?.name ?? id).trim() || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
@@ -227,7 +209,31 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       mergeConfiguredOptInProviderModels({ config: cfg, models });
-      applyOpenAICodexSparkFallback(models);
+      const supplemental = await augmentModelCatalogWithProviderPlugins({
+        config: cfg,
+        env: process.env,
+        context: {
+          config: cfg,
+          agentDir,
+          env: process.env,
+          entries: [...models],
+        },
+      });
+      if (supplemental.length > 0) {
+        const seen = new Set(
+          models.map(
+            (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+          ),
+        );
+        for (const entry of supplemental) {
+          const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          models.push(entry);
+          seen.add(key);
+        }
+      }
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
@@ -257,6 +263,13 @@ export async function loadModelCatalog(params?: {
  */
 export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
   return entry?.input?.includes("image") ?? false;
+}
+
+/**
+ * Check if a model supports native document/PDF input based on its catalog entry.
+ */
+export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
+  return entry?.input?.includes("document") ?? false;
 }
 
 /**

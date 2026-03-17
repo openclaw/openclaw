@@ -61,12 +61,13 @@ const {
   removeReactionDiscord,
   searchMessagesDiscord,
   sendMessageDiscord,
+  sendPollDiscord,
   sendVoiceMessageDiscord,
   setChannelPermissionDiscord,
   timeoutMemberDiscord,
 } = discordSendMocks;
 
-vi.mock("../../discord/send.js", () => ({
+vi.mock("../../../extensions/discord/src/send.js", () => ({
   ...discordSendMocks,
 }));
 
@@ -107,7 +108,7 @@ describe("handleDiscordMessagingAction", () => {
       expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", expectedOptions);
       return;
     }
-    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅");
+    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {});
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -120,7 +121,7 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(removeOwnReactionsDiscord).toHaveBeenCalledWith("C1", "M1");
+    expect(removeOwnReactionsDiscord).toHaveBeenCalledWith("C1", "M1", {});
   });
 
   it("removes reactions when remove flag set", async () => {
@@ -134,7 +135,7 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(removeReactionDiscord).toHaveBeenCalledWith("C1", "M1", "✅");
+    expect(removeReactionDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {});
   });
 
   it("rejects removes without emoji", async () => {
@@ -166,6 +167,31 @@ describe("handleDiscordMessagingAction", () => {
     ).rejects.toThrow(/Discord reactions are disabled/);
   });
 
+  it("parses string booleans for poll options", async () => {
+    await handleDiscordMessagingAction(
+      "poll",
+      {
+        to: "channel:123",
+        question: "Lunch?",
+        answers: ["Pizza", "Sushi"],
+        allowMultiselect: "true",
+        durationHours: "24",
+      },
+      enableAllActions,
+    );
+
+    expect(sendPollDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      {
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 2,
+        durationHours: 24,
+      },
+      expect.any(Object),
+    );
+  });
+
   it("adds normalized timestamps to readMessages payloads", async () => {
     readMessagesDiscord.mockResolvedValueOnce([
       { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
@@ -185,6 +211,24 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
+  it("threads provided cfg into readMessages calls", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+        },
+      },
+    } as OpenClawConfig;
+    await handleDiscordMessagingAction(
+      "readMessages",
+      { channelId: "C1" },
+      enableAllActions,
+      {},
+      cfg,
+    );
+    expect(readMessagesDiscord).toHaveBeenCalledWith("C1", expect.any(Object), { cfg });
+  });
+
   it("adds normalized timestamps to fetchMessage payloads", async () => {
     fetchMessageDiscord.mockResolvedValueOnce({
       id: "1",
@@ -201,6 +245,24 @@ describe("handleDiscordMessagingAction", () => {
     const expectedMs = Date.parse("2026-01-15T11:00:00.000Z");
     expect(payload.message?.timestampMs).toBe(expectedMs);
     expect(payload.message?.timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("threads provided cfg into fetchMessage calls", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token",
+        },
+      },
+    } as OpenClawConfig;
+    await handleDiscordMessagingAction(
+      "fetchMessage",
+      { guildId: "G1", channelId: "C1", messageId: "M1" },
+      enableAllActions,
+      {},
+      cfg,
+    );
+    expect(fetchMessageDiscord).toHaveBeenCalledWith("C1", "M1", { cfg });
   });
 
   it("adds normalized timestamps to listPins payloads", async () => {
@@ -312,12 +374,17 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(createThreadDiscord).toHaveBeenCalledWith("C1", {
-      name: "Forum thread",
-      messageId: undefined,
-      autoArchiveMinutes: undefined,
-      content: "Initial forum post body",
-    });
+    expect(createThreadDiscord).toHaveBeenCalledWith(
+      "C1",
+      {
+        name: "Forum thread",
+        messageId: undefined,
+        autoArchiveMinutes: undefined,
+        content: "Initial forum post body",
+        appliedTags: undefined,
+      },
+      {},
+    );
   });
 });
 

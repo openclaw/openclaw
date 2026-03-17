@@ -1,12 +1,28 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { parseExplicitTargetForChannel } from "../../channels/plugins/target-parsing.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
+
+export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
+  const text = payload.text?.trim();
+  if (!text) {
+    return payload.text;
+  }
+  const question = payload.btw?.question?.trim();
+  if (!question) {
+    return payload.text;
+  }
+  const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
+  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+}
 
 function resolveReplyThreadingForPayload(params: {
   payload: ReplyPayload;
@@ -59,13 +75,14 @@ export function applyReplyTagsToPayload(
 }
 
 export function isRenderablePayload(payload: ReplyPayload): boolean {
-  return Boolean(
-    payload.text ||
-    payload.mediaUrl ||
-    (payload.mediaUrls && payload.mediaUrls.length > 0) ||
-    payload.audioAsVoice ||
-    payload.channelData,
-  );
+  return hasReplyContent({
+    text: payload.text,
+    mediaUrl: payload.mediaUrl,
+    mediaUrls: payload.mediaUrls,
+    interactive: payload.interactive,
+    hasChannelData: hasReplyChannelData(payload.channelData),
+    extraContent: payload.audioAsVoice,
+  });
 }
 
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
@@ -144,13 +161,87 @@ export function filterMessagingToolMediaDuplicates(params: {
   });
 }
 
+const PROVIDER_ALIAS_MAP: Record<string, string> = {
+  lark: "feishu",
+};
+
+function normalizeProviderForComparison(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  const normalizedChannel = normalizeChannelId(trimmed);
+  if (normalizedChannel) {
+    return normalizedChannel;
+  }
+  return PROVIDER_ALIAS_MAP[lowered] ?? lowered;
+}
+
+function normalizeThreadIdForComparison(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^-?\d+$/.test(trimmed)) {
+    return String(Number.parseInt(trimmed, 10));
+  }
+  return trimmed.toLowerCase();
+}
+
+function resolveTargetProviderForComparison(params: {
+  currentProvider: string;
+  targetProvider?: string;
+}): string {
+  const targetProvider = normalizeProviderForComparison(params.targetProvider);
+  if (!targetProvider || targetProvider === "message") {
+    return params.currentProvider;
+  }
+  return targetProvider;
+}
+
+function targetsMatchForSuppression(params: {
+  provider: string;
+  originTarget: string;
+  targetKey: string;
+  targetThreadId?: string;
+}): boolean {
+  if (params.provider !== "telegram") {
+    return params.targetKey === params.originTarget;
+  }
+
+  const origin = parseExplicitTargetForChannel("telegram", params.originTarget);
+  const target = parseExplicitTargetForChannel("telegram", params.targetKey);
+  if (!origin || !target) {
+    return params.targetKey === params.originTarget;
+  }
+  const explicitTargetThreadId = normalizeThreadIdForComparison(params.targetThreadId);
+  const targetThreadId =
+    explicitTargetThreadId ?? (target.threadId != null ? String(target.threadId) : undefined);
+  const originThreadId = origin.threadId != null ? String(origin.threadId) : undefined;
+  if (origin.to.trim().toLowerCase() !== target.to.trim().toLowerCase()) {
+    return false;
+  }
+  if (originThreadId && targetThreadId != null) {
+    return originThreadId === targetThreadId;
+  }
+  if (originThreadId && targetThreadId == null) {
+    return false;
+  }
+  if (!originThreadId && targetThreadId != null) {
+    return false;
+  }
+  // chatId already matched and neither side carries thread context.
+  return true;
+}
+
 export function shouldSuppressMessagingToolReplies(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   accountId?: string;
 }): boolean {
-  const provider = params.messageProvider?.trim().toLowerCase();
+  const provider = normalizeProviderForComparison(params.messageProvider);
   if (!provider) {
     return false;
   }
@@ -164,13 +255,14 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   return sentTargets.some((target) => {
-    if (!target?.provider) {
+    const targetProvider = resolveTargetProviderForComparison({
+      currentProvider: provider,
+      targetProvider: target?.provider,
+    });
+    if (targetProvider !== provider) {
       return false;
     }
-    if (target.provider.trim().toLowerCase() !== provider) {
-      return false;
-    }
-    const targetKey = normalizeTargetForProvider(provider, target.to);
+    const targetKey = normalizeTargetForProvider(targetProvider, target.to);
     if (!targetKey) {
       return false;
     }
@@ -178,6 +270,11 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;
     }
-    return targetKey === originTarget;
+    return targetsMatchForSuppression({
+      provider,
+      originTarget,
+      targetKey,
+      targetThreadId: target.threadId,
+    });
   });
 }

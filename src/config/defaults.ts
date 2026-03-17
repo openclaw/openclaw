@@ -10,6 +10,7 @@ import {
 } from "./talk.js";
 import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
+import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type WarnState = { warned: boolean };
 
@@ -23,12 +24,13 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   sonnet: "anthropic/claude-sonnet-4-6",
 
   // OpenAI
-  gpt: "openai/gpt-5.2",
+  gpt: "openai/gpt-5.4",
   "gpt-mini": "openai/gpt-5-mini",
 
   // Google Gemini (3.x are preview ids in the catalog)
-  gemini: "google/gemini-3-pro-preview",
+  gemini: "google/gemini-3.1-pro-preview",
   "gemini-flash": "google/gemini-3-flash-preview",
+  "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
@@ -176,28 +178,26 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
 
   const talk = normalized.talk;
   const active = resolveActiveTalkProviderConfig(talk);
-  if (active.provider && active.provider !== DEFAULT_TALK_PROVIDER) {
+  if (active?.provider && active.provider !== DEFAULT_TALK_PROVIDER) {
     return normalized;
   }
 
-  const existingProviderApiKey =
-    typeof active.config?.apiKey === "string" ? active.config.apiKey.trim() : "";
-  const existingLegacyApiKey = typeof talk?.apiKey === "string" ? talk.apiKey.trim() : "";
-  if (existingProviderApiKey || existingLegacyApiKey) {
+  const existingProviderApiKeyConfigured = hasConfiguredSecretInput(active?.config?.apiKey);
+  const existingLegacyApiKeyConfigured = hasConfiguredSecretInput(talk?.apiKey);
+  if (existingProviderApiKeyConfigured || existingLegacyApiKeyConfigured) {
     return normalized;
   }
 
-  const providerId = active.provider ?? DEFAULT_TALK_PROVIDER;
+  const providerId = active?.provider ?? DEFAULT_TALK_PROVIDER;
   const providers = { ...talk?.providers };
   const providerConfig = { ...providers[providerId], apiKey: resolved };
   providers[providerId] = providerConfig;
 
   const nextTalk = {
     ...talk,
+    apiKey: resolved,
     provider: talk?.provider ?? providerId,
     providers,
-    // Keep legacy shape populated during compatibility rollout.
-    apiKey: resolved,
   };
 
   return {

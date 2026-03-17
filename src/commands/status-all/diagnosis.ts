@@ -1,4 +1,5 @@
 import type { ProgressReporter } from "../../cli/progress.js";
+import { formatConfigIssueLine } from "../../config/issue-format.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { formatPortDiagnostics } from "../../infra/ports.js";
 import {
@@ -49,6 +50,7 @@ export async function appendStatusAllDiagnosis(params: {
   connectionDetailsForReport: string;
   snap: ConfigSnapshotLike | null;
   remoteUrlMissing: boolean;
+  secretDiagnostics: string[];
   sentinel: { payload?: RestartSentinelPayload | null } | null;
   lastErr: string | null;
   port: number;
@@ -88,7 +90,7 @@ export async function appendStatusAllDiagnosis(params: {
         issues.findIndex((x) => x.path === issue.path && x.message === issue.message) === index,
     );
     for (const issue of uniqueIssues.slice(0, 12)) {
-      lines.push(`  - ${issue.path}: ${issue.message}`);
+      lines.push(`  ${formatConfigIssueLine(issue, "-")}`);
     }
     if (uniqueIssues.length > 12) {
       lines.push(`  ${muted(`… +${uniqueIssues.length - 12} more`)}`);
@@ -101,6 +103,17 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push("");
     emitCheck("Gateway remote mode misconfigured (gateway.remote.url missing)", "warn");
     lines.push(`  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`);
+  }
+
+  emitCheck(
+    `Secret diagnostics (${params.secretDiagnostics.length})`,
+    params.secretDiagnostics.length === 0 ? "ok" : "warn",
+  );
+  for (const diagnostic of params.secretDiagnostics.slice(0, 10)) {
+    lines.push(`  - ${muted(redactSecrets(diagnostic))}`);
+  }
+  if (params.secretDiagnostics.length > 10) {
+    lines.push(`  ${muted(`… +${params.secretDiagnostics.length - 10} more`)}`);
   }
 
   if (params.sentinel?.payload) {

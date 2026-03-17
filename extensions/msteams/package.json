@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.2.25",
+  "version": "2026.3.14",
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
@@ -11,6 +11,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "msteams",
       "label": "Microsoft Teams",
@@ -27,6 +28,11 @@
       "npmSpec": "@openclaw/msteams",
       "localPath": "extensions/msteams",
       "defaultChoice": "npm"
+    },
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@microsoft/agents-hosting"
+      ]
     }
   }
 }
