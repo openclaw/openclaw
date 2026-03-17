@@ -158,6 +158,9 @@ importers:
       markdown-it:
         specifier: ^14.1.1
         version: 14.1.1
+      mcps-openclaw:
+        specifier: 1.0.0
+        version: 1.0.0
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
@@ -5285,6 +5288,14 @@ packages:
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
+
+  mcp-secure@1.0.4:
+    resolution: {integrity: sha512-hcIvehPdnYdKJKWnK6oQIr93mXxrteYDXkYcKVKQaX3y/0MLS+2PpBr5Zirf139AMz2Uu5VmLh/fY6QG9E9FbA==}
+    engines: {node: '>=18.0.0'}
+
+  mcps-openclaw@1.0.0:
+    resolution: {integrity: sha512-6rPNgl7YN7torh248LD2pm+oYE90AAnKxWoCbRdtVnxrzrIQbCt1oFnmPiMXnTkLjKcnXfJvnKy3jayuLK/iAg==}
+    engines: {node: '>=18.0.0'}
 
   mdast-util-to-hast@13.2.1:
     resolution: {integrity: sha512-cctsq2wp5vTsLIcaymblUriiTcZd0CwWtCbLvrOzYCDZoWyMNV8sZ7krj09FSnsiJi3WVsHLM4k6Dq/yaPyCXA==}
@@ -12546,6 +12557,12 @@ snapshots:
   marked@17.0.4: {}
 
   math-intrinsics@1.1.0: {}
+
+  mcp-secure@1.0.4: {}
+
+  mcps-openclaw@1.0.0:
+    dependencies:
+      mcp-secure: 1.0.4
 
   mdast-util-to-hast@13.2.1:
     dependencies:
