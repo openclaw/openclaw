@@ -3240,65 +3240,103 @@ description: test skill
     );
   });
 
-  it("does not scan plugin code safety findings when deep audit is disabled", async () => {
-    const cfg: OpenClawConfig = {};
-    const nonDeepRes = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      deep: false,
-      stateDir: sharedCodeSafetyStateDir,
-      execDockerRawFn: execDockerRawUnavailable,
-    });
-    expect(nonDeepRes.findings.some((f) => f.checkId === "plugins.code_safety")).toBe(false);
-
-    // Deep-mode positive coverage lives in the detailed plugin+skills code-safety test below.
-  });
-
-  it("reports detailed code-safety issues for both plugins and skills", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: sharedCodeSafetyWorkspaceDir } },
-    };
-    const [pluginFindings, skillFindings] = await Promise.all([
-      collectPluginsCodeSafetyFindings({ stateDir: sharedCodeSafetyStateDir }),
-      collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir: sharedCodeSafetyStateDir }),
-    ]);
-
-    const pluginFinding = pluginFindings.find(
-      (finding) => finding.checkId === "plugins.code_safety" && finding.severity === "critical",
-    );
-    expect(pluginFinding).toBeDefined();
-    expect(pluginFinding?.detail).toContain("dangerous-exec");
-    expect(pluginFinding?.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
-
-    const skillFinding = skillFindings.find(
-      (finding) => finding.checkId === "skills.code_safety" && finding.severity === "critical",
-    );
-    expect(skillFinding).toBeDefined();
-    expect(skillFinding?.detail).toContain("dangerous-exec");
-    expect(skillFinding?.detail).toMatch(/runner\.js:\d+/);
-  });
-
-  it("evaluates plugin code-safety scanner failure modes", async () => {
+  it("evaluates code-safety findings", async () => {
     const cases = [
       {
+        name: "does not scan plugin code safety findings when deep audit is disabled",
+        run: async () =>
+          runSecurityAudit({
+            config: {},
+            includeFilesystem: true,
+            includeChannelSecurity: false,
+            deep: false,
+            stateDir: sharedCodeSafetyStateDir,
+            execDockerRawFn: execDockerRawUnavailable,
+          }),
+        assert: (result: SecurityAuditReport) => {
+          expect(result.findings.some((f) => f.checkId === "plugins.code_safety")).toBe(false);
+        },
+      },
+      {
+        name: "reports detailed code-safety issues for both plugins and skills",
+        run: async () => {
+          const cfg: OpenClawConfig = {
+            agents: { defaults: { workspace: sharedCodeSafetyWorkspaceDir } },
+          };
+          const [pluginFindings, skillFindings] = await Promise.all([
+            collectPluginsCodeSafetyFindings({ stateDir: sharedCodeSafetyStateDir }),
+            collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir: sharedCodeSafetyStateDir }),
+          ]);
+          return { pluginFindings, skillFindings };
+        },
+        assert: (
+          result: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>> extends never
+            ? never
+            : {
+                pluginFindings: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>>;
+                skillFindings: Awaited<ReturnType<typeof collectInstalledSkillsCodeSafetyFindings>>;
+              },
+        ) => {
+          const pluginFinding = result.pluginFindings.find(
+            (finding) =>
+              finding.checkId === "plugins.code_safety" && finding.severity === "critical",
+          );
+          expect(pluginFinding).toBeDefined();
+          expect(pluginFinding?.detail).toContain("dangerous-exec");
+          expect(pluginFinding?.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
+
+          const skillFinding = result.skillFindings.find(
+            (finding) =>
+              finding.checkId === "skills.code_safety" && finding.severity === "critical",
+          );
+          expect(skillFinding).toBeDefined();
+          expect(skillFinding?.detail).toContain("dangerous-exec");
+          expect(skillFinding?.detail).toMatch(/runner\.js:\d+/);
+        },
+      },
+      {
         name: "flags plugin extension entry path traversal in deep audit",
-        label: "audit-scanner-escape",
-        pluginName: "escape-plugin",
-        extensions: ["../outside.js"],
+        run: async () => {
+          const tmpDir = await makeTmpDir("audit-scanner-escape");
+          const pluginDir = path.join(tmpDir, "extensions", "escape-plugin");
+          await fs.mkdir(pluginDir, { recursive: true });
+          await fs.writeFile(
+            path.join(pluginDir, "package.json"),
+            JSON.stringify({
+              name: "escape-plugin",
+              openclaw: { extensions: ["../outside.js"] },
+            }),
+          );
+          await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
+          return collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
+        },
         assert: (findings: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>>) => {
           expect(findings.some((f) => f.checkId === "plugins.code_safety.entry_escape")).toBe(true);
         },
       },
       {
         name: "reports scan_failed when plugin code scanner throws during deep audit",
-        label: "audit-scanner-throws",
-        pluginName: "scanfail-plugin",
-        extensions: ["index.js"],
-        beforeRun: () =>
-          vi
+        run: async () => {
+          const scanSpy = vi
             .spyOn(skillScanner, "scanDirectoryWithSummary")
-            .mockRejectedValueOnce(new Error("boom")),
+            .mockRejectedValueOnce(new Error("boom"));
+          try {
+            const tmpDir = await makeTmpDir("audit-scanner-throws");
+            const pluginDir = path.join(tmpDir, "extensions", "scanfail-plugin");
+            await fs.mkdir(pluginDir, { recursive: true });
+            await fs.writeFile(
+              path.join(pluginDir, "package.json"),
+              JSON.stringify({
+                name: "scanfail-plugin",
+                openclaw: { extensions: ["index.js"] },
+              }),
+            );
+            await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
+            return await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
+          } finally {
+            scanSpy.mockRestore();
+          }
+        },
         assert: (findings: Awaited<ReturnType<typeof collectPluginsCodeSafetyFindings>>) => {
           expect(findings.some((f) => f.checkId === "plugins.code_safety.scan_failed")).toBe(true);
         },
@@ -3306,25 +3344,8 @@ description: test skill
     ] as const;
 
     for (const testCase of cases) {
-      const scanSpy = testCase.beforeRun?.();
-      try {
-        const tmpDir = await makeTmpDir(testCase.label);
-        const pluginDir = path.join(tmpDir, "extensions", testCase.pluginName);
-        await fs.mkdir(pluginDir, { recursive: true });
-        await fs.writeFile(
-          path.join(pluginDir, "package.json"),
-          JSON.stringify({
-            name: testCase.pluginName,
-            openclaw: { extensions: testCase.extensions },
-          }),
-        );
-        await fs.writeFile(path.join(pluginDir, "index.js"), "export {};");
-
-        const findings = await collectPluginsCodeSafetyFindings({ stateDir: tmpDir });
-        testCase.assert(findings);
-      } finally {
-        scanSpy?.mockRestore();
-      }
+      const result = await testCase.run();
+      testCase.assert(result as never);
     }
   });
 
