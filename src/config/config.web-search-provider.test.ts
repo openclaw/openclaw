@@ -59,6 +59,11 @@ vi.mock("../plugins/web-search-providers.js", () => {
         getCredentialValue: getScoped("perplexity"),
         getConfiguredCredentialValue: getConfigured("perplexity"),
       },
+      {
+        id: "tavily",
+        envVars: ["TAVILY_API_KEY"],
+        getCredentialValue: getScoped("tavily"),
+      },
     ],
   };
 });

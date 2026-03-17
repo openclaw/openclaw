@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
+  DEFAULT_TAVILY_BASE_URL,
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
   resolveTavilyExtractTimeoutSeconds,
@@ -26,7 +27,6 @@ const EXTRACT_CACHE = new Map<
 >();
 const DEFAULT_SEARCH_COUNT = 5;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
-const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
 
 export type TavilySearchParams = {
   cfg?: OpenClawConfig;
@@ -58,10 +58,9 @@ function resolveEndpoint(baseUrl: string, pathname: string): string {
   }
   try {
     const url = new URL(trimmed);
-    if (url.pathname && url.pathname !== "/") {
-      return url.toString();
-    }
-    url.pathname = pathname;
+    // Always append the endpoint pathname to the base URL path,
+    // supporting both bare hosts and reverse-proxy path prefixes.
+    url.pathname = url.pathname.replace(/\/$/, "") + pathname;
     return url.toString();
   } catch {
     return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
@@ -210,6 +209,7 @@ export async function runTavilyExtract(
     JSON.stringify({
       type: "tavily-extract",
       urls: params.urls,
+      baseUrl,
       query: params.query,
       extractDepth: params.extractDepth,
       chunksPerSource: params.chunksPerSource,
@@ -247,7 +247,13 @@ export async function runTavilyExtract(
     ...(typeof r.content === "string"
       ? { content: wrapExternalContent(r.content, { source: "web_fetch", includeWarning: false }) }
       : {}),
-    ...(Array.isArray(r.images) ? { images: r.images } : {}),
+    ...(Array.isArray(r.images)
+      ? {
+          images: (r.images as string[]).map((img) =>
+            wrapExternalContent(String(img), { source: "web_fetch", includeWarning: false }),
+          ),
+        }
+      : {}),
   }));
 
   const failedResults = Array.isArray(payload.failed_results) ? payload.failed_results : [];
