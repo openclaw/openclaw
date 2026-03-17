@@ -1033,7 +1033,7 @@ export function createWebFetchTool(options?: {
   );
   const parallelExtract = resolveParallelExtractConfig(fetch);
   const parallelExtractApiKey =
-    parallelExtract?.enabled !== false ? resolveParallelExtractApiKey(parallelExtract) : undefined;
+    parallelExtract?.enabled === true ? resolveParallelExtractApiKey(parallelExtract) : undefined;
   const parallelExtractEnabled = resolveParallelExtractEnabled({
     parallel: parallelExtract,
     apiKey: parallelExtractApiKey,
