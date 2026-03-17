@@ -29,6 +29,7 @@ curl -H "Authorization: Bearer $APERTIS_API_KEY" \
 ```
 
 Expected response:
+
 ```json
 {
   "object": "list",
@@ -61,6 +62,7 @@ openclaw model list --provider apertis
 ```
 
 Expected output:
+
 ```
 Provider: apertis
 ├── gpt-5.2 (Premium, Reasoning)
@@ -85,6 +87,7 @@ Provider: apertis
 #### 1. Obtain Apertis API Key
 
 **Option A: Web Console**
+
 ```
 1. Visit https://console.apertis.ai
 2. Sign in with your account
@@ -95,6 +98,7 @@ Provider: apertis
 ```
 
 **Option B: CLI**
+
 ```bash
 apertis auth login
 apertis api-keys create --name "OpenClaw Integration"
@@ -184,6 +188,7 @@ openclaw chat --model gpt-5.2 --message "What is 2+2?"
 ```
 
 Response:
+
 ```
 Assistant: 2 + 2 = 4.
 ```
@@ -198,6 +203,7 @@ openclaw chat \
 ```
 
 Response:
+
 ```
 Thinking: The user is asking me to solve a linear equation...
 [reasoning process]
@@ -226,49 +232,43 @@ openclaw chat \
 ### Programmatic Usage (Node.js)
 
 ```javascript
-const { OpenClaw } = require('openclaw');
+const { OpenClaw } = require("openclaw");
 
 const client = new OpenClaw({
-  provider: 'apertis',
-  apiKey: process.env.APERTIS_API_KEY
+  provider: "apertis",
+  apiKey: process.env.APERTIS_API_KEY,
 });
 
 // Chat completion
 const response = await client.chat.completions.create({
-  model: 'gpt-5.2',
-  messages: [
-    { role: 'user', content: 'Hello!' }
-  ]
+  model: "gpt-5.2",
+  messages: [{ role: "user", content: "Hello!" }],
 });
 
 console.log(response.choices[0].message.content);
 
 // With thinking
 const reasoning = await client.chat.completions.create({
-  model: 'gpt-5.2',
-  messages: [
-    { role: 'user', content: 'Solve: 2x + 5 = 13' }
-  ],
+  model: "gpt-5.2",
+  messages: [{ role: "user", content: "Solve: 2x + 5 = 13" }],
   thinking: {
-    type: 'enabled',
-    budget_tokens: 5000
-  }
+    type: "enabled",
+    budget_tokens: 5000,
+  },
 });
 
-console.log('Thinking:', reasoning.choices[0].message.thinking.content);
-console.log('Answer:', reasoning.choices[0].message.content);
+console.log("Thinking:", reasoning.choices[0].message.thinking.content);
+console.log("Answer:", reasoning.choices[0].message.content);
 
 // Streaming
 const stream = await client.chat.completions.create({
-  model: 'gpt-4.1',
-  messages: [
-    { role: 'user', content: 'Write a story' }
-  ],
-  stream: true
+  model: "gpt-4.1",
+  messages: [{ role: "user", content: "Write a story" }],
+  stream: true,
 });
 
 for await (const chunk of stream) {
-  process.stdout.write(chunk.choices[0].delta.content || '');
+  process.stdout.write(chunk.choices[0].delta.content || "");
 }
 ```
 
@@ -327,11 +327,13 @@ for chunk in stream:
 ### Issue: "Invalid API Key"
 
 **Symptom:**
+
 ```
 Error: 401 Unauthorized - Invalid API key
 ```
 
 **Solution:**
+
 1. Verify key format: `sk-proj-...`
 2. Check expiration: `apertis api-keys list`
 3. Regenerate if needed: `apertis api-keys create`
@@ -340,11 +342,13 @@ Error: 401 Unauthorized - Invalid API key
 ### Issue: "Connection Refused"
 
 **Symptom:**
+
 ```
 Error: ECONNREFUSED - Cannot reach api.apertis.ai
 ```
 
 **Solution:**
+
 1. Check network: `ping api.apertis.ai`
 2. Verify DNS: `nslookup api.apertis.ai`
 3. Check firewall: `curl -v https://api.apertis.ai/v1/models`
@@ -353,11 +357,13 @@ Error: ECONNREFUSED - Cannot reach api.apertis.ai
 ### Issue: "Model Not Found"
 
 **Symptom:**
+
 ```
 Error: 404 Not Found - Model gpt-5.2 not found
 ```
 
 **Solution:**
+
 1. List available models: `openclaw model list --provider apertis`
 2. Check model ID spelling
 3. Verify model is enabled in config
@@ -366,11 +372,13 @@ Error: 404 Not Found - Model gpt-5.2 not found
 ### Issue: "Rate Limited"
 
 **Symptom:**
+
 ```
 Error: 429 Too Many Requests - Rate limit exceeded
 ```
 
 **Solution:**
+
 1. Check rate limit: `apertis account info`
 2. Upgrade tier: https://console.apertis.ai/billing
 3. Implement backoff: OpenClaw auto-retries with exponential backoff
@@ -379,11 +387,13 @@ Error: 429 Too Many Requests - Rate limit exceeded
 ### Issue: "Thinking Mode Not Supported"
 
 **Symptom:**
+
 ```
 Error: 400 Bad Request - Model does not support thinking
 ```
 
 **Solution:**
+
 1. Use gpt-5.2 (only model with thinking)
 2. Check model capabilities: `openclaw model info gpt-5.2`
 3. Verify thinking is enabled in config
@@ -391,11 +401,13 @@ Error: 400 Bad Request - Model does not support thinking
 ### Issue: "Vision Not Supported"
 
 **Symptom:**
+
 ```
 Error: 400 Bad Request - Model does not support vision
 ```
 
 **Solution:**
+
 1. Use gpt-5.2, gpt-4.1, or gpt-4-turbo
 2. Verify image URL is accessible
 3. Check image format (JPEG, PNG, WebP, GIF)
@@ -412,6 +424,7 @@ openclaw dashboard --provider apertis
 ```
 
 Displays:
+
 - Total requests
 - Token usage (input/output/thinking)
 - Cost breakdown
@@ -578,14 +591,17 @@ openclaw export audit-log \
 ### Regular Tasks
 
 **Daily:**
+
 - Monitor error rate (target: < 1%)
 - Check cost tracking
 
 **Weekly:**
+
 - Review usage trends
 - Verify all models are responding
 
 **Monthly:**
+
 - Rotate API keys
 - Update provider config if new models available
 - Review security logs
