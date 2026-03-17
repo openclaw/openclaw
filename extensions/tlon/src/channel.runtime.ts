@@ -7,7 +7,12 @@ import type {
 } from "openclaw/plugin-sdk/tlon";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
-import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
+import {
+  formatTargetHint,
+  normalizeShip,
+  parseTlonTarget,
+  resolveTlonOutboundTarget,
+} from "./targets.js";
 import { resolveTlonAccount } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
 import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
@@ -131,19 +136,7 @@ async function withHttpPokeAccountApi<T>(
 export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 10000,
-  resolveTarget: ({ to }) => {
-    const parsed = parseTlonTarget(to ?? "");
-    if (!parsed) {
-      return {
-        ok: false,
-        error: new Error(`Invalid Tlon target. Use ${formatTargetHint()}`),
-      };
-    }
-    if (parsed.kind === "dm") {
-      return { ok: true, to: parsed.ship };
-    }
-    return { ok: true, to: parsed.nest };
-  },
+  resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
     const { account, parsed } = resolveOutboundContext({ cfg, accountId, to });
     return withHttpPokeAccountApi(account, async (api) => {

@@ -6,7 +6,12 @@ import {
   resolveTlonSetupConfigured,
   tlonSetupAdapter,
 } from "./setup-core.js";
-import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
+import {
+  formatTargetHint,
+  normalizeShip,
+  parseTlonTarget,
+  resolveTlonOutboundTarget,
+} from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { validateUrbitBaseUrl } from "./urbit/base-url.js";
 
@@ -151,19 +156,7 @@ export const tlonPlugin: ChannelPlugin = {
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 10000,
-    resolveTarget: ({ to }) => {
-      const parsed = parseTlonTarget(to ?? "");
-      if (!parsed) {
-        return {
-          ok: false,
-          error: new Error(`Invalid Tlon target. Use ${formatTargetHint()}`),
-        };
-      }
-      if (parsed.kind === "dm") {
-        return { ok: true, to: parsed.ship };
-      }
-      return { ok: true, to: parsed.nest };
-    },
+    resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
     sendText: async (params) =>
       await (
         await loadTlonChannelRuntime()
