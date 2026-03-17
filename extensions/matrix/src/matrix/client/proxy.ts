@@ -1,23 +1,36 @@
-import { setGlobalDispatcher, EnvHttpProxyAgent, type Dispatcher } from "undici";
+import {
+  setGlobalDispatcher,
+  getGlobalDispatcher,
+  EnvHttpProxyAgent,
+  type Dispatcher,
+} from "undici";
 import { getMatrixLogService } from "../sdk-runtime.js";
 
 let proxyConfigured = false;
+const initialDispatcher = getGlobalDispatcher();
+
+function stripControlChars(value: string): string {
+  return value.replace(/[\u0000-\u001F\u007F]/g, "");
+}
 
 /**
  * Sanitize a proxy URL for logging by removing embedded credentials.
- * e.g., "http://user:pass@proxy:8080" -> "http://***@proxy:8080"
+ * e.g., "http://user:pass@proxy:8080" -> "http://***:***@proxy:8080"
  */
 function sanitizeProxyUrlForLogging(proxyUrl: string): string {
+  const cleaned = stripControlChars(proxyUrl);
   try {
-    const url = new URL(proxyUrl);
-    if (url.username || url.password) {
+    const url = new URL(cleaned);
+    if (url.username) {
       url.username = "***";
+    }
+    if (url.password) {
       url.password = "***";
     }
     return url.toString();
   } catch {
-    // If URL parsing fails, mask anything that looks like credentials
-    return proxyUrl.replace(/\/\/[^@]+@/, "//***@");
+    // Covers both scheme://userinfo@host and userinfo@host (no scheme)
+    return cleaned.replace(/\/\/[^@\s]+@/g, "//***@").replace(/^[^@\s]+@/g, "***@");
   }
 }
 
@@ -26,8 +39,7 @@ function sanitizeProxyUrlForLogging(proxyUrl: string): string {
  */
 function sanitizeErrorForLogging(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
-  // Mask anything that looks like credentials in URLs
-  return msg.replace(/:\/\/[^@\s]+@/g, "://***@");
+  return stripControlChars(msg).replace(/:\/\/[^@\s]+@/g, "://***@");
 }
 
 /**
@@ -72,8 +84,6 @@ export function configureMatrixProxy(env: NodeJS.ProcessEnv = process.env): bool
   }
 
   try {
-    // Use EnvHttpProxyAgent and pass explicit proxy values so MATRIX_PROXY / ALL_PROXY
-    // are honored even though they are not native EnvHttpProxyAgent env names.
     const proxyAgent = new EnvHttpProxyAgent({
       httpProxy: proxyUrl,
       httpsProxy: proxyUrl,
@@ -83,13 +93,11 @@ export function configureMatrixProxy(env: NodeJS.ProcessEnv = process.env): bool
     proxyConfigured = true;
 
     const LogService = getMatrixLogService();
-    // Sanitize URL to avoid logging credentials
     const safeUrl = sanitizeProxyUrlForLogging(proxyUrl);
     LogService.info("MatrixProxy", `Configured global proxy: ${safeUrl}`);
     return true;
   } catch (err) {
     const LogService = getMatrixLogService();
-    // Sanitize error to avoid leaking credentials
     LogService.warn("MatrixProxy", `Failed to configure proxy: ${sanitizeErrorForLogging(err)}`);
     return false;
   }
@@ -108,4 +116,5 @@ export function isMatrixProxyConfigured(): boolean {
  */
 export function resetProxyStateForTesting(): void {
   proxyConfigured = false;
+  setGlobalDispatcher(initialDispatcher);
 }

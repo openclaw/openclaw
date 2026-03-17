@@ -1,3 +1,4 @@
+import { getGlobalDispatcher } from "undici";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   resolveMatrixProxyUrl,
@@ -110,6 +111,17 @@ describe("Matrix proxy support", () => {
 
       expect(configureMatrixProxy(process.env)).toBe(true);
       expect(isMatrixProxyConfigured()).toBe(true);
+    });
+
+    it("restores initial global dispatcher on reset", () => {
+      const initial = getGlobalDispatcher();
+      process.env.MATRIX_PROXY = "http://matrix-proxy:8080";
+
+      expect(configureMatrixProxy(process.env)).toBe(true);
+      expect(getGlobalDispatcher()).not.toBe(initial);
+
+      resetProxyStateForTesting();
+      expect(getGlobalDispatcher()).toBe(initial);
     });
   });
 });
