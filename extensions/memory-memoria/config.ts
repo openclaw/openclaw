@@ -389,7 +389,7 @@ function parseMemoryTypes(value: unknown): MemoriaMemoryType[] | undefined {
     }
     parsed.push(normalized);
   }
-  return parsed.length > 0 ? parsed : undefined;
+  return parsed;
 }
 
 function resolveEnvVars(value: string): string {

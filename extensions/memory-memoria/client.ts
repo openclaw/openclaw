@@ -476,7 +476,7 @@ class MemoriaEmbeddedClient implements MemoriaClientOps {
 
   private unsupported(): never {
     const base = `${EMBEDDED_UNAVAILABLE_MESSAGE} configured pythonExecutable=${this.config.pythonExecutable}`;
-    const extras = this.config.dbUrl ? ` dbUrl=${this.config.dbUrl}` : "";
+    const extras = this.config.dbUrl ? " dbUrl=<redacted>" : "";
     throw new Error(`${base}${extras}`);
   }
 

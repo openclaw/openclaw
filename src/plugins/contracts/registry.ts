@@ -166,7 +166,7 @@ export const providerContractPluginIds = [
 ].toSorted((left, right) => left.localeCompare(right));
 
 export const providerContractCompatPluginIds = providerContractPluginIds.map((pluginId) =>
-  pluginId === "kimi-coding" ? "kimi" : pluginId,
+  pluginId === "kimi" ? "kimi-coding" : pluginId,
 );
 
 export function requireProviderContractProvider(providerId: string): ProviderPlugin {

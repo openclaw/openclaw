@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/memory-memoria";
 import { MemoriaClient, type MemoriaMemoryRecord } from "./client.js";
@@ -39,6 +40,17 @@ const MEMORY_CAPTURE_TRIGGERS = [
   /[\w.-]+@[\w.-]+\.[a-z]{2,}/i,
   /\+\d{8,}/,
 ];
+
+const MEMORY_CAPTURE_BLOCKLIST = [
+  /ignore\s+(all\s+)?(previous|prior|earlier)\s+instructions?/i,
+  /disregard\s+(all\s+)?(previous|prior|earlier)\s+instructions?/i,
+  /(?:system|developer)\s+prompt/i,
+  /jailbreak/i,
+  /<tool_call>/i,
+];
+
+const AUTO_OBSERVE_SCOPE_CACHE_MAX = 256;
+const AUTO_OBSERVE_HASH_CACHE_MAX = 128;
 
 function resolveUserId(
   config: MemoriaPluginConfig,
@@ -202,7 +214,44 @@ function shouldCaptureMemory(text: string, maxChars: number): boolean {
   if (text.includes("<relevant-memories>")) {
     return false;
   }
+  if (MEMORY_CAPTURE_BLOCKLIST.some((pattern) => pattern.test(text))) {
+    return false;
+  }
   return MEMORY_CAPTURE_TRIGGERS.some((pattern) => pattern.test(text));
+}
+
+function hashObserveCandidate(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function resolveAutoObserveScope(ctx: PluginIdentityContext, userId: string): string {
+  return ctx.sessionId?.trim() || ctx.sessionKey?.trim() || ctx.agentId?.trim() || `user:${userId}`;
+}
+
+function getAutoObserveFingerprints(cache: Map<string, Set<string>>, scope: string): Set<string> {
+  const existing = cache.get(scope);
+  if (existing) {
+    return existing;
+  }
+  if (cache.size >= AUTO_OBSERVE_SCOPE_CACHE_MAX) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey) {
+      cache.delete(firstKey);
+    }
+  }
+  const created = new Set<string>();
+  cache.set(scope, created);
+  return created;
+}
+
+function rememberAutoObservedFingerprint(cache: Set<string>, fingerprint: string): void {
+  if (cache.size >= AUTO_OBSERVE_HASH_CACHE_MAX) {
+    const first = cache.values().next().value;
+    if (first) {
+      cache.delete(first);
+    }
+  }
+  cache.add(fingerprint);
 }
 
 function collectRecentUserMessages(
@@ -255,6 +304,7 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     const config = parseMemoriaPluginConfig(api.pluginConfig);
     const client = new MemoriaClient(config, { logger: api.logger });
+    const autoObserveFingerprintsByScope = new Map<string, Set<string>>();
 
     api.logger.info(`memory-memoria: registered (${config.backend})`);
 
@@ -494,7 +544,7 @@ const plugin = {
             const params = asRecord(rawParams) ?? {};
             const memoryId = readString(params, "memoryId");
             const query = readString(params, "query");
-            const reason = readString(params, "reason") ?? "";
+            const reason = readString(params, "reason");
             const userId = resolveUserId(config, ctx, readString(params, "userId"));
 
             if (!memoryId && !query) {
@@ -724,9 +774,20 @@ const plugin = {
       }
 
       const userId = resolveUserId(config, ctx);
+      const observeScope = resolveAutoObserveScope(ctx, userId);
+      const seenFingerprints = getAutoObserveFingerprints(
+        autoObserveFingerprintsByScope,
+        observeScope,
+      );
       let stored = 0;
 
-      for (const text of candidates.slice(-3)) {
+      const uniqueCandidates = Array.from(new Set(candidates.slice(-3)));
+
+      for (const text of uniqueCandidates) {
+        const fingerprint = hashObserveCandidate(text);
+        if (seenFingerprints.has(fingerprint)) {
+          continue;
+        }
         try {
           await client.storeMemory({
             userId,
@@ -735,6 +796,7 @@ const plugin = {
             sessionId: ctx.sessionId,
             source: "openclaw:auto_observe",
           });
+          rememberAutoObservedFingerprint(seenFingerprints, fingerprint);
           stored += 1;
         } catch (error) {
           api.logger.warn(

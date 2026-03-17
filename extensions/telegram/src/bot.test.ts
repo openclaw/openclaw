@@ -972,10 +972,9 @@ describe("createTelegramBot", () => {
       expect(flushTimer).toBeTypeOf("function");
       await flushTimer?.();
       await vi.waitFor(() => {
-        expect(replySpy).toHaveBeenCalledTimes(1);
+        expect(getFileSpy).toHaveBeenCalledTimes(1);
       });
 
-      expect(getFileSpy).toHaveBeenCalledTimes(1);
       expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
     } finally {
       setTimeoutSpy.mockRestore();

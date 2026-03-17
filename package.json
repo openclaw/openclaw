@@ -94,6 +94,10 @@
       "types": "./dist/plugin-sdk/channel-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-runtime.js"
     },
+    "./plugin-sdk/channel-lifecycle": {
+      "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
+      "default": "./dist/plugin-sdk/channel-lifecycle.js"
+    },
     "./plugin-sdk/infra-runtime": {
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"

@@ -27,11 +27,11 @@
           userIdStrategy: "sessionKey",
           autoRecall: true,
           autoObserve: false,
-          retrieveTopK: 5
-        }
-      }
-    }
-  }
+          retrieveTopK: 5,
+        },
+      },
+    },
+  },
 }
 ```
 

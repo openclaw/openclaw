@@ -13,6 +13,7 @@
   "config-runtime",
   "reply-runtime",
   "channel-runtime",
+  "channel-lifecycle",
   "infra-runtime",
   "media-runtime",
   "media-understanding-runtime",

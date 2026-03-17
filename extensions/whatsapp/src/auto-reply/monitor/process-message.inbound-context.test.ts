@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as providerDispatcherModule from "../../../../../src/auto-reply/reply/provider-dispatcher.js";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/suites.js";
+import * as deliverReplyModule from "../deliver-reply.js";
+import * as lastRouteModule from "./last-route.js";
 
 let capturedCtx: unknown;
 let capturedDispatchParams: unknown;
@@ -83,31 +86,30 @@ function createWhatsAppDirectStreamingArgs(params?: {
   });
 }
 
-vi.mock("../../../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
+import { processMessage } from "./process-message.js";
+
+const dispatchReplyWithBufferedBlockDispatcherSpy = vi
+  .spyOn(providerDispatcherModule, "dispatchReplyWithBufferedBlockDispatcher")
   // oxlint-disable-next-line typescript/no-explicit-any
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
+  .mockImplementation(async (params: any) => {
     capturedDispatchParams = params;
     capturedCtx = params.ctx;
-    return { queuedFinal: false };
-  }),
-}));
-
-vi.mock("./last-route.js", () => ({
-  trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+  });
+const trackBackgroundTaskSpy = vi
+  .spyOn(lastRouteModule, "trackBackgroundTask")
+  .mockImplementation((tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
     tasks.add(task);
     void task.finally(() => {
       tasks.delete(task);
     });
-  },
-  updateLastRouteInBackground: vi.fn(),
-}));
-
-vi.mock("../deliver-reply.js", () => ({
-  deliverWebReply: deliverWebReplyMock,
-}));
-
-import { updateLastRouteInBackground } from "./last-route.js";
-import { processMessage } from "./process-message.js";
+  });
+const updateLastRouteInBackgroundSpy = vi
+  .spyOn(lastRouteModule, "updateLastRouteInBackground")
+  .mockImplementation(() => {});
+const deliverWebReplySpy = vi
+  .spyOn(deliverReplyModule, "deliverWebReply")
+  .mockImplementation(deliverWebReplyMock as typeof deliverReplyModule.deliverWebReply);
 
 describe("web processMessage inbound context", () => {
   beforeEach(async () => {
@@ -115,6 +117,10 @@ describe("web processMessage inbound context", () => {
     capturedDispatchParams = undefined;
     backgroundTasks = new Set();
     deliverWebReplyMock.mockClear();
+    dispatchReplyWithBufferedBlockDispatcherSpy.mockClear();
+    trackBackgroundTaskSpy.mockClear();
+    updateLastRouteInBackgroundSpy.mockClear();
+    deliverWebReplySpy.mockClear();
     sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-process-message-"));
     sessionStorePath = path.join(sessionDir, "sessions.json");
   });
@@ -125,6 +131,13 @@ describe("web processMessage inbound context", () => {
       await fs.rm(sessionDir, { recursive: true, force: true });
       sessionDir = undefined;
     }
+  });
+
+  afterAll(() => {
+    dispatchReplyWithBufferedBlockDispatcherSpy.mockRestore();
+    trackBackgroundTaskSpy.mockRestore();
+    updateLastRouteInBackgroundSpy.mockRestore();
+    deliverWebReplySpy.mockRestore();
   });
 
   async function processSelfDirectMessage(cfg: unknown) {
@@ -324,7 +337,7 @@ describe("web processMessage inbound context", () => {
   });
 
   it("updates main last route for DM when session key matches main session key", async () => {
-    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    const updateLastRouteMock = updateLastRouteInBackgroundSpy;
     updateLastRouteMock.mockClear();
 
     const args = makeProcessMessageArgs({
@@ -351,7 +364,7 @@ describe("web processMessage inbound context", () => {
   });
 
   it("does not update main last route for isolated DM scope sessions", async () => {
-    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    const updateLastRouteMock = updateLastRouteInBackgroundSpy;
     updateLastRouteMock.mockClear();
 
     const args = makeProcessMessageArgs({
@@ -412,7 +425,7 @@ describe("web processMessage inbound context", () => {
   }
 
   it("does not update main last route for non-owner sender when main DM scope is pinned", async () => {
-    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    const updateLastRouteMock = updateLastRouteInBackgroundSpy;
     updateLastRouteMock.mockClear();
 
     const args = makePinnedMainScopeArgs({
@@ -427,7 +440,7 @@ describe("web processMessage inbound context", () => {
   });
 
   it("updates main last route for owner sender when main DM scope is pinned", async () => {
-    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    const updateLastRouteMock = updateLastRouteInBackgroundSpy;
     updateLastRouteMock.mockClear();
 
     const args = makePinnedMainScopeArgs({
