@@ -38,7 +38,7 @@ See the [full reference](/gateway/configuration-reference) for every available f
 <Tabs>
   <Tab title="Interactive wizard">
     ```bash
-    openclaw onboard       # full setup wizard
+    openclaw onboard       # full onboarding flow
     openclaw configure     # config wizard
     ```
   </Tab>
@@ -170,8 +170,38 @@ When validation fails:
     ```
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
-    - **Text patterns**: regex patterns in `mentionPatterns`
+    - **Text patterns**: safe regex patterns in `mentionPatterns`
     - See [full reference](/gateway/configuration-reference#group-chat-mention-gating) for per-channel overrides and self-chat mode.
+
+  </Accordion>
+
+  <Accordion title="Tune gateway channel health monitoring">
+    Control how aggressively the gateway restarts channels that look stale:
+
+    ```json5
+    {
+      gateway: {
+        channelHealthCheckMinutes: 5,
+        channelStaleEventThresholdMinutes: 30,
+        channelMaxRestartsPerHour: 10,
+      },
+      channels: {
+        telegram: {
+          healthMonitor: { enabled: false },
+          accounts: {
+            alerts: {
+              healthMonitor: { enabled: true },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    - Set `gateway.channelHealthCheckMinutes: 0` to disable health-monitor restarts globally.
+    - `channelStaleEventThresholdMinutes` should be greater than or equal to the check interval.
+    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to disable auto-restarts for one channel or account without disabling the global monitor.
+    - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
 
   </Accordion>
 
@@ -567,11 +597,11 @@ Rules:
   },
   skills: {
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         apiKey: {
           source: "file",
           provider: "filemain",
-          id: "/skills/entries/nano-banana-pro/apiKey",
+          id: "/skills/entries/image-lab/apiKey",
         },
       },
     },
