@@ -1690,35 +1690,53 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     ).toBe(true);
   });
 
-  it("registers http routes with auth and match options", () => {
+  it("registers plugin http routes", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "http-demo",
-      filename: "http-demo.cjs",
-      body: `module.exports = { id: "http-demo", register(api) {
-  api.registerHttpRoute({
-    path: "/webhook",
-    auth: "plugin",
-    match: "prefix",
-    handler: async () => false
-  });
-} };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["http-demo"],
+    const scenarios = [
+      {
+        label: "defaults exact match",
+        pluginId: "http-route-demo",
+        routeOptions:
+          '{ path: "/demo", auth: "gateway", handler: async (_req, res) => { res.statusCode = 200; res.end("ok"); } }',
+        expectedPath: "/demo",
+        expectedAuth: "gateway",
+        expectedMatch: "exact",
       },
-    });
+      {
+        label: "keeps explicit auth and match options",
+        pluginId: "http-demo",
+        routeOptions:
+          '{ path: "/webhook", auth: "plugin", match: "prefix", handler: async () => false }',
+        expectedPath: "/webhook",
+        expectedAuth: "plugin",
+        expectedMatch: "prefix",
+      },
+    ] as const;
 
-    const route = registry.httpRoutes.find((entry) => entry.pluginId === "http-demo");
-    expect(route).toBeDefined();
-    expect(route?.path).toBe("/webhook");
-    expect(route?.auth).toBe("plugin");
-    expect(route?.match).toBe("prefix");
-    const httpPlugin = registry.plugins.find((entry) => entry.id === "http-demo");
-    expect(httpPlugin?.httpRoutes).toBe(1);
+    for (const scenario of scenarios) {
+      const plugin = writePlugin({
+        id: scenario.pluginId,
+        filename: `${scenario.pluginId}.cjs`,
+        body: `module.exports = { id: "${scenario.pluginId}", register(api) {
+  api.registerHttpRoute(${scenario.routeOptions});
+} };`,
+      });
+
+      const registry = loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: [scenario.pluginId],
+        },
+      });
+
+      const route = registry.httpRoutes.find((entry) => entry.pluginId === scenario.pluginId);
+      expect(route, scenario.label).toBeDefined();
+      expect(route?.path, scenario.label).toBe(scenario.expectedPath);
+      expect(route?.auth, scenario.label).toBe(scenario.expectedAuth);
+      expect(route?.match, scenario.label).toBe(scenario.expectedMatch);
+      const httpPlugin = registry.plugins.find((entry) => entry.id === scenario.pluginId);
+      expect(httpPlugin?.httpRoutes, scenario.label).toBe(1);
+    }
   });
 
   it("rejects duplicate plugin registrations", () => {
@@ -1941,146 +1959,140 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     expect(loaded?.error).not.toContain("api.registerHttpHandler(...) was removed");
   });
 
-  it("rejects plugin http routes missing explicit auth", () => {
+  it("enforces plugin http route validation and conflict rules", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "http-route-missing-auth",
-      filename: "http-route-missing-auth.cjs",
-      body: `module.exports = { id: "http-route-missing-auth", register(api) {
+    const scenarios = [
+      {
+        label: "missing auth is rejected",
+        buildPlugins: () => [
+          writePlugin({
+            id: "http-route-missing-auth",
+            filename: "http-route-missing-auth.cjs",
+            body: `module.exports = { id: "http-route-missing-auth", register(api) {
   api.registerHttpRoute({ path: "/demo", handler: async () => true });
 } };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["http-route-missing-auth"],
-      },
-    });
-
-    expect(registry.httpRoutes.find((entry) => entry.pluginId === "http-route-missing-auth")).toBe(
-      undefined,
-    );
-    expect(
-      registry.diagnostics.some((diag) =>
-        String(diag.message).includes("http route registration missing or invalid auth"),
-      ),
-    ).toBe(true);
-  });
-
-  it("allows explicit replaceExisting for same-plugin http route overrides", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "http-route-replace-self",
-      filename: "http-route-replace-self.cjs",
-      body: `module.exports = { id: "http-route-replace-self", register(api) {
-  api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => false });
-  api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });
-} };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["http-route-replace-self"],
-      },
-    });
-
-    const routes = registry.httpRoutes.filter(
-      (entry) => entry.pluginId === "http-route-replace-self",
-    );
-    expect(routes).toHaveLength(1);
-    expect(routes[0]?.path).toBe("/demo");
-    expect(registry.diagnostics).toEqual([]);
-  });
-
-  it("rejects http route replacement when another plugin owns the route", () => {
-    useNoBundledPlugins();
-    const first = writePlugin({
-      id: "http-route-owner-a",
-      filename: "http-route-owner-a.cjs",
-      body: `module.exports = { id: "http-route-owner-a", register(api) {
-  api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => false });
-} };`,
-    });
-    const second = writePlugin({
-      id: "http-route-owner-b",
-      filename: "http-route-owner-b.cjs",
-      body: `module.exports = { id: "http-route-owner-b", register(api) {
-  api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });
-} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          load: { paths: [first.file, second.file] },
-          allow: ["http-route-owner-a", "http-route-owner-b"],
+          }),
+        ],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(
+            registry.httpRoutes.find((entry) => entry.pluginId === "http-route-missing-auth"),
+          ).toBeUndefined();
+          expect(
+            registry.diagnostics.some((diag) =>
+              String(diag.message).includes("http route registration missing or invalid auth"),
+            ),
+          ).toBe(true);
         },
       },
-    });
-
-    const route = registry.httpRoutes.find((entry) => entry.path === "/demo");
-    expect(route?.pluginId).toBe("http-route-owner-a");
-    expect(
-      registry.diagnostics.some((diag) =>
-        String(diag.message).includes("http route replacement rejected"),
-      ),
-    ).toBe(true);
-  });
-
-  it("rejects mixed-auth overlapping http routes", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "http-route-overlap",
-      filename: "http-route-overlap.cjs",
-      body: `module.exports = { id: "http-route-overlap", register(api) {
+      {
+        label: "same plugin can replace its own route",
+        buildPlugins: () => [
+          writePlugin({
+            id: "http-route-replace-self",
+            filename: "http-route-replace-self.cjs",
+            body: `module.exports = { id: "http-route-replace-self", register(api) {
+  api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => false });
+  api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });
+} };`,
+          }),
+        ],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const routes = registry.httpRoutes.filter(
+            (entry) => entry.pluginId === "http-route-replace-self",
+          );
+          expect(routes).toHaveLength(1);
+          expect(routes[0]?.path).toBe("/demo");
+          expect(registry.diagnostics).toEqual([]);
+        },
+      },
+      {
+        label: "cross-plugin replaceExisting is rejected",
+        buildPlugins: () => [
+          writePlugin({
+            id: "http-route-owner-a",
+            filename: "http-route-owner-a.cjs",
+            body: `module.exports = { id: "http-route-owner-a", register(api) {
+  api.registerHttpRoute({ path: "/demo", auth: "plugin", handler: async () => false });
+} };`,
+          }),
+          writePlugin({
+            id: "http-route-owner-b",
+            filename: "http-route-owner-b.cjs",
+            body: `module.exports = { id: "http-route-owner-b", register(api) {
+  api.registerHttpRoute({ path: "/demo", auth: "plugin", replaceExisting: true, handler: async () => true });
+} };`,
+          }),
+        ],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const route = registry.httpRoutes.find((entry) => entry.path === "/demo");
+          expect(route?.pluginId).toBe("http-route-owner-a");
+          expect(
+            registry.diagnostics.some((diag) =>
+              String(diag.message).includes("http route replacement rejected"),
+            ),
+          ).toBe(true);
+        },
+      },
+      {
+        label: "mixed-auth overlaps are rejected",
+        buildPlugins: () => [
+          writePlugin({
+            id: "http-route-overlap",
+            filename: "http-route-overlap.cjs",
+            body: `module.exports = { id: "http-route-overlap", register(api) {
   api.registerHttpRoute({ path: "/plugin/secure", auth: "gateway", match: "prefix", handler: async () => true });
   api.registerHttpRoute({ path: "/plugin/secure/report", auth: "plugin", match: "exact", handler: async () => true });
 } };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["http-route-overlap"],
+          }),
+        ],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const routes = registry.httpRoutes.filter(
+            (entry) => entry.pluginId === "http-route-overlap",
+          );
+          expect(routes).toHaveLength(1);
+          expect(routes[0]?.path).toBe("/plugin/secure");
+          expect(
+            registry.diagnostics.some((diag) =>
+              String(diag.message).includes("http route overlap rejected"),
+            ),
+          ).toBe(true);
+        },
       },
-    });
-
-    const routes = registry.httpRoutes.filter((entry) => entry.pluginId === "http-route-overlap");
-    expect(routes).toHaveLength(1);
-    expect(routes[0]?.path).toBe("/plugin/secure");
-    expect(
-      registry.diagnostics.some((diag) =>
-        String(diag.message).includes("http route overlap rejected"),
-      ),
-    ).toBe(true);
-  });
-
-  it("allows same-auth overlapping http routes", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "http-route-overlap-same-auth",
-      filename: "http-route-overlap-same-auth.cjs",
-      body: `module.exports = { id: "http-route-overlap-same-auth", register(api) {
+      {
+        label: "same-auth overlaps are allowed",
+        buildPlugins: () => [
+          writePlugin({
+            id: "http-route-overlap-same-auth",
+            filename: "http-route-overlap-same-auth.cjs",
+            body: `module.exports = { id: "http-route-overlap-same-auth", register(api) {
   api.registerHttpRoute({ path: "/plugin/public", auth: "plugin", match: "prefix", handler: async () => true });
   api.registerHttpRoute({ path: "/plugin/public/report", auth: "plugin", match: "exact", handler: async () => true });
 } };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["http-route-overlap-same-auth"],
+          }),
+        ],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const routes = registry.httpRoutes.filter(
+            (entry) => entry.pluginId === "http-route-overlap-same-auth",
+          );
+          expect(routes).toHaveLength(2);
+          expect(registry.diagnostics).toEqual([]);
+        },
       },
-    });
+    ] as const;
 
-    const routes = registry.httpRoutes.filter(
-      (entry) => entry.pluginId === "http-route-overlap-same-auth",
-    );
-    expect(routes).toHaveLength(2);
-    expect(registry.diagnostics).toEqual([]);
+    for (const scenario of scenarios) {
+      const plugins = scenario.buildPlugins();
+      const registry =
+        plugins.length === 1
+          ? loadRegistryFromSinglePlugin({
+              plugin: plugins[0],
+              pluginConfig: {
+                allow: [plugins[0].id],
+              },
+            })
+          : loadRegistryFromAllowedPlugins(plugins);
+      scenario.assert(registry);
+    }
   });
 
   it("respects explicit disable in config", () => {
