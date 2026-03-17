@@ -3000,124 +3000,137 @@ description: test skill
     );
   });
 
-  it.each([
-    {
-      name: "warns on unpinned npm install specs and missing integrity metadata",
-      cfg: {
-        plugins: {
-          installs: {
-            "voice-call": {
-              source: "npm",
-              spec: "@openclaw/voice-call",
-            },
-          },
-        },
-        hooks: {
-          internal: {
-            installs: {
-              "test-hooks": {
-                source: "npm",
-                spec: "@openclaw/test-hooks",
+  it("evaluates install metadata findings", async () => {
+    const cases = [
+      {
+        name: "warns on unpinned npm install specs and missing integrity metadata",
+        run: async () =>
+          runInstallMetadataAudit(
+            {
+              plugins: {
+                installs: {
+                  "voice-call": {
+                    source: "npm",
+                    spec: "@openclaw/voice-call",
+                  },
+                },
+              },
+              hooks: {
+                internal: {
+                  installs: {
+                    "test-hooks": {
+                      source: "npm",
+                      spec: "@openclaw/test-hooks",
+                    },
+                  },
+                },
+              },
+            } satisfies OpenClawConfig,
+            sharedInstallMetadataStateDir,
+          ),
+        expectedPresent: [
+          "plugins.installs_unpinned_npm_specs",
+          "plugins.installs_missing_integrity",
+          "hooks.installs_unpinned_npm_specs",
+          "hooks.installs_missing_integrity",
+        ],
+      },
+      {
+        name: "does not warn on pinned npm install specs with integrity metadata",
+        run: async () =>
+          runInstallMetadataAudit(
+            {
+              plugins: {
+                installs: {
+                  "voice-call": {
+                    source: "npm",
+                    spec: "@openclaw/voice-call@1.2.3",
+                    integrity: "sha512-plugin",
+                  },
+                },
+              },
+              hooks: {
+                internal: {
+                  installs: {
+                    "test-hooks": {
+                      source: "npm",
+                      spec: "@openclaw/test-hooks@1.2.3",
+                      integrity: "sha512-hook",
+                    },
+                  },
+                },
+              },
+            } satisfies OpenClawConfig,
+            sharedInstallMetadataStateDir,
+          ),
+        expectedAbsent: [
+          "plugins.installs_unpinned_npm_specs",
+          "plugins.installs_missing_integrity",
+          "hooks.installs_unpinned_npm_specs",
+          "hooks.installs_missing_integrity",
+        ],
+      },
+      {
+        name: "warns when install records drift from installed package versions",
+        run: async () => {
+          const tmp = await makeTmpDir("install-version-drift");
+          const stateDir = path.join(tmp, "state");
+          const pluginDir = path.join(stateDir, "extensions", "voice-call");
+          const hookDir = path.join(stateDir, "hooks", "test-hooks");
+          await fs.mkdir(pluginDir, { recursive: true });
+          await fs.mkdir(hookDir, { recursive: true });
+          await fs.writeFile(
+            path.join(pluginDir, "package.json"),
+            JSON.stringify({ name: "@openclaw/voice-call", version: "9.9.9" }),
+            "utf-8",
+          );
+          await fs.writeFile(
+            path.join(hookDir, "package.json"),
+            JSON.stringify({ name: "@openclaw/test-hooks", version: "8.8.8" }),
+            "utf-8",
+          );
+
+          return runInstallMetadataAudit(
+            {
+              plugins: {
+                installs: {
+                  "voice-call": {
+                    source: "npm",
+                    spec: "@openclaw/voice-call@1.2.3",
+                    integrity: "sha512-plugin",
+                    resolvedVersion: "1.2.3",
+                  },
+                },
+              },
+              hooks: {
+                internal: {
+                  installs: {
+                    "test-hooks": {
+                      source: "npm",
+                      spec: "@openclaw/test-hooks@1.2.3",
+                      integrity: "sha512-hook",
+                      resolvedVersion: "1.2.3",
+                    },
+                  },
+                },
               },
             },
-          },
+            stateDir,
+          );
         },
-      } satisfies OpenClawConfig,
-      expectedPresent: [
-        "plugins.installs_unpinned_npm_specs",
-        "plugins.installs_missing_integrity",
-        "hooks.installs_unpinned_npm_specs",
-        "hooks.installs_missing_integrity",
-      ],
-    },
-    {
-      name: "does not warn on pinned npm install specs with integrity metadata",
-      cfg: {
-        plugins: {
-          installs: {
-            "voice-call": {
-              source: "npm",
-              spec: "@openclaw/voice-call@1.2.3",
-              integrity: "sha512-plugin",
-            },
-          },
-        },
-        hooks: {
-          internal: {
-            installs: {
-              "test-hooks": {
-                source: "npm",
-                spec: "@openclaw/test-hooks@1.2.3",
-                integrity: "sha512-hook",
-              },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-      expectedAbsent: [
-        "plugins.installs_unpinned_npm_specs",
-        "plugins.installs_missing_integrity",
-        "hooks.installs_unpinned_npm_specs",
-        "hooks.installs_missing_integrity",
-      ],
-    },
-  ])("$name", async (testCase) => {
-    const res = await runInstallMetadataAudit(testCase.cfg, sharedInstallMetadataStateDir);
-    for (const checkId of testCase.expectedPresent ?? []) {
-      expect(hasFinding(res, checkId, "warn"), checkId).toBe(true);
-    }
-    for (const checkId of testCase.expectedAbsent ?? []) {
-      expect(hasFinding(res, checkId), checkId).toBe(false);
-    }
-  });
-
-  it("warns when install records drift from installed package versions", async () => {
-    const tmp = await makeTmpDir("install-version-drift");
-    const stateDir = path.join(tmp, "state");
-    const pluginDir = path.join(stateDir, "extensions", "voice-call");
-    const hookDir = path.join(stateDir, "hooks", "test-hooks");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.mkdir(hookDir, { recursive: true });
-    await fs.writeFile(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/voice-call", version: "9.9.9" }),
-      "utf-8",
-    );
-    await fs.writeFile(
-      path.join(hookDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/test-hooks", version: "8.8.8" }),
-      "utf-8",
-    );
-
-    const cfg: OpenClawConfig = {
-      plugins: {
-        installs: {
-          "voice-call": {
-            source: "npm",
-            spec: "@openclaw/voice-call@1.2.3",
-            integrity: "sha512-plugin",
-            resolvedVersion: "1.2.3",
-          },
-        },
+        expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
       },
-      hooks: {
-        internal: {
-          installs: {
-            "test-hooks": {
-              source: "npm",
-              spec: "@openclaw/test-hooks@1.2.3",
-              integrity: "sha512-hook",
-              resolvedVersion: "1.2.3",
-            },
-          },
-        },
-      },
-    };
+    ] as const;
 
-    const res = await runInstallMetadataAudit(cfg, stateDir);
-
-    expect(hasFinding(res, "plugins.installs_version_drift", "warn")).toBe(true);
-    expect(hasFinding(res, "hooks.installs_version_drift", "warn")).toBe(true);
+    for (const testCase of cases) {
+      const res = await testCase.run();
+      for (const checkId of testCase.expectedPresent ?? []) {
+        expect(hasFinding(res, checkId, "warn"), `${testCase.name}:${checkId}`).toBe(true);
+      }
+      for (const checkId of testCase.expectedAbsent ?? []) {
+        expect(hasFinding(res, checkId), `${testCase.name}:${checkId}`).toBe(false);
+      }
+    }
   });
 
   it("evaluates extension tool reachability findings", async () => {
