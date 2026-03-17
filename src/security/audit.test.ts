@@ -2469,9 +2469,10 @@ description: test skill
     });
   });
 
-  it("warns when Zalouser group routing contains mutable group entries", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+  it.each([
+    {
+      name: "warns when Zalouser group routing contains mutable group entries",
+      cfg: {
         channels: {
           zalouser: {
             enabled: true,
@@ -2481,28 +2482,14 @@ description: test skill
             },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [zalouserPlugin],
-      });
-
-      const finding = res.findings.find(
-        (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
-      );
-      expect(finding).toBeDefined();
-      expect(finding?.severity).toBe("warn");
-      expect(finding?.detail).toContain("channels.zalouser.groups:Ops Room");
-      expect(finding?.detail).not.toContain("group:g-123");
-    });
-  });
-
-  it("marks Zalouser mutable group routing as break-glass when dangerous matching is enabled", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
+      } satisfies OpenClawConfig,
+      expectedSeverity: "warn",
+      detailIncludes: ["channels.zalouser.groups:Ops Room"],
+      detailExcludes: ["group:g-123"],
+    },
+    {
+      name: "marks Zalouser mutable group routing as break-glass when dangerous matching is enabled",
+      cfg: {
         channels: {
           zalouser: {
             enabled: true,
@@ -2512,29 +2499,34 @@ description: test skill
             },
           },
         },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [zalouserPlugin],
-      });
-
+      } satisfies OpenClawConfig,
+      expectedSeverity: "info",
+      detailIncludes: ["out-of-scope"],
+      expectFindingMatch: {
+        checkId: "channels.zalouser.allowFrom.dangerous_name_matching_enabled",
+        severity: "info",
+      },
+    },
+  ])("$name", async (testCase) => {
+    await withChannelSecurityStateDir(async () => {
+      const res = await runChannelSecurityAudit(testCase.cfg, [zalouserPlugin]);
       const finding = res.findings.find(
         (entry) => entry.checkId === "channels.zalouser.groups.mutable_entries",
       );
+
       expect(finding).toBeDefined();
-      expect(finding?.severity).toBe("info");
-      expect(finding?.detail).toContain("out-of-scope");
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.zalouser.allowFrom.dangerous_name_matching_enabled",
-            severity: "info",
-          }),
-        ]),
-      );
+      expect(finding?.severity).toBe(testCase.expectedSeverity);
+      for (const snippet of testCase.detailIncludes) {
+        expect(finding?.detail).toContain(snippet);
+      }
+      for (const snippet of testCase.detailExcludes ?? []) {
+        expect(finding?.detail).not.toContain(snippet);
+      }
+      if (testCase.expectFindingMatch) {
+        expect(res.findings).toEqual(
+          expect.arrayContaining([expect.objectContaining(testCase.expectFindingMatch)]),
+        );
+      }
     });
   });
 
