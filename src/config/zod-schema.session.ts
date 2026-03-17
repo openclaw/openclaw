@@ -201,6 +201,7 @@ export const CommandsSchema = z
     bashForegroundMs: z.number().int().min(0).max(30_000).optional(),
     config: z.boolean().optional(),
     mcp: z.boolean().optional(),
+    plugins: z.boolean().optional(),
     debug: z.boolean().optional(),
     restart: z.boolean().optional().default(true),
     useAccessGroups: z.boolean().optional(),

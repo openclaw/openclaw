@@ -1,5 +1,6 @@
 import {
   describeImageWithModel,
+  describeImagesWithModel,
   transcribeOpenAiCompatibleAudio,
   type AudioTranscriptionRequest,
   type MediaUnderstandingProvider,
@@ -20,5 +21,6 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "openai",
   capabilities: ["image", "audio"],
   describeImage: describeImageWithModel,
+  describeImages: describeImagesWithModel,
   transcribeAudio: transcribeOpenAiAudio,
 };

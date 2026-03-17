@@ -1,4 +1,4 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { applyTogetherConfig, TOGETHER_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -6,12 +6,11 @@ import { buildTogetherProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "together";
 
-const togetherPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Together Provider",
   description: "Bundled Together provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Together",
@@ -50,6 +49,4 @@ const togetherPlugin = {
       },
     });
   },
-};
-
-export default togetherPlugin;
+});
