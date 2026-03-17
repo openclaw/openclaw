@@ -6,7 +6,7 @@ import type { MemoryProviderStatus } from "../memory/types.js";
 export { getTailnetHostname };
 
 type StatusMemoryManager = {
-  probeVectorAvailability(): Promise<void>;
+  probeVectorAvailability(): Promise<boolean>;
   status(): MemoryProviderStatus;
   close?(): Promise<void>;
 };
@@ -23,7 +23,7 @@ export async function getMemorySearchManager(params: {
   return {
     manager: {
       async probeVectorAvailability() {
-        await manager.probeVectorAvailability();
+        return await manager.probeVectorAvailability();
       },
       status() {
         return manager.status();

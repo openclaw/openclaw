@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectProvidedCfgSkipsRuntimeLoad,
   expectRuntimeCfgFallback,
-} from "../../../test-utils/send-config.js";
+} from "../../../../test/helpers/extensions/send-config.js";
 import { parseMattermostTarget, sendMessageMattermost } from "./send.js";
 import { resetMattermostOpaqueTargetCacheForTests } from "./target-resolution.js";
 

@@ -5,6 +5,7 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
+  OpenClawPluginDefinition,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 
@@ -42,6 +43,7 @@ export type {
   ProviderAuthMethod,
   ProviderAuthResult,
   OpenClawPluginCommandDefinition,
+  OpenClawPluginDefinition,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -88,10 +90,52 @@ type DefineChannelPluginEntryOptions<TPlugin extends ChannelPlugin = ChannelPlug
   name: string;
   description: string;
   plugin: TPlugin;
-  configSchema?: () => OpenClawPluginConfigSchema;
+  configSchema?: DefinePluginEntryOptions["configSchema"];
   setRuntime?: (runtime: PluginRuntime) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
 };
+
+type DefinePluginEntryOptions = {
+  id: string;
+  name: string;
+  description: string;
+  kind?: OpenClawPluginDefinition["kind"];
+  configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
+  register: (api: OpenClawPluginApi) => void;
+};
+
+type DefinedPluginEntry = {
+  id: string;
+  name: string;
+  description: string;
+  configSchema: OpenClawPluginConfigSchema;
+  register: NonNullable<OpenClawPluginDefinition["register"]>;
+} & Pick<OpenClawPluginDefinition, "kind">;
+
+function resolvePluginConfigSchema(
+  configSchema: DefinePluginEntryOptions["configSchema"] = emptyPluginConfigSchema,
+): OpenClawPluginConfigSchema {
+  return typeof configSchema === "function" ? configSchema() : configSchema;
+}
+
+// Shared generic plugin-entry boilerplate for bundled and third-party plugins.
+export function definePluginEntry({
+  id,
+  name,
+  description,
+  kind,
+  configSchema = emptyPluginConfigSchema,
+  register,
+}: DefinePluginEntryOptions): DefinedPluginEntry {
+  return {
+    id,
+    name,
+    description,
+    ...(kind ? { kind } : {}),
+    configSchema: resolvePluginConfigSchema(configSchema),
+    register,
+  };
+}
 
 // Shared channel-plugin entry boilerplate for bundled and third-party channels.
 export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
@@ -103,11 +147,11 @@ export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
   setRuntime,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>) {
-  return {
+  return definePluginEntry({
     id,
     name,
     description,
-    configSchema: configSchema(),
+    configSchema,
     register(api: OpenClawPluginApi) {
       setRuntime?.(api.runtime);
       api.registerChannel({ plugin });
@@ -116,7 +160,7 @@ export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
       }
       registerFull?.(api);
     },
-  };
+  });
 }
 
 // Shared setup-entry shape so bundled channels do not duplicate `{ plugin }`.

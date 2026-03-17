@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginCommandDefinition } from "../test-utils/plugin-command.js";
-import { createPluginRuntimeMock } from "../test-utils/plugin-runtime-mock.js";
+import type { OpenClawPluginCommandDefinition } from "../../test/helpers/extensions/plugin-command.js";
+import { createPluginRuntimeMock } from "../../test/helpers/extensions/plugin-runtime-mock.js";
 import register from "./index.js";
 
 function createHarness(config: Record<string, unknown>) {
@@ -20,7 +20,7 @@ function createHarness(config: Record<string, unknown>) {
       command = definition;
     }),
   };
-  register(api as never);
+  register.register(api as never);
   if (!command) {
     throw new Error("talk-voice command not registered");
   }
