@@ -54,7 +54,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     return { to };
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
-    const { action, params, cfg } = ctx;
+    const { action, params, cfg, accountId } = ctx;
     const resolveRoomId = () =>
       readStringParam(params, "roomId") ??
       readStringParam(params, "channelId") ??
@@ -79,6 +79,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           threadId: threadId ?? undefined,
         },
         cfg as CoreConfig,
+        accountId ?? undefined,
       );
     }
 
@@ -95,6 +96,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           remove,
         },
         cfg as CoreConfig,
+        accountId ?? undefined,
       );
     }
 
@@ -109,6 +111,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           limit,
         },
         cfg as CoreConfig,
+        accountId ?? undefined,
       );
     }
 
@@ -123,6 +126,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           after: readStringParam(params, "after"),
         },
         cfg as CoreConfig,
+        accountId ?? undefined,
       );
     }
 
@@ -137,6 +141,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           content,
         },
         cfg as CoreConfig,
+        accountId ?? undefined,
       );
     }
 
@@ -149,6 +154,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           messageId,
         },
         cfg as CoreConfig,
+        accountId ?? undefined,
       );
     }
 
@@ -165,6 +171,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           messageId,
         },
         cfg as CoreConfig,
+        accountId ?? undefined,
       );
     }
 
@@ -177,6 +184,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           roomId: readStringParam(params, "roomId") ?? readStringParam(params, "channelId"),
         },
         cfg as CoreConfig,
+        accountId ?? undefined,
       );
     }
 
@@ -187,6 +195,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
           roomId: resolveRoomId(),
         },
         cfg as CoreConfig,
+        accountId ?? undefined,
       );
     }
 
