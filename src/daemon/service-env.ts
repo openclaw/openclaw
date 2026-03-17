@@ -290,10 +290,12 @@ export function buildServiceEnvironment(params: {
   port: number;
   launchdLabel?: string;
   platform?: NodeJS.Platform;
+  /** Override process.execPath for nvm detection (testing). */
+  execPath?: string;
 }): Record<string, string | undefined> {
   const { env, port, launchdLabel } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform, params.execPath);
   const profile = env.OPENCLAW_PROFILE;
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
@@ -314,10 +316,12 @@ export function buildServiceEnvironment(params: {
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  /** Override process.execPath for nvm detection (testing). */
+  execPath?: string;
 }): Record<string, string | undefined> {
   const { env } = params;
   const platform = params.platform ?? process.platform;
-  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform);
+  const sharedEnv = resolveSharedServiceEnvironmentFields(env, platform, params.execPath);
   const gatewayToken =
     env.OPENCLAW_GATEWAY_TOKEN?.trim() || env.CLAWDBOT_GATEWAY_TOKEN?.trim() || undefined;
   return {
@@ -356,6 +360,7 @@ function buildCommonServiceEnvironment(
 function resolveSharedServiceEnvironmentFields(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
+  execPath?: string,
 ): SharedServiceEnvironmentFields {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
@@ -371,7 +376,7 @@ function resolveSharedServiceEnvironmentFields(
     env.NODE_EXTRA_CA_CERTS ??
     (platform === "darwin"
       ? "/etc/ssl/cert.pem"
-      : platform === "linux" && isNvmNode(env)
+      : platform === "linux" && isNvmNode(env, execPath ?? process.execPath)
         ? resolveLinuxSystemCaBundle()
         : undefined);
   const nodeUseSystemCa = env.NODE_USE_SYSTEM_CA ?? (platform === "darwin" ? "1" : undefined);
