@@ -94,8 +94,38 @@ function copyDirRecursive(src: string, dest: string): void {
   }
 }
 
+function migrateFromLegacyDir(oldRoot: string, storagePaths: MatrixStoragePaths): boolean {
+  const oldCrypto = path.join(oldRoot, "crypto");
+  const oldStorage = path.join(oldRoot, "bot-storage.json");
+  const hasOldCrypto = fs.existsSync(oldCrypto);
+  const hasOldStorage = fs.existsSync(oldStorage);
+  if (!hasOldCrypto && !hasOldStorage) {
+    return false;
+  }
+
+  fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+  try {
+    if (hasOldCrypto && !fs.existsSync(storagePaths.cryptoPath)) {
+      copyDirRecursive(oldCrypto, storagePaths.cryptoPath);
+    }
+    if (hasOldStorage && !fs.existsSync(storagePaths.storagePath)) {
+      fs.copyFileSync(oldStorage, storagePaths.storagePath);
+    }
+  } catch {
+    return false;
+  }
+
+  try {
+    fs.rmSync(oldRoot, { recursive: true, force: true });
+  } catch {
+    // Best-effort cleanup only; ignore failures.
+  }
+
+  return true;
+}
+
 /**
- * Migrate crypto and bot-storage from any legacy tokenHash subdir into the stable store dir.
+ * Migrate crypto and bot-storage from legacy tokenHash subdirs into the stable store dir.
  * Ensures device keys persist across access token changes (fixes #48749).
  */
 export function maybeMigrateFromTokenHashDirs(params: { storagePaths: MatrixStoragePaths }): void {
@@ -103,45 +133,47 @@ export function maybeMigrateFromTokenHashDirs(params: { storagePaths: MatrixStor
   if (!fs.existsSync(accountBaseDir)) {
     return;
   }
-  let hasStableCrypto = fs.existsSync(params.storagePaths.cryptoPath);
-  let hasStableStorage = fs.existsSync(params.storagePaths.storagePath);
-  if (hasStableCrypto && hasStableStorage) {
+  if (
+    fs.existsSync(params.storagePaths.cryptoPath) &&
+    fs.existsSync(params.storagePaths.storagePath)
+  ) {
     return;
   }
+
   let entries: string[];
   try {
     entries = fs.readdirSync(accountBaseDir);
   } catch {
     return;
   }
-  const tokenHashDirs = entries.filter(
-    (name) => name !== STORAGE_DIR_NAME && TOKEN_HASH_DIR_PATTERN.test(name),
-  );
+
+  const tokenHashDirs = entries
+    .filter((name) => name !== STORAGE_DIR_NAME && TOKEN_HASH_DIR_PATTERN.test(name))
+    .sort((a, b) => {
+      try {
+        const mtimeA = fs.statSync(path.join(accountBaseDir, a)).mtimeMs;
+        const mtimeB = fs.statSync(path.join(accountBaseDir, b)).mtimeMs;
+        return mtimeB - mtimeA; // newest first
+      } catch {
+        return 0;
+      }
+    });
+
+  // First pass: prefer dirs that have both crypto and bot-storage.
   for (const dir of tokenHashDirs) {
-    if (hasStableCrypto && hasStableStorage) {
-      break;
-    }
     const oldRoot = path.join(accountBaseDir, dir);
-    const oldCrypto = path.join(oldRoot, "crypto");
-    const oldStorage = path.join(oldRoot, "bot-storage.json");
-    const hasOldCrypto = fs.existsSync(oldCrypto);
-    const hasOldStorage = fs.existsSync(oldStorage);
-    if (!hasOldCrypto && !hasOldStorage) {
-      continue;
+    const hasCrypto = fs.existsSync(path.join(oldRoot, "crypto"));
+    const hasStorage = fs.existsSync(path.join(oldRoot, "bot-storage.json"));
+    if (hasCrypto && hasStorage && migrateFromLegacyDir(oldRoot, params.storagePaths)) {
+      return;
     }
-    try {
-      fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
-      if (!hasStableCrypto && hasOldCrypto) {
-        fs.mkdirSync(path.dirname(params.storagePaths.cryptoPath), { recursive: true });
-        copyDirRecursive(oldCrypto, params.storagePaths.cryptoPath);
-        hasStableCrypto = true;
-      }
-      if (!hasStableStorage && hasOldStorage) {
-        fs.copyFileSync(oldStorage, params.storagePaths.storagePath);
-        hasStableStorage = true;
-      }
-    } catch {
-      // Ignore migration failures; new store will be created.
+  }
+
+  // Second pass: accept partial dirs (crypto only or storage only) as a fallback.
+  for (const dir of tokenHashDirs) {
+    const oldRoot = path.join(accountBaseDir, dir);
+    if (migrateFromLegacyDir(oldRoot, params.storagePaths)) {
+      return;
     }
   }
 }
