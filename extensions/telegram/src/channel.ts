@@ -12,6 +12,7 @@ import {
   resolveThreadSessionKeys,
   type RoutePeer,
 } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
@@ -28,7 +29,6 @@ import {
   resolveTelegramGroupToolPolicy,
   TelegramConfigSchema,
   type ChannelMessageActionAdapter,
-  type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/telegram";
 import { parseTelegramTopicConversation } from "../../../src/acp/conversation-id.js";
