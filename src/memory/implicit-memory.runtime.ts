@@ -43,7 +43,7 @@ export async function retrieveImplicitContext(
     return null;
   }
   const stdout = await runMemoryManagerCommand(
-    ["retrieve", "--query", normalizedQuery, "--scope-key", scopeKey],
+    ["retrieve", `--query=${normalizedQuery}`, `--scope-key=${scopeKey}`],
     RETRIEVE_TIMEOUT_MS,
   );
   const context = stdout.trim();
@@ -63,7 +63,7 @@ export async function saveImplicitExperience(params: {
   }
 
   await runMemoryManagerCommand(
-    ["save", "--intent", intent, "--rules", rules, "--scope-key", scopeKey],
+    ["save", `--intent=${intent}`, `--rules=${rules}`, `--scope-key=${scopeKey}`],
     SAVE_TIMEOUT_MS,
   );
 }

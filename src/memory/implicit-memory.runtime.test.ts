@@ -147,4 +147,16 @@ describe("implicit memory runtime", () => {
     expect(context).toContain("Always use Fahrenheit and plain text.");
     expect(context).not.toContain("Always use Celsius and return JSON.");
   });
+
+  it("passes argv values safely when the query starts with a dash", async () => {
+    await saveImplicitExperience({
+      scopeKey: "sender:discord:user-dash",
+      intent: "- summarize this",
+      rules: "Preserve leading dashes in stored prompts.",
+    });
+
+    const context = await retrieveImplicitContext("- summarize this", "sender:discord:user-dash");
+
+    expect(context).toContain("Preserve leading dashes in stored prompts.");
+  });
 });
