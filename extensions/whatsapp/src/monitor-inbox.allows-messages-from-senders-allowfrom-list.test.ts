@@ -254,7 +254,6 @@ describe("web monitor inbox", () => {
 
   it("handles append messages by marking them read but skipping auto-reply", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
-    const staleTs = Math.floor(Date.now() / 1000) - 300;
 
     // Use a timestamp 2 minutes in the past to ensure it's outside the 60s grace period
     const oldTimestamp = nowSeconds(-120_000);

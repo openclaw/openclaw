@@ -48,6 +48,14 @@ type SecretDefaults = {
   exec?: string;
 };
 
+const MOONSHOT_NATIVE_BASE_URLS = new Set([
+  "https://api.moonshot.ai/v1",
+  "https://api.moonshot.cn/v1",
+]);
+const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
+  "https://coding-intl.dashscope.aliyuncs.com/v1",
+  "https://coding.dashscope.aliyuncs.com/v1",
+]);
 
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();

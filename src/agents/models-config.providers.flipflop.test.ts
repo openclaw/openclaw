@@ -149,22 +149,3 @@ describe("normalizeProviders flip-flop bug", () => {
     expect(normalized?.openai?.apiKey).toBe(TEST_ENV_VAR);
   });
 });
-
-/**
- * Test Instructions
- *
- * BEFORE APPLYING FIX:
- * - Run: `cd /path/to/openclaw && npm test -- src/agents/models-config.providers.flipflop.test.ts`
- * - Expected: "BUG REPRODUCTION" test PASSES (demonstrates the bug exists)
- * - Expected: "FIX VERIFICATION" tests FAIL (bug is present)
- *
- * AFTER APPLYING FIX:
- * - Remove lines 504-519 from src/agents/models-config.providers.ts
- * - Run: `npm test -- src/agents/models-config.providers.flipflop.test.ts`
- * - Expected: "BUG REPRODUCTION" test FAILS (bug is fixed, behavior changed)
- * - Expected: "FIX VERIFICATION" tests PASS (fix works correctly)
- *
- * Note: The "BUG REPRODUCTION" test is intentionally written to pass when the bug
- * exists. After the fix, this test will fail because the behavior changes. This
- * is expected - the test documents the buggy behavior for reproduction purposes.
- */
