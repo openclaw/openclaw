@@ -5,6 +5,7 @@ import {
   inspectPortUsage,
   killProcessTree,
   resetSchtasksBaseMocks,
+  schtasksCallOptions,
   schtasksCalls,
   schtasksResponses,
   withWindowsEnv,
@@ -165,6 +166,36 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expectGatewayTermination(5151);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
       expect(schtasksCalls.at(-1)).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
+  it("stops restart when the abort signal fires during port-release waiting", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const controller = new AbortController();
+      pushSuccessfulSchtasksResponses(4);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
+      inspectPortUsage.mockImplementationOnce(async () => {
+        controller.abort();
+        return busyPortUsage(5151);
+      });
+
+      await expect(
+        restartScheduledTask({
+          env,
+          stdout,
+          signal: controller.signal,
+        }),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+        message: "Operation aborted",
+      });
+
+      expectGatewayTermination(5151);
+      expect(schtasksCalls).toEqual([
+        ["/Query", "/TN", "OpenClaw Gateway"],
+        ["/End", "/TN", "OpenClaw Gateway"],
+      ]);
+      expect(schtasksCallOptions.at(-1)?.signal).toBe(controller.signal);
     });
   });
 });

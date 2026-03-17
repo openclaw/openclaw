@@ -4,6 +4,7 @@ import path from "node:path";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
+import { throwIfAborted } from "../infra/outbound/abort.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -474,13 +475,19 @@ async function resolveScheduledTaskGatewayListenerPids(port: number): Promise<nu
   );
 }
 
-async function terminateScheduledTaskGatewayListeners(env: GatewayServiceEnv): Promise<number[]> {
+async function terminateScheduledTaskGatewayListeners(
+  env: GatewayServiceEnv,
+  signal?: AbortSignal,
+): Promise<number[]> {
+  throwIfAborted(signal);
   const port = await resolveScheduledTaskPort(env);
   if (!port) {
     return [];
   }
+  throwIfAborted(signal);
   const pids = await resolveScheduledTaskGatewayListenerPids(port);
   for (const pid of pids) {
+    throwIfAborted(signal);
     await terminateGatewayProcessTree(pid, 300);
   }
   return pids;
@@ -532,19 +539,27 @@ async function terminateGatewayProcessTree(pid: number, graceMs: number): Promis
   await waitForProcessExit(pid, 5_000);
 }
 
-async function waitForGatewayPortRelease(port: number, timeoutMs = 5_000): Promise<boolean> {
+async function waitForGatewayPortRelease(
+  port: number,
+  timeoutMs = 5_000,
+  signal?: AbortSignal,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    throwIfAborted(signal);
     const diagnostics = await inspectPortUsage(port).catch(() => null);
     if (diagnostics?.status === "free") {
       return true;
     }
+    throwIfAborted(signal);
     await sleep(250);
   }
+  throwIfAborted(signal);
   return false;
 }
 
-async function terminateBusyPortListeners(port: number): Promise<number[]> {
+async function terminateBusyPortListeners(port: number, signal?: AbortSignal): Promise<number[]> {
+  throwIfAborted(signal);
   const diagnostics = await inspectPortUsage(port).catch(() => null);
   if (diagnostics?.status !== "busy") {
     return [];
@@ -557,6 +572,7 @@ async function terminateBusyPortListeners(port: number): Promise<number[]> {
     ),
   );
   for (const pid of pids) {
+    throwIfAborted(signal);
     await terminateGatewayProcessTree(pid, 300);
   }
   return pids;
@@ -599,12 +615,18 @@ async function stopStartupEntry(
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
 }
 
-async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise<void> {
+async function terminateInstalledStartupRuntime(
+  env: GatewayServiceEnv,
+  signal?: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
   if (!(await isStartupEntryInstalled(env))) {
     return;
   }
+  throwIfAborted(signal);
   const runtime = await resolveFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
+    throwIfAborted(signal);
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
 }
@@ -776,31 +798,39 @@ export async function restartScheduledTask({
     await assertSchtasksAvailable();
   } catch (err) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
+      throwIfAborted(signal);
       return await restartStartupEntry(effectiveEnv, stdout);
     }
     throw err;
   }
   if (!(await isRegisteredScheduledTask(effectiveEnv))) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
+      throwIfAborted(signal);
       return await restartStartupEntry(effectiveEnv, stdout);
     }
   }
   const taskName = resolveTaskName(effectiveEnv);
   const sig = signal ? { signal } : undefined;
   await execSchtasks(["/End", "/TN", taskName], sig);
+  throwIfAborted(signal);
   const restartPort = await resolveScheduledTaskPort(effectiveEnv);
-  await terminateScheduledTaskGatewayListeners(effectiveEnv);
-  await terminateInstalledStartupRuntime(effectiveEnv);
+  throwIfAborted(signal);
+  await terminateScheduledTaskGatewayListeners(effectiveEnv, signal);
+  throwIfAborted(signal);
+  await terminateInstalledStartupRuntime(effectiveEnv, signal);
+  throwIfAborted(signal);
   if (restartPort) {
-    const released = await waitForGatewayPortRelease(restartPort);
+    const released = await waitForGatewayPortRelease(restartPort, 5_000, signal);
     if (!released) {
-      await terminateBusyPortListeners(restartPort);
-      const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000);
+      throwIfAborted(signal);
+      await terminateBusyPortListeners(restartPort, signal);
+      const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000, signal);
       if (!releasedAfterForce) {
         throw new Error(`gateway port ${restartPort} is still busy before restart`);
       }
     }
   }
+  throwIfAborted(signal);
   const res = await execSchtasks(["/Run", "/TN", taskName], sig);
   if (res.code !== 0) {
     throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());

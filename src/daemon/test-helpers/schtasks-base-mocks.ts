@@ -1,14 +1,16 @@
 import { vi } from "vitest";
 import {
   inspectPortUsage,
+  schtasksCallOptions,
   killProcessTree,
   schtasksCalls,
   schtasksResponses,
 } from "./schtasks-fixtures.js";
 
 vi.mock("../schtasks-exec.js", () => ({
-  execSchtasks: async (argv: string[]) => {
+  execSchtasks: async (argv: string[], options?: { signal?: AbortSignal }) => {
     schtasksCalls.push(argv);
+    schtasksCallOptions.push(options);
     return schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
   },
 }));

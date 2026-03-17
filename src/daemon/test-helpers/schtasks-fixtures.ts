@@ -9,6 +9,7 @@ import { resolveTaskScriptPath } from "../schtasks.js";
 
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
 export const schtasksCalls: string[][] = [];
+export const schtasksCallOptions: Array<{ signal?: AbortSignal } | undefined> = [];
 
 export const inspectPortUsage: MockFn<(port: number) => Promise<PortUsage>> = vi.fn();
 export const killProcessTree: MockFn<typeof killProcessTreeImpl> = vi.fn();
@@ -34,6 +35,7 @@ export async function withWindowsEnv(
 export function resetSchtasksBaseMocks() {
   schtasksResponses.length = 0;
   schtasksCalls.length = 0;
+  schtasksCallOptions.length = 0;
   inspectPortUsage.mockReset();
   killProcessTree.mockReset();
 }
