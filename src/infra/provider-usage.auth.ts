@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import {
   dedupeProfileIds,
   ensureAuthProfileStore,
@@ -12,9 +9,9 @@ import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { resolveLegacyPiAgentAccessToken } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -42,27 +39,6 @@ function parseGoogleUsageToken(apiKey: string): string {
     // ignore
   }
   return apiKey;
-}
-
-function resolveLegacyZaiUsageToken(env: NodeJS.ProcessEnv): string | undefined {
-  try {
-    const authPath = path.join(
-      resolveRequiredHomeDir(env, os.homedir),
-      ".pi",
-      "agent",
-      "auth.json",
-    );
-    if (!fs.existsSync(authPath)) {
-      return undefined;
-    }
-    const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<
-      string,
-      { access?: string }
-    >;
-    return parsed["z-ai"]?.access || parsed.zai?.access;
-  } catch {
-    return undefined;
-  }
 }
 
 function resolveProviderApiKeyFromConfigAndStore(params: {
@@ -225,7 +201,7 @@ async function resolveProviderUsageAuthFallback(params: {
       if (apiKey) {
         return { provider: "zai", token: apiKey };
       }
-      const legacyToken = resolveLegacyZaiUsageToken(params.state.env);
+      const legacyToken = resolveLegacyPiAgentAccessToken(params.state.env, ["z-ai", "zai"]);
       return legacyToken ? { provider: "zai", token: legacyToken } : null;
     }
     case "minimax": {
