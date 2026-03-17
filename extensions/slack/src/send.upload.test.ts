@@ -4,34 +4,43 @@ import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 
 // --- Module mocks (must precede dynamic import) ---
 installSlackBlockTestMocks();
-const fetchWithSsrFGuard = vi.fn(
-  async (params: { url: string; init?: RequestInit }) =>
-    ({
-      response: await fetch(params.url, params.init),
-      finalUrl: params.url,
-      release: async () => {},
-    }) as const,
+const fetchWithSsrFGuard = vi.hoisted(() =>
+  vi.fn(
+    async (params: { url: string; init?: RequestInit }) =>
+      ({
+        response: await fetch(params.url, params.init),
+        finalUrl: params.url,
+        release: async () => {},
+      }) as const,
+  ),
 );
-
-vi.mock("../../../src/infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: (...args: unknown[]) =>
-    fetchWithSsrFGuard(...(args as [params: { url: string; init?: RequestInit }])),
-  withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
-    ...params,
-    mode: "trusted_env_proxy",
-  }),
-}));
-
-vi.mock("../../whatsapp/src/media.js", () => ({
-  loadWebMedia: vi.fn(async () => ({
+const loadWebMediaMock = vi.hoisted(() =>
+  vi.fn(async () => ({
     buffer: Buffer.from("fake-image"),
     contentType: "image/png",
     kind: "image",
     fileName: "screenshot.png",
   })),
+);
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: unknown[]) =>
+      fetchWithSsrFGuard(...(args as [params: { url: string; init?: RequestInit }])),
+    withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
+      ...params,
+      mode: "trusted_env_proxy",
+    }),
+  };
+});
+
+vi.mock("../../whatsapp/src/media.js", () => ({
+  loadWebMedia: (...args: Parameters<typeof loadWebMediaMock>) => loadWebMediaMock(...args),
 }));
 
-const { sendMessageSlack } = await import("./send.js");
+let sendMessageSlack: typeof import("./send.js").sendMessageSlack;
 
 type UploadTestClient = WebClient & {
   conversations: { open: ReturnType<typeof vi.fn> };
@@ -64,11 +73,14 @@ function createUploadTestClient(): UploadTestClient {
 describe("sendMessageSlack file upload with user IDs", () => {
   const originalFetch = globalThis.fetch;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     globalThis.fetch = vi.fn(
       async () => new Response("ok", { status: 200 }),
     ) as unknown as typeof fetch;
+    vi.resetModules();
     fetchWithSsrFGuard.mockClear();
+    loadWebMediaMock.mockClear();
+    ({ sendMessageSlack } = await import("./send.js"));
   });
 
   afterEach(() => {

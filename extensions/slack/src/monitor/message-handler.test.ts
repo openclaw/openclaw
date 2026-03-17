@@ -1,17 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSlackMessageHandler } from "./message-handler.js";
 
-const enqueueMock = vi.fn(async (_entry: unknown) => {});
-const flushKeyMock = vi.fn(async (_key: string) => {});
-const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
-  ...message,
-}));
+const enqueueMock = vi.hoisted(() => vi.fn(async (_entry: unknown) => {}));
+const flushKeyMock = vi.hoisted(() => vi.fn(async (_key: string) => {}));
+const resolveThreadTsMock = vi.hoisted(() =>
+  vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
+    ...message,
+  })),
+);
 
-vi.mock("../../../../src/auto-reply/inbound-debounce.js", () => ({
-  resolveInboundDebounceMs: () => 10,
-  createInboundDebouncer: () => ({
-    enqueue: (entry: unknown) => enqueueMock(entry),
-    flushKey: (key: string) => flushKeyMock(key),
+vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
+  shouldDebounceTextInbound: (params: { hasMedia?: boolean }) => !params.hasMedia,
+  createChannelInboundDebouncer: () => ({
+    debounceMs: 10,
+    debouncer: {
+      enqueue: (entry: unknown) => enqueueMock(entry),
+      flushKey: (key: string) => flushKeyMock(key),
+    },
   }),
 }));
 
@@ -20,6 +24,8 @@ vi.mock("./thread-resolution.js", () => ({
     resolve: (entry: { message: Record<string, unknown> }) => resolveThreadTsMock(entry),
   }),
 }));
+
+const { createSlackMessageHandler } = await import("./message-handler.js");
 
 function createContext(overrides?: {
   markMessageSeen?: (channel: string | undefined, ts: string | undefined) => boolean;

@@ -16,19 +16,29 @@ export type SlackSendTestClient = WebClient & {
   };
 };
 
-export function installSlackBlockTestMocks() {
-  vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
     loadConfig: () => ({}),
-  }));
+  };
+});
 
-  vi.mock("./accounts.js", () => ({
+vi.mock("./accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./accounts.js")>();
+  return {
+    ...actual,
     resolveSlackAccount: () => ({
       accountId: "default",
       botToken: "xoxb-test",
       botTokenSource: "config",
       config: {},
     }),
-  }));
+  };
+});
+
+export function installSlackBlockTestMocks() {
+  // Kept for existing call sites; the mocks are installed at module load time.
 }
 
 export function createSlackEditTestClient(): SlackEditTestClient {
