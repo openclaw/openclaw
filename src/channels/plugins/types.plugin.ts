@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import type { ChannelOnboardingAdapter } from "./onboarding-types.js";
 import type {
   ChannelAuthAdapter,
@@ -61,6 +63,14 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   config: ChannelConfigAdapter<ResolvedAccount>;
   configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
+  lifecycle?: {
+    onAccountConfigChanged?: (params: {
+      prevCfg: OpenClawConfig;
+      nextCfg: OpenClawConfig;
+      accountId: string;
+      runtime: RuntimeEnv;
+    }) => Promise<void> | void;
+  };
   pairing?: ChannelPairingAdapter;
   security?: ChannelSecurityAdapter<ResolvedAccount>;
   groups?: ChannelGroupAdapter;
