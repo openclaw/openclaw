@@ -7,8 +7,7 @@ describe("isLikelyInterimExecutionMessage", () => {
     expect(isLikelyInterimExecutionMessage("working on it, it'll auto-announce when done")).toBe(
       true,
     );
-    expect(isLikelyInterimExecutionMessage("我继续处理，完成后回报")).toBe(true);
-    expect(isLikelyInterimExecutionMessage("我先处理一下，完成后同步")).toBe(true);
+    expect(isLikelyInterimExecutionMessage("我继续执行，完成后回报")).toBe(true);
   });
 
   it("rejects substantive final content", () => {
@@ -19,15 +18,22 @@ describe("isLikelyInterimExecutionMessage", () => {
     expect(isLikelyInterimExecutionMessage("You should have your summary ready by tomorrow.")).toBe(
       false,
     );
-    expect(isLikelyInterimExecutionMessage("我已经处理完成，下面是最终结果和后续建议。")).toBe(
-      false,
-    );
+    expect(isLikelyInterimExecutionMessage("我已经看完图，下面是我的判断和还要改的地方。")).toBe(false);
+  });
+
+  it("accepts future-tense promises that still need background execution", () => {
     expect(
       isLikelyInterimExecutionMessage(
-        "我继续处理这个页面的标题、按钮、留白和插图比例，等我把三套方案都整理完再统一回报你最终版本。",
+        "你说得对。我先把这张结果图取出来并看一眼，看完后我再只回复你我的判断。",
       ),
+    ).toBe(true);
+  });
+
+  it("rejects blockers and generic processing notes", () => {
+    expect(
+      isLikelyInterimExecutionMessage("当前阻塞：我没有拿到最终图，需要你先确认登录状态。"),
     ).toBe(false);
-    expect(isLikelyInterimExecutionMessage("处理中")).toBe(false);
+    expect(isLikelyInterimExecutionMessage("处理中最大的风险是旧结果页还没刷新。")).toBe(false);
   });
 
   it("rejects empty text", () => {

@@ -264,7 +264,7 @@ describe("runReplyAgent execution-task interim retry", () => {
         meta: {},
       })
       .mockResolvedValueOnce({
-        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        payloads: [{ text: "我先把这张结果图取出来并看一眼，看完后我再只回复你我的判断。" }],
         meta: {},
       });
     spawnSubagentRunMock.mockResolvedValueOnce({
@@ -296,7 +296,7 @@ describe("runReplyAgent execution-task interim retry", () => {
     });
     expect(spawnSubagentRunMock.mock.calls[0]?.[0]).toMatchObject({
       task: expect.stringContaining(
-        "The requester session only produced this interim acknowledgement before handoff: working on it, it'll auto-announce when done",
+        "The requester session only produced this interim acknowledgement before handoff: 我先把这张结果图取出来并看一眼，看完后我再只回复你我的判断。",
       ),
     });
     expect(result).toMatchObject({
@@ -312,7 +312,7 @@ describe("runReplyAgent execution-task interim retry", () => {
         meta: {},
       })
       .mockResolvedValueOnce({
-        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        payloads: [{ text: "我先把这张结果图取出来并看一眼，看完后我再只回复你我的判断。" }],
         meta: {},
       });
     spawnSubagentRunMock.mockResolvedValueOnce({
@@ -336,7 +336,7 @@ describe("runReplyAgent execution-task interim retry", () => {
         meta: {},
       })
       .mockResolvedValueOnce({
-        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        payloads: [{ text: "我先把这张结果图取出来并看一眼，看完后我再只回复你我的判断。" }],
         meta: {},
       });
     spawnSubagentRunMock.mockResolvedValueOnce({
@@ -361,7 +361,7 @@ describe("runReplyAgent execution-task interim retry", () => {
         meta: {},
       })
       .mockResolvedValueOnce({
-        payloads: [{ text: "working on it, it'll auto-announce when done" }],
+        payloads: [{ text: "我先把这张结果图取出来并看一眼，看完后我再只回复你我的判断。" }],
         meta: {},
       });
 
