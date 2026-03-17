@@ -297,10 +297,15 @@ describe("cron cli", () => {
       "isolated",
       "--message",
       "hello",
+      "--expect-final",
     ]);
 
     const statusCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.status");
-    expect(statusCall?.[3]).toEqual({ progress: false, quiet: true });
+    expect(statusCall?.[3]).toEqual({
+      progress: false,
+      quiet: true,
+      expectFinal: false,
+    });
   });
 
   it("infers sessionTarget from payload when --session is omitted", async () => {

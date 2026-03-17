@@ -33,6 +33,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
       {
         progress: false,
         quiet: true,
+        expectFinal: false,
       },
     )) as {
       enabled?: boolean;
