@@ -69,6 +69,42 @@ OpenClaw resolves known Claude marketplace names from
 `~/.claude/plugins/known_marketplaces.json`. You can also pass an explicit
 marketplace source with `--marketplace`.
 
+## Conversation binding callbacks
+
+Plugins that bind a conversation can now react when an approval is resolved.
+
+Use `api.onConversationBindingResolved(...)` to receive a callback after a bind
+request is approved or denied:
+
+```ts
+export default {
+  id: "my-plugin",
+  register(api) {
+    api.onConversationBindingResolved(async (event) => {
+      if (event.status === "approved") {
+        // A binding now exists for this plugin + conversation.
+        console.log(event.binding?.conversationId);
+        return;
+      }
+
+      // The request was denied; clear any local pending state.
+      console.log(event.request.conversation.conversationId);
+    });
+  },
+};
+```
+
+Callback payload fields:
+
+- `status`: `"approved"` or `"denied"`
+- `decision`: `"allow-once"`, `"allow-always"`, or `"deny"`
+- `binding`: the resolved binding for approved requests
+- `request`: the original request summary, detach hint, sender id, and
+  conversation metadata
+
+This callback is notification-only. It does not change who is allowed to bind a
+conversation, and it runs after core approval handling finishes.
+
 ## Architecture
 
 OpenClaw's plugin system has four layers:
@@ -957,6 +993,16 @@ authoring plugins:
 - `openclaw/plugin-sdk/compat` remains as a legacy migration surface for older
   external plugins. Bundled plugins should not use it, and non-test imports emit
   a one-time deprecation warning outside test environments.
+- Bundled extension internals remain private. External plugins should use only
+  `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
+  public seams under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
+  `setup-entry.js`, and narrowly scoped files such as `login-qr-api.js`. Never
+  import `extensions/<id>/src/*` from core or from another extension.
+- Repo seam split:
+  `extensions/<id>/api.js` is the helper/types barrel,
+  `extensions/<id>/runtime-api.js` is the runtime-only barrel,
+  `extensions/<id>/index.js` is the bundled plugin entry,
+  and `extensions/<id>/setup-entry.js` is the setup plugin entry.
 - `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.
