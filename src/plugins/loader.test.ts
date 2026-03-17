@@ -509,6 +509,30 @@ module.exports = {
   return { pluginDir, fullMarker, setupMarker };
 }
 
+function createEnvResolvedPluginFixture(pluginId: string) {
+  useNoBundledPlugins();
+  const openclawHome = makeTempDir();
+  const ignoredHome = makeTempDir();
+  const stateDir = makeTempDir();
+  const pluginDir = path.join(openclawHome, "plugins", pluginId);
+  mkdirSafe(pluginDir);
+  const plugin = writePlugin({
+    id: pluginId,
+    dir: pluginDir,
+    filename: "index.cjs",
+    body: `module.exports = { id: ${JSON.stringify(pluginId)}, register() {} };`,
+  });
+  const env = {
+    ...process.env,
+    OPENCLAW_HOME: openclawHome,
+    HOME: ignoredHome,
+    OPENCLAW_STATE_DIR: stateDir,
+    CLAWDBOT_STATE_DIR: undefined,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+  };
+  return { plugin, env };
+}
+
 afterEach(() => {
   clearPluginLoaderCache();
   if (prevBundledDir === undefined) {
@@ -2820,92 +2844,45 @@ module.exports = {
     });
   });
 
-  it("does not warn about missing provenance for env-resolved load paths", () => {
-    useNoBundledPlugins();
-    const openclawHome = makeTempDir();
-    const ignoredHome = makeTempDir();
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(openclawHome, "plugins", "tracked-load-path");
-    mkdirSafe(pluginDir);
-    const plugin = writePlugin({
-      id: "tracked-load-path",
-      dir: pluginDir,
-      filename: "index.cjs",
-      body: `module.exports = { id: "tracked-load-path", register() {} };`,
-    });
-
-    const warnings: string[] = [];
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      logger: createWarningLogger(warnings),
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: openclawHome,
-        HOME: ignoredHome,
-        OPENCLAW_STATE_DIR: stateDir,
-        CLAWDBOT_STATE_DIR: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
-      config: {
+  it.each([
+    {
+      name: "does not warn about missing provenance for env-resolved load paths",
+      pluginId: "tracked-load-path",
+      buildConfig: (plugin: TempPlugin) => ({
         plugins: {
           load: { paths: ["~/plugins/tracked-load-path"] },
-          allow: ["tracked-load-path"],
+          allow: [plugin.id],
         },
-      },
-    });
-
-    expect(registry.plugins.find((entry) => entry.id === "tracked-load-path")?.source).toBe(
-      plugin.file,
-    );
-    expect(
-      warnings.some((msg) => msg.includes("loaded without install/load-path provenance")),
-    ).toBe(false);
-  });
-
-  it("does not warn about missing provenance for env-resolved install paths", () => {
-    useNoBundledPlugins();
-    const openclawHome = makeTempDir();
-    const ignoredHome = makeTempDir();
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(openclawHome, "plugins", "tracked-install-path");
-    mkdirSafe(pluginDir);
-    const plugin = writePlugin({
-      id: "tracked-install-path",
-      dir: pluginDir,
-      filename: "index.cjs",
-      body: `module.exports = { id: "tracked-install-path", register() {} };`,
-    });
-
-    const warnings: string[] = [];
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      logger: createWarningLogger(warnings),
-      env: {
-        ...process.env,
-        OPENCLAW_HOME: openclawHome,
-        HOME: ignoredHome,
-        OPENCLAW_STATE_DIR: stateDir,
-        CLAWDBOT_STATE_DIR: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
-      config: {
+      }),
+    },
+    {
+      name: "does not warn about missing provenance for env-resolved install paths",
+      pluginId: "tracked-install-path",
+      buildConfig: (plugin: TempPlugin) => ({
         plugins: {
           load: { paths: [plugin.file] },
-          allow: ["tracked-install-path"],
+          allow: [plugin.id],
           installs: {
-            "tracked-install-path": {
+            [plugin.id]: {
               source: "path",
-              installPath: "~/plugins/tracked-install-path",
-              sourcePath: "~/plugins/tracked-install-path",
+              installPath: `~/plugins/${plugin.id}`,
+              sourcePath: `~/plugins/${plugin.id}`,
             },
           },
         },
-      },
+      }),
+    },
+  ])("$name", ({ pluginId, buildConfig }) => {
+    const { plugin, env } = createEnvResolvedPluginFixture(pluginId);
+    const warnings: string[] = [];
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      logger: createWarningLogger(warnings),
+      env,
+      config: buildConfig(plugin),
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "tracked-install-path")?.source).toBe(
-      plugin.file,
-    );
+    expect(registry.plugins.find((entry) => entry.id === plugin.id)?.source).toBe(plugin.file);
     expect(
       warnings.some((msg) => msg.includes("loaded without install/load-path provenance")),
     ).toBe(false);
