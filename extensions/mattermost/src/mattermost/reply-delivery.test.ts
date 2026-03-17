@@ -45,6 +45,7 @@ describe("deliverMattermostReplyPayload", () => {
         "channel:town-square",
         "caption",
         expect.objectContaining({
+          cfg,
           accountId: "default",
           mediaUrl,
           replyToId: "root-post",
@@ -63,6 +64,7 @@ describe("deliverMattermostReplyPayload", () => {
 
   it("forwards replyToId for text-only chunked replies", async () => {
     const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
     const core = {
       channel: {
         text: {
@@ -75,7 +77,7 @@ describe("deliverMattermostReplyPayload", () => {
 
     await deliverMattermostReplyPayload({
       core,
-      cfg: {} satisfies OpenClawConfig,
+      cfg,
       payload: { text: "hello" },
       to: "channel:town-square",
       accountId: "default",
@@ -91,6 +93,7 @@ describe("deliverMattermostReplyPayload", () => {
       "channel:town-square",
       "hello",
       expect.objectContaining({
+        cfg,
         accountId: "default",
         replyToId: "root-post",
       }),
