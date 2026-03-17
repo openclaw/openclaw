@@ -128,7 +128,7 @@ export const formatResponseUsageLine = (params: {
         })
       : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  const suffix = costLabel ? ` · est ${costLabel}` : "";
+  const suffix = costLabel ? ` · ${costLabel}` : "";
   const modelLabel = params.model ? ` · ${params.model}` : "";
   const thinkingLabel =
     params.thinkingLevel && params.thinkingLevel !== "off"
