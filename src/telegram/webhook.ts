@@ -169,6 +169,15 @@ export async function startTelegramWebhook(opts: {
         return;
       }
 
+      // Passthrough x-trigger-source header for LLM quota routing.
+      const triggerSourceHeader = req.headers["x-trigger-source"];
+      const triggerSource = Array.isArray(triggerSourceHeader)
+        ? triggerSourceHeader[0]
+        : triggerSourceHeader;
+      if (triggerSource) {
+        (body.value as Record<string, unknown>)._triggerSource = triggerSource;
+      }
+
       let replied = false;
       const reply = async (json: string) => {
         if (replied) {
