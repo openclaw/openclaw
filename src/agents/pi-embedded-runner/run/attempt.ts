@@ -122,6 +122,14 @@ async function getImplicitMemoryRuntime(): Promise<ImplicitMemoryRuntimeModule> 
   implicitMemoryRuntimePromise ??= import("../../../memory/implicit-memory.runtime.js");
   return await implicitMemoryRuntimePromise;
 }
+
+export function shouldUseImplicitMemoryForRun(params: {
+  enabled: boolean;
+  isProbeSession: boolean;
+  trigger?: string;
+}): boolean {
+  return params.enabled && !params.isProbeSession && params.trigger === "user";
+}
 import { buildModelAliasLines } from "../model.js";
 import {
   clearActiveEmbeddedRun,
@@ -2315,10 +2323,11 @@ export async function runEmbeddedAttempt(
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       const autoMemoryEnabled = params.config?.memory?.implicit?.enabled === true;
-      const shouldUseImplicitMemory =
-        autoMemoryEnabled &&
-        !isProbeSession &&
-        (params.trigger == null || params.trigger === "user");
+      const shouldUseImplicitMemory = shouldUseImplicitMemoryForRun({
+        enabled: autoMemoryEnabled,
+        isProbeSession,
+        trigger: params.trigger,
+      });
       const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
       let abortTimer: NodeJS.Timeout | undefined;
       let compactionGraceUsed = false;
