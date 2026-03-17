@@ -1,7 +1,0 @@
-export {
-  primeConfiguredBindingRegistry as primeConfiguredAcpBindingRegistry,
-  resolveConfiguredBinding as resolveConfiguredAcpBinding,
-  resolveConfiguredBindingRecord as resolveConfiguredAcpBindingRecord,
-  resolveConfiguredBindingRecordBySessionKey as resolveConfiguredAcpBindingRecordBySessionKey,
-  resolveConfiguredBindingRecordForConversation as resolveConfiguredAcpBindingRecordForConversation,
-} from "./configured-binding-registry.js";

@@ -5,9 +5,6 @@ const resolveAgentConfigMock = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
-const getChannelPluginCatalogEntryMock = vi.hoisted(() => vi.fn());
-const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
-const loadOpenClawPluginsMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryVersionMock = vi.hoisted(() => vi.fn());
 
@@ -19,18 +16,6 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("./index.js", () => ({
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-}));
-
-vi.mock("./catalog.js", () => ({
-  getChannelPluginCatalogEntry: (...args: unknown[]) => getChannelPluginCatalogEntryMock(...args),
-}));
-
-vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
-}));
-
-vi.mock("../../plugins/loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
@@ -118,11 +103,6 @@ describe("configured binding registry", () => {
     resolveDefaultAgentIdMock.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
     getChannelPluginMock.mockReset();
-    getChannelPluginCatalogEntryMock.mockReset().mockReturnValue(undefined);
-    applyPluginAutoEnableMock.mockReset().mockImplementation(({ config }: { config: unknown }) => ({
-      config,
-    }));
-    loadOpenClawPluginsMock.mockReset();
     getActivePluginRegistryMock.mockReset().mockReturnValue({ channels: [] });
     getActivePluginRegistryVersionMock.mockReset().mockReturnValue(1);
   });
@@ -142,7 +122,6 @@ describe("configured binding registry", () => {
     expect(resolved?.record.conversation.channel).toBe("discord");
     expect(resolved?.record.metadata?.backend).toBe("acpx");
     expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("keeps compatibility with legacy acpBindings channel providers", async () => {
@@ -193,16 +172,13 @@ describe("configured binding registry", () => {
     });
   });
 
-  it("primes compiled ACP bindings from the binding agent workspace once", async () => {
+  it("primes compiled ACP bindings from the already loaded active registry once", async () => {
     const plugin = createDiscordAcpPlugin();
     const cfg = createConfig({ bindingAgentId: "codex" });
     getChannelPluginMock.mockReturnValue(undefined);
-    resolveAgentWorkspaceDirMock.mockImplementation((_cfg: unknown, agentId: string) =>
-      agentId === "codex" ? "/tmp/codex" : "/tmp/main",
-    );
-    loadOpenClawPluginsMock.mockImplementation(({ workspaceDir }: { workspaceDir?: string }) =>
-      workspaceDir === "/tmp/codex" ? { channels: [{ plugin }] } : { channels: [] },
-    );
+    getActivePluginRegistryMock.mockReturnValue({
+      channels: [{ plugin }],
+    });
     const bindingRegistry = await importConfiguredBindings("binding-workspace");
 
     const primed = bindingRegistry.primeConfiguredBindingRegistry({
@@ -217,21 +193,7 @@ describe("configured binding registry", () => {
 
     expect(primed).toEqual({ bindingCount: 1, channelCount: 1 });
     expect(resolved?.statefulTarget.agentId).toBe("codex");
-    expect(loadOpenClawPluginsMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        workspaceDir: "/tmp/main",
-        onlyPluginIds: ["discord"],
-      }),
-    );
-    expect(loadOpenClawPluginsMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        workspaceDir: "/tmp/codex",
-        onlyPluginIds: ["discord"],
-      }),
-    );
-    loadOpenClawPluginsMock.mockClear();
+    expect(plugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
 
     const second = bindingRegistry.resolveConfiguredBindingRecord({
       cfg: cfg as never,
@@ -241,7 +203,6 @@ describe("configured binding registry", () => {
     });
 
     expect(second?.statefulTarget.agentId).toBe("codex");
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
   it("resolves wildcard binding session keys from the compiled registry", async () => {
@@ -266,35 +227,17 @@ describe("configured binding registry", () => {
     expect(resolved?.record.metadata?.backend).toBe("acpx");
   });
 
-  it("uses catalog plugin ids when they differ from the channel id after startup priming", async () => {
-    const plugin = createDiscordAcpPlugin();
-    const cfg = createConfig();
-    getChannelPluginMock.mockReturnValue(undefined);
-    getChannelPluginCatalogEntryMock.mockReturnValue({
-      id: "discord",
-      pluginId: "@vendor/discord-runtime",
-    });
-    loadOpenClawPluginsMock.mockReturnValue({
-      channels: [{ plugin }],
-    });
-    const bindingRegistry = await importConfiguredBindings("plugin-id-scope");
+  it("does not perform late plugin discovery when a channel plugin is unavailable", async () => {
+    const bindingRegistry = await importConfiguredBindings("no-fallback-discovery");
 
-    bindingRegistry.primeConfiguredBindingRegistry({
-      cfg: cfg as never,
-    });
     const resolved = bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: cfg as never,
+      cfg: createConfig() as never,
       channel: "discord",
       accountId: "default",
       conversationId: "1479098716916023408",
     });
 
-    expect(resolved?.record.conversation.channel).toBe("discord");
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["@vendor/discord-runtime", "discord"],
-      }),
-    );
+    expect(resolved).toBeNull();
   });
 
   it("rebuilds the compiled registry when the active plugin registry version changes", async () => {

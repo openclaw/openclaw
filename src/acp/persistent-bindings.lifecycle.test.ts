@@ -28,7 +28,7 @@ vi.mock("./runtime/session-meta.js", () => ({
   readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
-vi.mock("../channels/plugins/acp-bindings.js", () => ({
+vi.mock("./persistent-bindings.resolve.js", () => ({
   resolveConfiguredAcpBindingSpecBySessionKey:
     resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey,
 }));

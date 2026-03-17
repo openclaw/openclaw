@@ -1,9 +1,6 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listConfiguredBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -14,7 +11,6 @@ import type {
   ConfiguredBindingRecordResolution,
   ConfiguredBindingResolution,
 } from "./binding-types.js";
-import { getChannelPluginCatalogEntry } from "./catalog.js";
 import {
   listConfiguredBindingConsumers,
   resolveConfiguredBindingConsumer,
@@ -35,14 +31,6 @@ type CompiledConfiguredBindingRegistry = {
 type CachedCompiledConfiguredBindingRegistry = {
   registryVersion: number;
   registry: CompiledConfiguredBindingRegistry;
-};
-
-type ConfiguredBindingCompilerContext = {
-  configForWorkspaceResolution: OpenClawConfig;
-  workspaceDirs: string[];
-  channelPluginCache: Map<string, ChannelPluginLike | null>;
-  scopedPluginIdsCache: Map<string, string[]>;
-  allowSnapshotFallback: boolean;
 };
 
 const compiledRegistryCache = new WeakMap<
@@ -82,153 +70,15 @@ function resolveLoadedChannelPlugin(channel: string) {
   });
 }
 
-function listConfiguredBindingCompilerWorkspaces(cfg: OpenClawConfig): {
-  configForWorkspaceResolution: OpenClawConfig;
-  workspaceDirs: string[];
-} {
-  const autoEnabled = applyPluginAutoEnable({ config: cfg }).config;
-  const seen = new Set<string>();
-  const workspaceDirs: string[] = [];
-  const addWorkspaceDir = (agentId: string) => {
-    const workspaceDir = resolveAgentWorkspaceDir(autoEnabled, agentId);
-    if (!workspaceDir || seen.has(workspaceDir)) {
-      return;
-    }
-    seen.add(workspaceDir);
-    workspaceDirs.push(workspaceDir);
-  };
-
-  addWorkspaceDir(resolveDefaultAgentId(autoEnabled));
-  for (const binding of listConfiguredBindings(autoEnabled)) {
-    addWorkspaceDir(pickFirstExistingAgentId(autoEnabled, binding.agentId ?? "main"));
-  }
-
-  return {
-    configForWorkspaceResolution: autoEnabled,
-    workspaceDirs,
-  };
-}
-
-function createConfiguredBindingCompilerContext(
-  cfg: OpenClawConfig,
-  options?: { allowSnapshotFallback?: boolean },
-): ConfiguredBindingCompilerContext {
-  const { configForWorkspaceResolution, workspaceDirs } =
-    listConfiguredBindingCompilerWorkspaces(cfg);
-  return {
-    configForWorkspaceResolution,
-    workspaceDirs,
-    channelPluginCache: new Map(),
-    scopedPluginIdsCache: new Map(),
-    allowSnapshotFallback: options?.allowSnapshotFallback ?? false,
-  };
-}
-
-function resolveScopedPluginIdsForChannelSnapshot(params: {
-  context: ConfiguredBindingCompilerContext;
-  workspaceDir: string;
-  channel: string;
-}): string[] {
-  const cacheKey = `${params.workspaceDir}\n${params.channel}`;
-  const cached = params.context.scopedPluginIdsCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  const catalogEntry = getChannelPluginCatalogEntry(params.channel, {
-    workspaceDir: params.workspaceDir,
-  });
-  const pluginIds = Array.from(
-    new Set(
-      [catalogEntry?.pluginId, params.channel].filter((entry): entry is string => Boolean(entry)),
-    ),
-  );
-  params.context.scopedPluginIdsCache.set(cacheKey, pluginIds);
-  return pluginIds;
-}
-
-function resolveConfiguredBindingChannelPluginSnapshot(params: {
-  context: ConfiguredBindingCompilerContext;
-  channel: string;
-}) {
-  if (!params.context.allowSnapshotFallback) {
-    return undefined;
-  }
-  const normalized = params.channel.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (params.context.channelPluginCache.has(normalized)) {
-    return params.context.channelPluginCache.get(normalized) ?? undefined;
-  }
-
-  for (const workspaceDir of params.context.workspaceDirs) {
-    try {
-      const registry = loadOpenClawPlugins({
-        config: params.context.configForWorkspaceResolution,
-        workspaceDir,
-        activate: false,
-        cache: false,
-        onlyPluginIds: resolveScopedPluginIdsForChannelSnapshot({
-          context: params.context,
-          workspaceDir,
-          channel: normalized,
-        }),
-        includeSetupOnlyChannelPlugins: true,
-        preferSetupRuntimeForChannelPlugins: true,
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      });
-      const plugin = findChannelPlugin({
-        registry,
-        channel: normalized,
-      });
-      if (resolveChannelConfiguredBindingProvider(plugin)) {
-        params.context.channelPluginCache.set(normalized, plugin ?? null);
-        return plugin;
-      }
-    } catch {
-      continue;
-    }
-  }
-
-  params.context.channelPluginCache.set(normalized, null);
-  return undefined;
-}
-
-function resolveConfiguredBindingChannelPlugin(params: {
-  context: ConfiguredBindingCompilerContext;
-  channel: string;
-}) {
-  const normalized = params.channel.trim().toLowerCase();
-  if (!normalized) {
-    return undefined;
-  }
-
-  const current = resolveLoadedChannelPlugin(normalized);
-  if (current) {
-    return current;
-  }
-
-  return resolveConfiguredBindingChannelPluginSnapshot({
-    context: params.context,
-    channel: normalized,
-  });
-}
-
-function resolveConfiguredBindingAdapter(params: {
-  context: ConfiguredBindingCompilerContext;
-  channel: string;
-}): { channel: ConfiguredBindingChannel; provider: ChannelConfiguredBindingProvider } | null {
-  const normalized = params.channel.trim().toLowerCase();
+function resolveConfiguredBindingAdapter(channel: string): {
+  channel: ConfiguredBindingChannel;
+  provider: ChannelConfiguredBindingProvider;
+} | null {
+  const normalized = channel.trim().toLowerCase();
   if (!normalized) {
     return null;
   }
-  const plugin = resolveConfiguredBindingChannelPlugin({
-    context: params.context,
-    channel: normalized,
-  });
+  const plugin = resolveLoadedChannelPlugin(normalized);
   const provider = resolveChannelConfiguredBindingProvider(plugin);
   if (
     !plugin ||
@@ -352,11 +202,7 @@ function pushCompiledRule(
 
 function compileConfiguredBindingRegistry(params: {
   cfg: OpenClawConfig;
-  allowSnapshotFallback: boolean;
 }): CompiledConfiguredBindingRegistry {
-  const context = createConfiguredBindingCompilerContext(params.cfg, {
-    allowSnapshotFallback: params.allowSnapshotFallback,
-  });
   const rulesByChannel = new Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>();
 
   for (const binding of listConfiguredBindings(params.cfg)) {
@@ -365,10 +211,7 @@ function compileConfiguredBindingRegistry(params: {
       continue;
     }
 
-    const resolvedChannel = resolveConfiguredBindingAdapter({
-      context,
-      channel: binding.match.channel,
-    });
+    const resolvedChannel = resolveConfiguredBindingAdapter(binding.match.channel);
     if (!resolvedChannel) {
       continue;
     }
@@ -410,7 +253,6 @@ function resolveCompiledBindingRegistry(cfg: OpenClawConfig): CompiledConfigured
 
   const registry = compileConfiguredBindingRegistry({
     cfg,
-    allowSnapshotFallback: false,
   });
   compiledRegistryCache.set(cfg, {
     registryVersion,
@@ -506,7 +348,6 @@ export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }):
 } {
   const registry = compileConfiguredBindingRegistry({
     cfg: params.cfg,
-    allowSnapshotFallback: true,
   });
   compiledRegistryCache.set(params.cfg, {
     registryVersion: getActivePluginRegistryVersion(),
