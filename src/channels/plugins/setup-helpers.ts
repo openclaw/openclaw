@@ -172,7 +172,7 @@ export function createPatchedAccountSetupAdapter(params: {
   return {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
-      applyAccountNameToChannelSection({
+      prepareScopedSetupConfig({
         cfg,
         channelKey: params.channelKey,
         accountId,
@@ -181,21 +181,14 @@ export function createPatchedAccountSetupAdapter(params: {
       }),
     validateInput: params.validateInput,
     applyAccountConfig: ({ cfg, accountId, input }) => {
-      const namedConfig = applyAccountNameToChannelSection({
+      const next = prepareScopedSetupConfig({
         cfg,
         channelKey: params.channelKey,
         accountId,
         name: input.name,
         alwaysUseAccounts: params.alwaysUseAccounts,
+        migrateBaseName: !params.alwaysUseAccounts,
       });
-      const next =
-        accountId !== DEFAULT_ACCOUNT_ID
-          ? migrateBaseNameToDefaultAccount({
-              cfg: namedConfig,
-              channelKey: params.channelKey,
-              alwaysUseAccounts: params.alwaysUseAccounts,
-            })
-          : namedConfig;
       const patch = params.buildPatch(input);
       return patchScopedAccountConfig({
         cfg: next,
