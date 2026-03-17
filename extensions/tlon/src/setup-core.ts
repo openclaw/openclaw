@@ -8,7 +8,6 @@ import {
   type ChannelSetupInput,
   type ChannelSetupWizard,
   type OpenClawConfig,
-  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { buildTlonAccountFields } from "./account-fields.js";
 import { normalizeShip } from "./targets.js";
@@ -38,12 +37,7 @@ type TlonSetupWizardBaseParams = {
     cfg: OpenClawConfig;
     configured: boolean;
   }) => string[] | Promise<string[]>;
-  finalize: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    prompter: WizardPrompter;
-    options?: Record<string, unknown>;
-  }) => Promise<{ cfg: OpenClawConfig }>;
+  finalize: NonNullable<ChannelSetupWizard["finalize"]>;
 };
 
 export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): ChannelSetupWizard {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
@@ -7,7 +8,6 @@ import {
   requireOpenClawAgentDir,
   setupAuthTestEnv,
 } from "../../commands/test-wizard-helpers.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
 import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
 import { requireProviderContractProvider, uniqueProviderContractProviders } from "./registry.js";
@@ -119,15 +119,15 @@ describe("provider auth-choice contract", () => {
     for (const scenario of pluginFallbackScenarios) {
       resolvePreferredProviderPluginProvidersMock.mockClear();
       await expect(
-        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice as AuthChoice }),
+        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice }),
       ).resolves.toBe(scenario.expectedProvider);
       expect(resolvePreferredProviderPluginProvidersMock).toHaveBeenCalled();
     }
 
     resolvePreferredProviderPluginProvidersMock.mockClear();
-    await expect(
-      resolvePreferredProviderForAuthChoice({ choice: "unknown" as AuthChoice }),
-    ).resolves.toBe(undefined);
+    await expect(resolvePreferredProviderForAuthChoice({ choice: "unknown" })).resolves.toBe(
+      undefined,
+    );
     expect(resolvePreferredProviderPluginProvidersMock).toHaveBeenCalled();
   });
 

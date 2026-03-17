@@ -1,3 +1,4 @@
+import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
@@ -14,6 +15,38 @@ export type PluginCommandSpecMock = {
   acceptsArgs: boolean;
 };
 
+type ProviderMonitorTestMocks = {
+  clientHandleDeployRequestMock: Mock<() => Promise<void>>;
+  clientFetchUserMock: Mock<(target: string) => Promise<{ id: string }>>;
+  clientGetPluginMock: Mock<(name: string) => unknown>;
+  clientConstructorOptionsMock: Mock<(options?: unknown) => void>;
+  createDiscordAutoPresenceControllerMock: Mock<() => unknown>;
+  createDiscordNativeCommandMock: Mock<(params?: { command?: { name?: string } }) => unknown>;
+  createDiscordMessageHandlerMock: Mock<() => unknown>;
+  createNoopThreadBindingManagerMock: Mock<() => { stop: ReturnType<typeof vi.fn> }>;
+  createThreadBindingManagerMock: Mock<() => { stop: ReturnType<typeof vi.fn> }>;
+  reconcileAcpThreadBindingsOnStartupMock: Mock<() => unknown>;
+  createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }>;
+  getAcpSessionStatusMock: Mock<
+    (params: {
+      cfg: OpenClawConfig;
+      sessionKey: string;
+      signal?: AbortSignal;
+    }) => Promise<{ state: string }>
+  >;
+  getPluginCommandSpecsMock: Mock<() => PluginCommandSpecMock[]>;
+  listNativeCommandSpecsForConfigMock: Mock<() => NativeCommandSpecMock[]>;
+  listSkillCommandsForAgentsMock: Mock<() => unknown[]>;
+  monitorLifecycleMock: Mock<(params: { threadBindings: { stop: () => void } }) => Promise<void>>;
+  resolveDiscordAccountMock: Mock<() => unknown>;
+  resolveDiscordAllowlistConfigMock: Mock<() => Promise<unknown>>;
+  resolveNativeCommandsEnabledMock: Mock<() => boolean>;
+  resolveNativeSkillsEnabledMock: Mock<() => boolean>;
+  isVerboseMock: Mock<() => boolean>;
+  shouldLogVerboseMock: Mock<() => boolean>;
+  voiceRuntimeModuleLoadedMock: Mock<() => void>;
+};
+
 export function baseDiscordAccountConfig() {
   return {
     commands: { native: true, nativeSkills: false },
@@ -23,7 +56,7 @@ export function baseDiscordAccountConfig() {
   };
 }
 
-const providerMonitorTestMocks = vi.hoisted(() => {
+const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   const isVerboseMock = vi.fn(() => false);
   const shouldLogVerboseMock = vi.fn(() => false);
@@ -123,7 +156,7 @@ const {
   voiceRuntimeModuleLoadedMock,
 } = providerMonitorTestMocks;
 
-export function getProviderMonitorTestMocks() {
+export function getProviderMonitorTestMocks(): typeof providerMonitorTestMocks {
   return providerMonitorTestMocks;
 }
 
