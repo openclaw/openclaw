@@ -143,6 +143,32 @@ describe("resolveModelAuthMode", () => {
     );
   });
 
+  it("returns aws-sdk for non-bedrock provider with aws-sdk override even when bearer token is set", async () => {
+    await withEnvAsync(
+      {
+        AWS_BEARER_TOKEN_BEDROCK: "bedrock-only-token", // pragma: allowlist secret
+      },
+      async () => {
+        expect(
+          resolveModelAuthMode(
+            "google-vertex",
+            {
+              models: {
+                providers: {
+                  "google-vertex": {
+                    auth: "aws-sdk",
+                    models: [],
+                  },
+                },
+              },
+            },
+            { version: 1, profiles: {} },
+          ),
+        ).toBe("aws-sdk");
+      },
+    );
+  });
+
   it("returns api-key for bedrock when bearer token is set", async () => {
     await withEnvAsync(
       {
