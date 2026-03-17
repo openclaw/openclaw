@@ -311,6 +311,43 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
+  it("prefers OPENCLAW_TASK_SCRIPT_NAME over the registered task script", async () => {
+    await withScheduledTaskScript(
+      {
+        env: { OPENCLAW_TASK_SCRIPT_NAME: "custom-gateway.cmd" },
+        scriptLines: ["@echo off", "node gateway.js --from-custom-script-name"],
+      },
+      async (env) => {
+        const queriedScriptPath = path.join(env.USERPROFILE ?? "", "custom-state", "gateway.cmd");
+        await fs.mkdir(path.dirname(queriedScriptPath), { recursive: true });
+        await fs.writeFile(
+          queriedScriptPath,
+          ["@echo off", "node gateway.js --from-query"].join("\r\n"),
+        );
+        execSchtasksMock.mockResolvedValue({
+          code: 0,
+          stdout: [
+            '<?xml version="1.0" encoding="UTF-16"?>',
+            "<Task>",
+            "  <Actions>",
+            `    <Exec><Command>${queriedScriptPath}</Command></Exec>`,
+            "  </Actions>",
+            "</Task>",
+          ].join("\r\n"),
+          stderr: "",
+        });
+
+        const result = await readScheduledTaskCommand(env);
+
+        expect(execSchtasksMock).not.toHaveBeenCalled();
+        expect(result).toEqual({
+          programArguments: ["node", "gateway.js", "--from-custom-script-name"],
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
   it("falls back to the registered task script when the default profile state dir differs", async () => {
     await withScheduledTaskScript({}, async (env) => {
       const queriedScriptPath = path.join(env.USERPROFILE ?? "", "custom-state", "gateway.cmd");

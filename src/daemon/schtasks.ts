@@ -162,8 +162,11 @@ export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
 ): Promise<GatewayServiceCommandConfig | null> {
   const derivedScriptPath = resolveTaskScriptPath(env);
-  const explicitScriptPath = env.OPENCLAW_TASK_SCRIPT?.trim() || env.OPENCLAW_STATE_DIR?.trim();
-  const registeredScriptPath = explicitScriptPath
+  const hasExplicitScriptPath =
+    Boolean(env.OPENCLAW_TASK_SCRIPT?.trim()) ||
+    Boolean(env.OPENCLAW_STATE_DIR?.trim()) ||
+    Boolean(env.OPENCLAW_TASK_SCRIPT_NAME?.trim());
+  const registeredScriptPath = hasExplicitScriptPath
     ? null
     : await resolveRegisteredTaskScriptPath(env).catch(() => null);
   const candidatePaths = [
