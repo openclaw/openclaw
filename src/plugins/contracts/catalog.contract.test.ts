@@ -1,11 +1,58 @@
-import { describe, expect, it } from "vitest";
-import {
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { providerContractRegistry } from "./registry.js";
+
+function uniqueProviders() {
+  return [
+    ...new Map(
+      providerContractRegistry.map((entry) => [entry.provider.id, entry.provider]),
+    ).values(),
+  ];
+}
+
+const resolvePluginProvidersMock = vi.fn();
+const resolveOwningPluginIdsForProviderMock = vi.fn();
+const resolveNonBundledProviderPluginIdsMock = vi.fn();
+
+vi.mock("../providers.js", () => ({
+  resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
+  resolveOwningPluginIdsForProvider: (...args: unknown[]) =>
+    resolveOwningPluginIdsForProviderMock(...args),
+  resolveNonBundledProviderPluginIds: (...args: unknown[]) =>
+    resolveNonBundledProviderPluginIdsMock(...args),
+}));
+
+const {
   augmentModelCatalogWithProviderPlugins,
   buildProviderMissingAuthMessageWithPlugin,
+  resetProviderRuntimeHookCacheForTest,
   resolveProviderBuiltInModelSuppression,
-} from "../provider-runtime.js";
+} = await import("../provider-runtime.js");
 
 describe("provider catalog contract", () => {
+  beforeEach(() => {
+    const providers = uniqueProviders();
+    const providerIds = [...new Set(providerContractRegistry.map((entry) => entry.pluginId))];
+    resetProviderRuntimeHookCacheForTest();
+
+    resolveOwningPluginIdsForProviderMock.mockReset();
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(providerIds);
+
+    resolveNonBundledProviderPluginIdsMock.mockReset();
+    resolveNonBundledProviderPluginIdsMock.mockReturnValue([]);
+
+    resolvePluginProvidersMock.mockReset();
+    resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) => {
+      const onlyPluginIds = params?.onlyPluginIds;
+      if (!onlyPluginIds || onlyPluginIds.length === 0) {
+        return providers;
+      }
+      const allowed = new Set(onlyPluginIds);
+      return providerContractRegistry
+        .filter((entry) => allowed.has(entry.pluginId))
+        .map((entry) => entry.provider);
+    });
+  });
+
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {
     expect(
       buildProviderMissingAuthMessageWithPlugin({
