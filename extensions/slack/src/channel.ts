@@ -486,7 +486,13 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   actions: createSlackActions(SLACK_CHANNEL, {
     invoke: async (action, cfg, toolContext) =>
-      await getSlackRuntime().channel.slack.handleSlackAction(action, cfg, toolContext),
+      await getSlackRuntime().channel.slack.handleSlackAction(
+        action,
+        cfg as OpenClawConfig,
+        toolContext as Parameters<
+          ReturnType<typeof getSlackRuntime>["channel"]["slack"]["handleSlackAction"]
+        >[2],
+      ),
   }),
   setup: slackSetupAdapter,
   outbound: {
