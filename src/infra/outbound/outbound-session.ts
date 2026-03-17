@@ -8,6 +8,7 @@ import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-rout
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
+import { normalizeOutboundThreadId } from "./thread-id.js";
 
 export type OutboundSessionRoute = {
   sessionKey: string;
@@ -29,20 +30,6 @@ export type ResolveOutboundSessionRouteParams = {
   replyToId?: string | null;
   threadId?: string | number | null;
 };
-
-function normalizeThreadId(value?: string | number | null): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return undefined;
-    }
-    return String(Math.trunc(value));
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function stripProviderPrefix(raw: string, channel: string): string {
   const trimmed = raw.trim();
@@ -240,7 +227,7 @@ function resolveMattermostSession(
     channel: "mattermost",
     peer: { kind: isUser ? "direct" : "channel", id: rawId },
   });
-  const threadId = normalizeThreadId(params.replyToId ?? params.threadId);
+  const threadId = normalizeOutboundThreadId(params.replyToId ?? params.threadId);
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId,
