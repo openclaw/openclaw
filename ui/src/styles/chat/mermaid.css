@@ -1,0 +1,35 @@
+.chat-text :where(.mermaid-block) {
+  margin-top: 0.75em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+}
+
+.chat-text :where(.mermaid-block__render) {
+  overflow-x: auto;
+  padding: 12px;
+}
+
+.chat-text :where(.mermaid-block__render svg) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.chat-text :where(.mermaid-block__source) {
+  border-top: 1px solid var(--border);
+}
+
+.chat-text :where(.mermaid-block__source > summary) {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chat-text :where(.mermaid-block__source > summary::-webkit-details-marker) {
+  display: none;
+}

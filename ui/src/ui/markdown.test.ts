@@ -30,6 +30,16 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(html).toContain("console.log(1)");
   });
 
+  it("renders mermaid fences into renderable mermaid blocks", () => {
+    const html = toSanitizedMarkdownHtml(
+      ["```mermaid", "flowchart TD", "A --> B", "```"].join("\n"),
+    );
+    expect(html).toContain('class="mermaid-block"');
+    expect(html).toContain('class="mermaid-block__render"');
+    expect(html).toContain('class="language-mermaid"');
+    expect(html).toContain("Mermaid source");
+  });
+
   it("flattens remote markdown images into alt text", () => {
     const html = toSanitizedMarkdownHtml("![Alt text](https://example.com/image.png)");
     expect(html).not.toContain("<img");

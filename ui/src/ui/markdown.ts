@@ -48,6 +48,7 @@ const allowedAttrs = [
   "data-code",
   "type",
   "aria-label",
+  "role",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
@@ -243,6 +244,7 @@ htmlEscapeRenderer.code = ({
   lang?: string;
   escaped?: boolean;
 }) => {
+  const normalizedLang = lang?.trim().toLowerCase() ?? "";
   const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
   const safeText = escaped ? text : escapeHtml(text);
   const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
@@ -255,10 +257,14 @@ htmlEscapeRenderer.code = ({
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="Copy code"><span class="code-block-copy__idle">Copy</span><span class="code-block-copy__done">Copied!</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
+  if (normalizedLang === "mermaid") {
+    return `<div class="mermaid-block"><div class="mermaid-block__render" aria-label="Mermaid diagram" role="img"></div><details class="mermaid-block__source"><summary>Mermaid source</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details></div>`;
+  }
+
   const trimmed = text.trim();
   const isJson =
-    lang === "json" ||
-    (!lang &&
+    normalizedLang === "json" ||
+    (!normalizedLang &&
       ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
         (trimmed.startsWith("[") && trimmed.endsWith("]"))));
 

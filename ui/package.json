@@ -13,7 +13,8 @@
     "@noble/ed25519": "3.0.1",
     "dompurify": "^3.3.3",
     "lit": "^3.3.2",
-    "marked": "^17.0.5"
+    "marked": "^17.0.5",
+    "mermaid": "11.13.0"
   },
   "devDependencies": {
     "@vitest/browser-playwright": "4.1.2",
