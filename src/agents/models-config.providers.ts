@@ -17,6 +17,7 @@ import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+import { findNormalizedProviderValue } from "./model-selection.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
@@ -897,7 +898,6 @@ export async function resolveImplicitCopilotProvider(params: {
     }
     return "";
   };
-
   let selectedGithubToken = githubToken;
   if (!selectedGithubToken && hasProfile) {
     // Respect auth.order when picking a discovery profile, but continue to
