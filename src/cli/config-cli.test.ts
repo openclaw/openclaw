@@ -388,6 +388,152 @@ describe("config cli", () => {
     });
   });
 
+  describe("config set - agent model override warnings", () => {
+    it("warns when setting agents.defaults.model.primary with agent-level overrides", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+          },
+          list: [
+            { id: "main", name: "Main", model: { primary: "openai-codex/gpt-5.3-codex" } },
+            { id: "work", name: "Work Agent", model: { primary: "openai-codex/gpt-5.3-codex" } },
+          ],
+        },
+      };
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: resolved }),
+      );
+
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
+
+      await program.parseAsync(
+        ["config", "set", "agents.defaults.model.primary", "openai-codex/gpt-5.4"],
+        { from: "user" },
+      );
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const logOutput = mockLog.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logOutput).toContain("agent");
+      expect(logOutput).toContain("model overrides");
+      expect(logOutput).toContain("Main (id: main)");
+      expect(logOutput).toContain("Work Agent (id: work)");
+    });
+
+    it("does not warn when no agent-level model overrides exist", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+          },
+          list: [{ id: "main", name: "Main" }, { id: "work" }],
+        },
+      };
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: resolved }),
+      );
+
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
+
+      await program.parseAsync(
+        ["config", "set", "agents.defaults.model.primary", "openai-codex/gpt-5.4"],
+        { from: "user" },
+      );
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const logOutput = mockLog.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logOutput).not.toContain("model overrides");
+    });
+
+    it("warns for string-style model overrides", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-opus-4-6" } },
+          list: [
+            {
+              id: "legacy",
+              name: "Legacy Agent",
+              model: "openai-codex/gpt-5.3-codex" as never,
+            },
+          ],
+        },
+      };
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: resolved }),
+      );
+
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
+
+      await program.parseAsync(
+        ["config", "set", "agents.defaults.model.primary", "openai-codex/gpt-5.4"],
+        { from: "user" },
+      );
+
+      const logOutput = mockLog.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logOutput).toContain("model overrides");
+      expect(logOutput).toContain("Legacy Agent (id: legacy)");
+      expect(logOutput).toContain("openai-codex/gpt-5.3-codex");
+    });
+
+    it("warns when using bracket notation path", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-opus-4-6" } },
+          list: [{ id: "main", name: "Main", model: { primary: "openai-codex/gpt-5.3-codex" } }],
+        },
+      };
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: resolved }),
+      );
+
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
+
+      await program.parseAsync(
+        ["config", "set", "agents.defaults.model[primary]", "openai-codex/gpt-5.4"],
+        { from: "user" },
+      );
+
+      const logOutput = mockLog.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logOutput).toContain("model overrides");
+      expect(logOutput).toContain("Main (id: main)");
+    });
+
+    it("does not warn when setting a non-model config path", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main", model: { primary: "openai-codex/gpt-5.3-codex" } }],
+        },
+        gateway: { port: 18789 },
+      };
+      mockReadConfigFileSnapshot.mockResolvedValueOnce(
+        buildSnapshot({ resolved, config: resolved }),
+      );
+
+      const { registerConfigCli } = await import("./config-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
+
+      await program.parseAsync(["config", "set", "gateway.port", "18790"], { from: "user" });
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const logOutput = mockLog.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logOutput).not.toContain("model overrides");
+    });
+  });
+
   describe("config unset - issue #6070", () => {
     it("preserves existing config keys when unsetting a value", async () => {
       const resolved: OpenClawConfig = {
