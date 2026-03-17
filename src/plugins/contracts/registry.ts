@@ -38,6 +38,7 @@ import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
 import type {
+  ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   ProviderPlugin,
   SpeechProviderPlugin,
@@ -63,12 +64,14 @@ type WebSearchProviderContractEntry = CapabilityContractEntry<WebSearchProviderP
 type SpeechProviderContractEntry = CapabilityContractEntry<SpeechProviderPlugin>;
 type MediaUnderstandingProviderContractEntry =
   CapabilityContractEntry<MediaUnderstandingProviderPlugin>;
+type ImageGenerationProviderContractEntry = CapabilityContractEntry<ImageGenerationProviderPlugin>;
 
 type PluginRegistrationContractEntry = {
   pluginId: string;
   providerIds: string[];
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  imageGenerationProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
@@ -129,6 +132,8 @@ const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [
   openAIPlugin,
   zaiPlugin,
 ];
+
+const bundledImageGenerationPlugins: RegistrablePlugin[] = [googlePlugin, openAIPlugin];
 
 function captureRegistrations(plugin: RegistrablePlugin) {
   const captured = createCapturedPluginRegistration();
@@ -209,12 +214,19 @@ export const mediaUnderstandingProviderContractRegistry: MediaUnderstandingProvi
     select: (captured) => captured.mediaUnderstandingProviders,
   });
 
+export const imageGenerationProviderContractRegistry: ImageGenerationProviderContractEntry[] =
+  buildCapabilityContractRegistry({
+    plugins: bundledImageGenerationPlugins,
+    select: (captured) => captured.imageGenerationProviders,
+  });
+
 const bundledPluginRegistrationList = [
   ...new Map(
     [
       ...bundledProviderPlugins,
       ...bundledSpeechPlugins,
       ...bundledMediaUnderstandingPlugins,
+      ...bundledImageGenerationPlugins,
       ...bundledWebSearchPlugins,
     ].map((plugin) => [plugin.id, plugin]),
   ).values(),
@@ -230,6 +242,7 @@ export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry
       mediaUnderstandingProviderIds: captured.mediaUnderstandingProviders.map(
         (provider) => provider.id,
       ),
+      imageGenerationProviderIds: captured.imageGenerationProviders.map((provider) => provider.id),
       webSearchProviderIds: captured.webSearchProviders.map((provider) => provider.id),
       toolNames: captured.tools.map((tool) => tool.name),
     };
