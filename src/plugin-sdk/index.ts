@@ -1,4 +1,5 @@
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
+export { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 export {
   BLUEBUBBLES_ACTIONS,
@@ -62,6 +63,27 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
+  ChannelSetupConfigureContext,
+  ChannelSetupDmPolicy,
+  ChannelSetupInteractiveContext,
+  ChannelSetupPlugin,
+  ChannelSetupResult,
+  ChannelSetupStatus,
+  ChannelSetupStatusContext,
+  ChannelSetupWizardAdapter,
+} from "../channels/plugins/setup-wizard-types.js";
+export type {
+  ChannelSetupWizard,
+  ChannelSetupWizardAllowFromEntry,
+  ChannelSetupWizardCredential,
+  ChannelSetupWizardCredentialState,
+  ChannelSetupWizardFinalize,
+  ChannelSetupWizardGroupAccess,
+  ChannelSetupWizardPrepare,
+  ChannelSetupWizardStatus,
+  ChannelSetupWizardTextInput,
+} from "../channels/plugins/setup-wizard.js";
+export type {
   AcpRuntimeCapabilities,
   AcpRuntimeControl,
   AcpRuntimeDoctorReport,
@@ -86,6 +108,7 @@ export { ACP_ERROR_CODES, AcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
 export type {
   AnyAgentTool,
+  MediaUnderstandingProviderPlugin,
   OpenClawPluginConfigSchema,
   OpenClawPluginApi,
   OpenClawPluginService,
@@ -118,6 +141,7 @@ export type {
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
+  SpeechProviderPlugin,
   ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
 } from "../plugins/types.js";
@@ -159,14 +183,17 @@ export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export * from "./speech.js";
 
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
+export * from "./media-understanding.js";
 export {
   mapAllowlistResolutionInputs,
   mapBasicAllowlistResolutionEntries,
   type BasicAllowlistResolutionEntry,
 } from "./allowlist-resolution.js";
+export * from "./provider-web-search.js";
 export { resolveRequestUrl } from "./request-url.js";
 export {
   buildDiscordSendMediaOptions,
@@ -222,6 +249,21 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export {
+  normalizeAllowFromEntries,
+  noteChannelLookupFailure,
+  noteChannelLookupSummary,
+  parseMentionOrPrefixedId,
+  parseSetupEntriesAllowingWildcard,
+  patchChannelConfigForAccount,
+  promptLegacyChannelAllowFrom,
+  promptParsedAllowFromForScopedChannel,
+  promptResolvedAllowFrom,
+  resolveSetupAccountId,
+  setAccountGroupPolicyForChannel,
+  setChannelDmPolicyWithAllowFrom,
+  setLegacyChannelDmPolicyWithAllowFrom,
+  setSetupChannelEnabled,
+  splitSetupEntries,
   promptSingleChannelSecretInput,
   type SingleChannelSecretInputPromptResult,
 } from "../channels/plugins/setup-wizard-helpers.js";
@@ -231,7 +273,10 @@ export { buildChannelSendResult } from "./channel-send-result.js";
 export type { ChannelSendRawResult } from "./channel-send-result.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
 export { createScopedChannelConfigBase } from "./channel-config-helpers.js";
-export { buildAccountScopedAllowlistConfigEditor } from "./allowlist-config-edit.js";
+export {
+  buildAccountScopedAllowlistConfigEditor,
+  resolveLegacyDmAllowlistConfigPaths,
+} from "./allowlist-config-edit.js";
 export {
   AllowFromEntrySchema,
   AllowFromListSchema,
@@ -356,6 +401,7 @@ export {
   listConfiguredAccountIds,
   resolveAccountWithDefaultFallback,
 } from "./account-resolution.js";
+export { resolveAccountEntry } from "../routing/account-lookup.js";
 export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
 export { extractToolSend } from "./tool-send.js";
@@ -385,7 +431,10 @@ export {
   resolveRuntimeEnv,
   resolveRuntimeEnvWithUnavailableExit,
 } from "./runtime.js";
+export { detectBinary } from "../plugins/setup-binary.js";
+export { installSignalCli } from "../plugins/signal-cli-install.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
+export { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 export { readBooleanParam } from "./boolean-param.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { generatePkceVerifierChallenge, toFormUrlEncoded } from "./oauth-utils.js";
@@ -420,6 +469,7 @@ export type {
   TailscaleStatusCommandRunner,
 } from "../shared/tailscale-status.js";
 export type { ChatType } from "../channels/chat-type.js";
+export { normalizeChatType } from "../channels/chat-type.js";
 /** @deprecated Use ChatType instead */
 export type { RoutePeerKind } from "../routing/resolve-route.js";
 export { resolveAckReaction } from "../agents/identity.js";
@@ -453,6 +503,7 @@ export type {
   PersistentDedupeOptions,
 } from "./persistent-dedupe.js";
 export { formatErrorMessage } from "../infra/errors.js";
+export { resolveFetch } from "../infra/fetch.js";
 export {
   formatUtcTimestamp,
   formatZonedTimestamp,
@@ -619,6 +670,7 @@ export {
   readStringParam,
 } from "../agents/tools/common.js";
 export { formatDocsLink } from "../terminal/links.js";
+export { formatCliCommand } from "../cli/command-format.js";
 export {
   DM_GROUP_ACCESS_REASON,
   readStoreAllowFromForDmPolicy,
@@ -630,7 +682,23 @@ export {
 } from "../security/dm-policy-shared.js";
 export type { DmGroupAccessReasonCode } from "../security/dm-policy-shared.js";
 export type { HookEntry } from "../hooks/types.js";
-export { clamp, escapeRegExp, normalizeE164, safeParseJson, sleep } from "../utils.js";
+export {
+  clamp,
+  escapeRegExp,
+  isRecord,
+  normalizeE164,
+  pathExists,
+  resolveUserPath,
+  safeParseJson,
+  sleep,
+} from "../utils.js";
+export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export {
+  DEFAULT_SECRET_FILE_MAX_BYTES,
+  loadSecretFileSync,
+  readSecretFileSync,
+  tryReadSecretFileSync,
+} from "../infra/secret-file.js";
 export { stripAnsi } from "../terminal/ansi.js";
 export { missingTargetError } from "../infra/outbound/target-errors.js";
 export { registerLogTransport } from "../logging/logger.js";
@@ -656,6 +724,8 @@ export type {
   DiagnosticWebhookProcessedEvent,
   DiagnosticWebhookReceivedEvent,
 } from "../infra/diagnostic-events.js";
+export { loadConfig } from "../config/config.js";
+export { runCommandWithTimeout } from "../process/exec.js";
 export { detectMime, extensionForMime, getFileExtension } from "../media/mime.js";
 export { extractOriginalFilename } from "../media/store.js";
 export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
@@ -734,21 +804,21 @@ export {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
-} from "../commands/self-hosted-provider-setup.js";
+} from "../plugins/provider-self-hosted-setup.js";
 export {
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
-} from "../commands/ollama-setup.js";
+} from "../plugins/provider-ollama-setup.js";
 export {
   VLLM_DEFAULT_BASE_URL,
   VLLM_DEFAULT_CONTEXT_WINDOW,
   VLLM_DEFAULT_COST,
   VLLM_DEFAULT_MAX_TOKENS,
   promptAndConfigureVllm,
-} from "../commands/vllm-setup.js";
+} from "../plugins/provider-vllm-setup.js";
 export {
   buildOllamaProvider,
   buildSglangProvider,

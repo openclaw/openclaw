@@ -6,8 +6,7 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/core";
-import { resolveOllamaApiBase } from "../../src/agents/models-config.providers.discovery.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "../../src/agents/ollama-defaults.js";
+import { OLLAMA_DEFAULT_BASE_URL, resolveOllamaApiBase } from "openclaw/plugin-sdk/provider-models";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";

@@ -82,6 +82,11 @@ function resolveBundledProviderCompatPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export const __testing = {
+  resolveBundledProviderCompatPluginIds,
+  withBundledProviderVitestCompat,
+} as const;
+
 export function resolveOwningPluginIdsForProvider(params: {
   provider: string;
   config?: PluginLoadOptions["config"];

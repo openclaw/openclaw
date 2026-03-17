@@ -63,7 +63,7 @@ function pickOnboardProviderAuthOptionValues(
 export function registerOnboardCommand(program: Command) {
   const command = program
     .command("onboard")
-    .description("Interactive wizard to set up the gateway, workspace, and skills")
+    .description("Interactive onboarding for the gateway, workspace, and skills")
     .addHelpText(
       "after",
       () =>
@@ -72,7 +72,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
     .option(
       "--reset",
-      "Reset config + credentials + sessions before running wizard (workspace only with --reset-scope full)",
+      "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run without prompts", false)
@@ -81,8 +81,8 @@ export function registerOnboardCommand(program: Command) {
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
       false,
     )
-    .option("--flow <flow>", "Wizard flow: quickstart|advanced|manual")
-    .option("--mode <mode>", "Wizard mode: local|remote")
+    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual")
+    .option("--mode <mode>", "Onboard mode: local|remote")
     .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
     .option(
       "--token-provider <id>",

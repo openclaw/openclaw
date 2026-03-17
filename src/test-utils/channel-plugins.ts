@@ -26,6 +26,8 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
     enabled: true,
   })),
   providers: [],
+  speechProviders: [],
+  mediaUnderstandingProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],

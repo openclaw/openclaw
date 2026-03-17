@@ -1,21 +1,24 @@
+import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-runtime";
 import {
   applyAccountNameToChannelSection,
+  DEFAULT_ACCOUNT_ID,
   migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import {
+  normalizeAccountId,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setLegacyChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DiscordGuildEntry } from "../../../src/config/types.discord.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
+import {
+  type ChannelSetupAdapter,
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
+import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
+import { createAllowlistSetupWizardProxy } from "../../../src/channels/plugins/setup-wizard-proxy.js";
 import { formatDocsLink } from "../../../src/terminal/links.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
@@ -345,4 +348,14 @@ export function createDiscordSetupWizardProxy(
     dmPolicy: discordDmPolicy,
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
+}
+export function createDiscordSetupWizardProxy(
+  loadWizard: () => Promise<{ discordSetupWizard: ChannelSetupWizard }>,
+) {
+  return createAllowlistSetupWizardProxy({
+    loadWizard: async () => (await loadWizard()).discordSetupWizard,
+    createBase: createDiscordSetupWizardBase,
+    fallbackResolvedGroupAllowlist: (entries) =>
+      entries.map((input) => ({ input, resolved: false })),
+  });
 }

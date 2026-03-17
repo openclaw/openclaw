@@ -1,4 +1,4 @@
-import type { ModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/reply-runtime";
 
 export function createModelsProviderData(
   entries: Record<string, string[]>,

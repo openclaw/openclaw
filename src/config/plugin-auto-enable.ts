@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
 import {
   getChannelPluginCatalogEntry,
   listChannelPluginCatalogEntries,
@@ -8,7 +9,7 @@ import {
   listChatChannels,
   normalizeChatChannelId,
 } from "../channels/registry.js";
-import { hasAnyWhatsAppAuth } from "../plugin-sdk-internal/whatsapp.js";
+import { hasAnyWhatsAppAuth } from "../plugin-sdk/whatsapp.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
@@ -36,10 +37,6 @@ const PROVIDER_PLUGIN_IDS: Array<{ pluginId: string; providerId: string }> = [
 
 function hasNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function recordHasKeys(value: unknown): boolean {
-  return isRecord(value) && Object.keys(value).length > 0;
 }
 
 function accountsHaveKeys(value: unknown, keys: readonly string[]): boolean {
@@ -159,7 +156,7 @@ function isStructuredChannelConfigured(
   if (spec.accountStringKeys && accountsHaveKeys(entry.accounts, spec.accountStringKeys)) {
     return true;
   }
-  return recordHasKeys(entry);
+  return hasMeaningfulChannelConfig(entry);
 }
 
 function isWhatsAppConfigured(cfg: OpenClawConfig): boolean {
@@ -170,12 +167,12 @@ function isWhatsAppConfigured(cfg: OpenClawConfig): boolean {
   if (!entry) {
     return false;
   }
-  return recordHasKeys(entry);
+  return hasMeaningfulChannelConfig(entry);
 }
 
 function isGenericChannelConfigured(cfg: OpenClawConfig, channelId: string): boolean {
   const entry = resolveChannelConfig(cfg, channelId);
-  return recordHasKeys(entry);
+  return hasMeaningfulChannelConfig(entry);
 }
 
 export function isChannelConfigured(

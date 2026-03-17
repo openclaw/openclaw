@@ -1,5 +1,6 @@
 export type {
   AnyAgentTool,
+  MediaUnderstandingProviderPlugin,
   OpenClawPluginConfigSchema,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
@@ -21,6 +22,7 @@ export type {
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
+  SpeechProviderPlugin,
   ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
   OpenClawPluginService,
