@@ -42,3 +42,23 @@ export async function buildSingleProviderApiKeyCatalog(params: {
     },
   };
 }
+
+export async function buildPairedProviderApiKeyCatalog(params: {
+  ctx: ProviderCatalogContext;
+  providerId: string;
+  buildProviders: () =>
+    | Record<string, ModelProviderConfig>
+    | Promise<Record<string, ModelProviderConfig>>;
+}): Promise<ProviderCatalogResult> {
+  const apiKey = params.ctx.resolveProviderApiKey(params.providerId).apiKey;
+  if (!apiKey) {
+    return null;
+  }
+
+  const providers = await params.buildProviders();
+  return {
+    providers: Object.fromEntries(
+      Object.entries(providers).map(([id, provider]) => [id, { ...provider, apiKey }]),
+    ),
+  };
+}

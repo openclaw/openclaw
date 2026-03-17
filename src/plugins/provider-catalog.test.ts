@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildSingleProviderApiKeyCatalog, findCatalogTemplate } from "./provider-catalog.js";
+import {
+  buildPairedProviderApiKeyCatalog,
+  buildSingleProviderApiKeyCatalog,
+  findCatalogTemplate,
+} from "./provider-catalog.js";
 import type { ProviderCatalogContext } from "./types.js";
 
 function createCatalogContext(params: {
@@ -87,6 +91,34 @@ describe("buildSingleProviderApiKeyCatalog", () => {
         provider: "test-provider",
         baseUrl: "https://override.example/v1/",
         apiKey: "secret-key",
+      },
+    });
+  });
+
+  it("adds api key to each paired provider", async () => {
+    const result = await buildPairedProviderApiKeyCatalog({
+      ctx: createCatalogContext({
+        apiKeys: { "test-provider": "secret-key" },
+      }),
+      providerId: "test-provider",
+      buildProviders: async () => ({
+        alpha: { api: "openai-completions", provider: "alpha" },
+        beta: { api: "openai-completions", provider: "beta" },
+      }),
+    });
+
+    expect(result).toEqual({
+      providers: {
+        alpha: {
+          api: "openai-completions",
+          provider: "alpha",
+          apiKey: "secret-key",
+        },
+        beta: {
+          api: "openai-completions",
+          provider: "beta",
+          apiKey: "secret-key",
+        },
       },
     });
   });
