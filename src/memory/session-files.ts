@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
@@ -43,6 +45,16 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
+/**
+ * Strips OpenClaw-injected metadata from a raw content string before
+ * normalization. Must be called on the original multi-line text so that
+ * the line-based sentinel detection in `stripInboundMetadata` works correctly.
+ */
+function stripRawContentMeta(raw: string): string {
+  const stripped = stripInboundMetadata(raw);
+  return stripInlineDirectiveTagsForDisplay(stripped).text;
+}
+
 export function extractSessionText(content: unknown): string | null {
   if (typeof content === "string") {
     const normalized = normalizeSessionText(content);
@@ -61,6 +73,42 @@ export function extractSessionText(content: unknown): string | null {
       continue;
     }
     const normalized = normalizeSessionText(record.text);
+    if (normalized) {
+      parts.push(normalized);
+    }
+  }
+  if (parts.length === 0) {
+    return null;
+  }
+  return parts.join(" ");
+}
+
+/**
+ * Like `extractSessionText` but strips OpenClaw-injected inbound metadata
+ * blocks and inline directive tags from raw content *before* normalization.
+ * Stripping must happen pre-normalization so that line-based sentinel
+ * detection in `stripInboundMetadata` can identify the fenced JSON blocks.
+ */
+function extractAndStripSessionText(content: unknown): string | null {
+  if (typeof content === "string") {
+    const clean = stripRawContentMeta(content);
+    const normalized = normalizeSessionText(clean);
+    return normalized ? normalized : null;
+  }
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; text?: unknown };
+    if (record.type !== "text" || typeof record.text !== "string") {
+      continue;
+    }
+    const clean = stripRawContentMeta(record.text);
+    const normalized = normalizeSessionText(clean);
     if (normalized) {
       parts.push(normalized);
     }
@@ -105,7 +153,7 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
-      const text = extractSessionText(message.content);
+      const text = extractAndStripSessionText(message.content);
       if (!text) {
         continue;
       }
