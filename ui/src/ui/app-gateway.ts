@@ -64,9 +64,10 @@ function clearChatInboundTimers(): void {
   }
 }
 
+const STALE_STREAM_MS = 30_000;
+
 function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string): void {
   clearChatInboundTimers();
-  const staleStreamMs = 30_000;
   _chatInboundTimerFast = setTimeout(() => {
     _chatInboundTimerFast = null;
     if (host.sessionKey !== triggerSessionKey) {
@@ -74,7 +75,7 @@ function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string):
     }
     const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
       .chatStreamStartedAt;
-    if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < staleStreamMs)) {
+    if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)) {
       return;
     }
     void loadChatHistory(host as unknown as OpenClawApp);
@@ -89,7 +90,7 @@ function debouncedLoadChatHistory(host: GatewayHost, triggerSessionKey: string):
     }
     const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
       .chatStreamStartedAt;
-    if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < staleStreamMs)) {
+    if (host.chatRunId || (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)) {
       return;
     }
     void loadChatHistory(host as unknown as OpenClawApp);
@@ -413,6 +414,15 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         _chatInboundTimerSlow = setTimeout(() => {
           _chatInboundTimerSlow = null;
           if (host.sessionKey !== endSessionKey) {
+            return;
+          }
+          // Skip if a new run started during the delay window
+          const streamStartedAt = (host as unknown as { chatStreamStartedAt?: number | null })
+            .chatStreamStartedAt;
+          if (
+            host.chatRunId ||
+            (streamStartedAt && Date.now() - streamStartedAt < STALE_STREAM_MS)
+          ) {
             return;
           }
           void loadChatHistory(host as unknown as OpenClawApp);
