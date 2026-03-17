@@ -16,6 +16,7 @@ import {
   findCodeBlocks,
   isInsideCodeBlock,
   splitLongLineByBytes,
+  wouldBreakStructure,
 } from "./markdown-boundaries.js";
 import { buildTextEmbeddingInput } from "../embedding-inputs.js";
 
@@ -92,6 +93,7 @@ export class SemanticChunker implements ChunkStrategy {
           priorityMap,
           codeBlocks,
           lineBytes,
+          lines,
         );
 
         if (bestSplit > lastBoundary) {
@@ -122,21 +124,23 @@ export class SemanticChunker implements ChunkStrategy {
     priorityMap: Map<number, number>,
     codeBlocks: Array<{ start: number; end: number }>,
     lineBytes: number[],
+    lines: string[],
   ): number {
     let bestSplit = end;
     let bestPriority = Infinity;
 
     // Search for a split point that minimizes both priority deviation and size overflow
     for (let i = end; i > start + 1; i -= 1) {
-      // Skip if this would break structure
-      if (isInsideCodeBlock(i, codeBlocks)) {
+      // Skip if this would break structure (including code blocks, orphaned headings, etc.)
+      if (wouldBreakStructure(i, lines, codeBlocks)) {
         continue;
       }
 
       const priority = priorityMap.get(i) ?? Infinity;
 
       // Calculate how much we'd be under the limit if we split here
-      const bytesAtSplit = this.calculateBytesFrom(start, i - 1, lineBytes);
+      // Include line i in the left chunk (split happens after line i)
+      const bytesAtSplit = this.calculateBytesFrom(start, i, lineBytes);
 
       // Prefer splits that:
       // 1. Have lower priority (better semantic boundary)
@@ -157,6 +161,23 @@ export class SemanticChunker implements ChunkStrategy {
       // Don't go too far back
       if (bytesAtSplit < maxBytes * 0.5) {
         break;
+      }
+    }
+
+    // Prevent fallback splits from landing inside code blocks
+    // When all candidates are skipped, bestSplit may be `end` which could be inside a code block
+    if (isInsideCodeBlock(bestSplit, codeBlocks)) {
+      // Find the code block that contains bestSplit
+      for (const block of codeBlocks) {
+        if (bestSplit > block.start && bestSplit < block.end) {
+          // Split before the code block starts
+          bestSplit = block.start;
+          break;
+        }
+      }
+      // Fallback: if still in code block, use start + 1
+      if (isInsideCodeBlock(bestSplit, codeBlocks)) {
+        bestSplit = start + 1;
       }
     }
 
@@ -190,11 +211,20 @@ export class SemanticChunker implements ChunkStrategy {
     const chunks: MemoryChunk[] = [];
 
     for (let i = 0; i < boundaries.length - 1; i += 1) {
-      const start = boundaries[i] ?? 0;
+      let start = boundaries[i] ?? 0;
       const end = boundaries[i + 1] ?? lines.length;
 
       if (start >= end) {
         continue;
+      }
+
+      // Apply overlap: extend start backward using previous chunk's end lines
+      if (i > 0 && config.overlapBytes > 0) {
+        const prevEnd = boundaries[i - 1] ?? 0;
+        const overlapStart = this.findOverlapStart(prevEnd, start, end, lineBytes, config.overlapBytes);
+        if (overlapStart < start) {
+          start = overlapStart;
+        }
       }
 
       const chunkLines = lines.slice(start, end);
@@ -223,6 +253,31 @@ export class SemanticChunker implements ChunkStrategy {
     }
 
     return chunks;
+  }
+
+  /**
+   * Find the start line for overlap content.
+   * Searches backward from original start to find how many lines to include for overlap.
+   * Always includes at least one line if overlapBytes > 0.
+   */
+  private findOverlapStart(
+    prevEnd: number,
+    originalStart: number,
+    _end: number,
+    lineBytes: number[],
+    overlapBytes: number,
+  ): number {
+    let acc = 0;
+    // Search backward from the line before original start, stopping at prevEnd
+    for (let i = originalStart - 1; i > prevEnd; i--) {
+      const lineByte = lineBytes[i] ?? 0;
+      // Keep at least one line, but don't exceed overlapBytes if we already have some
+      if (acc + lineByte > overlapBytes && i < originalStart - 1) {
+        return i + 1;
+      }
+      acc += lineByte;
+    }
+    return prevEnd;
   }
 
   /**
