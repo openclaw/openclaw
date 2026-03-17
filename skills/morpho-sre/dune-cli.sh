@@ -37,6 +37,7 @@ Env:
   DUNE_VAULT_SECRET_PATH (optional; default: secret/data/openclaw-sre/all-secrets)
   DUNE_ALLOW_MUTATIONS  (optional; set to 1 to allow create/update/archive)
   DUNE_SKIP_VAULT       (optional; set to 1 to skip Vault lookup)
+  DUNE_CLI_BIN          (optional; default: dune; path to dune binary)
 
 Examples:
   dune-cli.sh --probe-auth
@@ -190,11 +191,14 @@ probe_auth() {
   printf '  DUNE_ALLOW_MUTATIONS: %s\n' "${DUNE_ALLOW_MUTATIONS:-0}"
   printf '  dune binary:          %s\n' "$(command -v "$DUNE_CLI_BIN" 2>/dev/null || echo "(not found)")"
 
-  # Attempt resolution in a subshell so die() doesn't kill the probe
-  if (load_api_key) 2>/dev/null; then
-    # Re-run in main shell to capture the variables
-    load_api_key 2>/dev/null || true
-    printf '  resolution:           OK (source: %s, key: %s)\n' "$DUNE_CREDENTIAL_SOURCE" "$(redact_key "$DUNE_API_KEY")"
+  # Attempt resolution in a subshell so die() doesn't kill the probe.
+  # Export source and redacted key via stdout to avoid a second load_api_key call.
+  local probe_result
+  if probe_result="$(load_api_key 2>/dev/null && printf '%s\n' "$DUNE_CREDENTIAL_SOURCE" && redact_key "$DUNE_API_KEY")"; then
+    local probe_source probe_key
+    probe_source="$(printf '%s\n' "$probe_result" | head -1)"
+    probe_key="$(printf '%s\n' "$probe_result" | tail -1)"
+    printf '  resolution:           OK (source: %s, key: %s)\n' "$probe_source" "$probe_key"
   else
     printf '  resolution:           FAILED (run with DUNE_API_KEY=<key> or configure Vault)\n'
   fi

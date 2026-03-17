@@ -202,6 +202,8 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   --query "morpho blue" --categories decoded --include-schema
 ```
 
+- Note: `ethereum.blocks` uses columns `number` and `time` (not `block_number`/`block_time`).
+  Some upstream Dune reference docs use the wrong names — always verify with `dataset search --include-schema`.
 - DuneSQL references (loaded on demand):
   - `references/dune/dunesql-cheatsheet.md` — types, functions, common patterns
   - `references/dune/dataset-discovery.md` — dataset search and contract lookup
