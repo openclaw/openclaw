@@ -1,15 +1,14 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { buildNvidiaProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "nvidia";
 
-const nvidiaPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "NVIDIA Provider",
   description: "Bundled NVIDIA provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "NVIDIA",
@@ -27,6 +26,4 @@ const nvidiaPlugin = {
       },
     });
   },
-};
-
-export default nvidiaPlugin;
+});

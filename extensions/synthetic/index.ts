@@ -1,4 +1,4 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { applySyntheticConfig, SYNTHETIC_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -6,12 +6,11 @@ import { buildSyntheticProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "synthetic";
 
-const syntheticPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Synthetic Provider",
   description: "Bundled Synthetic provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Synthetic",
@@ -50,6 +49,4 @@ const syntheticPlugin = {
       },
     });
   },
-};
-
-export default syntheticPlugin;
+});

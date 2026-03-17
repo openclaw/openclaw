@@ -1,4 +1,4 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -84,12 +84,11 @@ async function resolveCloudflareGatewayMetadataInteractive(ctx: {
   return { accountId, gatewayId };
 }
 
-const cloudflareAiGatewayPlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Cloudflare AI Gateway Provider",
   description: "Bundled Cloudflare AI Gateway provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Cloudflare AI Gateway",
@@ -252,6 +251,4 @@ const cloudflareAiGatewayPlugin = {
       },
     });
   },
-};
-
-export default cloudflareAiGatewayPlugin;
+});

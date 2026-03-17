@@ -1,6 +1,5 @@
 import {
-  emptyPluginConfigSchema,
-  type OpenClawPluginApi,
+  definePluginEntry,
   type ProviderAuthContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
@@ -116,12 +115,11 @@ async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
   };
 }
 
-const githubCopilotPlugin = {
+export default definePluginEntry({
   id: "github-copilot",
   name: "GitHub Copilot Provider",
   description: "Bundled GitHub Copilot provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "GitHub Copilot",
@@ -196,6 +194,4 @@ const githubCopilotPlugin = {
         await fetchCopilotUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
   },
-};
-
-export default githubCopilotPlugin;
+});
