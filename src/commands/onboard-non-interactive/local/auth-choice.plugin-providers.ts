@@ -7,13 +7,13 @@ import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
+import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
 import type {
   ProviderAuthOptionBag,
   ProviderNonInteractiveApiKeyCredentialParams,
   ProviderResolveNonInteractiveApiKeyParams,
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { resolvePreferredProviderForAuthChoice } from "../../auth-choice.preferred-provider.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";

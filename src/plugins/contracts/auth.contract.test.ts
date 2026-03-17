@@ -14,19 +14,19 @@ import type {
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 
 type LoginOpenAICodexOAuth =
-  (typeof import("../../commands/openai-codex-oauth.js"))["loginOpenAICodexOAuth"];
+  (typeof import("../../plugins/provider-openai-codex-oauth.js"))["loginOpenAICodexOAuth"];
 type LoginQwenPortalOAuth =
   (typeof import("../../../extensions/qwen-portal-auth/oauth.js"))["loginQwenPortalOAuth"];
 type GithubCopilotLoginCommand =
   (typeof import("../../providers/github-copilot-auth.js"))["githubCopilotLoginCommand"];
 type CreateVpsAwareHandlers =
-  (typeof import("../../commands/oauth-flow.js"))["createVpsAwareOAuthHandlers"];
+  (typeof import("../../plugins/provider-oauth-flow.js"))["createVpsAwareOAuthHandlers"];
 
 const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>());
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn<LoginQwenPortalOAuth>());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn<GithubCopilotLoginCommand>());
 
-vi.mock("../../commands/openai-codex-oauth.js", () => ({
+vi.mock("../../plugins/provider-openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
 }));
 

@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
-import { applyAuthChoiceLoadedPluginProvider } from "../../commands/auth-choice.apply.plugin-provider.js";
 import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
@@ -8,18 +6,20 @@ import {
   readAuthProfilesForAgent,
   requireOpenClawAgentDir,
   setupAuthTestEnv,
-} from "../../commands/test-wizard-helpers.js";
+} from "../../../test/helpers/auth-wizard.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
+import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
 import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 import { requireProviderContractProvider, uniqueProviderContractProviders } from "./registry.js";
 
 type ResolvePluginProviders =
-  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolvePluginProviders;
+  typeof import("../../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
 type ResolveProviderPluginChoice =
-  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolveProviderPluginChoice;
+  typeof import("../../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type RunProviderModelSelectedHook =
-  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").runProviderModelSelectedHook;
+  typeof import("../../plugins/provider-auth-choice.runtime.js").runProviderModelSelectedHook;
 
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn());
@@ -38,7 +38,7 @@ vi.mock("../../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: githubCopilotLoginCommandMock,
 }));
 
-vi.mock("../../commands/auth-choice.apply.plugin-provider.runtime.js", () => ({
+vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders: resolvePluginProvidersMock,
   resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
   runProviderModelSelectedHook: runProviderModelSelectedHookMock,
@@ -54,7 +54,7 @@ vi.mock("../../plugins/providers.js", async () => {
 });
 
 const { resolvePreferredProviderForAuthChoice } =
-  await import("../../commands/auth-choice.preferred-provider.js");
+  await import("../../plugins/provider-auth-choice-preference.js");
 
 type StoredAuthProfile = {
   type?: string;
