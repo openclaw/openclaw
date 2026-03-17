@@ -7,13 +7,13 @@ import {
   formatDocsLink,
   hasConfiguredSecretInput,
   patchChannelConfigForAccount,
-  type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import {
   buildChannelConfigSchema,
   getChatChannelMeta,
   SlackConfigSchema,
   type ChannelPlugin,
+  type OpenClawConfig,
 } from "openclaw/plugin-sdk/slack";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {

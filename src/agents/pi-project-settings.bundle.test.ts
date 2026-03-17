@@ -1,57 +1,37 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-
-const hoisted = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
-}));
-
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => hoisted.loadPluginManifestRegistry(...args),
-}));
 
 const { loadEnabledBundlePiSettingsSnapshot } = await import("./pi-project-settings.js");
 
 const tempDirs = createTrackedTempDirs();
 
-function buildRegistry(params: {
-  pluginRoot: string;
-  settingsFiles?: string[];
-}): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [
-      {
-        id: "claude-bundle",
-        name: "Claude Bundle",
-        format: "bundle",
-        bundleFormat: "claude",
-        bundleCapabilities: ["settings"],
-        channels: [],
-        providers: [],
-        skills: [],
-        settingsFiles: params.settingsFiles ?? ["settings.json"],
-        hooks: [],
-        origin: "workspace",
-        rootDir: params.pluginRoot,
-        source: params.pluginRoot,
-        manifestPath: path.join(params.pluginRoot, ".claude-plugin", "plugin.json"),
-      },
-    ],
-  };
-}
-
 afterEach(async () => {
-  hoisted.loadPluginManifestRegistry.mockReset();
   await tempDirs.cleanup();
 });
+
+async function createWorkspaceBundle(params: {
+  workspaceDir: string;
+  pluginId?: string;
+}): Promise<string> {
+  const pluginId = params.pluginId ?? "claude-bundle";
+  const pluginRoot = path.join(params.workspaceDir, ".openclaw", "extensions", pluginId);
+  await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+  await fs.writeFile(
+    path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+    JSON.stringify({
+      name: pluginId,
+    }),
+    "utf-8",
+  );
+  return pluginRoot;
+}
 
 describe("loadEnabledBundlePiSettingsSnapshot", () => {
   it("loads sanitized settings from enabled bundle plugins", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await tempDirs.make("openclaw-bundle-");
+    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
     await fs.writeFile(
       path.join(pluginRoot, "settings.json"),
       JSON.stringify({
@@ -61,7 +41,6 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
       }),
       "utf-8",
     );
-    hoisted.loadPluginManifestRegistry.mockReturnValue(buildRegistry({ pluginRoot }));
 
     const snapshot = loadEnabledBundlePiSettingsSnapshot({
       cwd: workspaceDir,
@@ -81,16 +60,10 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
 
   it("loads enabled bundle MCP servers into the Pi settings snapshot", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await tempDirs.make("openclaw-bundle-");
-    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
+    const resolvedPluginRoot = await fs.realpath(pluginRoot);
     await fs.mkdir(path.join(pluginRoot, "servers"), { recursive: true });
-    await fs.writeFile(
-      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "claude-bundle",
-      }),
-      "utf-8",
-    );
+    const resolvedServerPath = await fs.realpath(path.join(pluginRoot, "servers"));
     await fs.writeFile(
       path.join(pluginRoot, ".mcp.json"),
       JSON.stringify({
@@ -102,9 +75,6 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
         },
       }),
       "utf-8",
-    );
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      buildRegistry({ pluginRoot, settingsFiles: [] }),
     );
 
     const snapshot = loadEnabledBundlePiSettingsSnapshot({
@@ -118,26 +88,18 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
       },
     });
 
-    expect(snapshot.mcpServers).toEqual({
+    expect((snapshot as Record<string, unknown>).mcpServers).toEqual({
       bundleProbe: {
         command: "node",
-        args: [path.join(pluginRoot, "servers", "probe.mjs")],
-        cwd: pluginRoot,
+        args: [path.join(resolvedServerPath, "probe.mjs")],
+        cwd: resolvedPluginRoot,
       },
     });
   });
 
   it("lets top-level MCP config override bundle MCP defaults", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await tempDirs.make("openclaw-bundle-");
-    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-    await fs.writeFile(
-      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-      JSON.stringify({
-        name: "claude-bundle",
-      }),
-      "utf-8",
-    );
+    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
     await fs.writeFile(
       path.join(pluginRoot, ".mcp.json"),
       JSON.stringify({
@@ -149,9 +111,6 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
         },
       }),
       "utf-8",
-    );
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
-      buildRegistry({ pluginRoot, settingsFiles: [] }),
     );
 
     const snapshot = loadEnabledBundlePiSettingsSnapshot({
@@ -172,7 +131,7 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
       },
     });
 
-    expect(snapshot.mcpServers).toEqual({
+    expect((snapshot as Record<string, unknown>).mcpServers).toEqual({
       sharedServer: {
         url: "https://example.com/mcp",
       },
@@ -181,13 +140,12 @@ describe("loadEnabledBundlePiSettingsSnapshot", () => {
 
   it("ignores disabled bundle plugins", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await tempDirs.make("openclaw-bundle-");
+    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
     await fs.writeFile(
       path.join(pluginRoot, "settings.json"),
       JSON.stringify({ hideThinkingBlock: true }),
       "utf-8",
     );
-    hoisted.loadPluginManifestRegistry.mockReturnValue(buildRegistry({ pluginRoot }));
 
     const snapshot = loadEnabledBundlePiSettingsSnapshot({
       cwd: workspaceDir,

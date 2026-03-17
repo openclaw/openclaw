@@ -1,5 +1,6 @@
 import {
   DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
   noteChannelLookupFailure,
   noteChannelLookupSummary,
   type OpenClawConfig,
@@ -12,7 +13,6 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { type ChannelSetupDmPolicy, type ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "../../../src/terminal/links.js";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,

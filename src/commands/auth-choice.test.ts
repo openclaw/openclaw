@@ -30,9 +30,9 @@ import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
-} from "../plugins/provider-model-definitions.js";
+} from "../plugin-sdk/provider-models.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
+import { registerProviderPlugins } from "../test-utils/plugin-registration.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
@@ -82,8 +82,7 @@ type StoredAuthProfile = {
 };
 
 function createDefaultProviderPlugins() {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of [
+  return registerProviderPlugins(
     anthropicPlugin,
     cloudflareAiGatewayPlugin,
     googlePlugin,
@@ -106,10 +105,7 @@ function createDefaultProviderPlugins() {
     xaiPlugin,
     xiaomiPlugin,
     zaiPlugin,
-  ]) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
+  );
 }
 
 describe("applyAuthChoice", () => {
