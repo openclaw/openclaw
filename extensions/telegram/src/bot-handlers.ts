@@ -1,7 +1,7 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/channel-plugin-common";
 import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
