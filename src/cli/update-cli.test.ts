@@ -890,31 +890,46 @@ describe("update-cli", () => {
     expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(false);
   });
 
-  it.each([
-    {
-      name: "update command",
-      run: async () => await updateCommand({ timeout: "invalid" }),
-      requireTty: false,
-    },
-    {
-      name: "update status command",
-      run: async () => await updateStatusCommand({ timeout: "invalid" }),
-      requireTty: false,
-    },
-    {
-      name: "update wizard command",
-      run: async () => await updateWizardCommand({ timeout: "invalid" }),
-      requireTty: true,
-    },
-  ])("validates timeout option for $name", async ({ run, requireTty }) => {
-    setTty(requireTty);
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
+  it("validates update command invocation errors", async () => {
+    const cases = [
+      {
+        name: "update command invalid timeout",
+        run: async () => await updateCommand({ timeout: "invalid" }),
+        requireTty: false,
+        expectedError: "timeout",
+      },
+      {
+        name: "update status command invalid timeout",
+        run: async () => await updateStatusCommand({ timeout: "invalid" }),
+        requireTty: false,
+        expectedError: "timeout",
+      },
+      {
+        name: "update wizard invalid timeout",
+        run: async () => await updateWizardCommand({ timeout: "invalid" }),
+        requireTty: true,
+        expectedError: "timeout",
+      },
+      {
+        name: "update wizard requires a TTY",
+        run: async () => await updateWizardCommand({}),
+        requireTty: false,
+        expectedError: "Update wizard requires a TTY",
+      },
+    ] as const;
 
-    await run();
+    for (const testCase of cases) {
+      setTty(testCase.requireTty);
+      vi.mocked(defaultRuntime.error).mockClear();
+      vi.mocked(defaultRuntime.exit).mockClear();
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      await testCase.run();
+
+      expect(defaultRuntime.error, testCase.name).toHaveBeenCalledWith(
+        expect.stringContaining(testCase.expectedError),
+      );
+      expect(defaultRuntime.exit, testCase.name).toHaveBeenCalledWith(1);
+    }
   });
 
   it("persists update channel when --channel is set", async () => {
@@ -959,19 +974,6 @@ describe("update-cli", () => {
         .mocked(runCommandWithTimeout)
         .mock.calls.some((call) => Array.isArray(call[0]) && call[0][0] === "npm"),
     ).toBe(shouldRunPackageUpdate);
-  });
-
-  it("updateWizardCommand requires a TTY", async () => {
-    setTty(false);
-    vi.mocked(defaultRuntime.error).mockClear();
-    vi.mocked(defaultRuntime.exit).mockClear();
-
-    await updateWizardCommand({});
-
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Update wizard requires a TTY"),
-    );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
