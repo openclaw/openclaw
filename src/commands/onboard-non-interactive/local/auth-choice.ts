@@ -1,6 +1,7 @@
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
+import { enablePluginInConfig } from "../../../plugins/enable.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
@@ -147,6 +148,33 @@ export async function applyNonInteractiveAuthChoice(params: {
     return true;
   };
 
+  const enforcePluginEnabledForBuiltInAuthChoice = (
+    choice: AuthChoice,
+    config: OpenClawConfig,
+  ): OpenClawConfig | null => {
+    const pluginId =
+      choice === "zai-api-key" ||
+      choice === "zai-coding-global" ||
+      choice === "zai-coding-cn" ||
+      choice === "zai-global" ||
+      choice === "zai-cn"
+        ? "zai"
+        : choice === "minimax-global-api" || choice === "minimax-cn-api"
+          ? "minimax"
+          : null;
+    if (!pluginId) {
+      return config;
+    }
+    const enableResult = enablePluginInConfig(config, pluginId);
+    if (!enableResult.enabled) {
+      const label = pluginId === "zai" ? "Z.AI" : "MiniMax";
+      runtime.error(`${label} plugin is disabled (${enableResult.reason ?? "blocked"}).`);
+      runtime.exit(1);
+      return null;
+    }
+    return enableResult.config;
+  };
+
   if (authChoice === "claude-cli" || authChoice === "codex-cli") {
     runtime.error(
       [
@@ -181,6 +209,39 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (simpleApiKeyChoice !== undefined) {
     return simpleApiKeyChoice;
+  }
+
+  if (
+    authChoice === "zai-api-key" ||
+    authChoice === "zai-coding-global" ||
+    authChoice === "zai-coding-cn" ||
+    authChoice === "zai-global" ||
+    authChoice === "zai-cn" ||
+    authChoice === "minimax-global-api" ||
+    authChoice === "minimax-cn-api"
+  ) {
+    const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
+      nextConfig,
+      authChoice,
+      opts,
+      runtime,
+      baseConfig,
+      resolveApiKey: (input) =>
+        resolveApiKey({
+          ...input,
+          cfg: baseConfig,
+          runtime,
+        }),
+      toApiKeyCredential,
+    });
+    if (pluginProviderChoice !== undefined) {
+      return pluginProviderChoice;
+    }
+    const guardedConfig = enforcePluginEnabledForBuiltInAuthChoice(authChoice, nextConfig);
+    if (!guardedConfig) {
+      return null;
+    }
+    nextConfig = guardedConfig;
   }
 
   if (

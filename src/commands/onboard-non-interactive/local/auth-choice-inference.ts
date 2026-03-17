@@ -27,13 +27,21 @@ export function inferAuthChoiceFromFlags(opts: OnboardOptions): AuthChoiceInfere
     authChoice: string;
     cliFlag: string;
   }>;
-  const matches: AuthChoiceFlag[] = flags
+  const rawMatches: AuthChoiceFlag[] = flags
     .filter(({ optionKey }) => hasStringValue(opts[optionKey as keyof OnboardOptions]))
     .map((flag) => ({
       optionKey: flag.optionKey,
       authChoice: flag.authChoice as AuthChoice,
       label: flag.cliFlag,
     }));
+
+  const matchesByChoice = new Map<AuthChoice, AuthChoiceFlag>();
+  for (const match of rawMatches) {
+    if (!matchesByChoice.has(match.authChoice)) {
+      matchesByChoice.set(match.authChoice, match);
+    }
+  }
+  const matches = Array.from(matchesByChoice.values());
 
   if (
     hasStringValue(opts.customBaseUrl) ||

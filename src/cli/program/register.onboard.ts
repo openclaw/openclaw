@@ -105,13 +105,22 @@ export function registerOnboardCommand(program: Command) {
     command.option(providerFlag.cliOption, providerFlag.description);
   }
 
-  command
-    .option("--azure-openai-base-url <url>", "Azure OpenAI base URL")
-    .option("--azure-openai-model-id <id>", "Azure OpenAI deployment/model ID")
-    .option(
+  const hasFlag = (cliFlag: string) =>
+    ONBOARD_AUTH_FLAGS.some((providerFlag) => providerFlag.cliFlag === cliFlag);
+  if (!hasFlag("--azure-openai-base-url")) {
+    command.option("--azure-openai-base-url <url>", "Azure OpenAI base URL");
+  }
+  if (!hasFlag("--azure-openai-model-id")) {
+    command.option("--azure-openai-model-id <id>", "Azure OpenAI deployment/model ID");
+  }
+  if (!hasFlag("--azure-openai-api-version")) {
+    command.option(
       "--azure-openai-api-version <version>",
       "Azure OpenAI API version (default: v1; preview example: 2025-04-01-preview)",
-    )
+    );
+  }
+
+  command
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -169,6 +178,9 @@ export function registerOnboardCommand(program: Command) {
           tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
           secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
           ...providerAuthOptionValues,
+          azureOpenaiBaseUrl: opts.azureOpenaiBaseUrl as string | undefined,
+          azureOpenaiModelId: opts.azureOpenaiModelId as string | undefined,
+          azureOpenaiApiVersion: opts.azureOpenaiApiVersion as string | undefined,
           cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
           cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
           customBaseUrl: opts.customBaseUrl as string | undefined,

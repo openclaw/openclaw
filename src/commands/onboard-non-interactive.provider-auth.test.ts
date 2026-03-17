@@ -42,6 +42,18 @@ const NON_INTERACTIVE_DEFAULT_OPTIONS = {
   json: true,
 } as const;
 
+function withDeniedPlugins(
+  config: Record<string, unknown>,
+  deny: string[],
+): Record<string, unknown> {
+  return {
+    ...config,
+    plugins: {
+      deny,
+    },
+  };
+}
+
 let ensureAuthProfileStore: typeof import("../agents/auth-profiles.js").ensureAuthProfileStore;
 let upsertAuthProfile: typeof import("../agents/auth-profiles.js").upsertAuthProfile;
 
@@ -161,6 +173,13 @@ async function runNonInteractiveSetupWithDefaults(
   );
 }
 
+async function writeInitialConfig(
+  configPath: string,
+  config: Record<string, unknown>,
+): Promise<void> {
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+}
+
 async function runOnboardingAndReadConfig(
   env: OnboardEnv,
   options: Record<string, unknown>,
@@ -263,6 +282,20 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("fails MiniMax non-interactive setup when plugin is disabled", async () => {
+    await withOnboardEnv("openclaw-onboard-minimax-disabled-", async ({ runtime, configPath }) => {
+      const cfg = withDeniedPlugins({}, ["minimax"]);
+      await writeInitialConfig(configPath, cfg);
+
+      await expect(
+        runNonInteractiveSetupWithDefaults(runtime, {
+          authChoice: "minimax-global-api",
+          minimaxApiKey: "sk-minimax-test", // pragma: allowlist secret
+        }),
+      ).rejects.toThrow("MiniMax plugin is disabled");
+    });
+  });
+
   it("stores Z.AI API key and uses global baseUrl by default", async () => {
     await withZaiProbeFetch(
       {
@@ -287,6 +320,20 @@ describe("onboard (non-interactive): provider auth", () => {
           });
         }),
     );
+  });
+
+  it("fails Z.AI non-interactive setup when plugin is disabled", async () => {
+    await withOnboardEnv("openclaw-onboard-zai-disabled-", async ({ runtime, configPath }) => {
+      const cfg = withDeniedPlugins({}, ["zai"]);
+      await writeInitialConfig(configPath, cfg);
+
+      await expect(
+        runNonInteractiveSetupWithDefaults(runtime, {
+          authChoice: "zai-api-key",
+          zaiApiKey: "zai-test-key", // pragma: allowlist secret
+        }),
+      ).rejects.toThrow("Z.AI plugin is disabled");
+    });
   });
 
   it("supports Z.AI CN coding endpoint auth choice", async () => {
