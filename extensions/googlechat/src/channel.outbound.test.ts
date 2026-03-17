@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 
 const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
+const probeGoogleChatMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./api.js", () => ({
+  probeGoogleChat: probeGoogleChatMock,
   sendGoogleChatMessage: sendGoogleChatMessageMock,
   uploadGoogleChatAttachment: uploadGoogleChatAttachmentMock,
 }));

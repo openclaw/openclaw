@@ -1,20 +1,22 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import * as authModule from "../agents/model-auth.js";
-import {
-  buildGeminiEmbeddingRequest,
-  buildGeminiTextEmbeddingRequest,
-  createGeminiEmbeddingProvider,
-  DEFAULT_GEMINI_EMBEDDING_MODEL,
-  GEMINI_EMBEDDING_2_MODELS,
-  isGeminiEmbedding2Model,
-  resolveGeminiOutputDimensionality,
-} from "./embeddings-gemini.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
+
+type ModelAuthModule = typeof import("../agents/model-auth.js");
+type EmbeddingsGeminiModule = typeof import("./embeddings-gemini.js");
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createModelAuthMockModule } = await import("../test-utils/model-auth-mock.js");
   return createModelAuthMockModule();
 });
+
+let authModule: ModelAuthModule;
+let buildGeminiEmbeddingRequest: EmbeddingsGeminiModule["buildGeminiEmbeddingRequest"];
+let buildGeminiTextEmbeddingRequest: EmbeddingsGeminiModule["buildGeminiTextEmbeddingRequest"];
+let createGeminiEmbeddingProvider: EmbeddingsGeminiModule["createGeminiEmbeddingProvider"];
+let DEFAULT_GEMINI_EMBEDDING_MODEL: EmbeddingsGeminiModule["DEFAULT_GEMINI_EMBEDDING_MODEL"];
+let GEMINI_EMBEDDING_2_MODELS: EmbeddingsGeminiModule["GEMINI_EMBEDDING_2_MODELS"];
+let isGeminiEmbedding2Model: EmbeddingsGeminiModule["isGeminiEmbedding2Model"];
+let resolveGeminiOutputDimensionality: EmbeddingsGeminiModule["resolveGeminiOutputDimensionality"];
 
 const createGeminiFetchMock = (embeddingValues = [1, 2, 3]) =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
@@ -46,6 +48,20 @@ function magnitude(values: number[]) {
   return Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
 }
 
+beforeEach(async () => {
+  vi.resetModules();
+  authModule = await import("../agents/model-auth.js");
+  ({
+    buildGeminiEmbeddingRequest,
+    buildGeminiTextEmbeddingRequest,
+    createGeminiEmbeddingProvider,
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    GEMINI_EMBEDDING_2_MODELS,
+    isGeminiEmbedding2Model,
+    resolveGeminiOutputDimensionality,
+  } = await import("./embeddings-gemini.js"));
+});
+
 afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllGlobals();
@@ -65,7 +81,9 @@ type GeminiFetchMock =
 
 async function createProviderWithFetch(
   fetchMock: GeminiFetchMock,
-  options: Partial<Parameters<typeof createGeminiEmbeddingProvider>[0]> & { model: string },
+  options: Partial<Parameters<EmbeddingsGeminiModule["createGeminiEmbeddingProvider"]>[0]> & {
+    model: string;
+  },
 ) {
   vi.stubGlobal("fetch", fetchMock);
   mockPublicPinnedHostname();

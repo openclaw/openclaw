@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 type LoggerModule = typeof import("./logger.js");
 
+function normalizePathForAssertion(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
 const originalGetBuiltinModule = (
   process as NodeJS.Process & { getBuiltinModule?: (id: string) => unknown }
 ).getBuiltinModule;
@@ -52,14 +56,17 @@ describe("logging/logger browser-safe import", () => {
     const { module, resolvePreferredOpenClawTmpDir } = await importBrowserSafeLogger();
 
     expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
-    expect(module.DEFAULT_LOG_DIR).toBe("/tmp/openclaw");
-    expect(module.DEFAULT_LOG_FILE).toBe("/tmp/openclaw/openclaw.log");
+    expect(normalizePathForAssertion(module.DEFAULT_LOG_DIR)).toBe("/tmp/openclaw");
+    expect(normalizePathForAssertion(module.DEFAULT_LOG_FILE)).toBe("/tmp/openclaw/openclaw.log");
   });
 
   it("disables file logging when imported in a browser-like environment", async () => {
     const { module, resolvePreferredOpenClawTmpDir } = await importBrowserSafeLogger();
 
-    expect(module.getResolvedLoggerSettings()).toMatchObject({
+    expect({
+      ...module.getResolvedLoggerSettings(),
+      file: normalizePathForAssertion(module.getResolvedLoggerSettings().file),
+    }).toMatchObject({
       level: "silent",
       file: "/tmp/openclaw/openclaw.log",
     });
