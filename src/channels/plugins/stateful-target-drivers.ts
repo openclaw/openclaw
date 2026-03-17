@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { acpStatefulBindingTargetDriver } from "./acp-stateful-target-driver.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
@@ -35,17 +34,10 @@ export type StatefulBindingTargetDriver = {
   }) => Promise<StatefulBindingTargetResetResult>;
 };
 
-const BUILTIN_STATEFUL_BINDING_TARGET_DRIVERS = new Map<string, StatefulBindingTargetDriver>([
-  [acpStatefulBindingTargetDriver.id, acpStatefulBindingTargetDriver],
-]);
-
 const registeredStatefulBindingTargetDrivers = new Map<string, StatefulBindingTargetDriver>();
 
 function listStatefulBindingTargetDrivers(): StatefulBindingTargetDriver[] {
-  return [
-    ...BUILTIN_STATEFUL_BINDING_TARGET_DRIVERS.values(),
-    ...registeredStatefulBindingTargetDrivers.values(),
-  ];
+  return [...registeredStatefulBindingTargetDrivers.values()];
 }
 
 export function registerStatefulBindingTargetDriver(driver: StatefulBindingTargetDriver): void {
@@ -54,13 +46,8 @@ export function registerStatefulBindingTargetDriver(driver: StatefulBindingTarge
     throw new Error("Stateful binding target driver id is required");
   }
   const normalized = { ...driver, id };
-  const existing =
-    registeredStatefulBindingTargetDrivers.get(id) ??
-    BUILTIN_STATEFUL_BINDING_TARGET_DRIVERS.get(id);
-  if (existing && existing !== driver) {
-    throw new Error(`Stateful binding target driver already registered for "${id}"`);
-  }
-  if (BUILTIN_STATEFUL_BINDING_TARGET_DRIVERS.has(id)) {
+  const existing = registeredStatefulBindingTargetDrivers.get(id);
+  if (existing) {
     return;
   }
   registeredStatefulBindingTargetDrivers.set(id, normalized);
@@ -75,11 +62,7 @@ export function getStatefulBindingTargetDriver(id: string): StatefulBindingTarge
   if (!normalizedId) {
     return null;
   }
-  return (
-    registeredStatefulBindingTargetDrivers.get(normalizedId) ??
-    BUILTIN_STATEFUL_BINDING_TARGET_DRIVERS.get(normalizedId) ??
-    null
-  );
+  return registeredStatefulBindingTargetDrivers.get(normalizedId) ?? null;
 }
 
 export function resolveStatefulBindingTargetBySessionKey(params: {

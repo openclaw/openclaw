@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
+import { ensureStatefulTargetBuiltinsRegistered } from "./stateful-target-builtins.js";
 import {
   getStatefulBindingTargetDriver,
   resolveStatefulBindingTargetBySessionKey,
@@ -9,6 +10,7 @@ export async function ensureConfiguredBindingTargetReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  ensureStatefulTargetBuiltinsRegistered();
   if (!params.bindingResolution) {
     return { ok: true };
   }
@@ -30,6 +32,7 @@ export async function resetConfiguredBindingTargetInPlace(params: {
   sessionKey: string;
   reason: "new" | "reset";
 }): Promise<{ ok: true } | { ok: false; skipped?: boolean; error?: string }> {
+  ensureStatefulTargetBuiltinsRegistered();
   const resolved = resolveStatefulBindingTargetBySessionKey({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -50,6 +53,7 @@ export async function ensureConfiguredBindingTargetSession(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
+  ensureStatefulTargetBuiltinsRegistered();
   const driver = getStatefulBindingTargetDriver(params.bindingResolution.statefulTarget.driverId);
   if (!driver) {
     return {

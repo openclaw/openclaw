@@ -5,6 +5,7 @@ import {
 } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   ConfiguredBindingResolution,
@@ -21,6 +22,16 @@ function toAcpStatefulBindingTargetDescriptor(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): StatefulBindingTargetDescriptor | null {
+  const meta = readAcpSessionEntry(params)?.acp;
+  const metaAgentId = meta?.agent?.trim();
+  if (metaAgentId) {
+    return {
+      kind: "stateful",
+      driverId: "acp",
+      sessionKey: params.sessionKey,
+      agentId: metaAgentId,
+    };
+  }
   const spec = resolveConfiguredAcpBindingSpecBySessionKey(params);
   if (!spec) {
     return null;

@@ -1,6 +1,14 @@
 // Public pairing/session-binding helpers for plugins that manage conversation ownership.
 
 export {
+  createConversationBindingRecord,
+  getConversationBindingCapabilities,
+  listSessionBindingRecords,
+  resolveConversationBindingRecord,
+  touchConversationBindingRecord,
+  unbindConversationBindingRecord,
+} from "../channels/plugins/binding-records.js";
+export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
   type ConfiguredBindingRouteResult,
@@ -29,7 +37,6 @@ export type {
   StatefulBindingTargetResetResult,
   StatefulBindingTargetSessionResult,
 } from "../channels/plugins/stateful-target-drivers.js";
-export * from "../acp/persistent-bindings.route.js";
 export {
   type BindingStatus,
   type BindingTargetKind,

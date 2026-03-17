@@ -16,9 +16,6 @@ export type {
   ChannelConfiguredBindingProvider,
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
-  ChannelAcpBindingAdapter,
-  ChannelAcpBindingConversationRef,
-  ChannelAcpBindingMatch,
 } from "../channels/plugins/types.adapters.js";
 export type { InspectedTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 export type { ResolvedTelegramAccount } from "../../extensions/telegram/src/accounts.js";

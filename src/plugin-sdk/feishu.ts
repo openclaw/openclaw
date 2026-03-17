@@ -35,9 +35,6 @@ export type {
   ChannelConfiguredBindingProvider,
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
-  ChannelAcpBindingAdapter,
-  ChannelAcpBindingConversationRef,
-  ChannelAcpBindingMatch,
 } from "../channels/plugins/types.adapters.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixContext } from "../channels/reply-prefix.js";

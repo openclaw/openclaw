@@ -2,12 +2,14 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import {
+  createConversationBindingRecord,
+  resolveConversationBindingRecord,
+  unbindConversationBindingRecord,
+} from "../channels/plugins/binding-records.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
-import {
-  getSessionBindingService,
-  type ConversationRef,
-} from "../infra/outbound/session-binding-service.js";
+import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   PluginConversationBinding,
@@ -423,7 +425,7 @@ async function bindConversationNow(params: {
     accountId: ref.accountId,
     conversationId: ref.conversationId,
   });
-  const record = await getSessionBindingService().bind({
+  const record = await createConversationBindingRecord({
     targetSessionKey,
     targetKind: "session",
     conversation: ref,
@@ -574,7 +576,7 @@ export async function requestPluginConversationBinding(params: {
 }): Promise<PluginConversationBindingRequestResult> {
   const conversation = normalizeConversation(params.conversation);
   const ref = toConversationRef(conversation);
-  const existing = getSessionBindingService().resolveByConversation(ref);
+  const existing = resolveConversationBindingRecord(ref);
   const existingPluginBinding = toPluginConversationBinding(existing);
   const existingLegacyPluginBinding = isLegacyPluginBindingRecord({
     record: existing,
@@ -665,9 +667,7 @@ export async function getCurrentPluginConversationBinding(params: {
   pluginRoot: string;
   conversation: PluginBindingConversation;
 }): Promise<PluginConversationBinding | null> {
-  const record = getSessionBindingService().resolveByConversation(
-    toConversationRef(params.conversation),
-  );
+  const record = resolveConversationBindingRecord(toConversationRef(params.conversation));
   const binding = toPluginConversationBinding(record);
   if (!binding || binding.pluginRoot !== params.pluginRoot) {
     return null;
@@ -684,12 +684,12 @@ export async function detachPluginConversationBinding(params: {
   conversation: PluginBindingConversation;
 }): Promise<{ removed: boolean }> {
   const ref = toConversationRef(params.conversation);
-  const record = getSessionBindingService().resolveByConversation(ref);
+  const record = resolveConversationBindingRecord(ref);
   const binding = toPluginConversationBinding(record);
   if (!binding || binding.pluginRoot !== params.pluginRoot) {
     return { removed: false };
   }
-  await getSessionBindingService().unbind({
+  await unbindConversationBindingRecord({
     bindingId: binding.bindingId,
     reason: "plugin-detach",
   });

@@ -551,36 +551,17 @@ export type ChannelConfiguredBindingMatch = ChannelConfiguredBindingConversation
 };
 
 export type ChannelConfiguredBindingProvider = {
-  compileConfiguredBinding?: (params: {
+  compileConfiguredBinding: (params: {
     binding: ConfiguredBindingRule;
     conversationId: string;
   }) => ChannelConfiguredBindingConversationRef | null;
-  matchInboundConversation?: (params: {
+  matchInboundConversation: (params: {
     binding: ConfiguredBindingRule;
     compiledBinding: ChannelConfiguredBindingConversationRef;
     conversationId: string;
     parentConversationId?: string;
   }) => ChannelConfiguredBindingMatch | null;
-  // Compatibility bridge for third-party plugins that still implement the
-  // earlier ACP-specific adapter shape.
-  normalizeConfiguredBindingTarget?: (params: {
-    binding: ConfiguredBindingRule;
-    conversationId: string;
-  }) => ChannelConfiguredBindingConversationRef | null;
-  matchConfiguredBinding?: (params: {
-    binding: ConfiguredBindingRule;
-    bindingConversationId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  }) => ChannelConfiguredBindingMatch | null;
 };
-
-/** @deprecated Use ChannelConfiguredBindingConversationRef. */
-export type ChannelAcpBindingConversationRef = ChannelConfiguredBindingConversationRef;
-/** @deprecated Use ChannelConfiguredBindingMatch. */
-export type ChannelAcpBindingMatch = ChannelConfiguredBindingMatch;
-/** @deprecated Use ChannelConfiguredBindingProvider. */
-export type ChannelAcpBindingAdapter = ChannelConfiguredBindingProvider;
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   resolveDmPolicy?: (

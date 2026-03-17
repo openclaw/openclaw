@@ -51,10 +51,3 @@ export type ConfiguredBindingResolution = ConfiguredBindingRecordResolution & {
   compiledBinding: CompiledConfiguredBinding;
   match: ChannelConfiguredBindingMatch;
 };
-
-/** @deprecated Use ConfiguredBindingConversation. */
-export type AcpBindingConversation = ConfiguredBindingConversation;
-/** @deprecated Use CompiledConfiguredBinding. */
-export type CompiledAcpBinding = CompiledConfiguredBinding;
-/** @deprecated Use ConfiguredBindingResolution. */
-export type AcpBindingResolution = ConfiguredBindingResolution;

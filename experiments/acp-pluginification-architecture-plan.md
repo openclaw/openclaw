@@ -1,6 +1,6 @@
 # Bindings Capability Architecture Plan
 
-Status: proposal
+Status: in progress
 
 ## Summary
 
@@ -51,10 +51,11 @@ The right move is to share the stable control-plane contracts, not to force all 
 
 ### ACP is only partially pluginified
 
-- `src/channels/plugins/acp-bindings.ts` handles ACP configured binding lookup.
-- `src/channels/plugins/acp-routing.ts` handles ACP configured route wrapping.
+- `src/channels/plugins/configured-binding-registry.ts` now owns generic configured binding compilation and lookup.
+- `src/channels/plugins/binding-routing.ts` and `src/channels/plugins/binding-targets.ts` now own the generic route and target lifecycle seams.
+- ACP now plugs into that seam through `src/channels/plugins/acp-configured-binding-consumer.ts` and `src/channels/plugins/acp-stateful-target-driver.ts`.
 - `src/acp/persistent-bindings.lifecycle.ts` still owns configured ACP ensure and reset behavior.
-- `src/channels/plugins/types.adapters.ts` only exposes ACP-specific normalize and match hooks today.
+- runtime-created plugin conversation bindings still use a separate path in `src/plugins/conversation-binding.ts`.
 
 ### Codex app server is already closer to the desired shape
 
@@ -259,25 +260,40 @@ The following should stay:
 
 ## Current Problems To Remove
 
-### Hot-path plugin discovery
+### ACP compatibility aliases still leak through the generic seam
 
-`src/channels/plugins/acp-bindings.ts` still bootstraps and discovers plugins while resolving configured ACP bindings.
+The generic capability is in place, but ACP-era names still remain in public and semi-public surfaces:
 
-That is acceptable only as migration scaffolding.
+- `src/channels/plugins/types.plugin.ts` still exposes `acpBindings`
+- `src/channels/plugins/types.adapters.ts` still exports `ChannelAcpBinding*` aliases
+- `src/channels/plugins/binding-provider.ts` still falls back to `plugin.acpBindings`
+- `src/plugin-sdk/conversation-runtime.ts` still re-exports ACP-shaped route helpers
 
-The final design should compile configured bindings at startup or reload and perform plain data lookups during inbound handling.
+That is now compatibility debt, not architecture.
 
-### ACP-shaped core seams
+### Configured binding implementation is still too monolithic
 
-`src/channels/plugins/acp-bindings.ts`, `src/channels/plugins/acp-routing.ts`, and `src/acp/persistent-bindings.lifecycle.ts` are still ACP-shaped interfaces in core.
+`src/channels/plugins/configured-binding-registry.ts` still mixes:
 
-That is the wrong long-term naming and ownership boundary.
+- registry compilation
+- cache invalidation
+- inbound matching
+- materialization of binding targets
+- session-key reverse lookup
 
-### Thin channel adapter contract
+That file is now generic, but still too large and too coupled.
 
-`src/channels/plugins/types.adapters.ts` only exposes ACP-specific normalize and match helpers today.
+### Runtime-created plugin bindings still use a separate stack
 
-That is not enough for the final binding capability design.
+`src/plugins/conversation-binding.ts` is still a separate implementation path for plugin-created bindings.
+
+That means configured bindings and runtime-created bindings share storage, but not one consistent capability layer.
+
+### Generic registries still hardcode ACP as a built-in
+
+`src/channels/plugins/configured-binding-consumers.ts` and `src/channels/plugins/stateful-target-drivers.ts` still import ACP directly.
+
+That is acceptable for now, but the clean final shape is to keep ACP built in while registering it from a dedicated bootstrap point instead of wiring it inside the generic registry files.
 
 ## Target Contracts
 
@@ -318,31 +334,48 @@ Core should support:
 ### Keep
 
 - `src/infra/outbound/session-binding-service.ts`
-- `src/plugins/conversation-binding.ts`
 - `src/acp/control-plane/*`
 - `extensions/acpx/*`
 
 ### Generalize
 
+- `src/plugins/conversation-binding.ts`
+  - fold runtime-created plugin bindings into the same generic binding capability instead of keeping a separate implementation stack
+- `src/channels/plugins/configured-binding-registry.ts`
+  - split into compiler, matcher, and session-key resolution modules with a thin facade
 - `src/channels/plugins/types.adapters.ts`
-  - evolve from `ChannelAcpBindingAdapter` into a generic channel binding provider contract
+  - finish removing ACP-era aliases after the deprecation window
 - `src/plugin-sdk/conversation-runtime.ts`
-  - export generic binding capability surfaces instead of ACP-shaped routing helpers
+  - export only the generic binding capability surfaces
 - `src/acp/persistent-bindings.lifecycle.ts`
   - either become a generic stateful target driver consumer or be renamed to ACP driver-specific lifecycle code
 
 ### Shrink Or Delete
 
-- `src/channels/plugins/acp-bindings.ts`
-  - replace with compiled binding registry logic or delete once fully superseded
-- `src/channels/plugins/acp-routing.ts`
-  - replace with generic resolved-binding dispatch helpers or delete once call sites move
+- `src/channels/plugins/acp-binding-sessions.ts`
+  - keep only if an ACP compatibility shim is still needed; otherwise fold callers onto the generic target APIs
+- `src/channels/plugins/types.plugin.ts`
+  - remove `acpBindings` once third-party callers are off the old name
+- `src/channels/plugins/binding-provider.ts`
+  - remove `plugin.acpBindings` fallback once the deprecation window closes
 - `src/acp/persistent-bindings.resolve.ts`
   - keep only as compatibility facade during migration
 - `src/acp/persistent-bindings.route.ts`
   - keep only as compatibility facade during migration
 
 ## Recommended Refactor Order
+
+### Completed groundwork
+
+The current branch has already completed most of the first migration wave:
+
+- stable generic binding nouns exist
+- configured bindings compile through a generic registry
+- inbound routing goes through generic binding resolution
+- configured binding lookup no longer performs fallback plugin discovery
+- ACP is expressed as a configured-binding consumer plus a built-in stateful target driver
+
+The remaining work is cleanup and unification, not first-principles redesign.
 
 ### Phase 1: Freeze the nouns
 
@@ -396,7 +429,36 @@ Requirements:
 - ACP target readiness uses the ACP driver contract
 - ACP-specific naming disappears from generic binding code
 
-### Phase 6: Keep codex app server on the same binding capability
+### Phase 6: Remove ACP compatibility aliases from the generic seam
+
+Remove the last ACP-era names from the generic interfaces.
+
+Requirements:
+
+- remove `acpBindings` from `src/channels/plugins/types.plugin.ts`
+- remove `ChannelAcpBinding*` aliases from `src/channels/plugins/types.adapters.ts`
+- stop `src/channels/plugins/binding-provider.ts` from checking `plugin.acpBindings`
+- stop exporting ACP-shaped route helpers from `src/plugin-sdk/conversation-runtime.ts`
+- shrink or delete `src/channels/plugins/acp-binding-sessions.ts`
+
+### Phase 7: Split the configured binding registry by responsibility
+
+Refactor `src/channels/plugins/configured-binding-registry.ts` into smaller modules.
+
+Suggested split:
+
+- compiler module
+- inbound matcher module
+- session-key reverse lookup module
+- thin public facade
+
+Requirements:
+
+- caching behavior remains unchanged
+- matching behavior remains unchanged
+- session-key resolution behavior remains unchanged
+
+### Phase 8: Keep codex app server on the same binding capability
 
 Do not force the codex app server into ACP semantics.
 
@@ -405,8 +467,20 @@ Requirements:
 - codex app server keeps runtime-created bindings through the same binding capability
 - inbound claim remains the default delivery path
 - only adopt the stateful target driver seam if the app server truly needs long-lived target orchestration
+- `src/plugins/conversation-binding.ts` stops being a separate binding stack and becomes a consumer of the generic binding capability
 
-### Phase 7: Remove ACP-shaped compatibility facades
+### Phase 9: Decouple built-in ACP registration from generic registry files
+
+Keep ACP built in, but stop importing it directly from the generic registry modules.
+
+Requirements:
+
+- `src/channels/plugins/configured-binding-consumers.ts` no longer hardcodes ACP imports
+- `src/channels/plugins/stateful-target-drivers.ts` no longer hardcodes ACP imports
+- ACP still registers by default during normal startup
+- generic registry files remain product-agnostic
+
+### Phase 10: Remove ACP-shaped compatibility facades
 
 Once all call sites are on the generic capability:
 
@@ -423,7 +497,10 @@ The architecture is done when all of these are true:
 - ACP still uses a core session kernel
 - codex app server and ACP both sit on top of the same binding capability
 - the binding capability can represent both configured and runtime-created bindings
+- runtime-created plugin bindings do not use a separate implementation stack
 - long-lived target orchestration is shared through a small core driver contract
+- generic registry files do not import ACP directly
+- ACP-era alias names are gone from the generic/plugin SDK surface
 - the main harness is not forced into the ACP engine
 - external plugins can use the same capability without internal imports
 

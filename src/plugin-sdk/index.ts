@@ -18,9 +18,6 @@ export type {
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
-  ChannelAcpBindingAdapter,
-  ChannelAcpBindingConversationRef,
-  ChannelAcpBindingMatch,
 } from "../channels/plugins/types.adapters.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ChannelSetupAdapter, ChannelSetupInput } from "../channels/plugins/types.js";
@@ -29,9 +26,6 @@ export type {
   ConfiguredBindingResolution,
   CompiledConfiguredBinding,
   StatefulBindingTargetDescriptor,
-  AcpBindingConversation,
-  AcpBindingResolution,
-  CompiledAcpBinding,
 } from "../channels/plugins/binding-types.js";
 export type {
   StatefulBindingTargetDriver,

@@ -32,9 +32,9 @@ vi.mock("./persistent-bindings.resolve.js", () => ({
   resolveConfiguredAcpBindingSpecBySessionKey:
     resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey,
 }));
-type AcpBindingSessionsModule = typeof import("../channels/plugins/acp-binding-sessions.js");
-let acpBindingSessions: AcpBindingSessionsModule;
-let acpBindingSessionsImportScope = 0;
+type BindingTargetsModule = typeof import("../channels/plugins/binding-targets.js");
+let bindingTargets: BindingTargetsModule;
+let bindingTargetsImportScope = 0;
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -45,10 +45,10 @@ const baseCfg = {
 
 beforeEach(async () => {
   vi.resetModules();
-  acpBindingSessionsImportScope += 1;
-  acpBindingSessions = await importFreshModule<AcpBindingSessionsModule>(
+  bindingTargetsImportScope += 1;
+  bindingTargets = await importFreshModule<BindingTargetsModule>(
     import.meta.url,
-    `../channels/plugins/acp-binding-sessions.js?scope=${acpBindingSessionsImportScope}`,
+    `../channels/plugins/binding-targets.js?scope=${bindingTargetsImportScope}`,
   );
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
@@ -60,7 +60,7 @@ beforeEach(async () => {
   resolveMocks.resolveConfiguredAcpBindingSpecBySessionKey.mockReset().mockReturnValue(null);
 });
 
-describe("resetConfiguredAcpBindingSessionInPlace", () => {
+describe("resetConfiguredBindingTargetInPlace", () => {
   it("does not resolve configured bindings when ACP metadata already exists", async () => {
     const sessionKey = "agent:claude:acp:binding:discord:default:9373ab192b2317f4";
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
@@ -75,7 +75,7 @@ describe("resetConfiguredAcpBindingSessionInPlace", () => {
       throw new Error("configured binding resolution should be skipped");
     });
 
-    const result = await acpBindingSessions.resetConfiguredAcpBindingSessionInPlace({
+    const result = await bindingTargets.resetConfiguredBindingTargetInPlace({
       cfg: baseCfg,
       sessionKey,
       reason: "reset",

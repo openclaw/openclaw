@@ -18,7 +18,6 @@ import type {
   ChannelStatusAdapter,
   ChannelAllowlistAdapter,
   ChannelConfiguredBindingProvider,
-  ChannelAcpBindingAdapter,
 } from "./types.adapters.js";
 import type {
   ChannelAgentTool,
@@ -80,8 +79,6 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   execApprovals?: ChannelExecApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
   bindings?: ChannelConfiguredBindingProvider;
-  /** @deprecated Use `bindings`. */
-  acpBindings?: ChannelAcpBindingAdapter;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;

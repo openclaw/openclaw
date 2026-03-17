@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { acpConfiguredBindingConsumer } from "./acp-configured-binding-consumer.js";
 import type {
   CompiledConfiguredBinding,
   ConfiguredBindingRecordResolution,
@@ -33,17 +32,10 @@ export type ConfiguredBindingConsumer = {
   }) => boolean;
 };
 
-const BUILTIN_CONFIGURED_BINDING_CONSUMERS = new Map<string, ConfiguredBindingConsumer>([
-  [acpConfiguredBindingConsumer.id, acpConfiguredBindingConsumer],
-]);
-
 const registeredConfiguredBindingConsumers = new Map<string, ConfiguredBindingConsumer>();
 
 export function listConfiguredBindingConsumers(): ConfiguredBindingConsumer[] {
-  return [
-    ...BUILTIN_CONFIGURED_BINDING_CONSUMERS.values(),
-    ...registeredConfiguredBindingConsumers.values(),
-  ];
+  return [...registeredConfiguredBindingConsumers.values()];
 }
 
 export function resolveConfiguredBindingConsumer(
@@ -62,12 +54,8 @@ export function registerConfiguredBindingConsumer(consumer: ConfiguredBindingCon
   if (!id) {
     throw new Error("Configured binding consumer id is required");
   }
-  const existing =
-    registeredConfiguredBindingConsumers.get(id) ?? BUILTIN_CONFIGURED_BINDING_CONSUMERS.get(id);
-  if (existing && existing !== consumer) {
-    throw new Error(`Configured binding consumer already registered for "${id}"`);
-  }
-  if (BUILTIN_CONFIGURED_BINDING_CONSUMERS.has(id)) {
+  const existing = registeredConfiguredBindingConsumers.get(id);
+  if (existing) {
     return;
   }
   registeredConfiguredBindingConsumers.set(id, {

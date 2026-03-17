@@ -21,9 +21,6 @@ export type {
   ChannelConfiguredBindingProvider,
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
-  ChannelAcpBindingAdapter,
-  ChannelAcpBindingConversationRef,
-  ChannelAcpBindingMatch,
 } from "../channels/plugins/types.adapters.js";
 export type {
   ChannelMessageActionContext,
