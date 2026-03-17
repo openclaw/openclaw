@@ -145,7 +145,22 @@ export function normalizeGeneratedThreadTitle(raw: string): string {
     firstLine = trimmed;
     break;
   }
-  return firstLine.replace(/^["'`]+|["'`]+$/g, "").trim();
+  return stripThreadTitleWrappers(firstLine);
+}
+
+function stripThreadTitleWrappers(raw: string): string {
+  let current = raw.trim();
+  let previous = "";
+  while (current && current !== previous) {
+    previous = current;
+    current = current.replace(/^["'`]+|["'`]+$/g, "").trim();
+    current = current.replace(/^\*\*(.+)\*\*$/u, "$1").trim();
+    current = current.replace(/^__(.+)__$/u, "$1").trim();
+    current = current.replace(/^\*(.+)\*$/u, "$1").trim();
+    current = current.replace(/^_(.+)_$/u, "$1").trim();
+    current = current.replace(/^~~(.+)~~$/u, "$1").trim();
+  }
+  return current;
 }
 
 function normalizeTitleContextField(raw: string | undefined, maxChars: number): string | undefined {

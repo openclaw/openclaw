@@ -19,4 +19,13 @@ describe("normalizeGeneratedThreadTitle", () => {
       "Weekly Release Summary",
     );
   });
+
+  it("strips markdown emphasis wrappers around the full title", () => {
+    expect(normalizeGeneratedThreadTitle("**Scaling ArcherScore Development Roadmap**")).toBe(
+      "Scaling ArcherScore Development Roadmap",
+    );
+    expect(normalizeGeneratedThreadTitle('"__Weekly Release Summary__"')).toBe(
+      "Weekly Release Summary",
+    );
+  });
 });
