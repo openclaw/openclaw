@@ -331,7 +331,8 @@ There are two layers of enforcement:
 2. **contract tests**
    Bundled plugins are captured in contract registries during test runs so
    OpenClaw can assert ownership explicitly. Today this is used for model
-   providers, web search providers, and bundled registration ownership.
+   providers, speech providers, web search providers, and bundled registration
+   ownership.
 
 The practical effect is that OpenClaw knows, up front, which plugin owns which
 surface. That lets core and channels compose seamlessly because ownership is
@@ -649,19 +650,31 @@ to think of as short-lived performance caches, not persistence.
 
 ## Runtime helpers
 
-Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
+Plugins can access selected core helpers via `api.runtime`. For TTS:
 
 ```ts
+const clip = await api.runtime.tts.textToSpeech({
+  text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
 const result = await api.runtime.tts.textToSpeechTelephony({
   text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
+const voices = await api.runtime.tts.listVoices({
+  provider: "elevenlabs",
   cfg: api.config,
 });
 ```
 
 Notes:
 
+- `textToSpeech` returns the normal core TTS output payload for file/voice-note surfaces.
 - Uses core `messages.tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
+- `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
 - OpenAI and ElevenLabs support telephony today. Microsoft does not.
 
 Plugins can also register speech providers via `api.registerSpeechProvider(...)`.
