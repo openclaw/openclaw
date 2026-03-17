@@ -37,6 +37,7 @@ import {
   createMattermostClient,
   fetchMattermostChannel,
   fetchMattermostMe,
+  fetchMattermostPost,
   fetchMattermostUser,
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
@@ -266,14 +267,28 @@ export function evaluateMattermostMentionGate(
 }
 
 export function resolveMattermostReplyRootId(params: {
+  kind?: ChatType;
   threadRootId?: string;
   replyToId?: string;
 }): string | undefined {
+  if (params.kind === "direct") {
+    return undefined;
+  }
   const threadRootId = params.threadRootId?.trim();
   if (threadRootId) {
     return threadRootId;
   }
   return params.replyToId?.trim() || undefined;
+}
+
+export function resolveMattermostReplyReferenceId(params: {
+  kind?: ChatType;
+  threadRootId?: string | null;
+}): string | undefined {
+  if (params.kind && params.kind !== "direct") {
+    return undefined;
+  }
+  return params.threadRootId?.trim() || undefined;
 }
 
 export function resolveMattermostEffectiveReplyToId(params: {
@@ -282,12 +297,12 @@ export function resolveMattermostEffectiveReplyToId(params: {
   replyToMode: "off" | "first" | "all";
   threadRootId?: string | null;
 }): string | undefined {
+  if (params.kind === "direct") {
+    return undefined;
+  }
   const threadRootId = params.threadRootId?.trim();
   if (threadRootId) {
     return threadRootId;
-  }
-  if (params.kind === "direct") {
-    return undefined;
   }
   const postId = params.postId?.trim();
   if (!postId) {
@@ -339,6 +354,20 @@ function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]):
   const suffix = mediaList.length === 1 ? label : `${label}s`;
   const tag = allImages ? "<media:image>" : "<media:document>";
   return `${tag} (${mediaList.length} ${suffix})`;
+}
+
+function buildMattermostReplySuffix(params: {
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
+}): string {
+  const replyToBody = params.replyToBody?.trim();
+  if (!replyToBody) {
+    return "";
+  }
+  const sender = params.replyToSender?.trim() || "unknown";
+  const idLine = params.replyToId?.trim() ? ` id:${params.replyToId.trim()}` : "";
+  return `\n\n[Replying to ${sender}${idLine}]\n${replyToBody}\n[/Replying]`;
 }
 
 function buildMattermostWsUrl(baseUrl: string): string {
@@ -730,6 +759,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 accountId: account.accountId,
                 agentId: route.agentId,
                 replyToId: resolveMattermostReplyRootId({
+                  kind,
                   threadRootId: threadContext.effectiveReplyToId,
                   replyToId: payload.replyToId,
                 }),
@@ -1037,6 +1067,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             agentId: params.route.agentId,
             replyToId: resolveMattermostReplyRootId({
+              kind: params.kind,
               threadRootId: params.effectiveReplyToId,
               replyToId: trimmedPayload.replyToId,
             }),
@@ -1484,6 +1515,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const baseSessionKey = route.sessionKey;
     const threadRootId = post.root_id?.trim() || undefined;
+    const replyReferenceId = resolveMattermostReplyReferenceId({
+      kind,
+      threadRootId,
+    });
     const replyToMode = resolveMattermostReplyToMode(account, kind);
     const threadContext = resolveMattermostThreadSessionContext({
       baseSessionKey,
@@ -1565,6 +1600,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
     const mediaList = await resolveMattermostMedia(post.file_ids);
     const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
+    let replyToBody: string | undefined;
+    let replyToSender: string | undefined;
+    if (replyReferenceId) {
+      try {
+        const replyTargetPost = await fetchMattermostPost(client, replyReferenceId);
+        const replyTargetSender =
+          replyTargetPost.user_id != null ? await resolveUserInfo(replyTargetPost.user_id) : null;
+        const replyTargetMedia = await resolveMattermostMedia(replyTargetPost.file_ids);
+        const replyTargetPlaceholder = buildMattermostAttachmentPlaceholder(replyTargetMedia);
+        const replyTargetText = [replyTargetPost.message?.trim() || "", replyTargetPlaceholder]
+          .filter(Boolean)
+          .join("\n")
+          .trim();
+        replyToBody = replyTargetText || undefined;
+        replyToSender =
+          replyTargetSender?.username?.trim() || replyTargetPost.user_id?.trim() || undefined;
+      } catch (err) {
+        logVerboseMessage(
+          `mattermost: failed to resolve reply target ${replyReferenceId}: ${String(err)}`,
+        );
+      }
+    }
     const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
     const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
     const bodyText = normalizeMention(baseText, botUsername);
@@ -1600,7 +1657,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       contextKey: `mattermost:message:${channelId}:${post.id ?? "unknown"}`,
     });
 
-    const textWithId = `${bodyText}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
+    const replySuffix = buildMattermostReplySuffix({
+      replyToId: replyReferenceId,
+      replyToBody,
+      replyToSender,
+    });
+    const textWithId = `${bodyText}${replySuffix}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
     const body = core.channel.reply.formatInboundEnvelope({
       channel: "Mattermost",
       from: fromLabel,
@@ -1672,8 +1734,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
       MessageSidLast:
         allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
-      ReplyToId: effectiveReplyToId,
-      MessageThreadId: effectiveReplyToId,
+      ReplyToId: replyReferenceId,
+      ReplyToBody: replyToBody,
+      ReplyToSender: replyToSender,
+      MessageThreadId: kind === "direct" ? undefined : effectiveReplyToId,
       Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
       WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
@@ -1749,6 +1813,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             agentId: route.agentId,
             replyToId: resolveMattermostReplyRootId({
+              kind,
               threadRootId: effectiveReplyToId,
               replyToId: payload.replyToId,
             }),
