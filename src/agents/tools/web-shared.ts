@@ -1,3 +1,5 @@
+import { normalizeHostnameAllowlist } from "../../infra/net/ssrf.js";
+
 export type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -84,6 +86,22 @@ export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number):
     { once: true },
   );
   return controller.signal;
+}
+
+/**
+ * Resolve the effective URL allowlist from `tools.web.urlAllowlist`.
+ * Returns `undefined` when no allowlist is configured (all URLs allowed).
+ */
+export function resolveUrlAllowlist(web?: {
+  urlAllowlist?: string[];
+  [key: string]: unknown;
+}): string[] | undefined {
+  const raw = web?.urlAllowlist;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const normalized = normalizeHostnameAllowlist(raw);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export type ReadResponseTextResult = {

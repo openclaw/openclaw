@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { matchesHostnameAllowlist } from "../../infra/net/ssrf.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
 import {
@@ -311,4 +312,90 @@ export function buildUnsupportedSearchFilterResponse(
     message: `${label} is not supported by the ${provider} provider. Only Brave and Perplexity support ${supportedLabel}.`,
     docs,
   };
+}
+
+// ---------------------------------------------------------------------------
+// URL allowlist filtering — applied to search payloads before returning to agent
+// ---------------------------------------------------------------------------
+
+export function filterResultsByAllowlist<T extends { url?: string }>(
+  results: T[],
+  allowlist: string[],
+): T[] {
+  // URL-less entries are always dropped — they cannot be fetched by web_fetch regardless of the
+  // allowlist. Note: this means `allowlist = []` is NOT a pure no-op; URL-less entries are still
+  // removed. In practice applyUrlAllowlistToPayload short-circuits on `!allowlist` (undefined)
+  // before reaching this function, so callers never pass `[]` without intending to filter.
+  const withUrl = results.filter((entry) => Boolean(entry.url));
+  if (allowlist.length === 0) {
+    return withUrl;
+  }
+  return withUrl.filter((entry) => {
+    try {
+      const parsed = new URL(entry.url as string);
+      return matchesHostnameAllowlist(parsed.hostname, allowlist);
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function applyUrlAllowlistToPayload(
+  payload: Record<string, unknown>,
+  allowlist: string[] | undefined,
+): Record<string, unknown> {
+  if (!allowlist) {
+    return payload;
+  }
+
+  const patched: Record<string, unknown> = { ...payload };
+
+  // Brave / Perplexity-sonar: { results: Array<{ url, title, ... }> }
+  const results = payload.results;
+  if (Array.isArray(results)) {
+    const filtered = filterResultsByAllowlist(results as Array<{ url?: string }>, allowlist);
+    patched.results = filtered;
+    // `count` is the only result-count field emitted by all active providers (Brave/Perplexity-sonar).
+    // No provider in this codebase emits totalResults, numResults, or total alongside results.
+    patched.count = filtered.length;
+  }
+
+  // Perplexity-chat / Grok / Kimi / Gemini: { citations: string[] }
+  // Replace blocked entries with a placeholder instead of splicing them out,
+  // so positional [N] inline citation references in `content` stay index-aligned.
+  const citations = payload.citations;
+  if (Array.isArray(citations)) {
+    patched.citations = (citations as string[]).map((url) => {
+      if (typeof url !== "string") {
+        return "[blocked by urlAllowlist]";
+      }
+      try {
+        return matchesHostnameAllowlist(new URL(url).hostname, allowlist)
+          ? url
+          : "[blocked by urlAllowlist]";
+      } catch {
+        return "[blocked by urlAllowlist]";
+      }
+    });
+  }
+
+  // Grok: { inlineCitations: Array<{ url, title?, ... }> }
+  // Use map() + placeholder (same as citations above) to preserve positional [N] index alignment.
+  const inlineCitations = payload.inlineCitations;
+  if (Array.isArray(inlineCitations)) {
+    patched.inlineCitations = (inlineCitations as Array<{ url?: string }>).map((entry) => {
+      if (!entry.url) {
+        return entry;
+      }
+      try {
+        return matchesHostnameAllowlist(new URL(entry.url).hostname, allowlist)
+          ? entry
+          : { ...entry, url: "[blocked by urlAllowlist]" };
+      } catch {
+        return { ...entry, url: "[blocked by urlAllowlist]" };
+      }
+    });
+  }
+
+  return patched;
 }

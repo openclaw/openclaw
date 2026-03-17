@@ -1,7 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import {
+  AllowlistBlockedError,
+  matchesHostnameAllowlist,
+  SsrFBlockedError,
+} from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
@@ -27,6 +31,7 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
+  resolveUrlAllowlist,
   writeCache,
 } from "./web-shared.js";
 
@@ -47,6 +52,18 @@ const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+
+export function isUrlAllowedByAllowlist(url: string, allowlist: string[]): boolean {
+  if (allowlist.length === 0) {
+    return true;
+  }
+  try {
+    const parsed = new URL(url);
+    return matchesHostnameAllowlist(parsed.hostname, allowlist);
+  } catch {
+    return false;
+  }
+}
 
 const WebFetchSchema = Type.Object({
   url: Type.String({ description: "HTTP or HTTPS URL to fetch." }),
@@ -458,6 +475,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  urlAllowlist?: string[];
 };
 
 function toFirecrawlContentParams(
@@ -551,6 +569,18 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     finalUrl = result.finalUrl;
     release = result.release;
 
+    // Check redirect target against allowlist
+    if (
+      params.urlAllowlist &&
+      finalUrl !== params.url &&
+      !isUrlAllowedByAllowlist(finalUrl, params.urlAllowlist)
+    ) {
+      if (release) {
+        await release();
+      }
+      throw new AllowlistBlockedError(`Redirect target not allowed by urlAllowlist: ${finalUrl}`);
+    }
+
     // Cloudflare Markdown for Agents — log token budget hint when present
     const markdownTokens = res.headers.get("x-markdown-tokens");
     if (markdownTokens) {
@@ -559,7 +589,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       );
     }
   } catch (error) {
-    if (error instanceof SsrFBlockedError) {
+    if (error instanceof SsrFBlockedError || error instanceof AllowlistBlockedError) {
       throw error;
     }
     const payload = await maybeFetchFirecrawlWebFetchPayload({
@@ -757,6 +787,7 @@ export function createWebFetchTool(options?: {
     firecrawl?.timeoutSeconds ?? fetch?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
   );
+  const urlAllowlist = resolveUrlAllowlist(options?.config?.tools?.web);
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -770,6 +801,18 @@ export function createWebFetchTool(options?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const url = readStringParam(params, "url", { required: true });
+      if (urlAllowlist) {
+        let parseable = true;
+        try {
+          new URL(url);
+        } catch {
+          parseable = false;
+          // Malformed URL — let runWebFetch produce the canonical "Invalid URL" error.
+        }
+        if (parseable && !isUrlAllowedByAllowlist(url, urlAllowlist)) {
+          throw new AllowlistBlockedError(`URL not allowed by urlAllowlist: ${url}`);
+        }
+      }
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
@@ -787,6 +830,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        urlAllowlist,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,

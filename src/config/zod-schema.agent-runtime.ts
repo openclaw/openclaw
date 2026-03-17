@@ -347,8 +347,45 @@ export const ToolsWebFetchSchema = z
   .strict()
   .optional();
 
+const UrlAllowlistDomainPattern =
+  /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+
+// Suffixes that the SSRF guard unconditionally blocks — allowlisting them is a no-op.
+const SSRF_ALWAYS_BLOCKED_SUFFIXES = [".localhost", ".local", ".internal"];
+
+const UrlAllowlistSchema = z
+  .array(
+    z
+      .string()
+      .refine((val) => UrlAllowlistDomainPattern.test(val), {
+        message:
+          'Invalid domain pattern. Use "example.com" or "*.example.com". Full URLs, empty strings, bare "*", and "*." are not allowed.',
+      })
+      .refine(
+        (val) => {
+          // Only reject wildcard patterns like *.localhost / *.local / *.internal —
+          // their subdomains are unconditionally blocked by the SSRF guard so allowlisting
+          // them is always a no-op. Bare single-label hostnames (e.g. "localhost") are
+          // allowed through here; the SSRF guard handles them at request time.
+          if (!val.startsWith("*.")) {
+            return true;
+          }
+          const bare = val.slice(2);
+          return !SSRF_ALWAYS_BLOCKED_SUFFIXES.some(
+            (suffix) => bare === suffix.slice(1) || bare.endsWith(suffix),
+          );
+        },
+        {
+          message:
+            'Wildcard patterns like "*.localhost", "*.local", or "*.internal" are always blocked by the SSRF guard and cannot be allowlisted.',
+        },
+      ),
+  )
+  .optional();
+
 export const ToolsWebSchema = z
   .object({
+    urlAllowlist: UrlAllowlistSchema,
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
   })
