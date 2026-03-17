@@ -1,1 +1,1 @@
-export * from "../../../test-utils/discord-provider.test-support.js";
+export * from "../../../../test/helpers/extensions/discord-provider.test-support.js";
