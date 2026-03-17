@@ -248,7 +248,7 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
       rest: {
         get: restGet,
       },
-    } as Parameters<typeof preflightDiscordMessage>[0]["client"];
+    } as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
 
     const result = await preflightDiscordMessage(
       createBasePreflightParams({
@@ -315,7 +315,7 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
       rest: {
         get: restGet,
       },
-    } as Parameters<typeof preflightDiscordMessage>[0]["client"];
+    } as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
 
     const result = await preflightDiscordMessage(
       createBasePreflightParams({

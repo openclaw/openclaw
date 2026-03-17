@@ -158,7 +158,7 @@ describe("createDiscordGatewayPlugin", () => {
     await registerGatewayClient(plugin);
 
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
-    expect((plugin as { gatewayInfo?: { url?: string } }).gatewayInfo?.url).toBe(
+    expect((plugin as unknown as { gatewayInfo?: { url?: string } }).gatewayInfo?.url).toBe(
       "wss://gateway.discord.gg/",
     );
     expect(runtime.log).toHaveBeenCalledWith(
@@ -306,7 +306,7 @@ describe("createDiscordGatewayPlugin", () => {
     await registerPromise;
 
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
-    expect((plugin as { gatewayInfo?: { url?: string } }).gatewayInfo?.url).toBe(
+    expect((plugin as unknown as { gatewayInfo?: { url?: string } }).gatewayInfo?.url).toBe(
       "wss://gateway.discord.gg/",
     );
     expect(runtime.log).toHaveBeenCalledWith(

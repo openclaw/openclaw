@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
 import {
   createDeferred,
   createNativeCommandTestParams,
@@ -274,16 +275,66 @@ function createConfiguredAcpTopicBinding(boundSessionKey: string) {
 }
 
 function createConfiguredBindingRoute(
-  route: {
-    sessionKey: string;
-    agentId: string;
-    matchedBy?: string;
-  },
+  route: ResolvedAgentRoute,
   binding: ReturnType<typeof createConfiguredAcpTopicBinding> | null,
 ) {
   return {
     bindingResolution: binding
       ? {
+          conversation: binding.record.conversation,
+          compiledBinding: {
+            channel: "telegram" as const,
+            binding: {
+              type: "acp" as const,
+              agentId: binding.spec.agentId,
+              match: {
+                channel: "telegram",
+                accountId: binding.spec.accountId,
+                peer: {
+                  kind: "group" as const,
+                  id: binding.spec.conversationId,
+                },
+              },
+              acp: {
+                mode: binding.spec.mode,
+              },
+            },
+            bindingConversationId: binding.spec.conversationId,
+            target: {
+              conversationId: binding.spec.conversationId,
+              ...(binding.spec.parentConversationId
+                ? { parentConversationId: binding.spec.parentConversationId }
+                : {}),
+            },
+            agentId: binding.spec.agentId,
+            mode: binding.spec.mode,
+            provider: {
+              compileConfiguredBinding: () => ({
+                conversationId: binding.spec.conversationId,
+                ...(binding.spec.parentConversationId
+                  ? { parentConversationId: binding.spec.parentConversationId }
+                  : {}),
+              }),
+              matchInboundConversation: () => ({
+                conversationId: binding.spec.conversationId,
+                ...(binding.spec.parentConversationId
+                  ? { parentConversationId: binding.spec.parentConversationId }
+                  : {}),
+              }),
+            },
+            statefulTarget: {
+              kind: "stateful" as const,
+              driverId: "acp" as const,
+              sessionKey: binding.record.targetSessionKey,
+              agentId: binding.spec.agentId,
+            },
+          },
+          match: {
+            conversationId: binding.spec.conversationId,
+            ...(binding.spec.parentConversationId
+              ? { parentConversationId: binding.spec.parentConversationId }
+              : {}),
+          },
           configuredBinding: binding,
           statefulTarget: {
             kind: "stateful" as const,
@@ -293,7 +344,6 @@ function createConfiguredBindingRoute(
           },
         }
       : null,
-    configuredBinding: binding,
     ...(binding ? { boundSessionKey: binding.record.targetSessionKey } : {}),
     route,
   };

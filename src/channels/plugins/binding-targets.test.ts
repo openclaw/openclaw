@@ -21,8 +21,18 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
     compiledBinding: {
       channel: "discord",
       binding: {
-        channel: "discord",
-        conversation: "123",
+        type: "acp" as const,
+        agentId: "codex",
+        match: {
+          channel: "discord",
+          peer: {
+            kind: "channel" as const,
+            id: "123",
+          },
+        },
+        acp: {
+          mode: "persistent",
+        },
       },
       bindingConversationId: "123",
       target: {

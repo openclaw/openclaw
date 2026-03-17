@@ -2,6 +2,7 @@ import { ChannelType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
 import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dispatcher.js";
+import type { ChatType } from "../../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import * as pluginCommandsModule from "../../../../src/plugins/commands.js";
 import { clearPluginCommands, registerPluginCommand } from "../../../../src/plugins/commands.js";
@@ -151,69 +152,133 @@ function createStatusCommand(cfg: OpenClawConfig) {
     acceptsArgs: false,
   });
 }
-function setConfiguredBinding(channelId: string, boundSessionKey: string) {
-  persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockImplementation((params) => ({
-    bindingResolution: {
-      configuredBinding: {
-        spec: {
+
+function resolveConversationFromParams(params: Parameters<ResolveConfiguredBindingRouteFn>[0]) {
+  if ("conversation" in params) {
+    return params.conversation;
+  }
+  return {
+    channel: params.channel,
+    accountId: params.accountId,
+    conversationId: params.conversationId,
+    ...(params.parentConversationId ? { parentConversationId: params.parentConversationId } : {}),
+  };
+}
+
+function createConfiguredBindingResolution(params: {
+  conversation: ReturnType<typeof resolveConversationFromParams>;
+  boundSessionKey: string;
+}) {
+  const peerKind: ChatType = params.conversation.conversationId.startsWith("dm-")
+    ? "direct"
+    : "channel";
+  const configuredBinding = {
+    spec: {
+      channel: "discord" as const,
+      accountId: params.conversation.accountId,
+      conversationId: params.conversation.conversationId,
+      ...(params.conversation.parentConversationId
+        ? { parentConversationId: params.conversation.parentConversationId }
+        : {}),
+      agentId: "codex",
+      mode: "persistent" as const,
+    },
+    record: {
+      bindingId: `config:acp:discord:${params.conversation.accountId}:${params.conversation.conversationId}`,
+      targetSessionKey: params.boundSessionKey,
+      targetKind: "session" as const,
+      conversation: params.conversation,
+      status: "active" as const,
+      boundAt: 0,
+    },
+  };
+  return {
+    conversation: params.conversation,
+    compiledBinding: {
+      channel: "discord" as const,
+      binding: {
+        type: "acp" as const,
+        agentId: "codex",
+        match: {
           channel: "discord",
-          accountId: params.accountId,
-          conversationId: channelId,
-          parentConversationId: params.parentConversationId,
-          agentId: "codex",
-          mode: "persistent",
-        },
-        record: {
-          bindingId: `config:acp:discord:${params.accountId}:${channelId}`,
-          targetSessionKey: boundSessionKey,
-          targetKind: "session",
-          conversation: {
-            channel: "discord",
-            accountId: params.accountId,
-            conversationId: channelId,
+          accountId: params.conversation.accountId,
+          peer: {
+            kind: peerKind,
+            id: params.conversation.conversationId,
           },
-          status: "active",
-          boundAt: 0,
         },
+        acp: {
+          mode: "persistent" as const,
+        },
+      },
+      bindingConversationId: params.conversation.conversationId,
+      target: {
+        conversationId: params.conversation.conversationId,
+        ...(params.conversation.parentConversationId
+          ? { parentConversationId: params.conversation.parentConversationId }
+          : {}),
+      },
+      agentId: "codex",
+      mode: "persistent" as const,
+      provider: {
+        compileConfiguredBinding: () => ({
+          conversationId: params.conversation.conversationId,
+          ...(params.conversation.parentConversationId
+            ? { parentConversationId: params.conversation.parentConversationId }
+            : {}),
+        }),
+        matchInboundConversation: () => ({
+          conversationId: params.conversation.conversationId,
+          ...(params.conversation.parentConversationId
+            ? { parentConversationId: params.conversation.parentConversationId }
+            : {}),
+        }),
       },
       statefulTarget: {
-        kind: "stateful",
+        kind: "stateful" as const,
         driverId: "acp",
-        sessionKey: boundSessionKey,
+        sessionKey: params.boundSessionKey,
         agentId: "codex",
       },
     },
-    configuredBinding: {
-      spec: {
-        channel: "discord",
-        accountId: params.accountId,
-        conversationId: channelId,
-        parentConversationId: params.parentConversationId,
-        agentId: "codex",
-        mode: "persistent",
-      },
-      record: {
-        bindingId: `config:acp:discord:${params.accountId}:${channelId}`,
-        targetSessionKey: boundSessionKey,
-        targetKind: "session",
-        conversation: {
-          channel: "discord",
-          accountId: params.accountId,
-          conversationId: channelId,
-        },
-        status: "active",
-        boundAt: 0,
-      },
+    match: {
+      conversationId: params.conversation.conversationId,
+      ...(params.conversation.parentConversationId
+        ? { parentConversationId: params.conversation.parentConversationId }
+        : {}),
     },
-    boundSessionKey,
-    boundAgentId: "codex",
-    route: {
-      ...params.route,
+    configuredBinding,
+    statefulTarget: {
+      kind: "stateful" as const,
+      driverId: "acp",
+      sessionKey: params.boundSessionKey,
       agentId: "codex",
-      sessionKey: boundSessionKey,
-      matchedBy: "binding.channel",
     },
-  }));
+  };
+}
+
+function setConfiguredBinding(channelId: string, boundSessionKey: string) {
+  persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockImplementation((params) => {
+    const conversation = resolveConversationFromParams(params);
+    const bindingResolution = createConfiguredBindingResolution({
+      conversation: {
+        ...conversation,
+        conversationId: channelId,
+      },
+      boundSessionKey,
+    });
+    return {
+      bindingResolution,
+      boundSessionKey,
+      boundAgentId: "codex",
+      route: {
+        ...params.route,
+        agentId: "codex",
+        sessionKey: boundSessionKey,
+        matchedBy: "binding.channel",
+      },
+    };
+  });
   persistentBindingMocks.ensureConfiguredAcpBindingSession.mockResolvedValue({
     ok: true,
   });
@@ -269,7 +334,6 @@ describe("Discord native plugin command dispatch", () => {
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReset();
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockImplementation((params) => ({
       bindingResolution: null,
-      configuredBinding: null,
       route: params.route,
     }));
     persistentBindingMocks.ensureConfiguredAcpBindingSession.mockReset();
