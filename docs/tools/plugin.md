@@ -105,6 +105,61 @@ Callback payload fields:
 This callback is notification-only. It does not change who is allowed to bind a
 conversation, and it runs after core approval handling finishes.
 
+## Public capability model
+
+Capabilities are the public plugin model. Every native OpenClaw plugin
+registers against one or more capability types:
+
+| Capability | Registration method | Example plugins |
+|---|---|---|
+| Text inference | `api.registerProvider(...)` | `openai`, `anthropic` |
+| Speech | `api.registerSpeechProvider(...)` | `elevenlabs`, `microsoft` |
+| Media understanding | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google` |
+| Image generation | `api.registerImageGenerationProvider(...)` | `openai`, `google` |
+| Web search | `api.registerWebSearchProvider(...)` | `google` |
+| Channel / messaging | `api.registerChannel(...)` | `msteams`, `matrix` |
+
+A plugin that registers zero capabilities but provides hooks, tools, or
+services is a **legacy hook-only** plugin. That shape is still fully supported.
+
+### Plugin shapes
+
+OpenClaw classifies every loaded plugin into a shape based on its actual
+registration behavior (not just static metadata):
+
+- **plain-capability** — registers exactly one capability type (for example a
+  provider-only plugin like `mistral`)
+- **hybrid-capability** — registers multiple capability types (for example
+  `openai` owns text inference, speech, media understanding, and image
+  generation)
+- **hook-only** — registers only hooks (typed or custom), no capabilities,
+  tools, commands, or services
+- **non-capability** — registers tools, commands, services, or routes but no
+  capabilities
+
+Use `openclaw plugins inspect <id>` to see a plugin's shape and capability
+breakdown. See [CLI reference](/cli/plugins#inspect) for details.
+
+### Capability labels
+
+Plugin capabilities use two stability labels:
+
+- `public` — stable, documented, and safe to depend on
+- `experimental` — may change between releases
+
+### Legacy hooks
+
+The `before_agent_start` hook remains supported as a compatibility path for
+hook-only plugins. Legacy real-world plugins still depend on it.
+
+Direction:
+
+- keep it working
+- document it as legacy
+- prefer `before_model_resolve` for model/provider override work
+- prefer `before_prompt_build` for prompt mutation work
+- remove only after real usage drops and fixture coverage proves migration safety
+
 ## Architecture
 
 OpenClaw's plugin system has four layers:
@@ -420,18 +475,24 @@ Native OpenClaw plugins are **TypeScript modules** loaded at runtime via jiti.
 **Config validation does not execute plugin code**; it uses the plugin manifest
 and JSON Schema instead. See [Plugin manifest](/plugins/manifest).
 
-Native OpenClaw plugins can register:
+Native OpenClaw plugins can register capabilities and surfaces:
 
-- Gateway RPC methods
-- Gateway HTTP routes
+**Capabilities** (public plugin model):
+
+- Text inference providers (model catalogs, auth, runtime hooks)
+- Speech providers
+- Media understanding providers
+- Image generation providers
+- Web search providers
+- Channel / messaging connectors
+
+**Surfaces** (supporting infrastructure):
+
+- Gateway RPC methods and HTTP routes
 - Agent tools
 - CLI commands
-- Speech providers
-- Web search providers
 - Background services
 - Context engines
-- Provider auth flows and model catalogs
-- Provider runtime hooks for dynamic model ids, transport normalization, capability metadata, stream wrapping, cache TTL policy, missing-auth hints, built-in model suppression, catalog augmentation, runtime auth exchange, and usage/billing auth + snapshot resolution
 - Optional config validation
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
@@ -495,6 +556,49 @@ Bad plugin contracts are:
 
 When in doubt, raise the abstraction level: define the capability first, then
 let plugins plug into it.
+
+## Export boundary
+
+OpenClaw exports capabilities, not implementation convenience.
+
+Keep capability registration public. Trim non-contract helper exports:
+
+- bundled-plugin-specific helper subpaths
+- runtime plumbing subpaths not intended as public API
+- vendor-specific convenience helpers
+- setup/onboarding helpers that are implementation details
+
+## Plugin inspection
+
+Use `openclaw plugins inspect <id>` for deep plugin introspection. This is the
+canonical command for understanding a plugin's shape and registration behavior.
+
+```bash
+openclaw plugins inspect openai
+openclaw plugins inspect openai --json
+```
+
+The inspect report shows:
+
+- identity, load status, source, and root
+- plugin shape (plain-capability, hybrid-capability, hook-only, non-capability)
+- capability mode and registered capabilities
+- hooks (typed and custom), tools, commands, services
+- channel registration
+- config policy flags
+- diagnostics
+- whether the plugin uses the legacy `before_agent_start` hook
+- install metadata
+
+Classification comes from actual registration behavior, not just static
+metadata.
+
+Summary commands remain summary-focused:
+
+- `plugins list` — compact inventory
+- `plugins status` — operational summary
+- `doctor` — issue-focused diagnostics
+- `plugins inspect` — deep detail
 
 ## Provider runtime hooks
 
