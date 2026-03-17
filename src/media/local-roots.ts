@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -23,13 +24,17 @@ function buildMediaLocalRoots(
 ): string[] {
   const resolvedStateDir = path.resolve(stateDir);
   const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
-  return [
+  const homeDir = path.resolve(os.homedir());
+  const desktopDir = path.join(homeDir, "Desktop");
+  return [...new Set([
     preferredTmpDir,
+    homeDir,
+    desktopDir,
     path.join(resolvedStateDir, "media"),
     path.join(resolvedStateDir, "agents"),
     path.join(resolvedStateDir, "workspace"),
     path.join(resolvedStateDir, "sandboxes"),
-  ];
+  ])];
 }
 
 export function getDefaultMediaLocalRoots(): readonly string[] {
