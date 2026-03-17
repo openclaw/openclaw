@@ -218,6 +218,11 @@
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
+:root[data-theme-mode="light"] .chat-text .code-block-wrapper pre {
+  background: transparent;
+  border: 0;
+}
+
 .chat-text :where(hr) {
   border: none;
   border-top: 1px solid var(--border);

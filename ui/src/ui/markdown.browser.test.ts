@@ -5,6 +5,7 @@ import { toSanitizedMarkdownHtml } from "./markdown.ts";
 describe("markdown code block copy button styles", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+    delete document.documentElement.dataset.themeMode;
   });
 
   it("shows a single copy label state at a time", async () => {
@@ -34,5 +35,26 @@ describe("markdown code block copy button styles", () => {
 
     expect(getComputedStyle(idle).display).toBe("none");
     expect(getComputedStyle(done).display).not.toBe("none");
+  });
+
+  it("keeps wrapped code blocks borderless in light mode", async () => {
+    document.documentElement.dataset.themeMode = "light";
+
+    const container = document.createElement("div");
+    container.className = "chat-text";
+    container.innerHTML = toSanitizedMarkdownHtml(["```bash", "echo hello", "```"].join("\n"));
+    document.body.append(container);
+
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const pre = container.querySelector<HTMLElement>(".code-block-wrapper pre");
+    expect(pre).not.toBeNull();
+    if (!pre) {
+      return;
+    }
+
+    const preStyle = getComputedStyle(pre);
+    expect(preStyle.backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(preStyle.borderTopWidth).toBe("0px");
   });
 });
