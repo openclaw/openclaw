@@ -147,6 +147,14 @@ async function flushMicrotasks(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = () => {};
+  const promise = new Promise<void>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("plugin conversation binding approvals", () => {
   beforeEach(() => {
     sessionBindingState.reset();
@@ -489,11 +497,8 @@ describe("plugin conversation binding approvals", () => {
 
   it("does not wait for an approved bind callback before returning", async () => {
     const registry = createEmptyPluginRegistry();
-    let releaseCallback: (() => void) | null = null;
-    const callbackGate = new Promise<void>((resolve) => {
-      releaseCallback = resolve;
-    });
-    const onResolved = vi.fn(async () => callbackGate);
+    const callbackGate = createDeferredVoid();
+    const onResolved = vi.fn(async () => callbackGate.promise);
     registry.conversationBindingResolvedHandlers.push({
       pluginId: "codex",
       pluginRoot: "/plugins/callback-slow-approve",
@@ -536,18 +541,15 @@ describe("plugin conversation binding approvals", () => {
     expect(settled).toBe(true);
     expect(onResolved).toHaveBeenCalledTimes(1);
 
-    releaseCallback?.();
+    callbackGate.resolve();
     const approved = await resolutionPromise;
     expect(approved.status).toBe("approved");
   });
 
   it("does not wait for a denied bind callback before returning", async () => {
     const registry = createEmptyPluginRegistry();
-    let releaseCallback: (() => void) | null = null;
-    const callbackGate = new Promise<void>((resolve) => {
-      releaseCallback = resolve;
-    });
-    const onResolved = vi.fn(async () => callbackGate);
+    const callbackGate = createDeferredVoid();
+    const onResolved = vi.fn(async () => callbackGate.promise);
     registry.conversationBindingResolvedHandlers.push({
       pluginId: "codex",
       pluginRoot: "/plugins/callback-slow-deny",
@@ -590,7 +592,7 @@ describe("plugin conversation binding approvals", () => {
     expect(settled).toBe(true);
     expect(onResolved).toHaveBeenCalledTimes(1);
 
-    releaseCallback?.();
+    callbackGate.resolve();
     const denied = await resolutionPromise;
     expect(denied.status).toBe("denied");
   });
