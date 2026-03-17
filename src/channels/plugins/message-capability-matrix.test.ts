@@ -75,18 +75,15 @@ describe("channel action capability matrix", () => {
 
     expect(result).toEqual(["interactive", "buttons"]);
     expect(telegramGetCapabilitiesMock).toHaveBeenCalledWith({ cfg: {} });
-  });
-
-  it("forwards Discord action capabilities through the channel wrapper", () => {
     discordGetCapabilitiesMock.mockReturnValue(["interactive", "components"]);
 
-    const result = discordPlugin.actions?.getCapabilities?.({ cfg: {} as OpenClawConfig });
+    const discordResult = discordPlugin.actions?.getCapabilities?.({ cfg: {} as OpenClawConfig });
 
-    expect(result).toEqual(["interactive", "components"]);
+    expect(discordResult).toEqual(["interactive", "components"]);
     expect(discordGetCapabilitiesMock).toHaveBeenCalledWith({ cfg: {} });
   });
 
-  it("exposes Mattermost buttons only when an account is configured", () => {
+  it("exposes configured channel capabilities only when required credentials are present", () => {
     const configuredCfg = {
       channels: {
         mattermost: {
@@ -103,61 +100,57 @@ describe("channel action capability matrix", () => {
         },
       },
     } as OpenClawConfig;
+    const configuredFeishuCfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_a",
+          appSecret: "secret",
+        },
+      },
+    } as OpenClawConfig;
+    const disabledFeishuCfg = {
+      channels: {
+        feishu: {
+          enabled: false,
+          appId: "cli_a",
+          appSecret: "secret",
+        },
+      },
+    } as OpenClawConfig;
+    const configuredMsteamsCfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          tenantId: "tenant",
+          appId: "app",
+          appPassword: "secret",
+        },
+      },
+    } as OpenClawConfig;
+    const disabledMsteamsCfg = {
+      channels: {
+        msteams: {
+          enabled: false,
+          tenantId: "tenant",
+          appId: "app",
+          appPassword: "secret",
+        },
+      },
+    } as OpenClawConfig;
 
     expect(mattermostPlugin.actions?.getCapabilities?.({ cfg: configuredCfg })).toEqual([
       "buttons",
     ]);
     expect(mattermostPlugin.actions?.getCapabilities?.({ cfg: unconfiguredCfg })).toEqual([]);
-  });
-
-  it("exposes Feishu cards only when credentials are configured", () => {
-    const configuredCfg = {
-      channels: {
-        feishu: {
-          enabled: true,
-          appId: "cli_a",
-          appSecret: "secret",
-        },
-      },
-    } as OpenClawConfig;
-    const disabledCfg = {
-      channels: {
-        feishu: {
-          enabled: false,
-          appId: "cli_a",
-          appSecret: "secret",
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(feishuPlugin.actions?.getCapabilities?.({ cfg: configuredCfg })).toEqual(["cards"]);
-    expect(feishuPlugin.actions?.getCapabilities?.({ cfg: disabledCfg })).toEqual([]);
-  });
-
-  it("exposes MSTeams cards only when credentials are configured", () => {
-    const configuredCfg = {
-      channels: {
-        msteams: {
-          enabled: true,
-          tenantId: "tenant",
-          appId: "app",
-          appPassword: "secret",
-        },
-      },
-    } as OpenClawConfig;
-    const disabledCfg = {
-      channels: {
-        msteams: {
-          enabled: false,
-          tenantId: "tenant",
-          appId: "app",
-          appPassword: "secret",
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(msteamsPlugin.actions?.getCapabilities?.({ cfg: configuredCfg })).toEqual(["cards"]);
-    expect(msteamsPlugin.actions?.getCapabilities?.({ cfg: disabledCfg })).toEqual([]);
+    expect(feishuPlugin.actions?.getCapabilities?.({ cfg: configuredFeishuCfg })).toEqual([
+      "cards",
+    ]);
+    expect(feishuPlugin.actions?.getCapabilities?.({ cfg: disabledFeishuCfg })).toEqual([]);
+    expect(msteamsPlugin.actions?.getCapabilities?.({ cfg: configuredMsteamsCfg })).toEqual([
+      "cards",
+    ]);
+    expect(msteamsPlugin.actions?.getCapabilities?.({ cfg: disabledMsteamsCfg })).toEqual([]);
   });
 
   it("keeps Zalo actions on the empty capability set", () => {
