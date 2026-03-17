@@ -1957,41 +1957,68 @@ description: test skill
     );
   });
 
-  it("flags Discord native commands without a guild user allowlist", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            groupPolicy: "allowlist",
-            guilds: {
-              "123": {
-                channels: {
-                  general: { allow: true },
+  it("evaluates Discord native command allowlist findings", async () => {
+    const cases = [
+      {
+        name: "flags missing guild user allowlists",
+        cfg: {
+          channels: {
+            discord: {
+              enabled: true,
+              token: "t",
+              groupPolicy: "allowlist",
+              guilds: {
+                "123": {
+                  channels: {
+                    general: { allow: true },
+                  },
                 },
               },
             },
           },
-        },
-      };
+        } as OpenClawConfig,
+        expectFinding: true,
+      },
+      {
+        name: "does not flag when dm.allowFrom includes a Discord snowflake id",
+        cfg: {
+          channels: {
+            discord: {
+              enabled: true,
+              token: "t",
+              dm: { allowFrom: ["387380367612706819"] },
+              groupPolicy: "allowlist",
+              guilds: {
+                "123": {
+                  channels: {
+                    general: { allow: true },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectFinding: false,
+      },
+    ] as const;
 
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
+    for (const testCase of cases) {
+      await withChannelSecurityStateDir(async () => {
+        const res = await runSecurityAudit({
+          config: testCase.cfg,
+          includeFilesystem: false,
+          includeChannelSecurity: true,
+          plugins: [discordPlugin],
+        });
+
+        expect(
+          res.findings.some(
+            (finding) => finding.checkId === "channels.discord.commands.native.no_allowlists",
+          ),
+          testCase.name,
+        ).toBe(testCase.expectFinding);
       });
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.commands.native.no_allowlists",
-            severity: "warn",
-          }),
-        ]),
-      );
-    });
+    }
   });
 
   it("keeps source-configured channel security findings when resolved inspection is incomplete", async () => {
@@ -2239,43 +2266,6 @@ description: test skill
     expect(finding?.title).toContain("could not be fully resolved");
     expect(finding?.detail).toContain("zalouser:default: failed to resolve account");
     expect(finding?.detail).toContain("missing SecretRef");
-  });
-
-  it("does not flag Discord slash commands when dm.allowFrom includes a Discord snowflake id", async () => {
-    await withChannelSecurityStateDir(async () => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          discord: {
-            enabled: true,
-            token: "t",
-            dm: { allowFrom: ["387380367612706819"] },
-            groupPolicy: "allowlist",
-            guilds: {
-              "123": {
-                channels: {
-                  general: { allow: true },
-                },
-              },
-            },
-          },
-        },
-      };
-
-      const res = await runSecurityAudit({
-        config: cfg,
-        includeFilesystem: false,
-        includeChannelSecurity: true,
-        plugins: [discordPlugin],
-      });
-
-      expect(res.findings).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.discord.commands.native.no_allowlists",
-          }),
-        ]),
-      );
-    });
   });
 
   it.each([
