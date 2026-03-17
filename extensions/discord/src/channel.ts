@@ -1,5 +1,8 @@
 import { Separator, TextDisplay } from "@buape/carbon";
-import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
+import {
+  buildAccountScopedAllowlistConfigEditor,
+  resolveLegacyDmAllowlistConfigPaths,
+} from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyConfiguredRouteWarnings,
@@ -347,14 +350,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       channelId: "discord",
       normalize: ({ cfg, accountId, values }) =>
         discordConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-      resolvePaths: (scope) =>
-        scope === "dm"
-          ? {
-              readPaths: [["allowFrom"], ["dm", "allowFrom"]],
-              writePath: ["allowFrom"],
-              cleanupPaths: [["dm", "allowFrom"]],
-            }
-          : null,
+      resolvePaths: resolveLegacyDmAllowlistConfigPaths,
     }),
   },
   security: {

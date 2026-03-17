@@ -270,7 +270,10 @@ export { buildChannelSendResult } from "./channel-send-result.js";
 export type { ChannelSendRawResult } from "./channel-send-result.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
 export { createScopedChannelConfigBase } from "./channel-config-helpers.js";
-export { buildAccountScopedAllowlistConfigEditor } from "./allowlist-config-edit.js";
+export {
+  buildAccountScopedAllowlistConfigEditor,
+  resolveLegacyDmAllowlistConfigPaths,
+} from "./allowlist-config-edit.js";
 export {
   AllowFromEntrySchema,
   AllowFromListSchema,
