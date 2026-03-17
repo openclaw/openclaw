@@ -1,0 +1,37 @@
+{
+  // Minimal skeleton for Formspree-mail -> Gmail -> OpenClaw intake.
+  // Fill these values manually; do not commit real secrets.
+  "hooks": {
+    "enabled": true,
+    "token": "${OPENCLAW_HOOKS_TOKEN}",
+    "path": "/hooks",
+    "presets": ["gmail"],
+    "allowedAgentIds": ["ops", "main"],
+    "defaultSessionKey": "hook:visitor-intake",
+    "allowRequestSessionKey": false,
+    "allowedSessionKeyPrefixes": ["hook:"],
+    "gmail": {
+      "account": "info@deepnoa.com",
+      "project": "<gcp-project-id>",
+      "topic": "projects/<gcp-project-id>/topics/gog-gmail-watch",
+      "subscription": "projects/<gcp-project-id>/subscriptions/gog-gmail-watch-push",
+      "label": "INBOX",
+      "hookUrl": "http://127.0.0.1:19001/hooks/gmail",
+      "renewMinutes": 60,
+      "includeBody": false,
+      "maxBytes": 4096
+    },
+    "mappings": [
+      {
+        "match": { "path": "gmail", "source": "gmail" },
+        "action": "agent",
+        "agentId": "ops",
+        "wakeMode": "now",
+        "name": "Visitor Intake",
+        "sessionKey": "hook:gmail:{{messages[0].id}}",
+        "deliver": false,
+        "messageTemplate": "A new external inquiry trigger was received from Formspree mail. Only use safe metadata. sender_present={{#if messages[0].from}}true{{else}}false{{/if}} subject_present={{#if messages[0].subject}}true{{else}}false{{/if}} received_at={{messages[0].date}} source=formspree_mail. Classify into inquiry, document_request, consultation, sales, or other, then emit visitor.inquiry.detected for manager ingestion."
+      }
+    ]
+  }
+}

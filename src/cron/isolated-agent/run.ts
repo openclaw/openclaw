@@ -376,6 +376,9 @@ export async function runCronIsolatedAgentTurn(params: {
         : params.job.id;
     cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
   }
+  if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("hook:formspree:")) {
+    cronSession.sessionEntry.label = "Inquiry Intake";
+  }
 
   // Respect session model override — check session.modelOverride before falling
   // back to the default config model. This ensures /model changes are honoured

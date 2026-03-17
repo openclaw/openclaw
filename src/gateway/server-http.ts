@@ -43,7 +43,12 @@ import {
   normalizeAgentPayload,
   normalizeHookHeaders,
   normalizeWakePayload,
+  buildFormspreeIntakeSession,
+  buildFormspreeInquiryId,
+  buildFormspreeOpsHookMessage,
+  buildFormspreeVisibleSessionMessage,
   readJsonBody,
+  readHookBody,
   normalizeHookDispatchSessionKey,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
@@ -380,15 +385,6 @@ export function createHooksRequestHandler(
       return false;
     }
 
-    if (url.searchParams.has("token")) {
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end(
-        "Hook token must be provided via Authorization: Bearer <token> or X-OpenClaw-Token header (query parameters are not allowed).",
-      );
-      return true;
-    }
-
     if (req.method !== "POST") {
       res.statusCode = 405;
       res.setHeader("Allow", "POST");
@@ -397,9 +393,28 @@ export function createHooksRequestHandler(
       return true;
     }
 
+    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
+    if (!subPath) {
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Not Found");
+      return true;
+    }
+
+    const isFormspreeHook = subPath === "formspree";
+
+    if (url.searchParams.has("token") && !isFormspreeHook) {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end(
+        "Hook token must be provided via Authorization: Bearer <token> or X-OpenClaw-Token header (query parameters are not allowed).",
+      );
+      return true;
+    }
+
     const token = extractHookToken(req);
     const clientKey = resolveHookClientKey(req);
-    if (!safeEqualSecret(token, hooksConfig.token)) {
+    if (!isFormspreeHook && !safeEqualSecret(token, hooksConfig.token)) {
       const throttle = hookAuthLimiter.check(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
       if (!throttle.allowed) {
         const retryAfter = throttle.retryAfterMs > 0 ? Math.ceil(throttle.retryAfterMs / 1000) : 1;
@@ -418,16 +433,15 @@ export function createHooksRequestHandler(
     }
     hookAuthLimiter.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH);
 
-    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
-    if (!subPath) {
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Not Found");
-      return true;
-    }
-
-    const body = await readJsonBody(req, hooksConfig.maxBodyBytes);
+    const body = isFormspreeHook
+      ? await readHookBody(req, hooksConfig.maxBodyBytes)
+      : await readJsonBody(req, hooksConfig.maxBodyBytes);
     if (!body.ok) {
+      if (isFormspreeHook) {
+        logHooks.warn(`formspree hook rejected payload: ${body.error}`);
+        sendJson(res, 200, { ok: true, source: "formspree", accepted: false, error: body.error });
+        return true;
+      }
       const status =
         body.error === "payload too large"
           ? 413
@@ -440,6 +454,74 @@ export function createHooksRequestHandler(
 
     const payload = typeof body.value === "object" && body.value !== null ? body.value : {};
     const headers = normalizeHookHeaders(req);
+
+    if (isFormspreeHook) {
+      const intakeSession = buildFormspreeIntakeSession(payload as Record<string, unknown>);
+      const event = intakeSession.public_event;
+      const inquiryId = buildFormspreeInquiryId(intakeSession);
+      logHooks.info?.(
+        `formspree hook received category=${event.category} sender=${event.has_sender ? "yes" : "no"} subject=${event.has_subject ? "yes" : "no"} service=${intakeSession.routing.service ? "yes" : "no"}`,
+      );
+      let visibleRunId: string | undefined;
+      let runId: string | undefined;
+      try {
+        const visibleSessionKey = resolveHookSessionKey({
+          hooksConfig,
+          source: "mapping",
+          sessionKey: `hook:formspree:${inquiryId}`,
+        });
+        if (visibleSessionKey.ok) {
+          const mainAgentId = resolveHookTargetAgentId(hooksConfig, "main");
+          if (isHookAgentAllowed(hooksConfig, mainAgentId)) {
+            visibleRunId = dispatchAgentHook({
+              message: buildFormspreeVisibleSessionMessage(intakeSession),
+              name: "Formspree Inquiry",
+              agentId: mainAgentId,
+              wakeMode: "now",
+              sessionKey: normalizeHookDispatchSessionKey({
+                sessionKey: visibleSessionKey.value,
+                targetAgentId: mainAgentId,
+              }),
+              deliver: false,
+              channel: "webchat",
+              timeoutSeconds: 20,
+            });
+          }
+          const opsSessionKey = resolveHookSessionKey({
+            hooksConfig,
+            source: "mapping",
+            sessionKey: `${visibleSessionKey.value}:ops`,
+          });
+          const targetAgentId = resolveHookTargetAgentId(hooksConfig, "ops");
+          if (opsSessionKey.ok && isHookAgentAllowed(hooksConfig, targetAgentId)) {
+            runId = dispatchAgentHook({
+              message: buildFormspreeOpsHookMessage(intakeSession),
+              name: "Formspree Intake",
+              agentId: targetAgentId,
+              wakeMode: "now",
+              sessionKey: normalizeHookDispatchSessionKey({
+                sessionKey: opsSessionKey.value,
+                targetAgentId,
+              }),
+              deliver: false,
+              channel: "last",
+            });
+          }
+        }
+      } catch (err) {
+        logHooks.warn(`formspree hook dispatch failed: ${String(err)}`);
+      }
+      sendJson(res, 200, {
+        ok: true,
+        source: "formspree",
+        event,
+        intakeSession,
+        runId,
+        visibleRunId,
+        visibleSessionKey: `hook:formspree:${inquiryId}`,
+      });
+      return true;
+    }
 
     if (subPath === "wake") {
       const normalized = normalizeWakePayload(payload as Record<string, unknown>);

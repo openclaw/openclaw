@@ -42,6 +42,25 @@ async function postHook(
   });
 }
 
+async function postHookRaw(
+  port: number,
+  path: string,
+  body: string,
+  options?: {
+    token?: string | null;
+    headers?: Record<string, string>;
+  },
+): Promise<Response> {
+  return fetch(`http://127.0.0.1:${port}${path}`, {
+    method: "POST",
+    headers: {
+      ...(options?.token ? { Authorization: `Bearer ${options.token}` } : {}),
+      ...options?.headers,
+    },
+    body,
+  });
+}
+
 function setMainAndHooksAgents(): void {
   testState.agentsConfig = {
     list: [{ id: "main", default: true }, { id: "hooks" }],
@@ -163,6 +182,105 @@ describe("gateway server hooks", () => {
 
       const resBadJson = await postHook(port, "/hooks/wake", "{");
       expect(resBadJson.status).toBe(400);
+    });
+  });
+
+  test("accepts unauthenticated formspree webhook payloads and routes them to ops", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedAgentIds: ["ops", "main"],
+      defaultSessionKey: "hook:visitor-intake",
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true }, { id: "ops" }],
+    };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+
+      const jsonRes = await fetch(`http://127.0.0.1:${port}/hooks/formspree`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "person@example.com",
+          company: "Deepnoa",
+          phone: "03-0000-0000",
+          service: "AI Agent導入支援",
+          subject: "資料請求",
+          message: "資料をお願いします",
+        }),
+      });
+      expect(jsonRes.status).toBe(200);
+      const jsonBody = (await jsonRes.json()) as {
+        event?: { type?: string; category?: string };
+        intakeSession?: {
+          routing?: { service?: string };
+          contact?: { has_company?: boolean; has_phone?: boolean; has_message?: boolean };
+        };
+        visibleSessionKey?: string;
+      };
+      expect(jsonBody.event?.type).toBe("visitor.inquiry.detected");
+      expect(jsonBody.event?.category).toBe("document_request");
+      expect(jsonBody.intakeSession?.routing?.service).toBe("AI Agent導入支援");
+      expect(jsonBody.intakeSession?.contact?.has_company).toBe(true);
+      expect(jsonBody.intakeSession?.contact?.has_phone).toBe(true);
+      expect(jsonBody.intakeSession?.contact?.has_message).toBe(true);
+      expect((jsonBody as { visibleSessionKey?: string }).visibleSessionKey).toMatch(
+        /^hook:formspree:[0-9a-f]{12}$/,
+      );
+      await waitForSystemEvent();
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+      const calls = cronIsolatedRun.mock.calls.map(
+        (call) =>
+          call[0] as {
+            sessionKey?: string;
+            job?: {
+              agentId?: string;
+              payload?: { message?: string; channel?: string; deliver?: boolean };
+            };
+          },
+      );
+      const visibleCall = calls.find((call) => call.job?.agentId === "main");
+      const opsCall = calls.find((call) => call.job?.agentId === "ops");
+      expect(visibleCall?.sessionKey).toMatch(/^hook:formspree:[0-9a-f]{12}$/);
+      expect(visibleCall?.job?.payload?.channel).toBe("webchat");
+      expect(visibleCall?.job?.payload?.deliver).toBe(false);
+      expect(visibleCall?.job?.payload?.message).toContain("visitor.inquiry.detected");
+      expect(visibleCall?.job?.payload?.message).toContain("has_message=true");
+      expect(visibleCall?.job?.payload?.message).not.toContain("company=Deepnoa");
+      expect(visibleCall?.job?.payload?.message).not.toContain("person@example.com");
+      const jsonCall = opsCall as
+        | { job?: { agentId?: string; payload?: { message?: string } } }
+        | undefined;
+      expect(jsonCall?.job?.agentId).toBe("ops");
+      expect(jsonCall?.job?.payload?.message).toContain("visitor.inquiry.detected");
+      expect(jsonCall?.job?.payload?.message).toContain("service=AI Agent導入支援");
+      expect(jsonCall?.job?.payload?.message).toContain("company=Deepnoa");
+      drainSystemEvents(resolveMainKey());
+
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
+      const boundary = "----OpenClawFormspreeBoundary";
+      const multipartBody = [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="email"',
+        "",
+        "person@example.com",
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="message"',
+        "",
+        "営業のご連絡です",
+        `--${boundary}--`,
+        "",
+      ].join("\r\n");
+      const multipartRes = await postHookRaw(port, "/hooks/formspree", multipartBody, {
+        headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
+      });
+      expect(multipartRes.status).toBe(200);
+      const multipartJson = (await multipartRes.json()) as { event?: { category?: string } };
+      expect(multipartJson.event?.category).toBe("sales");
     });
   });
 
