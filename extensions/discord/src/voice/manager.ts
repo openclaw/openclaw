@@ -17,7 +17,6 @@ import {
   type VoiceConnection,
 } from "@discordjs/voice";
 import { resolveAgentDir } from "../../../../src/agents/agent-scope.js";
-import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { agentCommandFromIngress } from "../../../../src/commands/agent.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
@@ -26,12 +25,7 @@ import { logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  runCapability,
-} from "../../../../src/media-understanding/runner.js";
+import { transcribeAudioFile } from "../../../../src/media-understanding/runtime.js";
 import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import { parseTtsDirectives } from "../../../../src/tts/tts-core.js";
@@ -236,33 +230,13 @@ async function transcribeAudio(params: {
   agentId: string;
   filePath: string;
 }): Promise<string | undefined> {
-  const ctx: MsgContext = {
-    MediaPath: params.filePath,
-    MediaType: "audio/wav",
-  };
-  const attachments = normalizeMediaAttachments(ctx);
-  if (attachments.length === 0) {
-    return undefined;
-  }
-  const cache = createMediaAttachmentCache(attachments);
-  const providerRegistry = buildProviderRegistry();
-  try {
-    const result = await runCapability({
-      capability: "audio",
-      cfg: params.cfg,
-      ctx,
-      attachments: cache,
-      media: attachments,
-      agentDir: resolveAgentDir(params.cfg, params.agentId),
-      providerRegistry,
-      config: params.cfg.tools?.media?.audio,
-    });
-    const output = result.outputs.find((entry) => entry.kind === "audio.transcription");
-    const text = output?.text?.trim();
-    return text || undefined;
-  } finally {
-    await cache.cleanup();
-  }
+  const result = await transcribeAudioFile({
+    cfg: params.cfg,
+    filePath: params.filePath,
+    mime: "audio/wav",
+    agentDir: resolveAgentDir(params.cfg, params.agentId),
+  });
+  return result.text?.trim() || undefined;
 }
 
 export class DiscordVoiceManager {

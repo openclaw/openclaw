@@ -104,29 +104,20 @@ export type PluginProviderRegistration = {
   rootDir?: string;
 };
 
-export type PluginWebSearchProviderRegistration = {
+type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
-  provider: WebSearchProviderPlugin;
+  provider: T;
   source: string;
   rootDir?: string;
 };
 
-export type PluginSpeechProviderRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  provider: SpeechProviderPlugin;
-  source: string;
-  rootDir?: string;
-};
-
-export type PluginMediaUnderstandingProviderRegistration = {
-  pluginId: string;
-  pluginName?: string;
-  provider: MediaUnderstandingProviderPlugin;
-  source: string;
-  rootDir?: string;
-};
+export type PluginSpeechProviderRegistration =
+  PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+export type PluginMediaUnderstandingProviderRegistration =
+  PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
+export type PluginWebSearchProviderRegistration =
+  PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 
 export type PluginHookRegistration = {
   pluginId: string;
@@ -576,13 +567,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerUniqueProviderLike = <
     T extends { id: string },
-    R extends {
-      pluginId: string;
-      pluginName?: string;
-      provider: T;
-      source: string;
-      rootDir?: string;
-    },
+    R extends PluginOwnedProviderRegistration<T>,
   >(params: {
     record: PluginRecord;
     provider: T;
