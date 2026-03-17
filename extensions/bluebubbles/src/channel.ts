@@ -18,7 +18,7 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,

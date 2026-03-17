@@ -3,18 +3,13 @@ import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
   hasConfiguredSecretInput,
   patchChannelConfigForAccount,
-} from "openclaw/plugin-sdk/setup";
-import {
-  buildChannelConfigSchema,
-  getChatChannelMeta,
-  SlackConfigSchema,
-  type ChannelPlugin,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/slack";
+} from "openclaw/plugin-sdk/setup";
 import { inspectSlackAccount } from "./account-inspect.js";
 import {
   listSlackAccountIds,
@@ -161,6 +156,7 @@ export const slackConfigBase = createScopedChannelConfigBase({
 });
 
 export function createSlackPluginBase(params: {
+  configSchema: Pick<ChannelPlugin<ResolvedSlackAccount>, "configSchema">["configSchema"];
   setupWizard: NonNullable<ChannelPlugin<ResolvedSlackAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedSlackAccount>["setup"]>;
 }): Pick<
@@ -205,7 +201,7 @@ export function createSlackPluginBase(params: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.slack"] },
-    configSchema: buildChannelConfigSchema(SlackConfigSchema),
+    configSchema: params.configSchema,
     config: {
       ...slackConfigBase,
       isConfigured: (account) => isSlackPluginAccountConfigured(account),
