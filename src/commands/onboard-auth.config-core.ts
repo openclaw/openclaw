@@ -10,7 +10,7 @@ export {
   LITELLM_BASE_URL,
   LITELLM_DEFAULT_MODEL_ID,
 } from "./onboard-auth.config-litellm.js";
-export { applyAuthProfileConfig } from "./auth-profile-config.js";
+export { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 export {
   applyHuggingfaceConfig,
   applyHuggingfaceProviderConfig,

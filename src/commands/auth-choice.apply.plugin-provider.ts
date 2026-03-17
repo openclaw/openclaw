@@ -7,11 +7,11 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import type { ProviderAuthMethod } from "../plugins/types.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
-import { applyAuthProfileConfig } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import type { OnboardOptions } from "./onboard-types.js";
 import {

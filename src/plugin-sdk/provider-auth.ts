@@ -29,8 +29,7 @@ export {
   resolveSecretInputModeForEnvSelection,
 } from "../commands/auth-choice.apply-helpers.js";
 export { buildTokenProfileId, validateAnthropicSetupToken } from "../commands/auth-token.js";
-export { buildApiKeyCredential } from "../commands/onboard-auth.credentials.js";
-export { applyAuthProfileConfig } from "../commands/onboard-auth.js";
+export { applyAuthProfileConfig, buildApiKeyCredential } from "../plugins/provider-auth-helpers.js";
 export { githubCopilotLoginCommand } from "../providers/github-copilot-auth.js";
 export { loginOpenAICodexOAuth } from "../commands/openai-codex-oauth.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
