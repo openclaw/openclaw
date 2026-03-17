@@ -302,6 +302,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Ollama overflow: rewrite Ollama `prompt too long` API payloads through the normal context-overflow sanitizer so embedded sessions keep the friendly overflow copy and auto-compaction trigger. (#34019) thanks @lishuaigit.
 
 - Control UI/auth: restore one-time legacy `?token=` imports for shared Control UI links while keeping `#token=` preferred, and carry pending query tokens through gateway URL confirmation so compatibility links still authenticate after confirmation. (#43979) Thanks @stim64045-spec.
+- Plugins/context engines: retry legacy lifecycle calls once without `sessionKey` when older plugins reject that field, memoize legacy mode after the first strict-schema fallback, and preserve non-compat runtime errors without retry. (#44779) thanks @hhhhao28.
 
 ## 2026.3.11
 
