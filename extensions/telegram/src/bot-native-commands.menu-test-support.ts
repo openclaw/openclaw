@@ -23,8 +23,8 @@ const deliveryMocks = vi.hoisted(() => ({
 export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
 
-vi.mock("../../../src/auto-reply/skill-commands.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/auto-reply/skill-commands.js")>();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
     listSkillCommandsForAgents,
@@ -79,4 +79,8 @@ export function createNativeCommandTestParams(
   });
 }
 
-export { createTelegramPrivateCommandContext as createPrivateCommandContext };
+export function createPrivateCommandContext(
+  params?: Parameters<typeof createTelegramPrivateCommandContext>[0],
+) {
+  return createTelegramPrivateCommandContext(params);
+}
