@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
+import type { ChannelSetupInput } from "./types.core.js";
 
 type ChannelSectionBase = {
   name?: string;
@@ -132,6 +134,49 @@ export function applySetupAccountConfigPatch(params: {
     accountId: params.accountId,
     patch: params.patch,
   });
+}
+
+export function createPatchedAccountSetupAdapter(params: {
+  channelKey: string;
+  alwaysUseAccounts?: boolean;
+  validateInput?: ChannelSetupAdapter["validateInput"];
+  buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
+}): ChannelSetupAdapter {
+  return {
+    resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToChannelSection({
+        cfg,
+        channelKey: params.channelKey,
+        accountId,
+        name,
+        alwaysUseAccounts: params.alwaysUseAccounts,
+      }),
+    validateInput: params.validateInput,
+    applyAccountConfig: ({ cfg, accountId, input }) => {
+      const namedConfig = applyAccountNameToChannelSection({
+        cfg,
+        channelKey: params.channelKey,
+        accountId,
+        name: input.name,
+        alwaysUseAccounts: params.alwaysUseAccounts,
+      });
+      const next =
+        accountId !== DEFAULT_ACCOUNT_ID
+          ? migrateBaseNameToDefaultAccount({
+              cfg: namedConfig,
+              channelKey: params.channelKey,
+              alwaysUseAccounts: params.alwaysUseAccounts,
+            })
+          : namedConfig;
+      return applySetupAccountConfigPatch({
+        cfg: next,
+        channelKey: params.channelKey,
+        accountId,
+        patch: params.buildPatch(input),
+      });
+    },
+  };
 }
 
 export function patchScopedAccountConfig(params: {

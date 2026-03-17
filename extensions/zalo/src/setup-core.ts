@@ -1,23 +1,10 @@
-import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
-  DEFAULT_ACCOUNT_ID,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
-  type ChannelSetupAdapter,
-} from "openclaw/plugin-sdk/setup";
+import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 
 const channel = "zalo" as const;
 
-export const zaloSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
+export const zaloSetupAdapter = createPatchedAccountSetupAdapter({
+  channelKey: channel,
   validateInput: ({ accountId, input }) => {
     if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
       return "ZALO_BOT_TOKEN can only be used for the default account.";
@@ -27,32 +14,12 @@ export const zaloSetupAdapter: ChannelSetupAdapter = {
     }
     return null;
   },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
-    const patch = input.useEnv
+  buildPatch: (input) =>
+    input.useEnv
       ? {}
       : input.tokenFile
         ? { tokenFile: input.tokenFile }
         : input.token
           ? { botToken: input.token }
-          : {};
-    return applySetupAccountConfigPatch({
-      cfg: next,
-      channelKey: channel,
-      accountId,
-      patch,
-    });
-  },
-};
+          : {},
+});
