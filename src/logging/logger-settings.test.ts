@@ -1,7 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fallbackRequireMock, readLoggingConfigMock } = vi.hoisted(() => ({
-  readLoggingConfigMock: vi.fn(() => undefined),
+  readLoggingConfigMock: vi.fn(
+    (): import("../config/types.base.js").LoggingConfig | undefined => undefined,
+  ),
   fallbackRequireMock: vi.fn(() => {
     throw new Error("config fallback should not be used in this test");
   }),
@@ -62,5 +64,26 @@ describe("getResolvedLoggerSettings", () => {
     process.env.OPENCLAW_TEST_FILE_LOG = "1";
     const settings = logging.getResolvedLoggerSettings();
     expect(settings.level).toBe("info");
+  });
+
+  it("uses logging.dir for rolling log path when set", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    logging.setLoggerOverride({ dir: "/custom/logs" });
+    const settings = logging.getResolvedLoggerSettings();
+    expect(settings.file).toMatch(/^\/custom\/logs\/openclaw-\d{4}-\d{2}-\d{2}\.log$/);
+  });
+
+  it("logging.file takes priority over logging.dir", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    logging.setLoggerOverride({ dir: "/custom/logs", file: "/exact/path.log" });
+    const settings = logging.getResolvedLoggerSettings();
+    expect(settings.file).toBe("/exact/path.log");
+  });
+
+  it("uses default dir when neither file nor dir is set", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    logging.setLoggerOverride({});
+    const settings = logging.getResolvedLoggerSettings();
+    expect(settings.file).toMatch(/^\/tmp\/openclaw\/openclaw-\d{4}-\d{2}-\d{2}\.log$/);
   });
 });

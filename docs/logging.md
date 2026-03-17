@@ -25,7 +25,19 @@ By default, the Gateway writes a rolling log file under:
 
 The date uses the gateway host's local timezone.
 
-You can override this in `~/.openclaw/openclaw.json`:
+You can customize the log directory while keeping daily rolling filenames:
+
+```json
+{
+  "logging": {
+    "dir": "/var/log/openclaw"
+  }
+}
+```
+
+This writes to `/var/log/openclaw/openclaw-YYYY-MM-DD.log`.
+
+To override the full path (disabling rolling filenames), use `file` instead:
 
 ```json
 {
@@ -34,6 +46,8 @@ You can override this in `~/.openclaw/openclaw.json`:
   }
 }
 ```
+
+Priority: `logging.file` > `logging.dir` > default (`/tmp/openclaw`).
 
 ## How to read logs
 
@@ -104,6 +118,7 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 {
   "logging": {
     "level": "info",
+    "dir": "/tmp/openclaw",
     "file": "/tmp/openclaw/openclaw-YYYY-MM-DD.log",
     "consoleLevel": "info",
     "consoleStyle": "pretty",
