@@ -2,71 +2,16 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import {
-  buildChannelConfigSchema,
-  DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
-  formatTrimmedAllowFromEntries,
-  getChatChannelMeta,
-  IMessageConfigSchema,
-  resolveIMessageConfigAllowFrom,
-  resolveIMessageConfigDefaultTo,
-  setAccountEnabledInConfigSection,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/imessage";
-import {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-  type ResolvedIMessageAccount,
-} from "./accounts.js";
-import { imessageSetupWizard } from "./plugin-shared.js";
+import { DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "openclaw/plugin-sdk/imessage";
+import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { imessageSetupAdapter } from "./setup-core.js";
+import { createIMessagePluginBase, imessageSetupWizard } from "./shared.js";
 
 export const imessageSetupPlugin: ChannelPlugin<ResolvedIMessageAccount> = {
-  id: "imessage",
-  meta: {
-    ...getChatChannelMeta("imessage"),
-    aliases: ["imsg"],
-    showConfigured: false,
-  },
-  setupWizard: imessageSetupWizard,
-  capabilities: {
-    chatTypes: ["direct", "group"],
-    media: true,
-  },
-  reload: { configPrefixes: ["channels.imessage"] },
-  configSchema: buildChannelConfigSchema(IMessageConfigSchema),
-  config: {
-    listAccountIds: (cfg) => listIMessageAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultIMessageAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "imessage",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg,
-        sectionKey: "imessage",
-        accountId,
-        clearBaseFields: ["cliPath", "dbPath", "service", "region", "name"],
-      }),
-    isConfigured: (account) => account.configured,
-    describeAccount: (account) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-    }),
-    resolveAllowFrom: ({ cfg, accountId }) => resolveIMessageConfigAllowFrom({ cfg, accountId }),
-    formatAllowFrom: ({ allowFrom }) => formatTrimmedAllowFromEntries(allowFrom),
-    resolveDefaultTo: ({ cfg, accountId }) => resolveIMessageConfigDefaultTo({ cfg, accountId }),
-  },
+  ...createIMessagePluginBase({
+    setupWizard: imessageSetupWizard,
+    setup: imessageSetupAdapter,
+  }),
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) =>
       buildAccountScopedDmSecurityPolicy({
@@ -90,5 +35,4 @@ export const imessageSetupPlugin: ChannelPlugin<ResolvedIMessageAccount> = {
         mentionGated: false,
       }),
   },
-  setup: imessageSetupAdapter,
 };
