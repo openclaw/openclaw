@@ -64,7 +64,10 @@ import {
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import {
+  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   isTelegramExecApprovalApprover,
@@ -331,7 +334,13 @@ export const registerTelegramHandlers = ({
       senderId: params.senderId,
       topicAgentId: topicConfig?.agentId,
     });
-    const baseSessionKey = route.sessionKey;
+    const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+      cfg,
+      route,
+      chatId: params.chatId,
+      isGroup: params.isGroup,
+      senderId: params.senderId,
+    });
     const threadKeys =
       dmThreadId != null
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })

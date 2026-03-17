@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/routing";
 import {
   buildAgentMainSessionKey,
+  DEFAULT_ACCOUNT_ID,
   resolveAgentIdFromSessionKey,
   sanitizeAgentId,
 } from "openclaw/plugin-sdk/routing";
@@ -147,4 +148,35 @@ export function resolveTelegramConversationRoute(params: {
     configuredBinding,
     configuredBindingSessionKey,
   };
+}
+
+export function resolveTelegramConversationBaseSessionKey(params: {
+  cfg: OpenClawConfig;
+  route: Pick<
+    ReturnType<typeof resolveTelegramConversationRoute>["route"],
+    "agentId" | "accountId" | "matchedBy" | "sessionKey"
+  >;
+  chatId: number | string;
+  isGroup: boolean;
+  senderId?: string | number | null;
+}): string {
+  const isNamedAccountFallback =
+    params.route.accountId !== DEFAULT_ACCOUNT_ID && params.route.matchedBy === "default";
+  if (!isNamedAccountFallback || params.isGroup) {
+    return params.route.sessionKey;
+  }
+  return buildAgentSessionKey({
+    agentId: params.route.agentId,
+    channel: "telegram",
+    accountId: params.route.accountId,
+    peer: {
+      kind: "direct",
+      id: resolveTelegramDirectPeerId({
+        chatId: params.chatId,
+        senderId: params.senderId,
+      }),
+    },
+    dmScope: "per-account-channel-peer",
+    identityLinks: params.cfg.session?.identityLinks,
+  }).toLowerCase();
 }

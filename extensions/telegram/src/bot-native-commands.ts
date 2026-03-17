@@ -63,7 +63,10 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
-import { resolveTelegramConversationRoute } from "./conversation-route.js";
+import {
+  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramConversationRoute,
+} from "./conversation-route.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import type { TelegramTransport } from "./fetch.js";
 import {
@@ -650,7 +653,13 @@ export const registerTelegramNativeCommands = ({
             });
             return;
           }
-          const baseSessionKey = route.sessionKey;
+          const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+            cfg,
+            route,
+            chatId,
+            isGroup,
+            senderId,
+          });
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
           const threadKeys =
