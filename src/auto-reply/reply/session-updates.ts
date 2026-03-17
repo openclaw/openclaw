@@ -286,12 +286,15 @@ export async function incrementCompactionCount(params: {
   if (tokensAfter != null && tokensAfter > 0) {
     updates.totalTokens = tokensAfter;
     updates.totalTokensFresh = true;
-    // Clear input/output breakdown since we only have the total estimate after compaction
-    updates.inputTokens = undefined;
-    updates.outputTokens = undefined;
-    updates.cacheRead = undefined;
-    updates.cacheWrite = undefined;
   }
+  // Always clear per-call token breakdown after compaction — the previous
+  // inputTokens value reflects the last pre-compaction API call and is stale.
+  // Without this, the Control UI can show "100% context used" even though the
+  // actual post-compaction context is much smaller (see #49076).
+  updates.inputTokens = undefined;
+  updates.outputTokens = undefined;
+  updates.cacheRead = undefined;
+  updates.cacheWrite = undefined;
   sessionStore[sessionKey] = {
     ...entry,
     ...updates,
