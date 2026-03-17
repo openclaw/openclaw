@@ -8,7 +8,7 @@ import {
   createDiscordDirectMessageContextOverrides,
 } from "./message-handler.test-harness.js";
 
-describe("discord processDiscordMessage inbound contract", () => {
+describe("discord processDiscordMessage inbound context", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     capture.ctx = undefined;
     const messageCtx = await createBaseDiscordMessageContext({
