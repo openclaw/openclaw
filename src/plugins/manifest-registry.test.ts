@@ -136,7 +136,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("suppresses duplicate warning for auto-discovered bundled duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -148,6 +148,29 @@ describe("loadPluginManifestRegistry", () => {
         idHint: "test-plugin",
         rootDir: dirA,
         origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "test-plugin",
+        rootDir: dirB,
+        origin: "global",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
+  });
+
+  it("emits duplicate warning for truly distinct non-bundled plugins with same id", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "test-plugin", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "test-plugin",
+        rootDir: dirA,
+        origin: "workspace",
       }),
       createPluginCandidate({
         idHint: "test-plugin",
@@ -239,7 +262,7 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
-  it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
+  it("suppresses duplicate warning for auto-discovered global duplicating bundled plugin", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
     const manifest = { id: "feishu", configSchema: { type: "object" } };
@@ -262,14 +285,10 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("global plugin will be overridden by bundled plugin"),
-      ),
-    ).toBe(true);
+    expect(countDuplicateWarnings(registry)).toBe(0);
   });
 
-  it("reports bundled plugins as the duplicate winner for workspace duplicates", () => {
+  it("suppresses duplicate warning for workspace duplicating bundled plugin", () => {
     const bundledDir = makeTempDir();
     const workspaceDir = makeTempDir();
     const manifest = { id: "shadowed", configSchema: { type: "object" } };
@@ -292,11 +311,7 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("workspace plugin will be overridden by bundled plugin"),
-      ),
-    ).toBe(true);
+    expect(countDuplicateWarnings(registry)).toBe(0);
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

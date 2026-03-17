@@ -368,7 +368,28 @@ export function loadPluginManifestRegistry(
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);
       })();
-      if (samePlugin) {
+      // When one candidate is bundled, only warn if the non-bundled copy was
+      // explicitly configured (origin=config or has a plugins.installs record).
+      // Auto-discovered duplicates of bundled plugins are expected (e.g. channels
+      // config auto-enabling a bundled extension) and should resolve silently.
+      const isBundledDuplicate =
+        existing.candidate.origin === "bundled" || candidate.origin === "bundled";
+      const isExplicitOverride =
+        isBundledDuplicate &&
+        (() => {
+          const nonBundled =
+            existing.candidate.origin === "bundled" ? candidate : existing.candidate;
+          return (
+            nonBundled.origin === "config" ||
+            matchesInstalledPluginRecord({
+              pluginId: manifest.id,
+              candidate: nonBundled,
+              config,
+              env,
+            })
+          );
+        })();
+      if (samePlugin || (isBundledDuplicate && !isExplicitOverride)) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
