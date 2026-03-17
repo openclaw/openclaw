@@ -10,6 +10,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { captureLlmCost } from "../../../infra/cost-capture.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -2844,6 +2845,19 @@ export async function runEmbeddedAttempt(
             log.warn(`llm_output hook failed: ${String(err)}`);
           });
       }
+
+      // Capture LLM costs to the cost database (fire-and-forget)
+      captureLlmCost({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        model: params.modelId,
+        agentId: hookAgentId,
+        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        usage: getUsageTotals(),
+      }).catch((err) => {
+        log.debug(`Failed to capture LLM cost: ${String(err)}`);
+      });
 
       return {
         aborted,
