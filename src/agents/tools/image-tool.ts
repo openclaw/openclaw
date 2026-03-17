@@ -117,8 +117,8 @@ export function resolveImageModelConfigForTool(params: {
   } else if (providerOk && providerVisionFromConfig) {
     preferred = providerVisionFromConfig;
   } else if (primary.provider === "blink" && blinkOk) {
-    // Blink provider routes through the Blink AI Gateway — use Claude Sonnet (vision-capable)
-    preferred = "blink/anthropic/claude-sonnet-4.6";
+    // Blink provider routes through the Blink AI Gateway — fast vision model
+    preferred = "blink/openai/gpt-5-mini";
   } else if (primary.provider === "zai" && providerOk) {
     preferred = "zai/glm-4.6v";
   } else if (primary.provider === "openai" && openaiOk) {
@@ -148,7 +148,7 @@ export function resolveImageModelConfigForTool(params: {
     if (openaiOk) addFallback("openai/gpt-5-mini");
     if (anthropicOk) addFallback(ANTHROPIC_IMAGE_FALLBACK);
     return {
-      primary: "blink/anthropic/claude-sonnet-4.6",
+      primary: "blink/openai/gpt-5-mini",
       ...(fallbacks.length ? { fallbacks } : {}),
     };
   }
