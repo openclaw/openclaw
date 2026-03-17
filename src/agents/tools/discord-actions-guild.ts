@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
-import { getPresence } from "../../discord/monitor/presence-cache.js";
 import {
   addRoleDiscord,
   createChannelDiscord,
@@ -20,7 +19,8 @@ import {
   setChannelPermissionDiscord,
   uploadEmojiDiscord,
   uploadStickerDiscord,
-} from "../../discord/send.js";
+} from "../../plugin-sdk-internal/discord.js";
+import { getPresence } from "../../plugin-sdk-internal/discord.js";
 import {
   type ActionGate,
   jsonResult,
@@ -58,6 +58,13 @@ async function runRoleMutation(params: {
     return;
   }
   await params.mutate({ guildId, userId, roleId });
+}
+
+function readChannelPermissionTarget(params: Record<string, unknown>) {
+  return {
+    channelId: readStringParam(params, "channelId", { required: true }),
+    targetId: readStringParam(params, "targetId", { required: true }),
+  };
 }
 
 export async function handleDiscordGuildAction(
@@ -453,10 +460,7 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("channels")) {
         throw new Error("Discord channel management is disabled.");
       }
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
-      });
-      const targetId = readStringParam(params, "targetId", { required: true });
+      const { channelId, targetId } = readChannelPermissionTarget(params);
       const targetTypeRaw = readStringParam(params, "targetType", {
         required: true,
       });
@@ -489,10 +493,7 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("channels")) {
         throw new Error("Discord channel management is disabled.");
       }
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
-      });
-      const targetId = readStringParam(params, "targetId", { required: true });
+      const { channelId, targetId } = readChannelPermissionTarget(params);
       if (accountId) {
         await removeChannelPermissionDiscord(channelId, targetId, { accountId });
       } else {

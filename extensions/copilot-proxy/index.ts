@@ -147,6 +147,14 @@ const copilotProxyPlugin = {
           },
         },
       ],
+      wizard: {
+        setup: {
+          choiceId: "copilot-proxy",
+          choiceLabel: "Copilot Proxy",
+          choiceHint: "Configure base URL + model ids",
+          methodId: "local",
+        },
+      },
     });
   },
 };

@@ -34,6 +34,7 @@ export const HeartbeatSchema = z
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
     lightContext: z.boolean().optional(),
+    isolatedSession: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -265,6 +266,7 @@ export const ToolsWebSearchSchema = z
     provider: z
       .union([
         z.literal("brave"),
+        z.literal("firecrawl"),
         z.literal("perplexity"),
         z.literal("grok"),
         z.literal("gemini"),
@@ -300,6 +302,13 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    firecrawl: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     kimi: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
@@ -327,6 +336,18 @@ export const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    readability: z.boolean().optional(),
+    firecrawl: z
+      .object({
+        enabled: z.boolean().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        onlyMainContent: z.boolean().optional(),
+        maxAgeMs: z.number().int().nonnegative().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -480,15 +501,34 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+export const SandboxSshSchema = z
+  .object({
+    target: z.string().min(1).optional(),
+    command: z.string().min(1).optional(),
+    workspaceRoot: z.string().min(1).optional(),
+    strictHostKeyChecking: z.boolean().optional(),
+    updateHostKeys: z.boolean().optional(),
+    identityFile: z.string().min(1).optional(),
+    certificateFile: z.string().min(1).optional(),
+    knownHostsFile: z.string().min(1).optional(),
+    identityData: SecretInputSchema.optional().register(sensitive),
+    certificateData: SecretInputSchema.optional().register(sensitive),
+    knownHostsData: SecretInputSchema.optional().register(sensitive),
+  })
+  .strict()
+  .optional();
+
 export const AgentSandboxSchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
+    backend: z.string().min(1).optional(),
     workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
     sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
     scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
     perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
+    ssh: SandboxSshSchema,
     browser: SandboxBrowserSchema,
     prune: SandboxPruneSchema,
   })
@@ -757,6 +797,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
   })

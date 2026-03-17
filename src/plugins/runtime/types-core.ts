@@ -13,6 +13,25 @@ export type PluginRuntimeCore = {
     loadConfig: typeof import("../../config/config.js").loadConfig;
     writeConfigFile: typeof import("../../config/config.js").writeConfigFile;
   };
+  agent: {
+    defaults: {
+      model: typeof import("../../agents/defaults.js").DEFAULT_MODEL;
+      provider: typeof import("../../agents/defaults.js").DEFAULT_PROVIDER;
+    };
+    resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
+    resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
+    resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
+    resolveThinkingDefault: typeof import("../../agents/model-selection.js").resolveThinkingDefault;
+    runEmbeddedPiAgent: typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent;
+    resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
+    ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
+    session: {
+      resolveStorePath: typeof import("../../config/sessions.js").resolveStorePath;
+      loadSessionStore: typeof import("../../config/sessions.js").loadSessionStore;
+      saveSessionStore: typeof import("../../config/sessions.js").saveSessionStore;
+      resolveSessionFilePath: typeof import("../../config/sessions.js").resolveSessionFilePath;
+    };
+  };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
     requestHeartbeatNow: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
@@ -20,7 +39,7 @@ export type PluginRuntimeCore = {
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
   media: {
-    loadWebMedia: typeof import("../../web/media.js").loadWebMedia;
+    loadWebMedia: typeof import("../../../extensions/whatsapp/src/media.js").loadWebMedia;
     detectMime: typeof import("../../media/mime.js").detectMime;
     mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
@@ -28,7 +47,9 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
+    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
     textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
+    listVoices: typeof import("../../tts/tts.js").listSpeechVoices;
   };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;

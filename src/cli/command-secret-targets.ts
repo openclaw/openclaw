@@ -30,6 +30,7 @@ const COMMAND_SECRET_TARGETS = {
     "agents.defaults.memorySearch.remote.",
     "agents.list[].memorySearch.remote.",
   ]),
+  securityAudit: idsByPrefix(["channels.", "gateway.auth.", "gateway.remote."]),
 } as const;
 
 function toTargetIdSet(values: readonly string[]): Set<string> {
@@ -58,4 +59,8 @@ export function getAgentRuntimeCommandSecretTargetIds(): Set<string> {
 
 export function getStatusCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(COMMAND_SECRET_TARGETS.status);
+}
+
+export function getSecurityAuditCommandSecretTargetIds(): Set<string> {
+  return toTargetIdSet(COMMAND_SECRET_TARGETS.securityAudit);
 }

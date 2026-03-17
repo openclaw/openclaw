@@ -172,7 +172,7 @@ function makeSymlinkStat(params?: { dev?: number; ino?: number }): import("node:
 }
 
 function mockWorkspaceStateRead(params: {
-  onboardingCompletedAt?: string;
+  setupCompletedAt?: string;
   errorCode?: string;
   rawContent?: string;
 }) {
@@ -186,7 +186,7 @@ function mockWorkspaceStateRead(params: {
         return params.rawContent;
       }
       return JSON.stringify({
-        onboardingCompletedAt: params.onboardingCompletedAt ?? "2026-02-15T14:00:00.000Z",
+        setupCompletedAt: params.setupCompletedAt ?? "2026-02-15T14:00:00.000Z",
       });
     }
     throw createEnoentError();
@@ -507,13 +507,13 @@ describe("agents.files.list", () => {
     mocks.loadConfigReturn = {};
   });
 
-  it("includes BOOTSTRAP.md when onboarding has not completed", async () => {
+  it("includes BOOTSTRAP.md when setup has not completed", async () => {
     const names = await listAgentFileNames();
     expect(names).toContain("BOOTSTRAP.md");
   });
 
-  it("hides BOOTSTRAP.md when workspace onboarding is complete", async () => {
-    mockWorkspaceStateRead({ onboardingCompletedAt: "2026-02-15T14:00:00.000Z" });
+  it("hides BOOTSTRAP.md when workspace setup is complete", async () => {
+    mockWorkspaceStateRead({ setupCompletedAt: "2026-02-15T14:00:00.000Z" });
 
     const names = await listAgentFileNames();
     expect(names).not.toContain("BOOTSTRAP.md");
@@ -576,7 +576,7 @@ describe("agents.files.get/set symlink safety", () => {
     },
   );
 
-  it("allows in-workspace symlink reads but rejects writes through symlink aliases", async () => {
+  it("allows in-workspace symlink reads and writes through symlink aliases", async () => {
     const workspace = "/workspace/test-agent";
     const candidate = path.resolve(workspace, "AGENTS.md");
     const target = path.resolve(workspace, "policies", "AGENTS.md");
@@ -636,11 +636,14 @@ describe("agents.files.get/set symlink safety", () => {
     });
     await setCall.promise;
     expect(setCall.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
+      true,
       expect.objectContaining({
-        message: expect.stringContaining('unsafe workspace file "AGENTS.md"'),
+        file: expect.objectContaining({
+          missing: false,
+          content: "updated\n",
+        }),
       }),
+      undefined,
     );
   });
 

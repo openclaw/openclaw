@@ -1,17 +1,20 @@
 import {
-  buildSglangProvider,
-  configureOpenAICompatibleSelfHostedProviderNonInteractive,
   emptyPluginConfigSchema,
-  promptAndConfigureOpenAICompatibleSelfHostedProvider,
   type OpenClawPluginApi,
-  type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
-  type ProviderAuthResult,
-  type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/core";
+import {
+  SGLANG_DEFAULT_API_KEY_ENV_VAR,
+  SGLANG_DEFAULT_BASE_URL,
+  SGLANG_MODEL_PLACEHOLDER,
+  SGLANG_PROVIDER_LABEL,
+} from "../../src/agents/sglang-defaults.js";
 
 const PROVIDER_ID = "sglang";
-const DEFAULT_BASE_URL = "http://127.0.0.1:30000/v1";
+
+async function loadProviderSetup() {
+  return await import("openclaw/plugin-sdk/self-hosted-provider-setup");
+}
 
 const sglangPlugin = {
   id: "sglang",
@@ -27,61 +30,47 @@ const sglangPlugin = {
       auth: [
         {
           id: "custom",
-          label: "SGLang",
+          label: SGLANG_PROVIDER_LABEL,
           hint: "Fast self-hosted OpenAI-compatible server",
           kind: "custom",
-          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
-            const result = await promptAndConfigureOpenAICompatibleSelfHostedProvider({
+          run: async (ctx) => {
+            const providerSetup = await loadProviderSetup();
+            return await providerSetup.promptAndConfigureOpenAICompatibleSelfHostedProviderAuth({
               cfg: ctx.config,
               prompter: ctx.prompter,
               providerId: PROVIDER_ID,
-              providerLabel: "SGLang",
-              defaultBaseUrl: DEFAULT_BASE_URL,
-              defaultApiKeyEnvVar: "SGLANG_API_KEY",
-              modelPlaceholder: "Qwen/Qwen3-8B",
+              providerLabel: SGLANG_PROVIDER_LABEL,
+              defaultBaseUrl: SGLANG_DEFAULT_BASE_URL,
+              defaultApiKeyEnvVar: SGLANG_DEFAULT_API_KEY_ENV_VAR,
+              modelPlaceholder: SGLANG_MODEL_PLACEHOLDER,
             });
-            return {
-              profiles: [
-                {
-                  profileId: result.profileId,
-                  credential: result.credential,
-                },
-              ],
-              configPatch: result.config,
-              defaultModel: result.modelRef,
-            };
           },
-          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
-            configureOpenAICompatibleSelfHostedProviderNonInteractive({
+          runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
+            const providerSetup = await loadProviderSetup();
+            return await providerSetup.configureOpenAICompatibleSelfHostedProviderNonInteractive({
               ctx,
               providerId: PROVIDER_ID,
-              providerLabel: "SGLang",
-              defaultBaseUrl: DEFAULT_BASE_URL,
-              defaultApiKeyEnvVar: "SGLANG_API_KEY",
-              modelPlaceholder: "Qwen/Qwen3-8B",
-            }),
+              providerLabel: SGLANG_PROVIDER_LABEL,
+              defaultBaseUrl: SGLANG_DEFAULT_BASE_URL,
+              defaultApiKeyEnvVar: SGLANG_DEFAULT_API_KEY_ENV_VAR,
+              modelPlaceholder: SGLANG_MODEL_PLACEHOLDER,
+            });
+          },
         },
       ],
       discovery: {
         order: "late",
-        run: async (ctx: ProviderDiscoveryContext) => {
-          if (ctx.config.models?.providers?.sglang) {
-            return null;
-          }
-          const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
-          if (!apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...(await buildSglangProvider({ apiKey: discoveryApiKey })),
-              apiKey,
-            },
-          };
+        run: async (ctx) => {
+          const providerSetup = await loadProviderSetup();
+          return await providerSetup.discoverOpenAICompatibleSelfHostedProvider({
+            ctx,
+            providerId: PROVIDER_ID,
+            buildProvider: providerSetup.buildSglangProvider,
+          });
         },
       },
       wizard: {
-        onboarding: {
+        setup: {
           choiceId: "sglang",
           choiceLabel: "SGLang",
           choiceHint: "Fast self-hosted OpenAI-compatible server",

@@ -125,7 +125,7 @@ async function bindSpawnedAcpSessionToThread(params: {
 
   const currentThreadId = bindingContext.threadId ?? "";
   const currentConversationId = bindingContext.conversationId?.trim() || "";
-  const requiresThreadIdForHere = channel !== "telegram";
+  const requiresThreadIdForHere = channel !== "telegram" && channel !== "feishu";
   if (
     threadMode === "here" &&
     ((requiresThreadIdForHere && !currentThreadId) ||
@@ -137,7 +137,12 @@ async function bindSpawnedAcpSessionToThread(params: {
     };
   }
 
-  const placement = channel === "telegram" ? "current" : currentThreadId ? "current" : "child";
+  const placement =
+    channel === "telegram" || channel === "feishu"
+      ? "current"
+      : currentThreadId
+        ? "current"
+        : "child";
   if (!capabilities.placements.includes(placement)) {
     return {
       ok: false,
