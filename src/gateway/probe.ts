@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -60,6 +61,7 @@ export async function probeGateway(opts: {
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
+      deviceIdentity: loadOrCreateDeviceIdentity(),
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },

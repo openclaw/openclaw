@@ -4,6 +4,12 @@ const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
 }));
 
+const mockDeviceIdentity = vi.hoisted(() => ({
+  deviceId: "dev-123",
+  publicKeyPem: "pub",
+  privateKeyPem: "priv",
+}));
+
 class MockGatewayClient {
   private readonly opts: Record<string, unknown>;
 
@@ -33,6 +39,10 @@ class MockGatewayClient {
   }
 }
 
+vi.mock("../infra/device-identity.js", () => ({
+  loadOrCreateDeviceIdentity: vi.fn(() => mockDeviceIdentity),
+}));
+
 vi.mock("./client.js", () => ({
   GatewayClient: MockGatewayClient,
 }));
@@ -48,6 +58,7 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
+    expect(gatewayClientState.options?.deviceIdentity).toEqual(mockDeviceIdentity);
     expect(result.ok).toBe(true);
   });
 });
