@@ -223,6 +223,52 @@ describe("zalouser setup wizard", () => {
     ).toBe(true);
   });
 
+  it("preserves non-quickstart forceAllowFrom behavior", async () => {
+    const runtime = createRuntimeEnv();
+    const note = vi.fn(async (_message: string, _title?: string) => {});
+    const seen: string[] = [];
+    const prompter = createTestWizardPrompter({
+      note,
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        seen.push(message);
+        if (message === "Login via QR code now?") {
+          return false;
+        }
+        if (message === "Configure Zalo groups access?") {
+          return false;
+        }
+        return false;
+      }),
+      text: vi.fn(async ({ message }: { message: string }) => {
+        seen.push(message);
+        if (message === "Zalouser allowFrom (name or user id)") {
+          return "";
+        }
+        return "";
+      }) as ReturnType<typeof createTestWizardPrompter>["text"],
+    });
+
+    const result = await zalouserConfigureAdapter.configure({
+      cfg: {} as OpenClawConfig,
+      runtime,
+      prompter,
+      options: {},
+      accountOverrides: {},
+      shouldPromptAccountIds: false,
+      forceAllowFrom: true,
+    });
+
+    expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
+    expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
+    expect(seen).not.toContain("Zalo Personal DM policy");
+    expect(seen).toContain("Zalouser allowFrom (name or user id)");
+    expect(
+      note.mock.calls.some(([message]) =>
+        String(message).includes("No DM allowlist entries added yet."),
+      ),
+    ).toBe(true);
+  });
+
   it("allowlists the plugin when a plugin allowlist already exists", async () => {
     const runtime = createRuntimeEnv();
     const prompter = createTestWizardPrompter({

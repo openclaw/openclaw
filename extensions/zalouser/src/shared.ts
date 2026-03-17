@@ -24,7 +24,7 @@ export const zalouserMeta = {
   blurb: "Zalo personal account via QR code login.",
   aliases: ["zlu"],
   order: 85,
-  quickstartAllowFrom: true,
+  quickstartAllowFrom: false,
 } satisfies ChannelPlugin<ResolvedZalouserAccount>["meta"];
 
 export function createZalouserPluginBase(params: {

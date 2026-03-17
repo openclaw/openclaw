@@ -424,6 +424,16 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
     applyAllowlist: ({ cfg, accountId, resolved }) =>
       setZalouserGroupAllowlist(cfg as OpenClawConfig, accountId, resolved as string[]),
   },
-  finalize: async ({ cfg }) => ({ cfg: ensureZalouserPluginEnabled(cfg) }),
+  finalize: async ({ cfg, accountId, forceAllowFrom, options, prompter }) => {
+    let next = cfg;
+    if (forceAllowFrom && !options?.quickstartDefaults) {
+      next = await promptZalouserAllowFrom({
+        cfg: next,
+        prompter,
+        accountId,
+      });
+    }
+    return { cfg: ensureZalouserPluginEnabled(next) };
+  },
   dmPolicy: zalouserDmPolicy,
 };

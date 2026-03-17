@@ -24,7 +24,7 @@
         "zlu"
       ],
       "order": 85,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": false
     },
     "install": {
       "npmSpec": "@openclaw/zalouser",
