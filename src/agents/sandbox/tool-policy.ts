@@ -84,14 +84,15 @@ export function resolveSandboxToolPolicyForAgent(
     : Array.isArray(globalAllow)
       ? globalAllow
       : [...DEFAULT_TOOL_ALLOW];
-  // alsoAllow extends the base allow list (agent-level takes precedence over global).
-  const effectiveAlsoAllow = Array.isArray(agentAlsoAllow)
-    ? agentAlsoAllow
-    : Array.isArray(globalAlsoAllow)
-      ? globalAlsoAllow
-      : undefined;
+  // alsoAllow extends the base allow list. Merge both agent-level and global-level
+  // entries to ensure additive semantics — global alsoAllow entries should not be
+  // silently dropped when an agent also specifies alsoAllow.
+  const effectiveAlsoAllow = [
+    ...(Array.isArray(globalAlsoAllow) ? globalAlsoAllow : []),
+    ...(Array.isArray(agentAlsoAllow) ? agentAlsoAllow : []),
+  ];
   const allow =
-    Array.isArray(effectiveAlsoAllow) && effectiveAlsoAllow.length > 0
+    effectiveAlsoAllow.length > 0
       ? Array.from(new Set([...baseAllow, ...effectiveAlsoAllow]))
       : baseAllow;
 

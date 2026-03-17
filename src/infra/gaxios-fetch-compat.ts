@@ -198,6 +198,11 @@ export function installGaxiosFetchCompat(): void {
   // Setting a minimal `window` shim makes every gaxios instance (including the
   // CJS copy used by google-auth-library) skip the node-fetch import and use
   // the native global fetch instead.
+  //
+  // CAUTION: This shim sets `typeof window !== 'undefined'` to true, which some
+  // libraries use for browser detection. We intentionally keep the shim minimal
+  // (only `fetch`) to reduce the risk of triggering browser-specific code paths
+  // in unrelated dependencies. Do not extend this shim without careful testing.
   if (typeof globalThis.window === "undefined") {
     Object.defineProperty(globalThis, "window", {
       value: { fetch: globalThis.fetch },

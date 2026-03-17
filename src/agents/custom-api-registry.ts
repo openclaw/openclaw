@@ -72,7 +72,6 @@ export function installGoogleVertexAdcFix(): void {
   if (!original) {
     return;
   }
-  vertexAdcFixApplied = true;
   registerApiProvider(
     {
       api: "google-vertex" as Api,
@@ -83,4 +82,7 @@ export function installGoogleVertexAdcFix(): void {
     },
     "openclaw-vertex-adc-fix",
   );
+  // Set the flag AFTER registerApiProvider succeeds. If it throws, we want to
+  // allow retry on subsequent calls rather than silently failing forever.
+  vertexAdcFixApplied = true;
 }
