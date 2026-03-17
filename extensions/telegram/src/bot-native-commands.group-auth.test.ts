@@ -8,6 +8,8 @@ import {
   findNotAuthorizedCalls,
 } from "./bot-native-commands.test-helpers.js";
 
+const TEST_CHANNEL_ID = -1001234567890;
+
 describe("native command auth in groups", () => {
   function setup(params: {
     cfg?: OpenClawConfig;
@@ -205,9 +207,33 @@ describe("native command auth in groups", () => {
 
     await handlers.status?.({
       channelPost: {
-        chat: { id: -1003897367666, type: "channel", title: "Bot Relay" },
+        chat: { id: TEST_CHANNEL_ID, type: "channel", title: "Bot Relay" },
         sender_chat: {
-          id: -1003897367666,
+          id: TEST_CHANNEL_ID,
+          type: "channel",
+          title: "Bot Relay",
+          username: "botrelay",
+        },
+        message_id: 1,
+        date: 1700000000,
+        text: "/status",
+      },
+      match: "",
+    });
+
+    expect(findNotAuthorizedCalls(sendMessage)).toHaveLength(0);
+  });
+
+  it("allows channel_post native commands when useAccessGroups is false with open policy", async () => {
+    const { handlers, sendMessage } = setup({
+      useAccessGroups: false,
+    });
+
+    await handlers.status?.({
+      channelPost: {
+        chat: { id: TEST_CHANNEL_ID, type: "channel", title: "Bot Relay" },
+        sender_chat: {
+          id: TEST_CHANNEL_ID,
           type: "channel",
           title: "Bot Relay",
           username: "botrelay",
@@ -239,9 +265,9 @@ describe("native command auth in groups", () => {
 
     await handlers.status?.({
       channelPost: {
-        chat: { id: -1003897367666, type: "channel", title: "Bot Relay" },
+        chat: { id: TEST_CHANNEL_ID, type: "channel", title: "Bot Relay" },
         sender_chat: {
-          id: -1003897367666,
+          id: TEST_CHANNEL_ID,
           type: "channel",
           title: "Bot Relay",
           username: "botrelay",
@@ -279,9 +305,9 @@ describe("native command auth in groups", () => {
 
     await handlers.status?.({
       channelPost: {
-        chat: { id: -1003897367666, type: "channel", title: "Bot Relay" },
+        chat: { id: TEST_CHANNEL_ID, type: "channel", title: "Bot Relay" },
         sender_chat: {
-          id: -1003897367666,
+          id: TEST_CHANNEL_ID,
           type: "channel",
           title: "Bot Relay",
           username: "botrelay",
@@ -308,9 +334,9 @@ describe("native command auth in groups", () => {
 
     await handlers.status?.({
       channelPost: {
-        chat: { id: -1003897367666, type: "channel", title: "Bot Relay" },
+        chat: { id: TEST_CHANNEL_ID, type: "channel", title: "Bot Relay" },
         sender_chat: {
-          id: -1003897367666,
+          id: TEST_CHANNEL_ID,
           type: "channel",
           title: "Bot Relay",
           username: "botrelay",
@@ -323,7 +349,7 @@ describe("native command auth in groups", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledWith(
-      -1003897367666,
+      TEST_CHANNEL_ID,
       "This group is not allowed.",
       expect.any(Object),
     );
@@ -351,9 +377,9 @@ describe("native command auth in groups", () => {
 
     await handlers.status?.({
       channelPost: {
-        chat: { id: -1003897367666, type: "channel", title: "Bot Relay" },
+        chat: { id: TEST_CHANNEL_ID, type: "channel", title: "Bot Relay" },
         sender_chat: {
-          id: -1003897367666,
+          id: TEST_CHANNEL_ID,
           type: "channel",
           title: "Bot Relay",
           username: "botrelay",
@@ -366,7 +392,7 @@ describe("native command auth in groups", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledWith(
-      -1003897367666,
+      TEST_CHANNEL_ID,
       "This group is not allowed.",
       expect.any(Object),
     );

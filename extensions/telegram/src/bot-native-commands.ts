@@ -329,13 +329,15 @@ async function resolveTelegramCommandAuth(params: {
     : false;
   const channelPolicy = isChannelPost ? resolveGroupPolicy(chatId) : null;
   const commandAuthorizers = isChannelPost
-    ? [
-        // Channel posts have no human sender identity, so explicit chat allow is the auth source.
-        {
-          configured: Boolean(channelPolicy?.allowlistEnabled),
-          allowed: Boolean(channelPolicy?.allowlistEnabled && channelPolicy.allowed),
-        },
-      ]
+    ? useAccessGroups
+      ? [
+          // Channel posts have no human sender identity, so explicit chat allow is the auth source.
+          {
+            configured: true,
+            allowed: Boolean(channelPolicy?.allowlistEnabled && channelPolicy.allowed),
+          },
+        ]
+      : []
     : [
         { configured: dmAllow.hasEntries, allowed: senderAllowed },
         ...(isGroup
