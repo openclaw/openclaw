@@ -1,3 +1,4 @@
+import type { ConsoleState } from "./controllers/console.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
@@ -263,6 +264,8 @@ export type AppViewState = {
   | "cronBusy"
 > &
   Pick<CronModelSuggestionsState, "cronModelSuggestions"> & {
+    console: ConsoleState;
+    consolePanel: "trace" | "prompt" | "security";
     skillsLoading: boolean;
     skillsReport: SkillStatusReport | null;
     skillsError: string | null;

@@ -69,6 +69,12 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import {
+  loadRunList,
+  loadRunTrace,
+  loadPromptSnapshot,
+  loadSecuritySnapshot,
+} from "./controllers/console.ts";
 import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
@@ -122,6 +128,7 @@ function createLazy<T>(loader: () => Promise<T>): () => T | null {
 
 const lazyAgents = createLazy(() => import("./views/agents.ts"));
 const lazyChannels = createLazy(() => import("./views/channels.ts"));
+const lazyConsole = createLazy(() => import("./views/console.ts"));
 const lazyCron = createLazy(() => import("./views/cron.ts"));
 const lazyDebug = createLazy(() => import("./views/debug.ts"));
 const lazyInstances = createLazy(() => import("./views/instances.ts"));
@@ -768,6 +775,47 @@ export function renderApp(state: AppViewState) {
         }
 
         ${renderUsageTab(state)}
+
+        ${
+          state.tab === "console" || state.tab === "trace" || state.tab === "promptInspector" || state.tab === "security"
+            ? lazyRender(lazyConsole, (m) => {
+                const panelMap = {
+                  console: "trace" as const,
+                  trace: "trace" as const,
+                  promptInspector: "prompt" as const,
+                  security: "security" as const,
+                };
+                const panel = panelMap[state.tab] ?? state.consolePanel;
+                return m.renderConsole({
+                  panel,
+                  state: state.console,
+                  onPanelChange: (p) => {
+                    state.consolePanel = p;
+                    const tabMap = { trace: "trace" as const, prompt: "promptInspector" as const, security: "security" as const };
+                    state.setTab(tabMap[p]);
+                  },
+                  onRefreshTrace: () => loadRunList({ console: state.console, client: state.client }),
+                  onSelectRun: (runId) => loadRunTrace({ console: state.console, client: state.client }, runId),
+                  onSubagentClick: (node) => { state.console.traceSubagentDetail = node; },
+                  onSubagentClose: () => { state.console.traceSubagentDetail = null; },
+                  onRefreshPrompt: () => loadPromptSnapshot({ console: state.console, client: state.client }),
+                  onTogglePromptSection: (id) => {
+                    const expanded = state.console.promptExpandedSections;
+                    if (expanded.has(id)) {
+                      expanded.delete(id);
+                    } else {
+                      expanded.add(id);
+                    }
+                    state.console.promptExpandedSections = new Set(expanded);
+                  },
+                  onRefreshSecurity: () => loadSecuritySnapshot({ console: state.console, client: state.client }),
+                  onSecurityTabChange: (tab) => { state.console.securityActiveTab = tab; },
+                  onSessionDetailClose: () => { state.console.sessionDetail = null; },
+                  onSessionDetailSelectRun: (runId) => loadRunTrace({ console: state.console, client: state.client }, runId),
+                });
+              })
+            : nothing
+        }
 
         ${
           state.tab === "cron"

@@ -441,6 +441,11 @@ export const icons = {
       <path d="M7 4v16" />
     </svg>
   `,
+  shield: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  `,
 } as const;
 
 export type IconName = keyof typeof icons;

@@ -1,0 +1,592 @@
+/* ===========================================
+   Console – Run Trace, Prompt Inspector, Security
+   =========================================== */
+
+/* ─── Trace Flow ─────────────────────────────────────────────── */
+
+.trace-flow-container {
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 8px 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+  border: 1px solid var(--border);
+}
+
+.trace-flow-svg {
+  display: block;
+  margin: 0 auto;
+}
+
+.trace-flow-svg text {
+  font-family: inherit;
+  user-select: none;
+}
+
+.trace-node-label {
+  fill: var(--text-strong);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.trace-node-subtitle {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.trace-node-icon {
+  font-size: 13px;
+}
+
+.trace-node-status {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.trace-node-expand {
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.trace-edge-label {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.trace-node--subagent rect {
+  cursor: pointer;
+}
+
+.trace-node--subagent:hover rect:first-of-type {
+  stroke-width: 2.5;
+}
+
+.trace-flow-empty {
+  text-align: center;
+  padding: 48px 16px;
+  color: var(--muted);
+}
+
+/* Legend */
+
+.trace-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 0 4px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.trace-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.trace-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* Selected row in run list */
+
+.data-table-row--selected {
+  background: var(--accent-subtle) !important;
+}
+
+.data-table-row--selected td {
+  color: var(--text-strong);
+}
+
+/* ─── Subagent Detail Panel ──────────────────────────────────── */
+
+.subagent-detail-panel {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--bg-elevated);
+  border: 2px solid #a78bfa;
+  border-radius: var(--radius-lg);
+  animation: slide-up 0.2s var(--ease-out);
+}
+
+.subagent-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.subagent-detail-icon {
+  font-size: 18px;
+  margin-right: 8px;
+}
+
+.subagent-detail-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.subagent-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.meta-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+/* ─── Prompt Inspector ───────────────────────────────────────── */
+
+/* Composition bar (stacked horizontal bar chart) */
+
+.prompt-composition-bar {
+  display: flex;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.prompt-composition-segment {
+  transition: opacity 0.15s;
+  cursor: default;
+}
+
+.prompt-composition-segment:hover {
+  opacity: 0.8;
+}
+
+.prompt-composition-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.prompt-composition-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.prompt-composition-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* Section list */
+
+.prompt-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 20px;
+}
+
+.prompt-section {
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--card);
+  transition: background 0.15s;
+}
+
+.prompt-section:hover {
+  background: var(--bg-hover);
+}
+
+.prompt-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.prompt-section-header__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.prompt-section-header__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.prompt-section-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.prompt-section-kind {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.prompt-section-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prompt-section-source {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  padding-left: 30px;
+}
+
+.prompt-section-toggle {
+  font-size: 10px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.prompt-section-content {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.prompt-section-content .code-block {
+  font-size: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Token bar (inline) */
+
+.prompt-token-bar {
+  width: 60px;
+  height: 6px;
+  background: var(--bg-muted);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.prompt-token-bar__fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.prompt-token-count {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Bootstrap & skills tables inherit data-table styles */
+
+.prompt-bootstrap,
+.prompt-skills-meta {
+  margin-top: 20px;
+}
+
+.card-subtitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+/* ─── Security Policy ────────────────────────────────────────── */
+
+.security-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-accent);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+
+.security-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.security-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.security-tab--active {
+  color: var(--text-strong);
+  background: var(--card);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.security-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 10px;
+  background: var(--bg-muted);
+  color: var(--muted);
+}
+
+.security-tab--active .security-tab-count {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.security-tab-content {
+  animation: fade-in 0.15s;
+}
+
+.security-condition {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  color: var(--text);
+  border: 1px solid var(--border);
+  margin: 1px 2px;
+}
+
+.security-permissions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.security-permission-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-subtle);
+  color: var(--warn);
+  border: 1px solid var(--warn-muted);
+}
+
+/* ─── Session Detail ─────────────────────────────────────────── */
+
+.session-detail-overlay {
+  animation: fade-in 0.2s;
+}
+
+.session-detail-card {
+  max-height: calc(100vh - 160px);
+  overflow-y: auto;
+}
+
+.session-transcript {
+  margin-bottom: 20px;
+}
+
+.transcript-entry {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  margin-bottom: 4px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
+.transcript-entry--user {
+  border-left: 3px solid var(--info);
+}
+
+.transcript-entry--assistant {
+  border-left: 3px solid var(--accent);
+}
+
+.transcript-entry--system {
+  border-left: 3px solid var(--muted);
+}
+
+.transcript-entry--tool {
+  border-left: 3px solid var(--ok);
+}
+
+.transcript-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.transcript-token-count {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.transcript-entry-content {
+  padding-left: 4px;
+}
+
+.transcript-text {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 13px;
+  color: var(--text);
+  margin: 0;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+/* Token breakdown */
+
+.session-token-breakdown {
+  margin-bottom: 20px;
+}
+
+.session-token-stats {
+  display: flex;
+  gap: 24px;
+  margin: 8px 0;
+}
+
+.session-token-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-token-stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.session-token-stat-value {
+  font-size: 18px;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-token-bar {
+  display: flex;
+  height: 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin: 8px 0 4px;
+}
+
+.session-token-bar__input {
+  background: var(--info);
+  transition: width 0.3s;
+}
+
+.session-token-bar__output {
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+.session-token-bar-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.session-detail-runs {
+  margin-top: 20px;
+}
+
+/* ─── Console panel tabs ─────────────────────────────────────── */
+
+.console-panel-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-accent);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+
+.console-panel-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.console-panel-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.console-panel-tab--active {
+  color: var(--text-strong);
+  background: var(--card);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* ─── Animations ─────────────────────────────────────────────── */
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
