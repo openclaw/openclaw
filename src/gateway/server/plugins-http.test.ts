@@ -461,4 +461,31 @@ describe("plugin HTTP route auth checks", () => {
     });
     expect(shouldEnforceGatewayAuthForPluginPath(registry, "/plugin/secure/report")).toBe(true);
   });
+
+  it("prefers the active route registry for auth checks when the explicit registry is stale", () => {
+    const startupRegistry = createTestRegistry();
+    const staleExplicitRegistry = createTestRegistry({
+      httpRoutes: [createRoute({ path: "/plugins/diffs", auth: "plugin" })],
+    });
+
+    setActivePluginRegistry(createTestRegistry());
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+
+    const unregister = registerPluginHttpRoute({
+      path: "/bluebubbles-webhook",
+      auth: "gateway",
+      handler: () => true,
+    });
+
+    try {
+      expect(
+        shouldEnforceGatewayAuthForPluginPath(staleExplicitRegistry, "/bluebubbles-webhook"),
+      ).toBe(true);
+      expect(shouldEnforceGatewayAuthForPluginPath(staleExplicitRegistry, "/plugins/diffs")).toBe(
+        false,
+      );
+    } finally {
+      unregister();
+    }
+  });
 });

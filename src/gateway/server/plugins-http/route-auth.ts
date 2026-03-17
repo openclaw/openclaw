@@ -1,4 +1,5 @@
 import type { PluginRegistry } from "../../../plugins/registry.js";
+import { resolveActivePluginHttpRouteRegistry } from "../../../plugins/runtime.js";
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
@@ -26,5 +27,8 @@ export function shouldEnforceGatewayAuthForPluginPath(
   if (isProtectedPluginRoutePathFromContext(pathContext)) {
     return true;
   }
-  return matchedPluginRoutesRequireGatewayAuth(findMatchingPluginHttpRoutes(registry, pathContext));
+  const activeRegistry = resolveActivePluginHttpRouteRegistry(registry);
+  return matchedPluginRoutesRequireGatewayAuth(
+    findMatchingPluginHttpRoutes(activeRegistry, pathContext),
+  );
 }
