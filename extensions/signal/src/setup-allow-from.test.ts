@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSignalAccountInput, parseSignalAllowFromEntries } from "./setup-surface.js";
+import { normalizeSignalAccountInput, parseSignalAllowFromEntries } from "./setup-core.js";
 
 describe("normalizeSignalAccountInput", () => {
   it("normalizes valid E.164 numbers", () => {
