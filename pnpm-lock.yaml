@@ -24,6 +24,11 @@ overrides:
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
+patchedDependencies:
+  '@mariozechner/pi-ai@0.60.0':
+    hash: 489ac92c1fe7b42975dd580a254bd5f3ef0bc51abdfe506bd34a6f3138e62556
+    path: patches/@mariozechner__pi-ai@0.60.0.patch
+
 importers:
 
   .:
@@ -69,7 +74,7 @@ importers:
         version: 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai':
         specifier: 0.60.0
-        version: 0.60.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+        version: 0.60.0(patch_hash=489ac92c1fe7b42975dd580a254bd5f3ef0bc51abdfe506bd34a6f3138e62556)(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
         specifier: 0.60.0
         version: 0.60.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
@@ -4794,7 +4799,7 @@ packages:
 
   glob@7.2.3:
     resolution: {integrity: sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==}
-    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+    deprecated: Glob versions prior to v9 are no longer supported
 
   google-auth-library@10.6.1:
     resolution: {integrity: sha512-5awwuLrzNol+pFDmKJd0dKtZ0fPLAtoA5p7YO4ODsDu6ONJUVqbYwvv8y2ZBO5MBNp9TJXigB19710kYpBPdtA==}
@@ -8909,7 +8914,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.60.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.60.0(patch_hash=489ac92c1fe7b42975dd580a254bd5f3ef0bc51abdfe506bd34a6f3138e62556)(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -8921,7 +8926,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.60.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.60.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.60.0(patch_hash=489ac92c1fe7b42975dd580a254bd5f3ef0bc51abdfe506bd34a6f3138e62556)(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -8955,7 +8960,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.60.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-ai@0.60.0(patch_hash=489ac92c1fe7b42975dd580a254bd5f3ef0bc51abdfe506bd34a6f3138e62556)(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.73.0(zod@4.3.6)
       '@aws-sdk/client-bedrock-runtime': 3.1011.0
@@ -9015,7 +9020,7 @@ snapshots:
     dependencies:
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.58.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.60.0(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.60.0(patch_hash=489ac92c1fe7b42975dd580a254bd5f3ef0bc51abdfe506bd34a6f3138e62556)(@modelcontextprotocol/sdk@1.27.1(zod@4.3.6))(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.60.0
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
