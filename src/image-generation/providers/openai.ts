@@ -39,19 +39,28 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProviderPlu
         throw new Error("OpenAI API key missing");
       }
 
-      const response = await fetch(`${resolveOpenAIBaseUrl(req.cfg)}/images/generations`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${auth.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: req.model || DEFAULT_OPENAI_IMAGE_MODEL,
-          prompt: req.prompt,
-          n: req.count ?? 1,
-          size: req.size ?? DEFAULT_SIZE,
-        }),
-      });
+      let response: Response;
+      try {
+        response = await fetch(`${resolveOpenAIBaseUrl(req.cfg)}/images/generations`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${auth.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: req.model || DEFAULT_OPENAI_IMAGE_MODEL,
+            prompt: req.prompt,
+            n: req.count ?? 1,
+            size: req.size ?? DEFAULT_SIZE,
+          }),
+          signal: AbortSignal.timeout(120_000),
+        });
+      } catch (err) {
+        throw new Error(
+          `OpenAI image generation request failed: ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        );
+      }
 
       if (!response.ok) {
         const text = await response.text().catch(() => "");
