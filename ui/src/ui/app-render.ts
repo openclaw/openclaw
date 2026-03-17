@@ -680,7 +680,7 @@ export function renderApp(state: AppViewState) {
                   configUiHints: state.configUiHints,
                   configSaving: state.configSaving,
                   configFormDirty: state.configFormDirty,
-                  configSaveError: state.configSaveError,
+                  configSaveError: state.lastError,
                   nostrProfileFormState: state.nostrProfileFormState,
                   nostrProfileAccountId: state.nostrProfileAccountId,
                   onRefresh: (probe) => loadChannels(state, probe),
