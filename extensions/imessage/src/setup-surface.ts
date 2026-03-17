@@ -1,18 +1,15 @@
+import { detectBinary } from "../../../src/commands/onboard-helpers.js";
 import {
   DEFAULT_ACCOUNT_ID,
-  detectBinary,
-  formatDocsLink,
   type OpenClawConfig,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   type WizardPrompter,
-} from "../../../src/plugin-sdk-internal/setup.js";
-import type {
-  ChannelSetupDmPolicy,
-  ChannelSetupWizard,
-} from "../../../src/plugin-sdk-internal/setup.js";
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,

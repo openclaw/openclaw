@@ -1,8 +1,8 @@
 import {
-  applyAccountNameToChannelSection,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   patchScopedAccountConfig,
+  prepareScopedSetupConfig,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
   type OpenClawConfig,
@@ -30,7 +30,7 @@ export function applyTlonSetupConfig(params: {
 }): OpenClawConfig {
   const { cfg, accountId, input } = params;
   const useDefault = accountId === DEFAULT_ACCOUNT_ID;
-  const namedConfig = applyAccountNameToChannelSection({
+  const namedConfig = prepareScopedSetupConfig({
     cfg,
     channelKey: channel,
     accountId,
@@ -70,7 +70,7 @@ export function applyTlonSetupConfig(params: {
 export const tlonSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
+    prepareScopedSetupConfig({
       cfg,
       channelKey: channel,
       accountId,

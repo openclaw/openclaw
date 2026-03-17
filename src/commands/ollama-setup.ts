@@ -8,10 +8,10 @@ import {
   type OllamaModelWithContext,
 } from "../agents/ollama-models.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyAgentDefaultModelPrimary } from "../plugins/provider-onboarding-config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
-import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 import { openUrl } from "./onboard-helpers.js";
 import type { OnboardMode, OnboardOptions } from "./onboard-types.js";
 

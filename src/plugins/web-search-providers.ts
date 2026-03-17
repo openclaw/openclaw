@@ -12,6 +12,7 @@ import {
 } from "./bundled-compat.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 
 const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
@@ -127,25 +128,47 @@ export function resolvePluginWebSearchProviders(params: {
   });
   const normalizedPlugins = normalizePluginsConfig(config?.plugins);
 
-  return BUNDLED_WEB_SEARCH_PROVIDER_REGISTRY.filter(
-    ({ pluginId }) =>
-      resolveEffectiveEnableState({
-        id: pluginId,
-        origin: "bundled",
-        config: normalizedPlugins,
-        rootConfig: config,
-      }).enabled,
-  )
-    .map((entry) => ({
+  return sortWebSearchProviders(
+    BUNDLED_WEB_SEARCH_PROVIDER_REGISTRY.filter(
+      ({ pluginId }) =>
+        resolveEffectiveEnableState({
+          id: pluginId,
+          origin: "bundled",
+          config: normalizedPlugins,
+          rootConfig: config,
+        }).enabled,
+    ).map((entry) => ({
       ...entry.provider,
       pluginId: entry.pluginId,
-    }))
-    .toSorted((a, b) => {
-      const aOrder = a.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-      const bOrder = b.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-      if (aOrder !== bOrder) {
-        return aOrder - bOrder;
-      }
-      return a.id.localeCompare(b.id);
-    });
+    })),
+  );
+}
+
+function sortWebSearchProviders(
+  providers: PluginWebSearchProviderEntry[],
+): PluginWebSearchProviderEntry[] {
+  return providers.toSorted((a, b) => {
+    const aOrder = a.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = b.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
+    if (aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
+
+export function resolveRuntimeWebSearchProviders(params: {
+  config?: PluginLoadOptions["config"];
+  bundledAllowlistCompat?: boolean;
+}): PluginWebSearchProviderEntry[] {
+  const runtimeProviders = getActivePluginRegistry()?.webSearchProviders ?? [];
+  if (runtimeProviders.length > 0) {
+    return sortWebSearchProviders(
+      runtimeProviders.map((entry) => ({
+        ...entry.provider,
+        pluginId: entry.pluginId,
+      })),
+    );
+  }
+  return resolvePluginWebSearchProviders(params);
 }

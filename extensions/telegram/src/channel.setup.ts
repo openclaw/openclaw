@@ -3,7 +3,7 @@ import {
   getChatChannelMeta,
   TelegramConfigSchema,
   type ChannelPlugin,
-} from "../../../src/plugin-sdk-internal/telegram.js";
+} from "openclaw/plugin-sdk/telegram";
 import { type ResolvedTelegramAccount } from "./accounts.js";
 import {
   findTelegramTokenOwnerAccountId,

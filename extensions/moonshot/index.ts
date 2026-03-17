@@ -1,15 +1,14 @@
+import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../../src/agents/pi-embedded-runner/moonshot-stream-wrappers.js";
+} from "openclaw/plugin-sdk/provider-stream";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
   setScopedCredentialValue,
-} from "../../src/agents/tools/web-search-plugin-factory.js";
-import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/provider-web-search";
 import {
   applyMoonshotConfig,
   applyMoonshotConfigCn,

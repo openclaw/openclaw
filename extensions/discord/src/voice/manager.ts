@@ -16,26 +16,30 @@ import {
   type AudioPlayer,
   type VoiceConnection,
 } from "@discordjs/voice";
-import { resolveAgentDir } from "../../../../src/agents/agent-scope.js";
-import type { MsgContext } from "../../../../src/auto-reply/templating.js";
-import { agentCommandFromIngress } from "../../../../src/commands/agent.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
-import type { DiscordAccountConfig, TtsConfig } from "../../../../src/config/types.js";
-import { logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
-import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveTtsConfig,
+  textToSpeech,
+  type ResolvedTtsConfig,
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildProviderRegistry,
   createMediaAttachmentCache,
   normalizeMediaAttachments,
   runCapability,
-} from "../../../../src/media-understanding/runner.js";
-import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { parseTtsDirectives } from "../../../../src/tts/tts-core.js";
-import { resolveTtsConfig, textToSpeech, type ResolvedTtsConfig } from "../../../../src/tts/tts.js";
+} from "openclaw/plugin-sdk/media-runtime";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";

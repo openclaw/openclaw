@@ -1,12 +1,12 @@
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { SlackAccountConfig } from "../../../src/config/types.slack.js";
 import {
-  type OpenClawConfig,
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeChatType,
   resolveAccountEntry,
 } from "../../../src/plugin-sdk-internal/accounts.js";
-import type { SlackAccountConfig } from "../../../src/plugin-sdk-internal/slack.js";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
 

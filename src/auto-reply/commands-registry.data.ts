@@ -453,6 +453,34 @@ function buildChatCommands(): ChatCommandDefinition[] {
       formatArgs: COMMAND_ARG_FORMATTERS.config,
     }),
     defineChatCommand({
+      key: "mcp",
+      nativeName: "mcp",
+      description: "Show or set embedded Pi MCP servers.",
+      textAlias: "/mcp",
+      category: "management",
+      args: [
+        {
+          name: "action",
+          description: "show | get | set | unset",
+          type: "string",
+          choices: ["show", "get", "set", "unset"],
+        },
+        {
+          name: "path",
+          description: "MCP server name",
+          type: "string",
+        },
+        {
+          name: "value",
+          description: "JSON config for set",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsParsing: "none",
+      formatArgs: COMMAND_ARG_FORMATTERS.mcp,
+    }),
+    defineChatCommand({
       key: "debug",
       nativeName: "debug",
       description: "Set runtime debug overrides.",

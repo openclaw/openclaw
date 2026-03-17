@@ -1,21 +1,19 @@
-import { parseTelegramTopicConversation } from "../../../src/acp/conversation-id.js";
-import { resolveExecApprovalCommandDisplay } from "../../../src/infra/exec-approval-command-display.js";
-import { buildExecApprovalPendingReplyPayload } from "../../../src/infra/exec-approval-reply.js";
+import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  type OutboundSendDeps,
-  resolveOutboundSendDep,
-} from "../../../src/infra/outbound/send-deps.js";
-import {
-  buildAccountScopedAllowlistConfigEditor,
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createScopedDmSecurityResolver,
-} from "../../../src/plugin-sdk-internal/channel-config.js";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import { type OutboundSendDeps, resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { normalizeMessageChannel } from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildAgentSessionKey,
   resolveThreadSessionKeys,
   type RoutePeer,
-} from "../../../src/plugin-sdk-internal/core.js";
+} from "openclaw/plugin-sdk/core";
+import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
+import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/infra-runtime";
+import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram";
 import {
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
@@ -33,8 +31,7 @@ import {
   type ChannelPlugin,
   type ChannelMessageActionAdapter,
   type OpenClawConfig,
-} from "../../../src/plugin-sdk-internal/telegram.js";
-import { normalizeMessageChannel } from "../../../src/utils/message-channel.js";
+} from "openclaw/plugin-sdk/telegram";
 import {
   listTelegramAccountIds,
   resolveTelegramAccount,

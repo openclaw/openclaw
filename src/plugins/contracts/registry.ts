@@ -35,33 +35,38 @@ import xaiPlugin from "../../../extensions/xai/index.js";
 import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
-import type { ProviderPlugin, SpeechProviderPlugin, WebSearchProviderPlugin } from "../types.js";
+import type {
+  MediaUnderstandingProviderPlugin,
+  ProviderPlugin,
+  SpeechProviderPlugin,
+  WebSearchProviderPlugin,
+} from "../types.js";
 
 type RegistrablePlugin = {
   id: string;
   register: (api: ReturnType<typeof createCapturedPluginRegistration>["api"]) => void;
 };
 
-type ProviderContractEntry = {
+type CapabilityContractEntry<T> = {
   pluginId: string;
-  provider: ProviderPlugin;
+  provider: T;
 };
 
-type WebSearchProviderContractEntry = {
-  pluginId: string;
-  provider: WebSearchProviderPlugin;
+type ProviderContractEntry = CapabilityContractEntry<ProviderPlugin>;
+
+type WebSearchProviderContractEntry = CapabilityContractEntry<WebSearchProviderPlugin> & {
   credentialValue: unknown;
 };
 
-type SpeechProviderContractEntry = {
-  pluginId: string;
-  provider: SpeechProviderPlugin;
-};
+type SpeechProviderContractEntry = CapabilityContractEntry<SpeechProviderPlugin>;
+type MediaUnderstandingProviderContractEntry =
+  CapabilityContractEntry<MediaUnderstandingProviderPlugin>;
 
 type PluginRegistrationContractEntry = {
   pluginId: string;
   providerIds: string[];
   speechProviderIds: string[];
+  mediaUnderstandingProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
@@ -111,21 +116,39 @@ const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unkn
 
 const bundledSpeechPlugins: RegistrablePlugin[] = [elevenLabsPlugin, microsoftPlugin, openAIPlugin];
 
+const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [
+  anthropicPlugin,
+  googlePlugin,
+  minimaxPlugin,
+  mistralPlugin,
+  moonshotPlugin,
+  openAIPlugin,
+  zaiPlugin,
+];
+
 function captureRegistrations(plugin: RegistrablePlugin) {
   const captured = createCapturedPluginRegistration();
   plugin.register(captured.api);
   return captured;
 }
 
-export const providerContractRegistry: ProviderContractEntry[] = bundledProviderPlugins.flatMap(
-  (plugin) => {
+function buildCapabilityContractRegistry<T>(params: {
+  plugins: RegistrablePlugin[];
+  select: (captured: ReturnType<typeof createCapturedPluginRegistration>) => T[];
+}): CapabilityContractEntry<T>[] {
+  return params.plugins.flatMap((plugin) => {
     const captured = captureRegistrations(plugin);
-    return captured.providers.map((provider) => ({
+    return params.select(captured).map((provider) => ({
       pluginId: plugin.id,
       provider,
     }));
-  },
-);
+  });
+}
+
+export const providerContractRegistry: ProviderContractEntry[] = buildCapabilityContractRegistry({
+  plugins: bundledProviderPlugins,
+  select: (captured) => captured.providers,
+});
 
 export const webSearchProviderContractRegistry: WebSearchProviderContractEntry[] =
   bundledWebSearchPlugins.flatMap((plugin) => {
@@ -138,19 +161,25 @@ export const webSearchProviderContractRegistry: WebSearchProviderContractEntry[]
   });
 
 export const speechProviderContractRegistry: SpeechProviderContractEntry[] =
-  bundledSpeechPlugins.flatMap((plugin) => {
-    const captured = captureRegistrations(plugin);
-    return captured.speechProviders.map((provider) => ({
-      pluginId: plugin.id,
-      provider,
-    }));
+  buildCapabilityContractRegistry({
+    plugins: bundledSpeechPlugins,
+    select: (captured) => captured.speechProviders,
+  });
+
+export const mediaUnderstandingProviderContractRegistry: MediaUnderstandingProviderContractEntry[] =
+  buildCapabilityContractRegistry({
+    plugins: bundledMediaUnderstandingPlugins,
+    select: (captured) => captured.mediaUnderstandingProviders,
   });
 
 const bundledPluginRegistrationList = [
   ...new Map(
-    [...bundledProviderPlugins, ...bundledSpeechPlugins, ...bundledWebSearchPlugins].map(
-      (plugin) => [plugin.id, plugin],
-    ),
+    [
+      ...bundledProviderPlugins,
+      ...bundledSpeechPlugins,
+      ...bundledMediaUnderstandingPlugins,
+      ...bundledWebSearchPlugins,
+    ].map((plugin) => [plugin.id, plugin]),
   ).values(),
 ];
 
@@ -161,6 +190,9 @@ export const pluginRegistrationContractRegistry: PluginRegistrationContractEntry
       pluginId: plugin.id,
       providerIds: captured.providers.map((provider) => provider.id),
       speechProviderIds: captured.speechProviders.map((provider) => provider.id),
+      mediaUnderstandingProviderIds: captured.mediaUnderstandingProviders.map(
+        (provider) => provider.id,
+      ),
       webSearchProviderIds: captured.webSearchProviders.map((provider) => provider.id),
       toolNames: captured.tools.map((tool) => tool.name),
     };

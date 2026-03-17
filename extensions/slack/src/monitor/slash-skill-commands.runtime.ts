@@ -1,1 +1,1 @@
-export { listSkillCommandsForAgents } from "../../../../src/auto-reply/skill-commands.js";
+export { listSkillCommandsForAgents } from "openclaw/plugin-sdk/reply-runtime";

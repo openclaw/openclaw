@@ -1,4 +1,4 @@
-import { isAllowedParsedChatSender } from "../../../src/plugin-sdk-internal/imessage.js";
+import { isAllowedParsedChatSender } from "openclaw/plugin-sdk/allow-from";
 
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 

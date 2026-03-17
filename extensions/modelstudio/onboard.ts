@@ -1,13 +1,13 @@
 import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalog,
-} from "../../src/commands/onboard-auth.config-shared.js";
-import {
   MODELSTUDIO_CN_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_REF,
   MODELSTUDIO_GLOBAL_BASE_URL,
-} from "../../src/commands/onboard-auth.models.js";
-import type { OpenClawConfig } from "../../src/config/config.js";
+} from "openclaw/plugin-sdk/provider-models";
+import {
+  applyAgentDefaultModelPrimary,
+  applyProviderConfigWithModelCatalog,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 import { buildModelStudioProvider } from "./provider-catalog.js";
 
 export { MODELSTUDIO_CN_BASE_URL, MODELSTUDIO_DEFAULT_MODEL_REF, MODELSTUDIO_GLOBAL_BASE_URL };

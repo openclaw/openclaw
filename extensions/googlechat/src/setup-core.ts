@@ -1,23 +1,9 @@
-import {
-  applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
-  DEFAULT_ACCOUNT_ID,
-  migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
-  type ChannelSetupAdapter,
-} from "openclaw/plugin-sdk/setup";
+import { createPatchedAccountSetupAdapter, DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 
 const channel = "googlechat" as const;
 
-export const googlechatSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name,
-    }),
+export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
+  channelKey: channel,
   validateInput: ({ accountId, input }) => {
     if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
       return "GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.";
@@ -27,20 +13,7 @@ export const googlechatSetupAdapter: ChannelSetupAdapter = {
     }
     return null;
   },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const namedConfig = applyAccountNameToChannelSection({
-      cfg,
-      channelKey: channel,
-      accountId,
-      name: input.name,
-    });
-    const next =
-      accountId !== DEFAULT_ACCOUNT_ID
-        ? migrateBaseNameToDefaultAccount({
-            cfg: namedConfig,
-            channelKey: channel,
-          })
-        : namedConfig;
+  buildPatch: (input) => {
     const patch = input.useEnv
       ? {}
       : input.tokenFile
@@ -52,17 +25,12 @@ export const googlechatSetupAdapter: ChannelSetupAdapter = {
     const audience = input.audience?.trim();
     const webhookPath = input.webhookPath?.trim();
     const webhookUrl = input.webhookUrl?.trim();
-    return applySetupAccountConfigPatch({
-      cfg: next,
-      channelKey: channel,
-      accountId,
-      patch: {
-        ...patch,
-        ...(audienceType ? { audienceType } : {}),
-        ...(audience ? { audience } : {}),
-        ...(webhookPath ? { webhookPath } : {}),
-        ...(webhookUrl ? { webhookUrl } : {}),
-      },
-    });
+    return {
+      ...patch,
+      ...(audienceType ? { audienceType } : {}),
+      ...(audience ? { audience } : {}),
+      ...(webhookPath ? { webhookPath } : {}),
+      ...(webhookUrl ? { webhookUrl } : {}),
+    };
   },
-};
+});

@@ -1,13 +1,14 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import { isRecord } from "../../src/utils.js";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider } from "./provider-catalog.js";
 
-const PROVIDER_ID = "kimi-coding";
+const PLUGIN_ID = "kimi";
+const PROVIDER_ID = "kimi";
 
 const kimiCodingPlugin = {
-  id: PROVIDER_ID,
+  id: PLUGIN_ID,
   name: "Kimi Provider",
   description: "Bundled Kimi provider plugin",
   configSchema: emptyPluginConfigSchema(),
@@ -15,7 +16,7 @@ const kimiCodingPlugin = {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Kimi",
-      aliases: ["kimi", "kimi-code"],
+      aliases: ["kimi-code", "kimi-coding"],
       docsPath: "/providers/moonshot",
       envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
       auth: [

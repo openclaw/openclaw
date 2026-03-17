@@ -1,5 +1,6 @@
+import type { OpenClawConfig } from "../../../src/config/config.js";
 import { createScopedAccountConfigAccessors } from "../../../src/plugin-sdk-internal/channel-config.js";
-import { normalizeE164, type OpenClawConfig } from "../../../src/plugin-sdk-internal/signal.js";
+import { normalizeE164 } from "../../../src/utils.js";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 

@@ -1,20 +1,16 @@
+import { formatCliCommand } from "../../../src/cli/command-format.js";
+import { detectBinary } from "../../../src/commands/onboard-helpers.js";
+import { installSignalCli } from "../../../src/commands/signal-install.js";
 import {
   DEFAULT_ACCOUNT_ID,
-  detectBinary,
-  formatCliCommand,
-  formatDocsLink,
-  installSignalCli,
   type OpenClawConfig,
-  parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForScopedChannel,
   setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   type WizardPrompter,
-} from "../../../src/plugin-sdk-internal/setup.js";
-import type {
-  ChannelSetupDmPolicy,
-  ChannelSetupWizard,
-} from "../../../src/plugin-sdk-internal/setup.js";
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,

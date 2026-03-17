@@ -1,8 +1,8 @@
 import path from "node:path";
+import { formatCliCommand } from "../../../src/cli/command-format.js";
+import type { DmPolicy } from "../../../src/config/types.js";
 import {
   DEFAULT_ACCOUNT_ID,
-  formatCliCommand,
-  formatDocsLink,
   normalizeAccountId,
   normalizeAllowFromEntries,
   normalizeE164,
@@ -10,9 +10,9 @@ import {
   splitSetupEntries,
   setSetupChannelEnabled,
   type OpenClawConfig,
-} from "../../../src/plugin-sdk-internal/setup.js";
-import type { ChannelSetupWizard } from "../../../src/plugin-sdk-internal/setup.js";
-import { type DmPolicy } from "../../../src/plugin-sdk-internal/whatsapp.js";
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatDocsLink } from "../../../src/terminal/links.js";
 import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
 import { loginWeb } from "./login.js";
 import { whatsappSetupAdapter } from "./setup-core.js";

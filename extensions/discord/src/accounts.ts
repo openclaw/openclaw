@@ -1,14 +1,11 @@
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { DiscordAccountConfig, DiscordActionConfig } from "../../../src/config/types.js";
 import {
   createAccountActionGate,
   createAccountListHelpers,
   normalizeAccountId,
   resolveAccountEntry,
 } from "../../../src/plugin-sdk-internal/accounts.js";
-import type {
-  OpenClawConfig,
-  DiscordAccountConfig,
-  DiscordActionConfig,
-} from "../../../src/plugin-sdk-internal/discord.js";
 import { resolveDiscordToken } from "./token.js";
 
 export type ResolvedDiscordAccount = {
