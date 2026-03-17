@@ -24,7 +24,7 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
       nodeManager: "npm", // npm | pnpm | yarn | bun (Gateway runtime still Node; bun not recommended)
     },
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         enabled: true,
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: {
@@ -37,6 +37,10 @@ All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.j
   },
 }
 ```
+
+For built-in image generation/editing, prefer `agents.defaults.imageGenerationModel`
+plus the core `image_generate` tool. `skills.entries.*` is only for custom or
+third-party skill workflows.
 
 ## Fields
 

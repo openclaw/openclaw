@@ -360,14 +360,29 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Enable: `BYTEPLUS_API_KEY=... BYTEPLUS_LIVE_TEST=1 pnpm test:live src/agents/byteplus.live.test.ts`
 - Optional model override: `BYTEPLUS_CODING_MODEL=ark-code-latest`
 
-## Google image generation live
+## Image generation live
 
-- Test: `src/image-generation/providers/google.live.test.ts`
-- Enable: `GOOGLE_LIVE_TEST=1 pnpm test:live src/image-generation/providers/google.live.test.ts`
-- Key source: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
-- Optional overrides:
-  - `GOOGLE_IMAGE_GENERATION_MODEL=gemini-3.1-flash-image-preview`
-  - `GOOGLE_IMAGE_BASE_URL=https://generativelanguage.googleapis.com/v1beta`
+- Test: `src/image-generation/runtime.live.test.ts`
+- Command: `pnpm test:live src/image-generation/runtime.live.test.ts`
+- Scope:
+  - Enumerates every registered image-generation provider plugin
+  - Loads missing provider env vars from your login shell (`~/.profile`) before probing
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Skips providers with no usable auth/profile/model
+  - Runs the stock image-generation variants through the shared runtime capability:
+    - `google:flash-generate`
+    - `google:pro-generate`
+    - `google:pro-edit`
+    - `openai:default-generate`
+- Current bundled providers covered:
+  - `openai`
+  - `google`
+- Optional narrowing:
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-1,google/gemini-3.1-flash-image-preview"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit"`
+- Optional auth behavior:
+  - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 
 ## Docker runners (optional “works in Linux” checks)
 
