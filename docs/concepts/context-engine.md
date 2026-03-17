@@ -80,11 +80,12 @@ four lifecycle points:
 
 ### Subagent lifecycle (optional)
 
-Engines can also manage context across subagent boundaries:
+OpenClaw currently calls one subagent lifecycle hook:
 
-- **prepareSubagentSpawn** — set up shared state before a child session starts.
-  Returns a rollback handle in case the spawn fails.
 - **onSubagentEnded** — clean up when a subagent session completes or is swept.
+
+The `prepareSubagentSpawn` hook is part of the interface for future use, but
+the runtime does not invoke it yet.
 
 ### System prompt addition
 
@@ -169,10 +170,11 @@ Required members:
 | ------------------ | -------- | -------------------------------------------------------- |
 | `info`             | Property | Engine id, name, version, and whether it owns compaction |
 | `ingest(params)`   | Method   | Store a single message                                   |
-| `assemble(params)` | Method   | Build context for a model run (returns `AssembleResult`)  |
+| `assemble(params)` | Method   | Build context for a model run (returns `AssembleResult`) |
 | `compact(params)`  | Method   | Summarize/reduce context                                 |
 
 `assemble` returns an `AssembleResult` with:
+
 - `messages` — the ordered messages to send to the model.
 - `estimatedTokens` (required, `number`) — the engine's estimate of total
   tokens in the assembled context. OpenClaw uses this for compaction threshold
@@ -183,12 +185,12 @@ Optional members:
 
 | Member                         | Kind   | Purpose                                                                                                         |
 | ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------- |
-| `bootstrap(params)`            | Method | Initialize engine state for a session. Called once when the engine first sees a session (e.g., import history).  |
-| `ingestBatch(params)`          | Method | Ingest a completed turn as a batch. Called after a run completes, with all messages from that turn at once.      |
-| `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                          |
-| `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session.                                                                         |
-| `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                  |
-| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload — not per-session.
+| `bootstrap(params)`            | Method | Initialize engine state for a session. Called once when the engine first sees a session (e.g., import history). |
+| `ingestBatch(params)`          | Method | Ingest a completed turn as a batch. Called after a run completes, with all messages from that turn at once.     |
+| `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                         |
+| `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session.                                                                        |
+| `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                 |
+| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload — not per-session.                           |
 
 ### ownsCompaction
 
@@ -214,9 +216,11 @@ alongside the engine.
 }
 ```
 
-The slot is exclusive — only one context engine can be active at a time. If
-multiple plugins declare `kind: "context-engine"`, only the one selected in
-`plugins.slots.contextEngine` loads. Others are disabled with diagnostics.
+The slot is exclusive at run time — only one registered context engine is
+resolved for a given run or compaction operation. Other enabled
+`kind: "context-engine"` plugins can still load and run their registration
+code; `plugins.slots.contextEngine` only selects which registered engine id
+OpenClaw resolves when it needs a context engine.
 
 ## Relationship to compaction and memory
 
@@ -236,7 +240,9 @@ multiple plugins declare `kind: "context-engine"`, only the one selected in
 - If switching engines, existing sessions continue with their current history.
   The new engine takes over for future runs.
 - Engine errors are logged and surfaced in diagnostics. If a plugin engine
-  fails to load, OpenClaw falls back to the legacy engine with a warning.
+  fails to register or the selected engine id cannot be resolved, OpenClaw
+  does not fall back automatically; runs fail until you fix the plugin or
+  switch `plugins.slots.contextEngine` back to `"legacy"`.
 - For development, use `openclaw plugins install -l ./my-engine` to link a
   local plugin directory without copying.
 
