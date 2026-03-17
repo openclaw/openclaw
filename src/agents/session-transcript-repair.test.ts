@@ -111,7 +111,10 @@ describe("sanitizeToolUseResultPairing", () => {
 
   it("drops duplicate tool results for the same id across the transcript", () => {
     const input = buildDuplicateToolResultInput({
-      middleMessage: { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      middleMessage: {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+      },
       secondText: "second (duplicate)",
     });
 
@@ -237,6 +240,39 @@ describe("sanitizeToolUseResultPairing", () => {
     // No synthetic results should be added
     expect(result.added).toHaveLength(0);
   });
+
+  it("drops empty-name tool calls and their paired tool results (Gemini #16263)", () => {
+    // Gemini 3 preview can return functionCall blocks with empty name fields.
+    // sanitizeToolCallInputs drops them from the assistant message; the subsequent
+    // sanitizeToolUseResultPairing then drops the now-orphaned tool result.
+    // This combination prevents "function_response.name: Name cannot be empty" 400s.
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "_1234567890_1", name: "", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "_1234567890_1",
+        toolName: "",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+      },
+      { role: "user", content: "next turn" },
+    ]);
+
+    // Step 1: sanitizeToolCallInputs drops the empty-name tool call.
+    // The assistant message has no remaining content blocks, so it is also dropped.
+    const afterInputRepair = sanitizeToolCallInputs(input);
+    expect(afterInputRepair.some((m) => m.role === "assistant")).toBe(false);
+
+    // Step 2: sanitizeToolUseResultPairing drops the now-orphaned tool result.
+    const result = repairToolUseResultPairing(afterInputRepair);
+    expect(result.droppedOrphanCount).toBe(1);
+    expect(result.messages.some((m) => m.role === "toolResult")).toBe(false);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.role).toBe("user");
+  });
 });
 
 describe("sanitizeToolCallInputs", () => {
@@ -331,7 +367,12 @@ describe("sanitizeToolCallInputs", () => {
         role: "assistant",
         content: [
           { type: "text", text: "before" },
-          { type: "toolUse", id: "call_ok", name: "read", input: { path: "a" } },
+          {
+            type: "toolUse",
+            id: "call_ok",
+            name: "read",
+            input: { path: "a" },
+          },
           { type: "toolCall", id: "call_drop", name: "read" },
         ],
       },
@@ -354,7 +395,14 @@ describe("sanitizeToolCallInputs", () => {
     },
     {
       name: "trims trailing whitespace from tool names",
-      content: [{ type: "toolUse", id: "call_1", name: "exec ", input: { command: "ls" } }],
+      content: [
+        {
+          type: "toolUse",
+          id: "call_1",
+          name: "exec ",
+          input: { command: "ls" },
+        },
+      ],
       options: undefined,
       expectedNames: ["exec"],
     },
@@ -437,13 +485,20 @@ describe("sanitizeToolCallInputs", () => {
   });
   it("preserves other block properties when trimming tool names", () => {
     const toolCalls = sanitizeAssistantToolCalls([
-      { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: " read ",
+        arguments: { path: "/tmp/test" },
+      },
     ]);
 
     expect(toolCalls).toHaveLength(1);
     expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
-    expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
+    expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({
+      path: "/tmp/test",
+    });
   });
 });
 
@@ -457,7 +512,11 @@ describe("stripToolResultDetails", () => {
         content: [{ type: "text", text: "ok" }],
         details: { internal: true },
       },
-      { role: "assistant", content: [{ type: "text", text: "keep me" }], details: { no: "touch" } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "keep me" }],
+        details: { no: "touch" },
+      },
       { role: "user", content: "hello" },
     ]);
 

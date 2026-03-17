@@ -25,6 +25,29 @@ describe("resolveTranscriptPolicy", () => {
     });
   });
 
+  it("enables repairToolNamesOnEveryTurn for Google APIs", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "google",
+      modelId: "gemini-3-flash-preview",
+      modelApi: "google-generative-ai",
+    });
+    expect(policy.repairToolNamesOnEveryTurn).toBe(true);
+  });
+
+  it("disables repairToolNamesOnEveryTurn for non-Google providers", () => {
+    expect(
+      resolveTranscriptPolicy({
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+      }).repairToolNamesOnEveryTurn,
+    ).toBe(false);
+    expect(
+      resolveTranscriptPolicy({ provider: "openai", modelApi: "openai" })
+        .repairToolNamesOnEveryTurn,
+    ).toBe(false);
+    expect(resolveTranscriptPolicy({ provider: "mistral" }).repairToolNamesOnEveryTurn).toBe(false);
+  });
+
   it("enables sanitizeToolCallIds for Mistral provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "mistral",

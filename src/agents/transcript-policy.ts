@@ -29,6 +29,11 @@ export type TranscriptPolicy = {
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
   allowSyntheticToolResults: boolean;
+  // Re-run tool name repair on every outbound turn. Gemini 3 can return functionCall blocks
+  // with empty name fields (issue #16263); sanitizeSessionHistory only runs at attempt start,
+  // so new toolResult messages created mid-attempt bypass it. This flag enables a streamFn
+  // wrapper that drops empty-name tool calls + orphaned results before each API request.
+  repairToolNamesOnEveryTurn: boolean;
 };
 
 const OPENAI_MODEL_APIS = new Set([
@@ -86,7 +91,10 @@ export function resolveTranscriptPolicy(params: {
   // Anthropic Claude endpoints can reject replayed `thinking` blocks unless the
   // original signatures are preserved byte-for-byte. Drop them at send-time to
   // keep persisted sessions usable across follow-up turns.
-  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId });
+  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({
+    provider,
+    modelId,
+  });
 
   const needsNonImageSanitize =
     isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;
@@ -123,5 +131,6 @@ export function resolveTranscriptPolicy(params: {
     validateGeminiTurns: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
     validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
+    repairToolNamesOnEveryTurn: isGoogle,
   };
 }
