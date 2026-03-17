@@ -73,10 +73,15 @@ export function buildMSTeamsAuthConfig(
       if (creds.ficClientId) base.FICClientId = creds.ficClientId;
       if (creds.widAssertionFile) base.WIDAssertionFile = creds.widAssertionFile;
       break;
-    case "defaultAzureCredential":
-      // No additional fields needed — DAC handles credential discovery.
-      // The SDK still needs clientId/tenantId for audience validation.
+    case "defaultAzureCredential": {
+      // Detect AKS workload identity and pass through to SDK's native WID support.
+      // AZURE_FEDERATED_TOKEN_FILE is injected by the Azure Workload Identity webhook.
+      const widAssertionFile = process.env.AZURE_FEDERATED_TOKEN_FILE;
+      if (widAssertionFile) {
+        base.WIDAssertionFile = widAssertionFile;
+      }
       break;
+    }
     case "clientSecret":
     default:
       if (creds.appPassword) base.clientSecret = creds.appPassword;
@@ -96,6 +101,13 @@ export function createTokenProvider(
   sdk: MSTeamsSdk,
 ) {
   if (creds.authType === "defaultAzureCredential") {
+    // When WIDAssertionFile is set (AKS workload identity), the SDK's native
+    // MsalTokenProvider handles token acquisition via client assertion.
+    // Fall back to @azure/identity DefaultAzureCredential for other environments
+    // (local dev with az cli, managed identity without federation, etc.).
+    if (authConfig.WIDAssertionFile) {
+      return new sdk.MsalTokenProvider(authConfig);
+    }
     return new DefaultAzureCredentialTokenProvider(creds.appId, creds.tenantId);
   }
   return new sdk.MsalTokenProvider(authConfig);
