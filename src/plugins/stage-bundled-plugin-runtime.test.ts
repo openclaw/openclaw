@@ -153,9 +153,7 @@ describe("stageBundledPluginRuntime", () => {
         description: string;
         acceptsArgs: boolean;
       }>;
-      matchPluginCommand: (
-        commandBody: string,
-      ) => {
+      matchPluginCommand: (commandBody: string) => {
         command: { handler: ({ args }: { args?: string }) => Promise<{ text: string }> };
         args?: string;
       } | null;
