@@ -247,7 +247,13 @@ async function refreshLock(mapKey: string, token: string): Promise<void> {
     };
 
     const serialized = JSON.stringify(nextPayload);
-    const { bytesWritten } = await handle.write(serialized, 0, "utf8");
+    const buf = Buffer.from(serialized, "utf8");
+    const { bytesWritten } = await handle.write(buf, 0, buf.length, 0);
+    if (bytesWritten !== buf.length) {
+      throw new Error(
+        `refreshLock: short write (${bytesWritten}/${buf.length}); aborting to preserve lock integrity`,
+      );
+    }
     await handle.truncate(bytesWritten);
   } catch {
     // Preserve exclusivity on transient write errors; do not delete lock here.
