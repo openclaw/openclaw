@@ -4,6 +4,7 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -76,6 +77,18 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       .map((id) => resolveMattermostAccount({ cfg, accountId: id }))
       .filter((a) => a.enabled && a.botToken?.trim() && a.baseUrl?.trim());
     return accounts.length > 0 ? (["buttons"] as const) : [];
+  },
+  getToolSchema: ({ cfg }) => {
+    const accounts = listMattermostAccountIds(cfg)
+      .map((id) => resolveMattermostAccount({ cfg, accountId: id }))
+      .filter((a) => a.enabled && a.botToken?.trim() && a.baseUrl?.trim());
+    return accounts.length > 0
+      ? {
+          properties: {
+            buttons: createMessageToolButtonsSchema(),
+          },
+        }
+      : null;
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {
