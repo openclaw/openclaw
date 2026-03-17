@@ -31,7 +31,7 @@ export async function sweepSessionArchiveFiles(params: {
   // Clean up old .deleted and .reset archives using existing retention config.
   for (const reason of ["deleted", "reset"] as const) {
     const retention = reason === "reset" ? config.resetArchiveRetentionMs : config.pruneAfterMs;
-    if (retention == null || retention <= 0) {
+    if (retention == null || retention < 0) {
       continue;
     }
     const result = await cleanupArchivedSessionTranscripts({

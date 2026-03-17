@@ -136,6 +136,28 @@ describe("sweepSessionArchiveFiles", () => {
     expect(result.removed).toBe(2);
   });
 
+  it("cleans up archives when retention is zero (immediate cleanup)", async () => {
+    mocks.resolveMaintenanceConfig.mockReturnValue({
+      mode: "warn",
+      pruneAfterMs: 0,
+      maxEntries: 500,
+      rotateBytes: 10_485_760,
+      resetArchiveRetentionMs: 0,
+      maxDiskBytes: undefined,
+      highWaterBytes: undefined,
+    });
+
+    const recentStamp = formatSessionArchiveTimestamp(Date.now() - 1000);
+    fs.writeFileSync(path.join(sessionsDir, `s.jsonl.deleted.${recentStamp}`), "");
+    fs.writeFileSync(path.join(sessionsDir, `s.jsonl.reset.${recentStamp}`), "");
+
+    const result = await sweepSessionArchiveFiles({ stateDir: tempDir });
+
+    // Both files should be removed since retention=0 means "clean up everything".
+    expect(result.removed).toBe(2);
+    expect(fs.readdirSync(sessionsDir)).toHaveLength(0);
+  });
+
   it("returns zeros when no agent session directories exist", async () => {
     mocks.resolveAgentSessionDirs.mockResolvedValue([]);
     const result = await sweepSessionArchiveFiles({ stateDir: tempDir });
