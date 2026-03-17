@@ -141,7 +141,7 @@ export type PluginRuntimeChannel = {
   };
   telegram: {
     auditGroupMembership: typeof import("../../../extensions/telegram/runtime-api.js").auditTelegramGroupMembership;
-    collectUnmentionedGroupIds: typeof import("../../../extensions/telegram/api.js").collectTelegramUnmentionedGroupIds;
+    collectUnmentionedGroupIds: typeof import("../../../extensions/telegram/runtime-api.js").collectTelegramUnmentionedGroupIds;
     probeTelegram: typeof import("../../../extensions/telegram/runtime-api.js").probeTelegram;
     resolveTelegramToken: typeof import("../../../extensions/telegram/runtime-api.js").resolveTelegramToken;
     sendMessageTelegram: typeof import("../../../extensions/telegram/runtime-api.js").sendMessageTelegram;

@@ -957,6 +957,16 @@ authoring plugins:
 - `openclaw/plugin-sdk/compat` remains as a legacy migration surface for older
   external plugins. Bundled plugins should not use it, and non-test imports emit
   a one-time deprecation warning outside test environments.
+- Bundled extension internals remain private. External plugins should use only
+  `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
+  public seams under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
+  `setup-entry.js`, and narrowly scoped files such as `login-qr-api.js`. Never
+  import `extensions/<id>/src/*` from core or from another extension.
+- Repo seam split:
+  `extensions/<id>/api.js` is the helper/types barrel,
+  `extensions/<id>/runtime-api.js` is the runtime-only barrel,
+  `extensions/<id>/index.js` is the bundled plugin entry,
+  and `extensions/<id>/setup-entry.js` is the setup plugin entry.
 - `openclaw/plugin-sdk/telegram` for Telegram channel plugin types and shared channel-facing helpers. Built-in Telegram implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/discord` for Discord channel plugin types and shared channel-facing helpers. Built-in Discord implementation internals stay private to the bundled extension.
 - `openclaw/plugin-sdk/slack` for Slack channel plugin types and shared channel-facing helpers. Built-in Slack implementation internals stay private to the bundled extension.

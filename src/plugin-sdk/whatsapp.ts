@@ -1,8 +1,11 @@
 export type { ChannelMessageActionName } from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
-export type { WebChannelStatus, WebMonitorTuning } from "../../extensions/whatsapp/api.js";
-export type { WebInboundMessage, WebListenerCloseReason } from "../../extensions/whatsapp/api.js";
+export type { WebChannelStatus, WebMonitorTuning } from "../../extensions/whatsapp/runtime-api.js";
+export type {
+  WebInboundMessage,
+  WebListenerCloseReason,
+} from "../../extensions/whatsapp/runtime-api.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -73,7 +76,7 @@ export {
   logoutWeb,
   pickWebChannel,
   webAuthExists,
-} from "../../extensions/whatsapp/api.js";
+} from "../../extensions/whatsapp/runtime-api.js";
 export {
   DEFAULT_WEB_MEDIA_BYTES,
   HEARTBEAT_PROMPT,
@@ -81,28 +84,28 @@ export {
   monitorWebChannel,
   resolveHeartbeatRecipients,
   runWebHeartbeatOnce,
-} from "../../extensions/whatsapp/api.js";
+} from "../../extensions/whatsapp/runtime-api.js";
 export {
   extractMediaPlaceholder,
   extractText,
   monitorWebInbox,
-} from "../../extensions/whatsapp/api.js";
-export { loginWeb } from "../../extensions/whatsapp/api.js";
+} from "../../extensions/whatsapp/runtime-api.js";
+export { loginWeb } from "../../extensions/whatsapp/runtime-api.js";
 export {
   getDefaultLocalRoots,
   loadWebMedia,
   loadWebMediaRaw,
   optimizeImageToJpeg,
-} from "../../extensions/whatsapp/api.js";
+} from "../../extensions/whatsapp/runtime-api.js";
 export {
   sendMessageWhatsApp,
   sendPollWhatsApp,
   sendReactionWhatsApp,
-} from "../../extensions/whatsapp/api.js";
+} from "../../extensions/whatsapp/runtime-api.js";
 export {
   createWaSocket,
   formatError,
   getStatusCode,
   waitForWaConnection,
-} from "../../extensions/whatsapp/api.js";
-export { createWhatsAppLoginTool } from "../../extensions/whatsapp/api.js";
+} from "../../extensions/whatsapp/runtime-api.js";
+export { createWhatsAppLoginTool } from "../../extensions/whatsapp/runtime-api.js";
