@@ -31,6 +31,16 @@ function resolveProviderLabel(providerId: string): string {
   }
 }
 
+function formatVoiceMeta(voice: SpeechVoiceOption): string | undefined {
+  const parts = [voice.locale, voice.gender];
+  const personalities = voice.personalities?.filter((value) => value.trim().length > 0) ?? [];
+  if (personalities.length > 0) {
+    parts.push(personalities.join(", "));
+  }
+  const filtered = parts.filter((part): part is string => Boolean(part?.trim()));
+  return filtered.length > 0 ? filtered.join(" · ") : undefined;
+}
+
 function formatVoiceList(voices: SpeechVoiceOption[], limit: number, providerId: string): string {
   const sliced = voices.slice(0, Math.max(1, Math.min(limit, 50)));
   const lines: string[] = [];
@@ -42,6 +52,14 @@ function formatVoiceList(voices: SpeechVoiceOption[], limit: number, providerId:
     const meta = category ? ` · ${category}` : "";
     lines.push(`- ${name}${meta}`);
     lines.push(`  id: ${v.id}`);
+    const details = formatVoiceMeta(v);
+    if (details) {
+      lines.push(`  meta: ${details}`);
+    }
+    const description = (v.description ?? "").trim();
+    if (description) {
+      lines.push(`  note: ${description}`);
+    }
   }
   if (voices.length > sliced.length) {
     lines.push("");
