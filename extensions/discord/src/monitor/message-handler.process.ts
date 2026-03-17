@@ -18,6 +18,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { writePendingInbound } from "../../infra/pending-inbound-store.js";
+import { logWarn } from "../../logger.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isGatewayDraining } from "../../process/command-queue.js";
@@ -172,7 +173,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         baseSessionKey,
     });
     if (!drainAccepted) {
-      logVerbose(
+      logWarn(
         `discord: drain capture rejected for message ${message.id} (pending-inbound store at capacity)`,
       );
     }

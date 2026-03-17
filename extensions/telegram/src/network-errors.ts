@@ -152,6 +152,20 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
 }
 
 /**
+ * Checks whether any error in the cause chain of `err` has a pre-connect error code.
+ * Used to determine whether a grammY "failed after N attempts" envelope is safe to retry.
+ */
+function hasPreConnectCauseInChain(err: unknown): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    const code = normalizeCode(getErrorCode(candidate));
+    if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
  * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
  * the request reached Telegram's servers, preventing duplicate message delivery.
@@ -175,10 +189,16 @@ export function isSafeToRetrySendError(err: unknown): boolean {
       return true;
     }
     // grammY envelope error: "Network request for '…' failed after N attempts"
-    // All internal grammY retries failed at the network layer — the message was
-    // never delivered, so retrying from our side is safe.
+    // This envelope wraps an underlying cause — we must inspect it to determine
+    // safety. Only treat as safe-to-retry if the root cause is a verifiable
+    // pre-connect failure. ECONNRESET, post-connect timeouts, and unknown causes
+    // could mean Telegram already received the message, so we must NOT retry.
     if (GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message.toLowerCase())) {
-      return true;
+      if (hasPreConnectCauseInChain(candidate)) {
+        return true;
+      }
+      // Underlying cause is not a pre-connect failure — not safe to retry.
+      continue;
     }
   }
   return false;

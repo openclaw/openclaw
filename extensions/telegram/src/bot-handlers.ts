@@ -35,6 +35,7 @@ import type {
 import { danger, logVerbose, warn } from "../globals.js";
 import { writePendingInbound } from "../infra/pending-inbound-store.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { logWarn } from "../logger.js";
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { isGatewayDraining } from "../process/command-queue.js";
@@ -1700,7 +1701,12 @@ export const registerTelegramHandlers = ({
       // policy flows.  Firing this short-circuit outside drain mode would
       // silently drop text-only DMs from senders with dmPolicy: "pairing"
       // before they ever reach the pairing challenge handler.
-      if (isGatewayDraining() && !event.isGroup && !hasInboundMedia(event.msg) && !hasReplyTargetMedia(event.msg)) {
+      if (
+        isGatewayDraining() &&
+        !event.isGroup &&
+        !hasInboundMedia(event.msg) &&
+        !hasReplyTargetMedia(event.msg)
+      ) {
         if (dmPolicy === "disabled") {
           return;
         }
@@ -1889,7 +1895,7 @@ export const registerTelegramHandlers = ({
           sessionKey: drainSessionKey,
         });
         if (!drainAccepted) {
-          logVerbose(
+          logWarn(
             `telegram: drain capture rejected for ${event.chatId}:${event.msg.message_id} (pending-inbound store at capacity)`,
           );
         }

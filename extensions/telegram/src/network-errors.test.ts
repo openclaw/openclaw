@@ -184,6 +184,55 @@ describe("isSafeToRetrySendError", () => {
     const wrapped = Object.assign(new Error("fetch failed"), { cause: root });
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
+
+  it("allows retry for grammY failed-after envelope with pre-connect cause", () => {
+    const root = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const envelope = Object.assign(
+      new Error("Network request for 'sendMessage' failed after 3 attempts."),
+      { cause: root },
+    );
+    expect(isSafeToRetrySendError(envelope)).toBe(true);
+  });
+
+  it("allows retry for grammY failed-after envelope with DNS failure cause", () => {
+    const root = Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
+    const envelope = Object.assign(
+      new Error("Network request for 'sendMessage' failed after 2 attempts."),
+      { cause: root },
+    );
+    expect(isSafeToRetrySendError(envelope)).toBe(true);
+  });
+
+  it("does NOT allow retry for grammY failed-after envelope with ECONNRESET cause", () => {
+    const root = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    const envelope = Object.assign(
+      new Error("Network request for 'sendMessage' failed after 2 attempts."),
+      { cause: root },
+    );
+    expect(isSafeToRetrySendError(envelope)).toBe(false);
+  });
+
+  it("does NOT allow retry for grammY failed-after envelope with ETIMEDOUT cause", () => {
+    const root = Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const envelope = Object.assign(
+      new Error("Network request for 'sendMessage' failed after 2 attempts."),
+      { cause: root },
+    );
+    expect(isSafeToRetrySendError(envelope)).toBe(false);
+  });
+
+  it("does NOT allow retry for grammY failed-after envelope with no cause", () => {
+    const envelope = new Error("Network request for 'sendMessage' failed after 2 attempts.");
+    expect(isSafeToRetrySendError(envelope)).toBe(false);
+  });
+
+  it("does NOT allow retry for grammY failed-after envelope with unknown cause", () => {
+    const envelope = Object.assign(
+      new Error("Network request for 'sendMessage' failed after 2 attempts."),
+      { cause: new Error("something went wrong") },
+    );
+    expect(isSafeToRetrySendError(envelope)).toBe(false);
+  });
 });
 
 describe("isTelegramServerError", () => {
