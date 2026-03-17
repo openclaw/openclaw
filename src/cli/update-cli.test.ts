@@ -636,26 +636,80 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("updateCommand refreshes gateway service env when service is already installed", async () => {
-    const mockResult: UpdateRunResult = {
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    };
+  it("updateCommand handles service env refresh and restart behavior", async () => {
+    const cases = [
+      {
+        name: "refreshes service env when already installed",
+        run: async () => {
+          vi.mocked(runGatewayUpdate).mockResolvedValue({
+            status: "ok",
+            mode: "git",
+            steps: [],
+            durationMs: 100,
+          } satisfies UpdateRunResult);
+          vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
+          serviceLoaded.mockResolvedValue(true);
 
-    vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
-    serviceLoaded.mockResolvedValue(true);
+          await updateCommand({});
+        },
+        assert: () => {
+          expect(runDaemonInstall).toHaveBeenCalledWith({
+            force: true,
+            json: undefined,
+          });
+          expect(runRestartScript).toHaveBeenCalled();
+          expect(runDaemonRestart).not.toHaveBeenCalled();
+        },
+      },
+      {
+        name: "falls back to daemon restart when service env refresh cannot complete",
+        run: async () => {
+          vi.mocked(runDaemonRestart).mockResolvedValue(true);
+          await runRestartFallbackScenario({ daemonInstall: "fail" });
+        },
+        assert: () => {
+          expect(runDaemonInstall).toHaveBeenCalledWith({
+            force: true,
+            json: undefined,
+          });
+          expect(runDaemonRestart).toHaveBeenCalled();
+        },
+      },
+      {
+        name: "keeps going when daemon install succeeds but restart fallback still handles relaunch",
+        run: async () => {
+          vi.mocked(runDaemonRestart).mockResolvedValue(true);
+          await runRestartFallbackScenario({ daemonInstall: "ok" });
+        },
+        assert: () => {
+          expect(runDaemonInstall).toHaveBeenCalledWith({
+            force: true,
+            json: undefined,
+          });
+          expect(runDaemonRestart).toHaveBeenCalled();
+        },
+      },
+      {
+        name: "skips service env refresh when --no-restart is set",
+        run: async () => {
+          vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+          serviceLoaded.mockResolvedValue(true);
 
-    await updateCommand({});
+          await updateCommand({ restart: false });
+        },
+        assert: () => {
+          expect(runDaemonInstall).not.toHaveBeenCalled();
+          expect(runRestartScript).not.toHaveBeenCalled();
+          expect(runDaemonRestart).not.toHaveBeenCalled();
+        },
+      },
+    ] as const;
 
-    expect(runDaemonInstall).toHaveBeenCalledWith({
-      force: true,
-      json: undefined,
-    });
-    expect(runRestartScript).toHaveBeenCalled();
-    expect(runDaemonRestart).not.toHaveBeenCalled();
+    for (const testCase of cases) {
+      vi.clearAllMocks();
+      await testCase.run();
+      testCase.assert();
+    }
   });
 
   it.each([
@@ -754,31 +808,6 @@ describe("update-cli", () => {
       testCase.expectedOptions(String(root), context),
     );
     testCase.assertExtra();
-  });
-
-  it("updateCommand falls back to restart when service env refresh cannot complete", async () => {
-    for (const daemonInstall of ["fail", "ok"] as const) {
-      vi.clearAllMocks();
-      vi.mocked(runDaemonRestart).mockResolvedValue(true);
-      await runRestartFallbackScenario({ daemonInstall });
-
-      expect(runDaemonInstall).toHaveBeenCalledWith({
-        force: true,
-        json: undefined,
-      });
-      expect(runDaemonRestart).toHaveBeenCalled();
-    }
-  });
-
-  it("updateCommand does not refresh service env when --no-restart is set", async () => {
-    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-    serviceLoaded.mockResolvedValue(true);
-
-    await updateCommand({ restart: false });
-
-    expect(runDaemonInstall).not.toHaveBeenCalled();
-    expect(runRestartScript).not.toHaveBeenCalled();
-    expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("updateCommand continues after doctor sub-step and clears update flag", async () => {
