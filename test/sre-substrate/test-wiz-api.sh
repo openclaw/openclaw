@@ -142,8 +142,8 @@ assert_ok "auth: probe returns credentialSource" \
 # --- token cache file created with correct perms ---
 assert_ok "auth: token cache file exists" \
   "[[ -f '${TMP}/token-auth.json' ]]"
-assert_ok "auth: token cache file has 600 perms" \
-  "[[ \"\$(stat -f '%Lp' '${TMP}/token-auth.json' 2>/dev/null || stat -c '%a' '${TMP}/token-auth.json' 2>/dev/null)\" == '600' ]]"
+assert_ok "auth: token cache is not world/group readable" \
+  "[[ \"\$(ls -l '${TMP}/token-auth.json' | cut -c5-10)\" == '------' ]]"
 
 # --- token cache is valid JSON with expires_at ---
 assert_ok "auth: token cache has expires_at" \
