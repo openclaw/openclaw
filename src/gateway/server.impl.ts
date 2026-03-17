@@ -93,6 +93,7 @@ import {
   runGatewayStartupPluginBootstrapPhase,
   runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
+  runGatewayStartupDiscoveryPhase,
   runGatewayStartupSecretsPrecheck,
   runGatewayStartupSidecarPhase,
   runGatewayStartupTransportBootstrapPhase,
@@ -575,17 +576,20 @@ export async function startGatewayServer(
 
   if (!minimalTestGateway) {
     const machineDisplayName = await getMachineDisplayName();
-    const discovery = await startGatewayDiscovery({
-      machineDisplayName,
-      port,
-      gatewayTls: gatewayTls.enabled
-        ? { enabled: true, fingerprintSha256: gatewayTls.fingerprintSha256 }
-        : undefined,
-      wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
-      wideAreaDiscoveryDomain: cfgAtStart.discovery?.wideArea?.domain,
-      tailscaleMode,
-      mdnsMode: cfgAtStart.discovery?.mdns?.mode,
-      logDiscovery,
+    const discovery = await runGatewayStartupDiscoveryPhase({
+      startDiscovery: async () =>
+        await startGatewayDiscovery({
+          machineDisplayName,
+          port,
+          gatewayTls: gatewayTls.enabled
+            ? { enabled: true, fingerprintSha256: gatewayTls.fingerprintSha256 }
+            : undefined,
+          wideAreaDiscoveryEnabled: cfgAtStart.discovery?.wideArea?.enabled === true,
+          wideAreaDiscoveryDomain: cfgAtStart.discovery?.wideArea?.domain,
+          tailscaleMode,
+          mdnsMode: cfgAtStart.discovery?.mdns?.mode,
+          logDiscovery,
+        }),
     });
     bonjourStop = discovery.bonjourStop;
   }

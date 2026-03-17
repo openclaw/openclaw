@@ -86,12 +86,12 @@ No user-facing CLI flag removals in stages 1 to 3.
 - Stage 1B: complete with runtime fingerprint diagnostics integrated into startup and status paths.
 - Stage 2A: complete with deterministic read and mutation seam splits in config paths, including no-repair plugin validation reads to avoid discovery-side chmod writes during config validation, read-only daemon status config loads, daemon status env-isolated read contexts, and dotenv hydration into read-only env snapshots instead of `process.env`.
 - Stage 2B: complete with `RuntimeStateContainer` seams threaded through startup/runtime overrides, including fallback gateway context lifecycle ownership, remote skills state cleanup, and gateway health runtime-state reset hardening (cache reset plus stale in-flight refresh guard) during shutdown.
-- Stage 3A: in progress with startup phase extractions for config preflight, secrets precheck, auth bootstrap, runtime policy, explicit runtime-config and control-ui-root helpers, plugin bootstrap, TLS runtime, transport bootstrap, and sidecar startup classification seams, secrets activation controller, and runtime config reloader wiring; early-phase typed startup context handoff and shared startup phase failure reporting now includes secrets-precheck/auth-bootstrap/runtime-policy/plugin-bootstrap/tls-runtime/transport-bootstrap/sidecar-startup/runtime-config/control-ui-root classification.
+- Stage 3A: in progress with startup phase extractions for config preflight, secrets precheck, auth bootstrap, runtime policy, explicit runtime-config and control-ui-root helpers, plugin bootstrap, TLS runtime, transport bootstrap, sidecar startup, and discovery startup classification seams, secrets activation controller, and runtime config reloader wiring; early-phase typed startup context handoff and shared startup phase failure reporting now includes secrets-precheck/auth-bootstrap/runtime-policy/plugin-bootstrap/tls-runtime/transport-bootstrap/sidecar-startup/discovery-startup/runtime-config/control-ui-root classification.
 - Stages 3B to 5: not started.
 
 ## Highest leverage next steps
 
-1. Stage 3A: classify the remaining late-startup boundaries after sidecar startup, especially discovery and Tailscale exposure paths, with explicit phase labels.
+1. Stage 3A: classify the remaining late-startup boundaries after discovery startup, especially Tailscale exposure, with explicit phase labels.
 2. Stage 3B: define shared `OnboardingPlan` decision graph and keep interactive and non-interactive executors separate.
 3. Stage 4: extract route index matcher and cache boundaries, then narrow plugin runtime surface behind capability subfacades.
 

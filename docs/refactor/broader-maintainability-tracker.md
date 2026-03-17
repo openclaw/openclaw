@@ -90,6 +90,7 @@ Do not edit these files under this plan:
 - [x] Classify TLS runtime resolution startup failures through shared startup phase formatter
 - [x] Classify transport bootstrap startup failures through shared startup phase formatter
 - [x] Classify sidecar startup failures through shared startup phase formatter
+- [x] Classify discovery startup failures through shared startup phase formatter
 
 ### Stage 3B: onboarding flow consolidation
 

@@ -20,6 +20,7 @@ export type GatewayStartupPreflightPhase =
   | "tls_runtime_resolution"
   | "transport_bootstrap"
   | "sidecar_startup"
+  | "discovery_startup"
   | "runtime_config_resolution"
   | "control_ui_root_resolution";
 
@@ -64,6 +65,7 @@ function isGatewayStartupPreflightPhase(value: unknown): value is GatewayStartup
     value === "tls_runtime_resolution" ||
     value === "transport_bootstrap" ||
     value === "sidecar_startup" ||
+    value === "discovery_startup" ||
     value === "runtime_config_resolution" ||
     value === "control_ui_root_resolution"
   );
@@ -265,6 +267,10 @@ type GatewayStartupTransportBootstrapPhaseDeps<TTransportRuntime> = {
 
 type GatewayStartupSidecarPhaseDeps<TSidecarRuntime> = {
   startSidecars: () => Promise<TSidecarRuntime> | TSidecarRuntime;
+};
+
+type GatewayStartupDiscoveryPhaseDeps<TDiscoveryRuntime> = {
+  startDiscovery: () => Promise<TDiscoveryRuntime> | TDiscoveryRuntime;
 };
 
 type GatewayStartupRuntimeConfigPhaseDeps = {
@@ -472,6 +478,23 @@ export async function runGatewayStartupSidecarPhase<TSidecarRuntime>(
     throw new GatewayStartupPreflightError(
       "sidecar_startup",
       formatStartupPhaseErrorMessage(err, "Failed to start gateway sidecars."),
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * Startup phase: start discovery services after the core gateway runtime is ready.
+ */
+export async function runGatewayStartupDiscoveryPhase<TDiscoveryRuntime>(
+  deps: GatewayStartupDiscoveryPhaseDeps<TDiscoveryRuntime>,
+): Promise<TDiscoveryRuntime> {
+  try {
+    return await deps.startDiscovery();
+  } catch (err) {
+    throw new GatewayStartupPreflightError(
+      "discovery_startup",
+      formatStartupPhaseErrorMessage(err, "Failed to start gateway discovery."),
       { cause: err },
     );
   }

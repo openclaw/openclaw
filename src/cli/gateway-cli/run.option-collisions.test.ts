@@ -245,6 +245,22 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("surfaces discovery startup phase classification on startup failure", async () => {
+    startGatewayServer.mockRejectedValueOnce({
+      name: "GatewayStartupPreflightError",
+      phase: "discovery_startup",
+      message: "mdns bind failed",
+    });
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors).toContain(
+      "Gateway startup phase failed (discovery_startup): mdns bind failed",
+    );
+  });
+
   it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
     await runGatewayCli(["gateway", "run", "--auth", mode, "--allow-unconfigured"]);
 

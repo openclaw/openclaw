@@ -12,6 +12,7 @@ import {
   runGatewayStartupRuntimeConfigPhase,
   runGatewayStartupRuntimePolicyPhase,
   runGatewayStartupSecretsPrecheck,
+  runGatewayStartupDiscoveryPhase,
   runGatewayStartupSidecarPhase,
   runGatewayStartupTransportBootstrapPhase,
   runGatewayStartupTlsRuntimePhase,
@@ -493,6 +494,30 @@ describe("runGatewayStartupSidecarPhase", () => {
   });
 });
 
+describe("runGatewayStartupDiscoveryPhase", () => {
+  it("returns discovery runtime on success", async () => {
+    const discoveryRuntime = { bonjourStop: vi.fn(async () => {}) };
+    const result = await runGatewayStartupDiscoveryPhase({
+      startDiscovery: vi.fn().mockResolvedValue(discoveryRuntime),
+    });
+
+    expect(result).toBe(discoveryRuntime);
+  });
+
+  it("classifies discovery startup failures", async () => {
+    await expect(
+      runGatewayStartupDiscoveryPhase({
+        startDiscovery: vi.fn().mockRejectedValue(new Error("mdns bind failed")),
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<GatewayStartupPreflightError>>({
+        phase: "discovery_startup",
+        message: "mdns bind failed",
+      }),
+    );
+  });
+});
+
 describe("runGatewayStartupRuntimeConfigPhase", () => {
   it("stores resolved runtime config and preserves prior context fields", async () => {
     const baseSnapshot = createSnapshot({ config: { gateway: { bind: "loopback" } } });
@@ -723,6 +748,19 @@ describe("classifyGatewayStartupPreflightError", () => {
     });
   });
 
+  it("classifies serialized discovery startup errors", () => {
+    const classified = classifyGatewayStartupPreflightError({
+      name: "GatewayStartupPreflightError",
+      phase: "discovery_startup",
+      message: "mdns bind failed",
+    });
+
+    expect(classified).toEqual({
+      phase: "discovery_startup",
+      message: "mdns bind failed",
+    });
+  });
+
   it("returns null for non-preflight errors", () => {
     expect(classifyGatewayStartupPreflightError(new Error("boom"))).toBeNull();
   });
@@ -797,6 +835,16 @@ describe("formatGatewayStartupPreflightFailure", () => {
         message: "browser control failed",
       }),
     ).toBe("Gateway startup phase failed (sidecar_startup): browser control failed");
+  });
+
+  it("formats classified discovery startup failures", () => {
+    expect(
+      formatGatewayStartupPreflightFailure({
+        name: "GatewayStartupPreflightError",
+        phase: "discovery_startup",
+        message: "mdns bind failed",
+      }),
+    ).toBe("Gateway startup phase failed (discovery_startup): mdns bind failed");
   });
 
   it("returns null for non-classified failures", () => {
