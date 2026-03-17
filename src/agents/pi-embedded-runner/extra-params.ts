@@ -494,8 +494,11 @@ export function createTurnIdWrapper(
 
 /**
  * Wraps the stream function to inject `skill_names` into every outgoing
- * LLM request payload. The donut-backend LLM proxy reads this field for
- * per-skill token attribution analytics.
+ * LLM request via the `X-Skill-Names` HTTP header. The donut-backend LLM
+ * proxy reads this header for per-skill token attribution analytics.
+ *
+ * Unlike the earlier body-field approach, headers are ignored by strict
+ * APIs (Anthropic, OpenAI) so this is safe for both proxy and direct routes.
  *
  * Note: `feature_context` is inferred server-side by the LLM proxy from
  * the messages array, so it does not need to be injected here.
@@ -509,17 +512,11 @@ function createSkillNamesWrapper(
   }
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const p = payload as Record<string, unknown>;
-          if (!p.skill_names) {
-            p.skill_names = skillNames;
-          }
-        }
-        originalOnPayload?.(payload);
+      headers: {
+        ...options?.headers,
+        "X-Skill-Names": skillNames.join(","),
       },
     });
   };
