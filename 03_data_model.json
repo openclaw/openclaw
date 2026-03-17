@@ -1,0 +1,100 @@
+{
+  "version": "2.0.0",
+  "name": "openclaw-mission-control-team-model",
+  "note": "Canonical schema for Mission Control entities/state (supporting material; mission-control.config.json remains source of truth).",
+  "enums": {
+    "workItemStage": [
+      "intake",
+      "context",
+      "research",
+      "planning",
+      "drafting",
+      "execution",
+      "review",
+      "final_synthesis",
+      "memory_sync",
+      "done",
+      "blocked"
+    ],
+    "agentMode": [
+      "orchestrate",
+      "research",
+      "plan",
+      "draft",
+      "execute",
+      "code",
+      "validate",
+      "simulate",
+      "memory_retrieve",
+      "memory_store"
+    ],
+    "handoffStatus": ["queued", "accepted", "rejected", "returned", "completed", "expired"],
+    "artifactType": [
+      "brief",
+      "evidence_bundle",
+      "plan",
+      "draft",
+      "code_patch",
+      "execution_output",
+      "validation_report",
+      "simulation_report",
+      "memory_record",
+      "decision"
+    ],
+    "memoryConfidence": ["explicit", "strongly_supported"]
+  },
+  "entities": {
+    "mission": {
+      "fields": [
+        "id",
+        "name",
+        "status",
+        "healthScore",
+        "currentPhaseId",
+        "activeWorkItemIds",
+        "nextActions",
+        "updatedAt"
+      ]
+    },
+    "agent": {
+      "fields": [
+        "id",
+        "displayName",
+        "role",
+        "allowedModes",
+        "currentMode",
+        "currentWorkItemId",
+        "guardrailWarnings"
+      ]
+    },
+    "workItem": {
+      "fields": [
+        "id",
+        "title",
+        "stage",
+        "status",
+        "priority",
+        "ownerAgentId",
+        "nextAgentId",
+        "requiredArtifacts",
+        "blockerIds",
+        "approvalIds"
+      ]
+    },
+    "handoff": {
+      "fields": [
+        "id",
+        "workItemId",
+        "fromAgentId",
+        "toAgentId",
+        "status",
+        "requiredArtifacts",
+        "artifactIds"
+      ]
+    },
+    "artifact": { "fields": ["id", "workItemId", "type", "ownerAgentId", "summary", "sourceRefs"] },
+    "memoryRecord": {
+      "fields": ["id", "key", "title", "confidence", "sourceRefs", "storedByAgentId"]
+    }
+  }
+}

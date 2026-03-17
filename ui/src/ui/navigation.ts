@@ -4,6 +4,10 @@ import type { IconName } from "./icons.js";
 export const TAB_GROUPS = [
   { label: "chat", tabs: ["chat"] },
   {
+    label: "mission",
+    tabs: ["missionOverview", "missionPipeline", "missionTeam", "missionSystems"],
+  },
+  {
     label: "control",
     tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
   },
@@ -34,6 +38,10 @@ export type Tab =
   | "skills"
   | "nodes"
   | "chat"
+  | "missionOverview"
+  | "missionPipeline"
+  | "missionTeam"
+  | "missionSystems"
   | "config"
   | "communications"
   | "appearance"
@@ -54,6 +62,10 @@ const TAB_PATHS: Record<Tab, string> = {
   skills: "/skills",
   nodes: "/nodes",
   chat: "/chat",
+  missionOverview: "/mission/overview",
+  missionPipeline: "/mission/pipeline",
+  missionTeam: "/mission/team",
+  missionSystems: "/mission/systems",
   config: "/config",
   communications: "/communications",
   appearance: "/appearance",
@@ -151,6 +163,14 @@ export function iconForTab(tab: Tab): IconName {
       return "folder";
     case "chat":
       return "messageSquare";
+    case "missionOverview":
+      return "barChart";
+    case "missionPipeline":
+      return "loader";
+    case "missionTeam":
+      return "brain";
+    case "missionSystems":
+      return "monitor";
     case "overview":
       return "barChart";
     case "channels":

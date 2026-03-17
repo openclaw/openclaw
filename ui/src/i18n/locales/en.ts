@@ -19,6 +19,7 @@ export const en: TranslationMap = {
   },
   nav: {
     chat: "Chat",
+    mission: "Mission Control",
     control: "Control",
     agent: "Agent",
     settings: "Settings",
@@ -28,6 +29,10 @@ export const en: TranslationMap = {
   },
   tabs: {
     agents: "Agents",
+    missionOverview: "Mission Overview",
+    missionPipeline: "Mission Pipeline",
+    missionTeam: "Mission Team",
+    missionSystems: "Mission Systems",
     overview: "Overview",
     channels: "Channels",
     instances: "Instances",
@@ -48,6 +53,10 @@ export const en: TranslationMap = {
   },
   subtitles: {
     agents: "Workspaces, tools, identities.",
+    missionOverview: "Mission health, phase, handoffs, blockers.",
+    missionPipeline: "Stage lanes from intake to memory sync.",
+    missionTeam: "Agent roles, modes, and guardrail warnings.",
+    missionSystems: "Gateway, sessions, approvals, cron, models, errors.",
     overview: "Status, entry points, health.",
     channels: "Channels and settings.",
     instances: "Connected clients and nodes.",

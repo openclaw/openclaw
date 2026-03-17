@@ -1,0 +1,15 @@
+{
+  "name": "unavailable-provenance",
+  "description": "Fixture for rendering unavailable badges and fallback callouts.",
+  "provenance": {
+    "mission": "unavailable",
+    "workItems": "mixed",
+    "handoffs": "unavailable",
+    "memory": "seed-backed",
+    "approvals": "unavailable",
+    "sessions": "unavailable",
+    "cron": "unavailable",
+    "logs": "unavailable",
+    "models": "unavailable"
+  }
+}

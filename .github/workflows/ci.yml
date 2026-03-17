@@ -226,6 +226,15 @@ jobs:
       - name: Check types and lint and oxfmt
         run: pnpm check
 
+      - name: Enforce generated config-doc baseline drift
+        run: pnpm config:docs:check
+
+      - name: Explicit typecheck
+        run: pnpm tsgo
+
+      - name: Mission Control node tests
+        run: cd ui && pnpm vitest run --config vitest.node.config.ts src/ui/mission-control/adapters.node.test.ts src/ui/mission-control/store.node.test.ts src/ui/mission-control/guardrails.node.test.ts src/ui/views/mission-provenance.node.test.ts
+
       - name: Strict TS build smoke
         run: pnpm build:strict-smoke
 

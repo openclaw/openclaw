@@ -1,0 +1,8 @@
+{
+  "mission": {
+    "id": "broken",
+    "name": "Malformed Fixture"
+  },
+  "workItems": [{ "id": "wi-x", "title": "Broken item" }],
+  "handoffs": [{ "id": "h-x" }]
+}

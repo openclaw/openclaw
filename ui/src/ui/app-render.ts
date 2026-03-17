@@ -95,6 +95,10 @@ import { renderConfig } from "./views/config.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderLoginGate } from "./views/login-gate.ts";
+import { renderMissionOverview } from "./views/mission-overview.ts";
+import { renderMissionPipeline } from "./views/mission-pipeline.ts";
+import { renderMissionSystems } from "./views/mission-systems.ts";
+import { renderMissionTeam } from "./views/mission-team.ts";
 import { renderOverview } from "./views/overview.ts";
 
 // Lazy-loaded view modules – deferred so the initial bundle stays small.
@@ -609,6 +613,14 @@ export function renderApp(state: AppViewState) {
               </div>
             </section>`
         }
+
+        ${state.tab === "missionOverview" ? renderMissionOverview(state) : nothing}
+
+        ${state.tab === "missionPipeline" ? renderMissionPipeline(state) : nothing}
+
+        ${state.tab === "missionTeam" ? renderMissionTeam(state) : nothing}
+
+        ${state.tab === "missionSystems" ? renderMissionSystems(state) : nothing}
 
         ${
           state.tab === "overview"

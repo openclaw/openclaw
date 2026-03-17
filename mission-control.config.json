@@ -1,0 +1,101 @@
+{
+  "version": "2.0.0",
+  "featureFlags": { "missionControl": true },
+  "mission": { "name": "Mission Control Rollout", "projectName": "OpenClaw Control UI" },
+  "files": {
+    "projectInstructions": "PROJECT_INSTRUCTIONS.md",
+    "projectMemory": "PROJECT_MEMORY.md",
+    "taskQueue": "TASK_QUEUE.md",
+    "teamOperatingModel": "TEAM_OPERATING_MODEL.md"
+  },
+  "team": {
+    "agents": [
+      {
+        "id": "orbit",
+        "displayName": "Orbit",
+        "role": "Orchestrator",
+        "allowedModes": ["orchestrate"],
+        "defaultMode": "orchestrate"
+      },
+      {
+        "id": "scout",
+        "displayName": "Scout",
+        "role": "Research Agent",
+        "allowedModes": ["research"],
+        "defaultMode": "research"
+      },
+      {
+        "id": "atlas",
+        "displayName": "Atlas",
+        "role": "Planning and Drafting Agent",
+        "allowedModes": ["plan", "draft"],
+        "defaultMode": "plan"
+      },
+      {
+        "id": "forge",
+        "displayName": "Forge",
+        "role": "Execution, Production, and Coding Agent",
+        "allowedModes": ["execute", "code"],
+        "defaultMode": "execute"
+      },
+      {
+        "id": "review",
+        "displayName": "Review",
+        "role": "Validation and Simulation Agent",
+        "allowedModes": ["validate", "simulate"],
+        "defaultMode": "validate"
+      },
+      {
+        "id": "vault",
+        "displayName": "Vault",
+        "role": "Memory and Context Management Agent",
+        "allowedModes": ["memory_retrieve", "memory_store"],
+        "defaultMode": "memory_retrieve"
+      }
+    ]
+  },
+  "workflow": {
+    "stages": [
+      "intake",
+      "context",
+      "research",
+      "planning",
+      "drafting",
+      "execution",
+      "review",
+      "final_synthesis",
+      "memory_sync",
+      "done",
+      "blocked"
+    ],
+    "guardrails": [
+      "orbit_not_primary_executor_on_non_trivial_work",
+      "scout_must_separate_evidence_inference_unknowns",
+      "atlas_modes_limited_to_plan_and_draft",
+      "forge_cannot_redefine_scope_without_block",
+      "review_must_issue_structured_outcome",
+      "vault_only_stores_explicit_or_strongly_supported_memory"
+    ]
+  },
+  "scoringWeights": {
+    "phaseProgress": 0.15,
+    "activeFlowHealth": 0.2,
+    "blockerBurden": 0.15,
+    "reviewDebt": 0.15,
+    "approvalBacklog": 0.05,
+    "runtimeHealth": 0.15,
+    "handoffLatency": 0.05,
+    "memorySyncHealth": 0.1
+  },
+  "ui": {
+    "defaultPages": ["overview", "pipeline", "team", "systems"],
+    "topCards": [
+      "missionHealth",
+      "activePhase",
+      "pendingHandoffs",
+      "pendingApprovals",
+      "reviewDebt",
+      "systemHealth"
+    ]
+  }
+}

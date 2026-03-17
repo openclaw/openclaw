@@ -1,0 +1,31 @@
+version: 2
+name: mission-control-implementation-backlog-team-model
+phases:
+  - id: phase-1
+    name: Shell, flags, and team model
+    objective: Add Mission Control safely and establish the canonical team/config model.
+  - id: phase-2
+    name: Seed UI and layout
+    objective: Render the core dashboard experience before live data plumbing.
+  - id: phase-3
+    name: Live runtime adapters
+    objective: Hydrate the dashboard from existing Gateway/runtime surfaces.
+  - id: phase-4
+    name: Project file adapters and routing derivation
+    objective: Convert project files into structured mission state.
+  - id: phase-5
+    name: Guardrails, review, and memory
+    objective: Make the team model enforceable and legible.
+  - id: phase-6
+    name: Safe actions and audit
+    objective: Controlled intervention with mutation audit.
+  - id: phase-7
+    name: Polish, filters, and testing
+    objective: Harden for real operator use.
+definition_of_done:
+  - Mission Control inside existing Control UI behind feature flag
+  - Overview/Pipeline/Team/Systems render from seed and live overlays
+  - Orbit/Scout/Atlas/Forge/Review/Vault workflow visible
+  - Work items, handoffs, artifacts, review state, and memory state represented
+  - Safe actions are audited
+  - Existing auth/pairing/approvals remain intact

@@ -1,0 +1,89 @@
+{
+  "mission": {
+    "id": "mission-control-rollout",
+    "name": "Mission Control Rollout",
+    "projectName": "OpenClaw Control UI",
+    "status": "watch",
+    "healthScore": 82,
+    "currentPhaseId": "phase-2",
+    "nextActions": [
+      "Finish normalized mission store and seed-data hydration",
+      "Wire sessions, approvals, and health into Overview and Team"
+    ]
+  },
+  "agents": [
+    {
+      "id": "orbit",
+      "displayName": "Orbit",
+      "role": "Orchestrator",
+      "allowedModes": ["orchestrate"],
+      "currentMode": "orchestrate"
+    },
+    {
+      "id": "scout",
+      "displayName": "Scout",
+      "role": "Research Agent",
+      "allowedModes": ["research"],
+      "currentMode": "research"
+    },
+    {
+      "id": "atlas",
+      "displayName": "Atlas",
+      "role": "Planning and Drafting Agent",
+      "allowedModes": ["plan", "draft"],
+      "currentMode": "plan"
+    },
+    {
+      "id": "forge",
+      "displayName": "Forge",
+      "role": "Execution and Coding Agent",
+      "allowedModes": ["execute", "code"],
+      "currentMode": "code"
+    },
+    {
+      "id": "review",
+      "displayName": "Review",
+      "role": "Validation and Simulation Agent",
+      "allowedModes": ["validate", "simulate"],
+      "currentMode": "validate"
+    },
+    {
+      "id": "vault",
+      "displayName": "Vault",
+      "role": "Memory and Context Agent",
+      "allowedModes": ["memory_retrieve", "memory_store"],
+      "currentMode": "memory_store"
+    }
+  ],
+  "workItems": [
+    {
+      "id": "wi-2",
+      "title": "Build Mission Control shell",
+      "stage": "execution",
+      "ownerAgentId": "forge",
+      "nextAgentId": "review",
+      "requiredArtifacts": ["plan", "code_patch"],
+      "blockerIds": ["blocker-1"],
+      "approvalIds": ["approval-1"]
+    }
+  ],
+  "handoffs": [
+    {
+      "id": "handoff-4",
+      "workItemId": "wi-2",
+      "fromAgentId": "forge",
+      "toAgentId": "review",
+      "status": "queued",
+      "requiredArtifacts": ["code_patch", "validation_report"]
+    }
+  ],
+  "memoryRecords": [
+    {
+      "id": "memory-1",
+      "key": "team/orbit-primary-role",
+      "title": "Orbit orchestrates non-trivial work",
+      "confidence": "explicit",
+      "sourceRefs": ["TEAM_OPERATING_MODEL.md"]
+    }
+  ]
+}
