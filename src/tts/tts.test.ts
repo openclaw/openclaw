@@ -311,7 +311,7 @@ describe("tts", () => {
       expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
     });
 
-    it("accepts edge as provider override", () => {
+    it("accepts edge as a legacy microsoft provider override", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input = "Hello [[tts:provider=edge]] world";
       const result = parseTtsDirectives(input, policy);
@@ -524,8 +524,8 @@ describe("tts", () => {
             ELEVENLABS_API_KEY: undefined,
             XI_API_KEY: undefined,
           },
-          prefsPath: "/tmp/tts-prefs-edge.json",
-          expected: "edge",
+          prefsPath: "/tmp/tts-prefs-microsoft.json",
+          expected: "microsoft",
         },
       ] as const;
 
@@ -536,6 +536,25 @@ describe("tts", () => {
           expect(provider).toBe(testCase.expected);
         });
       }
+    });
+  });
+
+  describe("resolveTtsConfig provider normalization", () => {
+    it("normalizes legacy edge provider ids to microsoft", () => {
+      const config = resolveTtsConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: {
+          tts: {
+            provider: "edge",
+            edge: {
+              enabled: true,
+            },
+          },
+        },
+      });
+
+      expect(config.provider).toBe("microsoft");
+      expect(getTtsProvider(config, "/tmp/tts-prefs-normalized.json")).toBe("microsoft");
     });
   });
 

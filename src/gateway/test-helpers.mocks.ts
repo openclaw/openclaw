@@ -146,6 +146,7 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   ],
   channelSetups: [],
   providers: [],
+  speechProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
