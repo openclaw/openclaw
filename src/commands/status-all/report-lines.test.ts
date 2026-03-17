@@ -46,6 +46,7 @@ describe("buildStatusAllReportLines", () => {
       diagnosis: {
         snap: null,
         remoteUrlMissing: false,
+        secretDiagnostics: [],
         sentinel: null,
         lastErr: null,
         port: 18789,
@@ -70,5 +71,10 @@ describe("buildStatusAllReportLines", () => {
     expect(output).toContain("Bootstrap file");
     expect(output).toContain("PRESENT");
     expect(output).toContain("ABSENT");
+    expect(diagnosisSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        secretDiagnostics: [],
+      }),
+    );
   });
 });
