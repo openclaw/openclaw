@@ -284,7 +284,7 @@ describe("web inbound helpers", () => {
     );
   });
 
-  it("escapes double quotes and angle brackets in adReply attributes", () => {
+  it('escapes special characters (&, ", <, >) in adReply attributes', () => {
     expect(
       extractMediaPlaceholder({
         videoMessage: {
