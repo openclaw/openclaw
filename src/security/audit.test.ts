@@ -3594,28 +3594,28 @@ description: test skill
       return probeEnv;
     };
 
-    it("applies token precedence across local/remote gateway modes", async () => {
+    it("applies gateway auth precedence across local/remote modes", async () => {
       const cases: Array<{
         name: string;
         cfg: OpenClawConfig;
-        env?: { token?: string };
-        expectedToken: string;
+        env?: { token?: string; password?: string };
+        expectedAuth: { token?: string; password?: string };
       }> = [
         {
           name: "uses local auth when gateway.mode is local",
           cfg: { gateway: { mode: "local", auth: { token: "local-token-abc123" } } },
-          expectedToken: "local-token-abc123",
+          expectedAuth: { token: "local-token-abc123" },
         },
         {
           name: "prefers env token over local config token",
           cfg: { gateway: { mode: "local", auth: { token: "local-token" } } },
           env: { token: "env-token" },
-          expectedToken: "env-token",
+          expectedAuth: { token: "env-token" },
         },
         {
           name: "uses local auth when gateway.mode is undefined (default)",
           cfg: { gateway: { auth: { token: "default-local-token" } } },
-          expectedToken: "default-local-token",
+          expectedAuth: { token: "default-local-token" },
         },
         {
           name: "uses remote auth when gateway.mode is remote with URL",
@@ -3626,7 +3626,7 @@ description: test skill
               remote: { url: "wss://remote.example.com:18789", token: "remote-token-xyz789" },
             },
           },
-          expectedToken: "remote-token-xyz789",
+          expectedAuth: { token: "remote-token-xyz789" },
         },
         {
           name: "ignores env token when gateway.mode is remote",
@@ -3638,7 +3638,7 @@ description: test skill
             },
           },
           env: { token: "env-token" },
-          expectedToken: "remote-token",
+          expectedAuth: { token: "remote-token" },
         },
         {
           name: "falls back to local auth when gateway.mode is remote but URL is missing",
@@ -3649,31 +3649,8 @@ description: test skill
               remote: { token: "remote-token-should-not-use" },
             },
           },
-          expectedToken: "fallback-local-token",
+          expectedAuth: { token: "fallback-local-token" },
         },
-      ];
-
-      await Promise.all(
-        cases.map(async (testCase) => {
-          const { probeGatewayFn, getAuth } = makeProbeCapture();
-          await audit(testCase.cfg, {
-            deep: true,
-            deepTimeoutMs: 50,
-            probeGatewayFn,
-            env: makeProbeEnv(testCase.env),
-          });
-          expect(getAuth()?.token, testCase.name).toBe(testCase.expectedToken);
-        }),
-      );
-    });
-
-    it("applies password precedence for remote gateways", async () => {
-      const cases: Array<{
-        name: string;
-        cfg: OpenClawConfig;
-        env?: { password?: string };
-        expectedPassword: string;
-      }> = [
         {
           name: "uses remote password when env is unset",
           cfg: {
@@ -3682,7 +3659,7 @@ description: test skill
               remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
             },
           },
-          expectedPassword: "remote-pass",
+          expectedAuth: { password: "remote-pass" },
         },
         {
           name: "prefers env password over remote password",
@@ -3693,7 +3670,7 @@ description: test skill
             },
           },
           env: { password: "env-pass" },
-          expectedPassword: "env-pass",
+          expectedAuth: { password: "env-pass" },
         },
       ];
 
@@ -3706,7 +3683,7 @@ description: test skill
             probeGatewayFn,
             env: makeProbeEnv(testCase.env),
           });
-          expect(getAuth()?.password, testCase.name).toBe(testCase.expectedPassword);
+          expect(getAuth(), testCase.name).toEqual(testCase.expectedAuth);
         }),
       );
     });
