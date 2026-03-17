@@ -459,8 +459,7 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\nwhatsapp transcript");
   });
 
-  it("skips URL-only audio when remote file is too small", async () => {
-    // Override the default mock to return a tiny buffer (below MIN_AUDIO_FILE_BYTES)
+  it("injects a placeholder transcript when URL-only audio is too small", async () => {
     mockedFetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.alloc(100),
       contentType: "audio/ogg",
@@ -499,7 +498,21 @@ describe("applyMediaUnderstanding", () => {
     });
 
     expect(transcribeAudio).not.toHaveBeenCalled();
-    expect(result.appliedAudio).toBe(false);
+    expect(result.appliedAudio).toBe(true);
+    expect(result.outputs).toEqual([
+      expect.objectContaining({
+        kind: "audio.transcription",
+        text: "[Voice note was empty or contained only silence — no speech detected]",
+        provider: "openclaw",
+        model: "synthetic-empty-audio",
+      }),
+    ]);
+    expect(ctx.Transcript).toBe(
+      "[Voice note was empty or contained only silence — no speech detected]",
+    );
+    expect(ctx.Body).toBe(
+      "[Audio]\nTranscript:\n[Voice note was empty or contained only silence — no speech detected]",
+    );
   });
 
   it("skips audio transcription when attachment exceeds maxBytes", async () => {
