@@ -262,6 +262,8 @@ type DeliverOutboundPayloadsCoreParams = {
   onPayload?: (payload: NormalizedOutboundPayload) => void;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
+  /** Top-level session key for internal hooks when mirror is disabled. */
+  sessionKey?: string;
   mirror?: DeliveryMirror;
   silent?: boolean;
 };
@@ -613,7 +615,8 @@ async function deliverOutboundPayloadsCore(
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(payloads, channel, handler);
   const hookRunner = getGlobalHookRunner();
-  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
+  const sessionKeyForInternalHooks =
+    params.mirror?.sessionKey ?? params.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
   const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
