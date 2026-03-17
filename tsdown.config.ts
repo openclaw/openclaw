@@ -131,6 +131,10 @@ function buildCoreDistEntries(): Record<string, string> {
     "line/accounts": "src/line/accounts.ts",
     "line/send": "src/line/send.ts",
     "line/template-messages": "src/line/template-messages.ts",
+    // Pre-compile plugin runtime so jiti doesn't have to transpile it (and its
+    // entire dependency tree) synchronously on first message, which blocks the
+    // event loop for ~100s.
+    "plugins/runtime/index": "src/plugins/runtime/index.ts",
   };
 }
 
