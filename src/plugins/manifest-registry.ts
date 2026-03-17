@@ -361,7 +361,40 @@ export function loadPluginManifestRegistry(params: {
         }
         const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
         const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-        return Boolean(existingReal && candidateReal && existingReal === candidateReal);
+        if (Boolean(existingReal && candidateReal && existingReal === candidateReal)) {
+          return true;
+        }
+        // Suppress false-positive duplicate warnings when an npm-installed plugin
+        // produces both a config-origin entry (auto-generated from plugins.installs
+        // into plugins.entries on each startup) and a global-origin candidate
+        // discovered from the extensions directory. On Windows the two path
+        // representations can differ after realpath resolution even though they
+        // refer to the same installation, so check the install record explicitly.
+        const installRecord = config.plugins?.installs?.[manifest.id];
+        if (installRecord) {
+          const isConfigGlobalPair =
+            (existing.candidate.origin === "config" && candidate.origin === "global") ||
+            (existing.candidate.origin === "global" && candidate.origin === "config");
+          if (isConfigGlobalPair) {
+            const globalCandidate =
+              existing.candidate.origin === "global" ? existing.candidate : candidate;
+            const trackedPaths = [installRecord.installPath, installRecord.sourcePath]
+              .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+              .map((entry) => resolveUserPath(entry, env));
+            // No tracked paths → the install record covers this plugin ID without path
+            // pinning; any global candidate for this ID is linked to the install.
+            if (trackedPaths.length === 0) {
+              return true;
+            }
+            const globalSource = resolveUserPath(globalCandidate.source, env);
+            const globalRoot =
+              safeRealpathSync(globalCandidate.rootDir, realpathCache) ?? globalCandidate.rootDir;
+            return trackedPaths.some(
+              (p) => globalSource === p || isPathInside(p, globalSource) || isPathInside(p, globalRoot),
+            );
+          }
+        }
+        return false;
       })();
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
