@@ -2,6 +2,7 @@ import {
   createAllowlistSetupWizardProxy,
   DEFAULT_ACCOUNT_ID,
   createEnvPatchedAccountSetupAdapter,
+  formatDocsLink,
   hasConfiguredSecretInput,
   type OpenClawConfig,
   noteChannelLookupFailure,
@@ -18,7 +19,6 @@ import {
   type ChannelSetupWizard,
   type ChannelSetupWizardAllowFromEntry,
 } from "openclaw/plugin-sdk/setup";
-import { formatDocsLink } from "../../../src/terminal/links.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { listSlackAccountIds, resolveSlackAccount, type ResolvedSlackAccount } from "./accounts.js";
 import {
