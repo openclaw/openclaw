@@ -2066,15 +2066,16 @@ export async function runEmbeddedAttempt(
           if (!Array.isArray(messages)) {
             return inner(model, context, options);
           }
-          // Drop tool calls with empty/invalid names from assistant messages, then
-          // drop any orphaned tool results whose call was removed above.
+          // Drop tool calls with empty/invalid names from assistant messages.
           const repaired1 = sanitizeToolCallInputs(messages as AgentMessage[], {
             allowedToolNames: repairAllowedToolNames,
           });
-          const repaired2 = sanitizeToolUseResultPairing(repaired1);
-          if (repaired2 === messages) {
+          // Fast path: nothing was dropped, no further work needed.
+          if (repaired1 === messages) {
             return inner(model, context, options);
           }
+          // Drop the now-orphaned tool results whose calls were removed above.
+          const repaired2 = sanitizeToolUseResultPairing(repaired1);
           const nextContext = {
             ...(context as unknown as Record<string, unknown>),
             messages: repaired2,
