@@ -213,7 +213,7 @@ export async function createGeminiEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<{ provider: EmbeddingProvider; client: GeminiEmbeddingClient }> {
   const client = await resolveGeminiEmbeddingClient(options);
-  const baseUrl = client.baseUrl.replace(/\/$/, "");
+  const baseUrl = client.baseUrl;
   const embedUrl = `${baseUrl}/${client.modelPath}:embedContent`;
   const batchUrl = `${baseUrl}/${client.modelPath}:batchEmbedContents`;
   const isV2 = isGeminiEmbedding2Model(client.model);

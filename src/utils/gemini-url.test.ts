@@ -94,6 +94,18 @@ describe("normalizeGeminiBaseUrl", () => {
     ).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
+  it("does not strip /openai when it is not a trailing segment", () => {
+    expect(
+      normalizeGeminiBaseUrl("https://proxy.example.com/openai/v1beta", DEFAULT_FALLBACK),
+    ).toBe("https://proxy.example.com/openai/v1beta");
+  });
+
+  it("does not strip /openai when followed by other path", () => {
+    expect(normalizeGeminiBaseUrl("https://proxy.example.com/openai/v1", DEFAULT_FALLBACK)).toBe(
+      "https://proxy.example.com/openai/v1",
+    );
+  });
+
   it("appends /v1beta to fallback without version segment", () => {
     expect(normalizeGeminiBaseUrl(undefined, "https://generativelanguage.googleapis.com")).toBe(
       "https://generativelanguage.googleapis.com/v1beta",
