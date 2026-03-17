@@ -173,6 +173,9 @@ export const buildTelegramMessageContext = async ({
   resolveTelegramGroupConfig,
   sendChatActionHandler,
 }: BuildTelegramMessageContextParams) => {
+  const triggerSource = (primaryCtx as unknown as { update?: { _triggerSource?: string } }).update
+    ?._triggerSource;
+
   const msg = primaryCtx.message;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -862,6 +865,7 @@ export const buildTelegramMessageContext = async ({
     removeAckAfterReply,
     statusReactionController,
     accountId: account.accountId,
+    triggerSource,
   };
 };
 
