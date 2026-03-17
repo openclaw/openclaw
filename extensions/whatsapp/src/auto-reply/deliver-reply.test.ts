@@ -26,7 +26,7 @@ async function loadSubject() {
     const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
     return {
       ...actual,
-      sleep: (...args: unknown[]) => sleepMock(...args),
+      sleep: (ms: number) => sleepMock(ms),
     };
   });
   vi.doMock("../media.js", () => ({
