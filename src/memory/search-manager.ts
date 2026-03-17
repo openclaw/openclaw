@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { emitLifecycleHook } from "../lifecycle-hooks.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type {
@@ -119,9 +120,11 @@ class FallbackMemoryManager implements MemorySearchManager {
     query: string,
     opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
   ) {
+    let results: any;
+    
     if (!this.primaryFailed) {
       try {
-        return await this.deps.primary.search(query, opts);
+        results = await this.deps.primary.search(query, opts);
       } catch (err) {
         this.primaryFailed = true;
         this.lastError = err instanceof Error ? err.message : String(err);
@@ -131,11 +134,27 @@ class FallbackMemoryManager implements MemorySearchManager {
         this.evictCacheEntry();
       }
     }
-    const fallback = await this.ensureFallback();
-    if (fallback) {
-      return await fallback.search(query, opts);
+    
+    if (!results) {
+      const fallback = await this.ensureFallback();
+      if (fallback) {
+        results = await fallback.search(query, opts);
+      }
     }
-    throw new Error(this.lastError ?? "memory search unavailable");
+    
+    if (!results) {
+      throw new Error(this.lastError ?? "memory search unavailable");
+    }
+    
+    // Emit lifecycle hook: memory:retrieve
+    emitLifecycleHook("memory:retrieve", {
+      sessionKey: opts?.sessionKey,
+      agentId: this.deps.agentId,
+      query,
+      results: Array.isArray(results) ? results : [results],
+    });
+    
+    return results;
   }
 
   async readFile(params: { relPath: string; from?: number; lines?: number }) {

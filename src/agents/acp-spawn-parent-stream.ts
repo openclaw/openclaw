@@ -6,6 +6,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { emitLifecycleHook } from "../lifecycle-hooks.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
@@ -338,6 +339,16 @@ export function startAcpSpawnParentStreamRelay(params: {
       } else {
         emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
       }
+      
+      // Emit lifecycle hook: agent:handoff (producer -> consumer)
+      emitLifecycleHook("agent:handoff", {
+        sessionKey: params.parentSessionKey,
+        producerAgent: params.agentId,
+        consumerAgent: "parent-session", // Parent session receives the output
+        payload: { childSessionKey: params.childSessionKey, runId: params.runId },
+        handoffMetadata: { completed: true, durationMs },
+      });
+      
       dispose();
       return;
     }
