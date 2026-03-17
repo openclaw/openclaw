@@ -7,7 +7,7 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { resolveLineAccount } from "../api.js";
+import { resolveLineAccount } from "../../../src/line/accounts.js";
 import {
   isLineConfigured,
   listLineAccountIds,
