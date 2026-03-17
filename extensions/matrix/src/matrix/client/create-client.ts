@@ -8,6 +8,7 @@ import { ensureMatrixCryptoRuntime } from "../deps.js";
 import { loadMatrixSdk } from "../sdk-runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import {
+  maybeMigrateFromTokenHashDirs,
   maybeMigrateLegacyStorage,
   resolveMatrixStoragePaths,
   writeStorageMeta,
@@ -60,6 +61,7 @@ export async function createMatrixClient(params: {
     env,
   });
   maybeMigrateLegacyStorage({ storagePaths, env });
+  maybeMigrateFromTokenHashDirs({ storagePaths });
   fs.mkdirSync(storagePaths.rootDir, { recursive: true });
   const storage: IStorageProvider = new SimpleFsStorageProvider(storagePaths.storagePath);
 

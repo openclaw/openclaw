@@ -125,11 +125,11 @@ Enable with `channels.matrix.encryption: true`:
   `pnpm rebuild @matrix-org/matrix-sdk-crypto-nodejs` or fetch the binary with
   `node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js`.
 
-Crypto state is stored per account + access token in
-`~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
-(SQLite database). Sync state lives alongside it in `bot-storage.json`.
-If the access token (device) changes, a new store is created and the bot must be
-re-verified for encrypted rooms.
+Crypto state is stored per account in a **stable path** (so it survives access token changes):
+`~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/store/crypto/`
+(SQLite database). Sync state lives alongside it in `store/bot-storage.json`.
+When you rotate or change the access token (e.g. re-login), the same store is reused and
+device verification is preserved; you do not need to re-verify the bot in Element.
 
 **Device verification:**
 When E2EE is enabled, the bot will request verification from your other sessions on startup.

@@ -11,9 +11,8 @@ export type MatrixResolvedConfig = {
 /**
  * Authenticated Matrix configuration.
  * Note: deviceId is NOT included here because it's implicit in the accessToken.
- * The crypto storage assumes the device ID (and thus access token) does not change
- * between restarts. If the access token becomes invalid or crypto storage is lost,
- * both will need to be recreated together.
+ * Crypto storage (E2EE device keys) is persisted under a stable path per account
+ * so it survives access token rotation; see resolveMatrixStoragePaths in storage.ts.
  */
 export type MatrixAuth = {
   homeserver: string;
