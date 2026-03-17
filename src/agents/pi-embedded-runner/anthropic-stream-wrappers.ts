@@ -408,35 +408,21 @@ export function isAnthropicBedrockModel(modelId: string, modelName?: string): bo
     return modelName ? modelName.toLowerCase().includes("claude") : false;
   }
 
-  // Short/opaque inference profile IDs (not matching known provider prefixes) —
-  // fall back to model name, but only if the ID doesn't look like a standard
-  // non-Anthropic model ID (e.g., amazon.nova-*, meta.llama-*, mistral.*)
-  if (modelName && !looksLikeStandardBedrockModelId(normalized)) {
+  // Short/opaque inference profile IDs — fall back to model name only for IDs
+  // that look like short profile IDs (alphanumeric, no dots/colons/slashes).
+  // Excludes standard model IDs, other ARN resource types, and any dotted identifiers.
+  if (modelName && looksLikeShortProfileId(normalized)) {
     return modelName.toLowerCase().includes("claude");
   }
 
   return false;
 }
 
-/** Returns true when the ID matches a known non-Anthropic Bedrock model-ID pattern. */
-function looksLikeStandardBedrockModelId(normalizedId: string): boolean {
-  const knownPrefixes = [
-    "amazon.",
-    "meta.",
-    "mistral.",
-    "cohere.",
-    "ai21.",
-    "stability.",
-    "deepseek.",
-    "luma.",
-    "google.",
-    "nvidia.",
-    "minimax.",
-    "moonshot.",
-    "openai.",
-    "qwen.",
-    "writer.",
-    "zai.",
-  ];
-  return knownPrefixes.some((prefix) => normalizedId.startsWith(prefix));
+/**
+ * Returns true when the ID looks like a short Application Inference Profile ID
+ * (opaque alphanumeric string without dots, colons, or slashes).
+ * Examples: "gdkqufd9flgg", "s3rr0t98ews8"
+ */
+function looksLikeShortProfileId(normalizedId: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(normalizedId) || /^[a-z0-9]+$/.test(normalizedId);
 }
