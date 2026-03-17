@@ -10,6 +10,10 @@ title: "Media Understanding"
 
 OpenClaw can **summarize inbound media** (image/audio/video) before the reply pipeline runs. It auto‑detects when local tools or provider keys are available, and can be disabled or customized. If understanding is off, models still receive the original files/URLs as usual.
 
+Vendor-specific media behavior is registered by vendor plugins, while OpenClaw
+core owns the shared `tools.media` config, fallback order, and reply-pipeline
+integration.
+
 ## Goals
 
 - Optional: pre‑digest inbound media into short text for faster routing + better command parsing.
@@ -184,7 +188,10 @@ If you set `capabilities`, the entry only runs for those media types. For shared
 lists, OpenClaw can infer defaults:
 
 - `openai`, `anthropic`, `minimax`: **image**
+- `moonshot`: **image + video**
 - `google` (Gemini API): **image + audio + video**
+- `mistral`: **audio**
+- `zai`: **image**
 - `groq`: **audio**
 - `deepgram`: **audio**
 
@@ -193,11 +200,11 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                             | Notes                                                     |
-| ---------- | ------------------------------------------------ | --------------------------------------------------------- |
-| Image      | OpenAI / Anthropic / Google / others via `pi-ai` | Any image-capable model in the registry works.            |
-| Audio      | OpenAI, Groq, Deepgram, Google, Mistral          | Provider transcription (Whisper/Deepgram/Gemini/Voxtral). |
-| Video      | Google (Gemini API)                              | Provider video understanding.                             |
+| Capability | Provider integration                               | Notes                                                                   |
+| ---------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| Image      | OpenAI, Anthropic, Google, MiniMax, Moonshot, Z.AI | Vendor plugins register image support against core media understanding. |
+| Audio      | OpenAI, Groq, Deepgram, Google, Mistral            | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).               |
+| Video      | Google, Moonshot                                   | Provider video understanding via vendor plugins.                        |
 
 ## Model selection guidance
 

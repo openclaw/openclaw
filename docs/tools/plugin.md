@@ -113,9 +113,11 @@ That means:
 Examples:
 
 - the bundled `openai` plugin owns OpenAI model-provider behavior and OpenAI
-  speech behavior
+  speech + media-understanding behavior
 - the bundled `elevenlabs` plugin owns ElevenLabs speech behavior
 - the bundled `microsoft` plugin owns Microsoft speech behavior
+- the bundled `google`, `minimax`, `mistral`, `moonshot`, and `zai` plugins own
+  their media-understanding backends
 - the `voice-call` plugin is a feature plugin: it owns call transport, tools,
   CLI, routes, and runtime, but it consumes core TTS/STT capability instead of
   inventing a second speech stack
@@ -167,17 +169,23 @@ For example, TTS follows this shape:
 
 That same pattern should be preferred for future capabilities.
 
-### Capability example: video
+### Capability example: video understanding
 
-If OpenClaw adds video, prefer this order:
+OpenClaw already treats image/audio/video understanding as one shared
+capability. The same ownership model applies there:
 
-1. define a core video capability
-2. decide the shared contract: input media shape, provider result shape, cache/fallback behavior, and runtime helpers
-3. let vendor plugins such as `openai` or a future video vendor register video implementations
-4. let channels or feature plugins consume `api.runtime.video` instead of wiring directly to a provider plugin
+1. core defines the media-understanding contract
+2. vendor plugins register `describeImage`, `transcribeAudio`, and
+   `describeVideo` as applicable
+3. channels and feature plugins consume the shared core behavior instead of
+   wiring directly to vendor code
 
-This avoids baking one provider's video assumptions into core. The plugin owns
-the vendor surface; core owns the capability contract.
+That avoids baking one provider's video assumptions into core. The plugin owns
+the vendor surface; core owns the capability contract and fallback behavior.
+
+If OpenClaw adds a new domain later, such as video generation, use the same
+sequence again: define the core capability first, then let vendor plugins
+register implementations against it.
 
 ## Compatible bundles
 
@@ -716,6 +724,28 @@ Notes:
 - The preferred ownership model is company-oriented: one vendor plugin can own
   text, speech, image, and future media providers as OpenClaw adds those
   capability contracts.
+
+For image/audio/video understanding, plugins register one typed
+media-understanding provider instead of a generic key/value bag:
+
+```ts
+api.registerMediaUnderstandingProvider({
+  id: "google",
+  capabilities: ["image", "audio", "video"],
+  describeImage: async (req) => ({ text: "..." }),
+  transcribeAudio: async (req) => ({ text: "..." }),
+  describeVideo: async (req) => ({ text: "..." }),
+});
+```
+
+Notes:
+
+- Keep orchestration, fallback, config, and channel wiring in core.
+- Keep vendor behavior in the provider plugin.
+- Additive expansion should stay typed: new optional methods, new optional
+  result fields, new optional capabilities.
+- If OpenClaw adds a new capability such as video generation later, define the
+  core capability contract first, then let vendor plugins register against it.
 
 For STT/transcription, plugins can call:
 
@@ -1294,6 +1324,7 @@ Plugins export either:
 - `registerChannel`
 - `registerProvider`
 - `registerSpeechProvider`
+- `registerMediaUnderstandingProvider`
 - `registerWebSearchProvider`
 - `registerHttpRoute`
 - `registerCommand`
