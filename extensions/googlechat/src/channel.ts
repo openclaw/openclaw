@@ -35,7 +35,8 @@ import {
 } from "./accounts.js";
 import { googlechatMessageActions } from "./actions.js";
 import { getGoogleChatRuntime } from "./runtime.js";
-import { googlechatSetupAdapter, googlechatSetupWizard } from "./setup-surface.js";
+import { googlechatSetupAdapter } from "./setup-core.js";
+import { googlechatSetupWizard } from "./setup-surface.js";
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,

@@ -1,4 +1,3 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
@@ -6,8 +5,9 @@ import {
   patchChannelConfigForAccount,
   setAccountGroupPolicyForChannel,
   setLegacyChannelDmPolicyWithAllowFrom,
-  setOnboardingChannelEnabled,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
+  setSetupChannelEnabled,
+} from "../../../src/channels/plugins/setup-flow-helpers.js";
+import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-flow-types.js";
 import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
@@ -216,7 +216,7 @@ export const slackSetupAdapter: ChannelSetupAdapter = {
 export function createSlackSetupWizardProxy(
   loadWizard: () => Promise<{ slackSetupWizard: ChannelSetupWizard }>,
 ) {
-  const slackDmPolicy: ChannelOnboardingDmPolicy = {
+  const slackDmPolicy: ChannelSetupDmPolicy = {
     label: "Slack",
     channel,
     policyKey: "channels.slack.dmPolicy",
@@ -455,7 +455,7 @@ export function createSlackSetupWizardProxy(
       }) => {
         try {
           const wizard = (await loadWizard()).slackSetupWizard;
-          if (!wizard.groupAccess) {
+          if (!wizard.groupAccess?.resolveAllowlist) {
             return entries;
           }
           return await wizard.groupAccess.resolveAllowlist({
@@ -490,6 +490,6 @@ export function createSlackSetupWizardProxy(
         resolved: unknown;
       }) => setSlackChannelAllowlist(cfg, accountId, resolved as string[]),
     },
-    disable: (cfg: OpenClawConfig) => setOnboardingChannelEnabled(cfg, channel, false),
+    disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
 }

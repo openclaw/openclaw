@@ -5,11 +5,12 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
-  patchChannelOnboardingAdapter,
+  patchChannelSetupFlowAdapter,
   setDefaultChannelPluginRegistryForTests,
 } from "./channel-test-helpers.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
+  ensureOnboardingPluginInstalled,
   loadOnboardingPluginRegistrySnapshotForChannel,
   reloadOnboardingPluginRegistry,
 } from "./onboarding/plugin-install.js";
@@ -17,6 +18,10 @@ import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-h
 
 const catalogMocks = vi.hoisted(() => ({
   listChannelPluginCatalogEntries: vi.fn(),
+}));
+
+const manifestRegistryMocks = vi.hoisted(() => ({
+  loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
 }));
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
@@ -91,8 +96,8 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
   } as OpenClawConfig;
 }
 
-function patchTelegramAdapter(overrides: Parameters<typeof patchChannelOnboardingAdapter>[1]) {
-  return patchChannelOnboardingAdapter("telegram", {
+function patchTelegramAdapter(overrides: Parameters<typeof patchChannelSetupFlowAdapter>[1]) {
+  return patchChannelSetupFlowAdapter("telegram", {
     ...overrides,
     getStatus:
       overrides.getStatus ??
@@ -197,6 +202,14 @@ vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistry: manifestRegistryMocks.loadPluginManifestRegistry,
+  };
+});
+
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(async () => false),
 }));
@@ -205,6 +218,10 @@ vi.mock("./onboarding/plugin-install.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...(actual as Record<string, unknown>),
+    ensureOnboardingPluginInstalled: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      cfg,
+      installed: true,
+    })),
     // Allow tests to simulate an empty plugin registry during onboarding.
     loadOnboardingPluginRegistrySnapshotForChannel: vi.fn(() => createEmptyPluginRegistry()),
     reloadOnboardingPluginRegistry: vi.fn(() => {}),
@@ -215,6 +232,16 @@ describe("setupChannels", () => {
   beforeEach(() => {
     setDefaultChannelPluginRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
+    manifestRegistryMocks.loadPluginManifestRegistry.mockReset();
+    manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    vi.mocked(ensureOnboardingPluginInstalled).mockClear();
+    vi.mocked(ensureOnboardingPluginInstalled).mockImplementation(async ({ cfg }) => ({
+      cfg,
+      installed: true,
+    }));
     vi.mocked(loadOnboardingPluginRegistrySnapshotForChannel).mockClear();
     vi.mocked(reloadOnboardingPluginRegistry).mockClear();
   });
@@ -250,7 +277,7 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
   });
 
-  it("continues Telegram onboarding even when plugin registry is empty (avoids 'plugin not available' block)", async () => {
+  it("continues Telegram setup when the plugin registry is empty", async () => {
     // Simulate missing registry entries (the scenario reported in #25545).
     setActivePluginRegistry(createEmptyPluginRegistry());
     // Avoid accidental env-token configuration changing the prompt path.
@@ -284,11 +311,7 @@ describe("setupChannels", () => {
       );
     });
     expect(sawHardStop).toBe(false);
-    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-      }),
-    );
+    expect(loadOnboardingPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(reloadOnboardingPluginRegistry).not.toHaveBeenCalled();
   });
 
@@ -395,6 +418,100 @@ describe("setupChannels", () => {
       prompter,
     );
 
+    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "msteams",
+        pluginId: "@openclaw/msteams-plugin",
+      }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("treats installed external plugin channels as installed without reinstall prompts", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "msteams",
+        pluginId: "@openclaw/msteams-plugin",
+        meta: {
+          id: "msteams",
+          label: "Microsoft Teams",
+          selectionLabel: "Microsoft Teams",
+          docsPath: "/channels/msteams",
+          blurb: "teams channel",
+        },
+        install: {
+          npmSpec: "@openclaw/msteams",
+        },
+      } satisfies ChannelPluginCatalogEntry,
+    ]);
+    manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "@openclaw/msteams-plugin",
+          channels: ["msteams"],
+        } as never,
+      ],
+      diagnostics: [],
+    });
+    vi.mocked(loadOnboardingPluginRegistrySnapshotForChannel).mockImplementation(
+      ({ channel }: { channel: string }) => {
+        const registry = createEmptyPluginRegistry();
+        if (channel === "msteams") {
+          registry.channelSetups.push({
+            pluginId: "@openclaw/msteams-plugin",
+            source: "test",
+            plugin: {
+              id: "msteams",
+              meta: {
+                id: "msteams",
+                label: "Microsoft Teams",
+                selectionLabel: "Microsoft Teams",
+                docsPath: "/channels/msteams",
+                blurb: "teams channel",
+              },
+              capabilities: { chatTypes: ["direct"] },
+              config: {
+                listAccountIds: () => [],
+                resolveAccount: () => ({ accountId: "default" }),
+              },
+              setupWizard: {
+                channel: "msteams",
+                status: {
+                  configuredLabel: "configured",
+                  unconfiguredLabel: "installed",
+                  resolveConfigured: () => false,
+                  resolveStatusLines: async () => [],
+                  resolveSelectionHint: async () => "installed",
+                },
+                credentials: [],
+              },
+              outbound: { deliveryMode: "direct" },
+            },
+          } as never);
+        }
+        return registry;
+      },
+    );
+
+    let channelSelectionCount = 0;
+    const select = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Select a channel") {
+        channelSelectionCount += 1;
+        return channelSelectionCount === 1 ? "msteams" : "__done__";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter);
+
+    expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
     expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "msteams",

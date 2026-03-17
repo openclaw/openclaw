@@ -199,6 +199,28 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(true);
   });
 
+  it("preserves provider auth env metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      providers: ["openai", "openai-codex"],
+      providerAuthEnvVars: {
+        openai: ["OPENAI_API_KEY"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
+      openai: ["OPENAI_API_KEY"],
+    });
+  });
+
   it("reports bundled plugins as the duplicate winner for auto-discovered globals", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
@@ -321,6 +343,23 @@ describe("loadPluginManifestRegistry", () => {
     const registry = loadRegistry([
       createPluginCandidate({
         idHint: "openai-provider",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.diagnostics.some((diag) => diag.message.includes("plugin id mismatch"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts plugin-style id hints without warning", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "brave", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "brave-plugin",
         rootDir: dir,
         origin: "bundled",
       }),

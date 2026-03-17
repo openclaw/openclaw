@@ -91,6 +91,8 @@ describe("registerPreActionHooks", () => {
     program.command("agents").action(() => {});
     program.command("configure").action(() => {});
     program.command("onboard").action(() => {});
+    const channels = program.command("channels");
+    channels.command("add").action(() => {});
     program
       .command("update")
       .command("status")
@@ -165,6 +167,31 @@ describe("registerPreActionHooks", () => {
       commandPath: ["message", "send"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+  });
+
+  it("keeps onboarding and channels add manifest-first", async () => {
+    await runPreAction({
+      parseArgv: ["onboard"],
+      processArgv: ["node", "openclaw", "onboard"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["onboard"],
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    await runPreAction({
+      parseArgv: ["channels", "add"],
+      processArgv: ["node", "openclaw", "channels", "add"],
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["channels", "add"],
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("skips help/version preaction and respects banner opt-out", async () => {

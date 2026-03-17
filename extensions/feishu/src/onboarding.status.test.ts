@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/feishu";
 import { describe, expect, it } from "vitest";
-import { buildChannelOnboardingAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import { buildChannelSetupFlowAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { feishuPlugin } from "./channel.js";
 
-const feishuConfigureAdapter = buildChannelOnboardingAdapterFromSetupWizard({
+const feishuConfigureAdapter = buildChannelSetupFlowAdapterFromSetupWizard({
   plugin: feishuPlugin,
   wizard: feishuPlugin.setupWizard!,
 });

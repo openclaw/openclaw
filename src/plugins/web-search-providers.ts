@@ -1,5 +1,8 @@
-import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+} from "./bundled-compat.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import type { WebSearchProviderPlugin } from "./types.js";
@@ -8,72 +11,12 @@ const log = createSubsystemLogger("plugins");
 
 const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
   "brave",
+  "firecrawl",
   "google",
   "moonshot",
   "perplexity",
   "xai",
 ] as const;
-
-function withBundledWebSearchAllowlistCompat(
-  config: PluginLoadOptions["config"],
-): PluginLoadOptions["config"] {
-  const allow = config?.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return config;
-  }
-
-  const allowSet = new Set(allow.map((entry) => entry.trim()).filter(Boolean));
-  let changed = false;
-  for (const pluginId of BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS) {
-    if (!allowSet.has(pluginId)) {
-      allowSet.add(pluginId);
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return config;
-  }
-
-  return {
-    ...config,
-    plugins: {
-      ...config?.plugins,
-      allow: [...allowSet],
-    },
-  };
-}
-
-function withBundledWebSearchEnablementCompat(
-  config: PluginLoadOptions["config"],
-): PluginLoadOptions["config"] {
-  const existingEntries = config?.plugins?.entries ?? {};
-  let changed = false;
-  const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
-
-  for (const pluginId of BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS) {
-    if (existingEntries[pluginId] !== undefined) {
-      continue;
-    }
-    nextEntries[pluginId] = { enabled: true };
-    changed = true;
-  }
-
-  if (!changed) {
-    return config;
-  }
-
-  return {
-    ...config,
-    plugins: {
-      ...config?.plugins,
-      entries: {
-        ...existingEntries,
-        ...nextEntries,
-      },
-    },
-  };
-}
 
 export function resolvePluginWebSearchProviders(params: {
   config?: PluginLoadOptions["config"];
@@ -82,9 +25,15 @@ export function resolvePluginWebSearchProviders(params: {
   bundledAllowlistCompat?: boolean;
 }): WebSearchProviderPlugin[] {
   const allowlistCompat = params.bundledAllowlistCompat
-    ? withBundledWebSearchAllowlistCompat(params.config)
+    ? withBundledPluginAllowlistCompat({
+        config: params.config,
+        pluginIds: BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS,
+      })
     : params.config;
-  const config = withBundledWebSearchEnablementCompat(allowlistCompat);
+  const config = withBundledPluginEnablementCompat({
+    config: allowlistCompat,
+    pluginIds: BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS,
+  });
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir: params.workspaceDir,

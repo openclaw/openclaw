@@ -25,7 +25,8 @@ import { FeishuConfigSchema } from "./config-schema.js";
 import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { feishuSetupAdapter, feishuSetupWizard } from "./setup-surface.js";
+import { feishuSetupAdapter } from "./setup-core.js";
+import { feishuSetupWizard } from "./setup-surface.js";
 import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
 import type { ResolvedFeishuAccount, FeishuConfig } from "./types.js";
 

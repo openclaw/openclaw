@@ -91,6 +91,7 @@ function createSandboxConfig(
 ): SandboxConfig {
   return {
     mode: "all",
+    backend: "docker",
     scope: "shared",
     workspaceAccess,
     workspaceRoot: "~/.openclaw/sandboxes",

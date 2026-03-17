@@ -250,6 +250,7 @@ function loadOnboardingPluginRegistry(params: {
     cache: false,
     logger: createPluginLoaderLogger(log),
     onlyPluginIds: params.onlyPluginIds,
+    includeSetupOnlyChannelPlugins: true,
     activate: params.activate,
   });
 }

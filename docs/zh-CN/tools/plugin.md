@@ -5,10 +5,10 @@ read_when:
 summary: OpenClaw 插件/扩展：发现、配置和安全
 title: 插件
 x-i18n:
-  generated_at: "2026-02-03T07:55:25Z"
+  generated_at: "2026-03-16T01:39:16Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: b36ca6b90ca03eaae25c00f9b12f2717fcd17ac540ba616ee03b398b234c2308
+  source_hash: 3c79de31bf50147bdfa6cfc5ed55185e91bb55a8db986df0596b24d5529c7798
   source_path: tools/plugin.md
   workflow: 15
 ---
@@ -50,8 +50,7 @@ openclaw plugins install @openclaw/voice-call
 - [Nostr](/channels/nostr) — `@openclaw/nostr`
 - [Zalo](/channels/zalo) — `@openclaw/zalo`
 - [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
-- Google Antigravity OAuth（提供商认证）— 作为 `google-antigravity-auth` 捆绑（默认禁用）
-- Gemini CLI OAuth（提供商认证）— 作为 `google-gemini-cli-auth` 捆绑（默认禁用）
+- Google 网页搜索 + Gemini CLI OAuth — 作为 `google` 捆绑（网页搜索会自动加载；提供商认证仍需手动启用）
 - Qwen OAuth（提供商认证）— 作为 `qwen-portal-auth` 捆绑（默认禁用）
 - Copilot Proxy（提供商认证）— 本地 VS Code Copilot Proxy 桥接；与内置 `github-copilot` 设备登录不同（捆绑，默认禁用）
 

@@ -292,6 +292,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         config: cfg,
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
+        includeSetupOnlyChannelPlugins: true,
       }),
     );
     expect(clearPluginDiscoveryCache.mock.invocationCallOrder[0]).toBeLessThan(
@@ -316,6 +317,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["telegram"],
+        includeSetupOnlyChannelPlugins: true,
       }),
     );
   });
@@ -377,6 +379,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["telegram"],
+        includeSetupOnlyChannelPlugins: true,
         activate: false,
       }),
     );
@@ -400,6 +403,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["@openclaw/msteams-plugin"],
+        includeSetupOnlyChannelPlugins: true,
         activate: false,
       }),
     );

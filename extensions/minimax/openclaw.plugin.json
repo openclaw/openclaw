@@ -1,6 +1,10 @@
 {
   "id": "minimax",
-  "providers": ["minimax"],
+  "providers": ["minimax", "minimax-portal"],
+  "providerAuthEnvVars": {
+    "minimax": ["MINIMAX_API_KEY"],
+    "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

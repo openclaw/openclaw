@@ -6,22 +6,22 @@ import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { getChannelSetupFlowAdapter } from "./channel-setup/registry.js";
+import type { ChannelSetupFlowAdapter } from "./channel-setup/types.js";
 import type { ChannelChoice } from "./onboard-types.js";
-import { getChannelOnboardingAdapter } from "./onboarding/registry.js";
-import type { ChannelOnboardingAdapter } from "./onboarding/types.js";
 
-type ChannelOnboardingAdapterPatch = Partial<
+type ChannelSetupFlowAdapterPatch = Partial<
   Pick<
-    ChannelOnboardingAdapter,
+    ChannelSetupFlowAdapter,
     "configure" | "configureInteractive" | "configureWhenConfigured" | "getStatus"
   >
 >;
 
-type PatchedOnboardingAdapterFields = {
-  configure?: ChannelOnboardingAdapter["configure"];
-  configureInteractive?: ChannelOnboardingAdapter["configureInteractive"];
-  configureWhenConfigured?: ChannelOnboardingAdapter["configureWhenConfigured"];
-  getStatus?: ChannelOnboardingAdapter["getStatus"];
+type PatchedSetupAdapterFields = {
+  configure?: ChannelSetupFlowAdapter["configure"];
+  configureInteractive?: ChannelSetupFlowAdapter["configureInteractive"];
+  configureWhenConfigured?: ChannelSetupFlowAdapter["configureWhenConfigured"];
+  getStatus?: ChannelSetupFlowAdapter["getStatus"];
 };
 
 export function setDefaultChannelPluginRegistryForTests(): void {
@@ -36,16 +36,16 @@ export function setDefaultChannelPluginRegistryForTests(): void {
   setActivePluginRegistry(createTestRegistry(channels));
 }
 
-export function patchChannelOnboardingAdapter(
+export function patchChannelSetupFlowAdapter(
   channel: ChannelChoice,
-  patch: ChannelOnboardingAdapterPatch,
+  patch: ChannelSetupFlowAdapterPatch,
 ): () => void {
-  const adapter = getChannelOnboardingAdapter(channel);
+  const adapter = getChannelSetupFlowAdapter(channel);
   if (!adapter) {
-    throw new Error(`missing onboarding adapter for ${channel}`);
+    throw new Error(`missing setup adapter for ${channel}`);
   }
 
-  const previous: PatchedOnboardingAdapterFields = {};
+  const previous: PatchedSetupAdapterFields = {};
 
   if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
     previous.getStatus = adapter.getStatus;
