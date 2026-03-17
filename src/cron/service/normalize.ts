@@ -81,7 +81,9 @@ export function inferLegacyName(job: {
 
 export function normalizePayloadToSystemText(payload: CronPayload) {
   if (payload.kind === "systemEvent") {
-    return payload.text.trim();
+    // Guard against null/undefined text that can slip through at runtime despite
+    // TypeScript typing (e.g. bad patch window, store migration gap, race condition).
+    return (payload.text ?? "").trim();
   }
-  return payload.message.trim();
+  return ((payload as unknown as { message?: string | null }).message ?? "").trim();
 }
