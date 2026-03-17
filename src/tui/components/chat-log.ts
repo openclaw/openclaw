@@ -6,16 +6,33 @@ import { BtwInlineMessage } from "./btw-inline-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
+function formatTimestamp(): string {
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2, "0");
+  const m = String(now.getMinutes()).padStart(2, "0");
+  return `[${h}:${m}]`;
+}
+
 export class ChatLog extends Container {
   private readonly maxComponents: number;
   private toolById = new Map<string, ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
+  private _showTimestamps = false;
 
   constructor(maxComponents = 180) {
     super();
     this.maxComponents = Math.max(20, Math.floor(maxComponents));
+  }
+
+  set showTimestamps(value: boolean) {
+    this._showTimestamps = value;
+  }
+
+  private prependTimestamp(text: string): string {
+    if (!this._showTimestamps) return text;
+    return `${theme.muted(formatTimestamp())} ${text}`;
   }
 
   private dropComponentReferences(component: Component) {
@@ -59,11 +76,14 @@ export class ChatLog extends Container {
 
   addSystem(text: string) {
     this.append(new Spacer(1));
-    this.append(new Text(theme.system(text), 1, 0));
+    this.append(new Text(theme.system(this.prependTimestamp(text)), 1, 0));
   }
 
   addUser(text: string) {
-    this.append(new UserMessageComponent(text));
+    const display = this._showTimestamps
+      ? `${theme.muted(formatTimestamp())}\n${text}`
+      : text;
+    this.append(new UserMessageComponent(display));
   }
 
   private resolveRunId(runId?: string) {
@@ -77,7 +97,9 @@ export class ChatLog extends Container {
       existing.setText(text);
       return existing;
     }
-    const component = new AssistantMessageComponent(text);
+    const component = new AssistantMessageComponent(
+      this._showTimestamps ? `${formatTimestamp()} ${text}` : text,
+    );
     this.streamingRuns.set(effectiveRunId, component);
     this.append(component);
     return component;

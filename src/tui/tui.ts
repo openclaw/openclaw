@@ -541,6 +541,10 @@ export async function runTui(opts: TuiOptions) {
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
+  chatLog.showTimestamps = Boolean(
+    (config as Record<string, unknown>).tui &&
+    ((config as Record<string, unknown>).tui as Record<string, unknown>)?.showTimestamps,
+  );
   const editor = new CustomEditor(tui, editorTheme);
   const root = new Container();
   root.addChild(header);
