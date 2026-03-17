@@ -292,6 +292,8 @@ importers:
 
   extensions/copilot-proxy: {}
 
+  extensions/deepseek: {}
+
   extensions/diagnostics-otel:
     dependencies:
       '@opentelemetry/api':
@@ -341,6 +343,8 @@ importers:
         version: 1.58.2
 
   extensions/discord: {}
+
+  extensions/elevenlabs: {}
 
   extensions/feishu:
     dependencies:
@@ -450,6 +454,8 @@ importers:
       openai:
         specifier: ^6.29.0
         version: 6.29.0(ws@8.19.0)(zod@4.3.6)
+
+  extensions/microsoft: {}
 
   extensions/minimax: {}
 
