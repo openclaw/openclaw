@@ -92,7 +92,7 @@ describe("tool mutation helpers", () => {
     expect(fp).toContain("path=/tmp/demo.txt");
   });
 
-  it("clears lastToolError when message retry with different path succeeds (#37430)", () => {
+  it("isSameToolMutationAction returns true for message retry with different attachment path (#37430)", () => {
     const failedRef = {
       toolName: "message",
       actionFingerprint: buildToolActionFingerprint("message", {
