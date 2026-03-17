@@ -88,6 +88,19 @@ const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: tru
 const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const resolveGatewayModeProbeSummary = vi.hoisted(() =>
+  vi.fn(async () => ({
+    localUrl: "ws://127.0.0.1:18789",
+    remoteUrl: "",
+    localProbe: { ok: true },
+    remoteProbe: null,
+    hints: {
+      local: "Gateway reachable (ws://127.0.0.1:18789)",
+      remote: "No remote URL configured yet",
+    },
+    credentials: {},
+  })),
+);
 
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
@@ -152,6 +165,7 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   openUrl: vi.fn(async () => true),
   printWizardHeader: vi.fn(),
   probeGatewayReachable,
+  resolveGatewayModeProbeSummary,
   waitForGatewayReachable: vi.fn(async () => {}),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
   resolveControlUiLinks: vi.fn(() => ({
@@ -398,10 +412,8 @@ describe("runSetupWizard", () => {
     }
   });
 
-  it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
-    const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "gateway-ref-password"; // pragma: allowlist secret
-    probeGatewayReachable.mockClear();
+  it("passes the configured local port into the shared gateway mode probe summary", async () => {
+    resolveGatewayModeProbeSummary.mockClear();
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -434,36 +446,79 @@ describe("runSetupWizard", () => {
     const prompter = buildWizardPrompter({ select });
     const runtime = createRuntime();
 
-    try {
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          mode: "local",
-          authChoice: "skip",
-          installDaemon: false,
-          skipProviders: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-        },
-        runtime,
-        prompter,
-      );
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
-      }
-    }
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
 
-    expect(probeGatewayReachable).toHaveBeenCalledWith(
+    expect(resolveGatewayModeProbeSummary).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        password: "gateway-ref-password", // pragma: allowlist secret
+        cfg: expect.objectContaining({
+          gateway: expect.objectContaining({
+            auth: expect.objectContaining({
+              mode: "password",
+            }),
+          }),
+        }),
+        localPort: 18789,
       }),
+    );
+  });
+
+  it("surfaces gateway probe secret resolution failures through the wizard note channel", async () => {
+    const note = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+    resolveGatewayModeProbeSummary.mockImplementationOnce(async (params) => {
+      await params.onSecretResolveError?.({
+        path: "gateway.auth.password",
+        error: new Error("missing env ref"),
+      });
+      return {
+        localUrl: "ws://127.0.0.1:18789",
+        remoteUrl: "",
+        localProbe: { ok: false },
+        remoteProbe: null,
+        hints: {
+          local: "No gateway detected (ws://127.0.0.1:18789)",
+          remote: "No remote URL configured yet",
+        },
+        credentials: {},
+      };
+    });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Could not resolve gateway.auth.password SecretRef for setup probe."),
+      "Gateway auth",
     );
   });
 

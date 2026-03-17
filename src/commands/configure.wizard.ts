@@ -40,6 +40,7 @@ import {
   guardCancel,
   printWizardHeader,
   probeGatewayReachable,
+  resolveGatewayModeProbeSummary,
   resolveControlUiLinks,
   summarizeExistingConfig,
 } from "./onboard-helpers.js";
@@ -338,40 +339,11 @@ export async function runConfigureWizard(
       }
     }
 
-    const localUrl = "ws://127.0.0.1:18789";
-    const baseLocalProbeToken = await resolveGatewaySecretInputForWizard({
+    const gatewayModeProbeSummary = await resolveGatewayModeProbeSummary({
       cfg: baseConfig,
-      value: baseConfig.gateway?.auth?.token,
-      path: "gateway.auth.token",
+      localPort: resolveGatewayPort(baseConfig),
+      resolveSecretInput: resolveGatewaySecretInputForWizard,
     });
-    const baseLocalProbePassword = await resolveGatewaySecretInputForWizard({
-      cfg: baseConfig,
-      value: baseConfig.gateway?.auth?.password,
-      path: "gateway.auth.password",
-    });
-    const localProbe = await probeGatewayReachable({
-      url: localUrl,
-      token:
-        process.env.OPENCLAW_GATEWAY_TOKEN ??
-        process.env.CLAWDBOT_GATEWAY_TOKEN ??
-        baseLocalProbeToken,
-      password:
-        process.env.OPENCLAW_GATEWAY_PASSWORD ??
-        process.env.CLAWDBOT_GATEWAY_PASSWORD ??
-        baseLocalProbePassword,
-    });
-    const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
-    const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
-      cfg: baseConfig,
-      value: baseConfig.gateway?.remote?.token,
-      path: "gateway.remote.token",
-    });
-    const remoteProbe = remoteUrl
-      ? await probeGatewayReachable({
-          url: remoteUrl,
-          token: baseRemoteProbeToken,
-        })
-      : null;
 
     const mode = guardCancel(
       await select({
@@ -380,18 +352,12 @@ export async function runConfigureWizard(
           {
             value: "local",
             label: "Local (this machine)",
-            hint: localProbe.ok
-              ? `Gateway reachable (${localUrl})`
-              : `No gateway detected (${localUrl})`,
+            hint: gatewayModeProbeSummary.hints.local,
           },
           {
             value: "remote",
             label: "Remote (info-only)",
-            hint: !remoteUrl
-              ? "No remote URL configured yet"
-              : remoteProbe?.ok
-                ? `Gateway reachable (${remoteUrl})`
-                : `Configured but unreachable (${remoteUrl})`,
+            hint: gatewayModeProbeSummary.hints.remote,
           },
         ],
       }),

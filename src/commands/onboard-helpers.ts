@@ -437,6 +437,138 @@ export async function waitForGatewayReachable(params: {
   return { ok: false, detail: lastDetail };
 }
 
+function normalizeConfiguredProbeSecret(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized || normalized === "undefined" || normalized === "null") {
+    return undefined;
+  }
+  return normalized;
+}
+
+async function resolveGatewayProbeSecret(params: {
+  cfg: OpenClawConfig;
+  value: unknown;
+  path: string;
+  resolveSecretInput?: (params: {
+    cfg: OpenClawConfig;
+    value: unknown;
+    path: string;
+  }) => Promise<string | undefined>;
+  onSecretResolveError?: (params: { path: string; error: unknown }) => Promise<void> | void;
+}): Promise<string | undefined> {
+  const fallback = normalizeConfiguredProbeSecret(params.value);
+  if (!params.resolveSecretInput) {
+    return fallback;
+  }
+
+  try {
+    return (
+      (await params.resolveSecretInput({
+        cfg: params.cfg,
+        value: params.value,
+        path: params.path,
+      })) ?? fallback
+    );
+  } catch (error) {
+    await params.onSecretResolveError?.({ path: params.path, error });
+    return fallback;
+  }
+}
+
+export async function resolveGatewayModeProbeSummary(params: {
+  cfg: OpenClawConfig;
+  localPort: number;
+  env?: NodeJS.ProcessEnv;
+  resolveSecretInput?: (params: {
+    cfg: OpenClawConfig;
+    value: unknown;
+    path: string;
+  }) => Promise<string | undefined>;
+  onSecretResolveError?: (params: { path: string; error: unknown }) => Promise<void> | void;
+}): Promise<{
+  localUrl: string;
+  remoteUrl: string;
+  localProbe: { ok: boolean; detail?: string };
+  remoteProbe: { ok: boolean; detail?: string } | null;
+  hints: {
+    local: string;
+    remote: string;
+  };
+  credentials: {
+    localToken?: string;
+    localPassword?: string;
+    remoteToken?: string;
+  };
+}> {
+  const env = params.env ?? process.env;
+  const localUrl = `ws://127.0.0.1:${params.localPort}`;
+  const localToken =
+    env.OPENCLAW_GATEWAY_TOKEN ??
+    env.CLAWDBOT_GATEWAY_TOKEN ??
+    (await resolveGatewayProbeSecret({
+      cfg: params.cfg,
+      value: params.cfg.gateway?.auth?.token,
+      path: "gateway.auth.token",
+      resolveSecretInput: params.resolveSecretInput,
+      onSecretResolveError: params.onSecretResolveError,
+    }));
+  const localPassword =
+    env.OPENCLAW_GATEWAY_PASSWORD ??
+    env.CLAWDBOT_GATEWAY_PASSWORD ??
+    (await resolveGatewayProbeSecret({
+      cfg: params.cfg,
+      value: params.cfg.gateway?.auth?.password,
+      path: "gateway.auth.password",
+      resolveSecretInput: params.resolveSecretInput,
+      onSecretResolveError: params.onSecretResolveError,
+    }));
+  const localProbe = await probeGatewayReachable({
+    url: localUrl,
+    token: localToken,
+    password: localPassword,
+  });
+
+  const remoteUrl = params.cfg.gateway?.remote?.url?.trim() ?? "";
+  const remoteToken = await resolveGatewayProbeSecret({
+    cfg: params.cfg,
+    value: params.cfg.gateway?.remote?.token,
+    path: "gateway.remote.token",
+    resolveSecretInput: params.resolveSecretInput,
+    onSecretResolveError: params.onSecretResolveError,
+  });
+  const remoteProbe = remoteUrl
+    ? await probeGatewayReachable({
+        url: remoteUrl,
+        token: remoteToken,
+      })
+    : null;
+
+  return {
+    localUrl,
+    remoteUrl,
+    localProbe,
+    remoteProbe,
+    hints: {
+      local: localProbe.ok
+        ? `Gateway reachable (${localUrl})`
+        : `No gateway detected (${localUrl})`,
+      remote: !remoteUrl
+        ? "No remote URL configured yet"
+        : remoteProbe?.ok
+          ? `Gateway reachable (${remoteUrl})`
+          : `Configured but unreachable (${remoteUrl})`,
+    },
+    credentials: {
+      localToken,
+      localPassword,
+      remoteToken,
+    },
+  };
+}
+
 function summarizeError(err: unknown): string {
   let raw = "unknown error";
   if (err instanceof Error) {

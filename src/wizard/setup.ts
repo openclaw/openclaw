@@ -12,7 +12,6 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
-import { normalizeSecretInputString } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -280,81 +279,26 @@ export async function runSetupWizard(
   }
 
   const localPort = resolveGatewayPort(baseConfig);
-  const localUrl = `ws://127.0.0.1:${localPort}`;
-  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
-  try {
-    const resolvedGatewayToken = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: baseConfig.gateway?.auth?.token,
-      path: "gateway.auth.token",
-      env: process.env,
-    });
-    if (resolvedGatewayToken) {
-      localGatewayToken = resolvedGatewayToken;
-    }
-  } catch (error) {
-    await prompter.note(
-      [
-        "Could not resolve gateway.auth.token SecretRef for setup probe.",
-        error instanceof Error ? error.message : String(error),
-      ].join("\n"),
-      "Gateway auth",
-    );
-  }
-  let localGatewayPassword =
-    process.env.OPENCLAW_GATEWAY_PASSWORD ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
-  try {
-    const resolvedGatewayPassword = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: baseConfig.gateway?.auth?.password,
-      path: "gateway.auth.password",
-      env: process.env,
-    });
-    if (resolvedGatewayPassword) {
-      localGatewayPassword = resolvedGatewayPassword;
-    }
-  } catch (error) {
-    await prompter.note(
-      [
-        "Could not resolve gateway.auth.password SecretRef for setup probe.",
-        error instanceof Error ? error.message : String(error),
-      ].join("\n"),
-      "Gateway auth",
-    );
-  }
-
-  const localProbe = await onboardHelpers.probeGatewayReachable({
-    url: localUrl,
-    token: localGatewayToken,
-    password: localGatewayPassword,
+  const gatewayModeProbeSummary = await onboardHelpers.resolveGatewayModeProbeSummary({
+    cfg: baseConfig,
+    localPort,
+    resolveSecretInput: async (params) =>
+      resolveSetupSecretInputString({
+        config: params.cfg,
+        value: params.value,
+        path: params.path,
+        env: process.env,
+      }),
+    onSecretResolveError: async (params) => {
+      await prompter.note(
+        [
+          `Could not resolve ${params.path} SecretRef for setup probe.`,
+          params.error instanceof Error ? params.error.message : String(params.error),
+        ].join("\n"),
+        "Gateway auth",
+      );
+    },
   });
-  const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
-  let remoteGatewayToken = normalizeSecretInputString(baseConfig.gateway?.remote?.token);
-  try {
-    const resolvedRemoteGatewayToken = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: baseConfig.gateway?.remote?.token,
-      path: "gateway.remote.token",
-      env: process.env,
-    });
-    if (resolvedRemoteGatewayToken) {
-      remoteGatewayToken = resolvedRemoteGatewayToken;
-    }
-  } catch (error) {
-    await prompter.note(
-      [
-        "Could not resolve gateway.remote.token SecretRef for setup probe.",
-        error instanceof Error ? error.message : String(error),
-      ].join("\n"),
-      "Gateway auth",
-    );
-  }
-  const remoteProbe = remoteUrl
-    ? await onboardHelpers.probeGatewayReachable({
-        url: remoteUrl,
-        token: remoteGatewayToken,
-      })
-    : null;
 
   const mode =
     opts.mode ??
@@ -366,18 +310,12 @@ export async function runSetupWizard(
             {
               value: "local",
               label: "Local gateway (this machine)",
-              hint: localProbe.ok
-                ? `Gateway reachable (${localUrl})`
-                : `No gateway detected (${localUrl})`,
+              hint: gatewayModeProbeSummary.hints.local,
             },
             {
               value: "remote",
               label: "Remote gateway (info-only)",
-              hint: !remoteUrl
-                ? "No remote URL configured yet"
-                : remoteProbe?.ok
-                  ? `Gateway reachable (${remoteUrl})`
-                  : `Configured but unreachable (${remoteUrl})`,
+              hint: gatewayModeProbeSummary.hints.remote,
             },
           ],
         })) as OnboardMode));

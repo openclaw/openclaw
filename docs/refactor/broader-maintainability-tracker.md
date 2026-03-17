@@ -98,6 +98,7 @@ Do not edit these files under this plan:
 
 - [x] Extract first shared gateway reachability and health-check workflow used by wizard and non-interactive local onboarding
 - [x] Extract shared workspace resolution and workspace-config helpers used by wizard and non-interactive local onboarding
+- [x] Extract shared gateway mode probe summary used by configure and setup flows
 - [ ] Define shared `OnboardingPlan` decision graph
 - [ ] Keep separate interactive and non-interactive executors
 - [ ] Add parity coverage for equivalent inputs

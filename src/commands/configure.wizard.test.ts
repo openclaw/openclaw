@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   note: vi.fn(),
   printWizardHeader: vi.fn(),
   probeGatewayReachable: vi.fn(),
+  resolveGatewayModeProbeSummary: vi.fn(),
   waitForGatewayReachable: vi.fn(),
   resolveControlUiLinks: vi.fn(),
   summarizeExistingConfig: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock("./onboard-helpers.js", () => ({
   guardCancel: <T>(value: T) => value,
   printWizardHeader: mocks.printWizardHeader,
   probeGatewayReachable: mocks.probeGatewayReachable,
+  resolveGatewayModeProbeSummary: mocks.resolveGatewayModeProbeSummary,
   resolveControlUiLinks: mocks.resolveControlUiLinks,
   summarizeExistingConfig: mocks.summarizeExistingConfig,
   waitForGatewayReachable: mocks.waitForGatewayReachable,
@@ -108,6 +110,17 @@ describe("runConfigureWizard", () => {
       issues: [],
     });
     mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.resolveGatewayModeProbeSummary.mockResolvedValue({
+      localUrl: "ws://127.0.0.1:18789",
+      remoteUrl: "",
+      localProbe: { ok: false },
+      remoteProbe: null,
+      hints: {
+        local: "No gateway detected (ws://127.0.0.1:18789)",
+        remote: "No remote URL configured yet",
+      },
+      credentials: {},
+    });
     mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
     mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
     mocks.summarizeExistingConfig.mockReturnValue("");
@@ -149,6 +162,17 @@ describe("runConfigureWizard", () => {
       config: {},
       issues: [],
     });
+    mocks.resolveGatewayModeProbeSummary.mockResolvedValue({
+      localUrl: "ws://127.0.0.1:18789",
+      remoteUrl: "",
+      localProbe: { ok: false },
+      remoteProbe: null,
+      hints: {
+        local: "No gateway detected (ws://127.0.0.1:18789)",
+        remote: "No remote URL configured yet",
+      },
+      credentials: {},
+    });
     mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
     mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
     mocks.summarizeExistingConfig.mockReturnValue("");
@@ -174,6 +198,17 @@ describe("runConfigureWizard", () => {
       issues: [],
     });
     mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.resolveGatewayModeProbeSummary.mockResolvedValue({
+      localUrl: "ws://127.0.0.1:18789",
+      remoteUrl: "",
+      localProbe: { ok: false },
+      remoteProbe: null,
+      hints: {
+        local: "No gateway detected (ws://127.0.0.1:18789)",
+        remote: "No remote URL configured yet",
+      },
+      credentials: {},
+    });
     mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
     mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
     mocks.summarizeExistingConfig.mockReturnValue("");
@@ -207,6 +242,50 @@ describe("runConfigureWizard", () => {
             workspace: "/tmp/next-workspace",
           }),
         }),
+      }),
+    );
+  });
+
+  it("builds the gateway mode probe summary from the configured local port", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: false,
+      valid: true,
+      config: {},
+      issues: [],
+    });
+    mocks.resolveGatewayPort.mockReturnValue(24567);
+    mocks.resolveGatewayModeProbeSummary.mockResolvedValue({
+      localUrl: "ws://127.0.0.1:24567",
+      remoteUrl: "",
+      localProbe: { ok: false },
+      remoteProbe: null,
+      hints: {
+        local: "No gateway detected (ws://127.0.0.1:24567)",
+        remote: "No remote URL configured yet",
+      },
+      credentials: {},
+    });
+    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:24567" });
+    mocks.summarizeExistingConfig.mockReturnValue("");
+    mocks.createClackPrompter.mockReturnValue({});
+    mocks.clackSelect.mockResolvedValue("local");
+    mocks.clackIntro.mockResolvedValue(undefined);
+    mocks.clackOutro.mockResolvedValue(undefined);
+
+    await runConfigureWizard(
+      { command: "configure", sections: [] },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(mocks.resolveGatewayModeProbeSummary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        localPort: 24567,
       }),
     );
   });
