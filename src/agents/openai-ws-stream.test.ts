@@ -572,7 +572,7 @@ describe("convertMessagesToInputItems", () => {
     // Paired tool result should also be skipped when tool call was skipped due to empty name
     const msg1 = assistantMsg([], [{ id: "call123", name: "", args: { query: "test" } }]);
     const msg2 = {
-      role: "tool_result" as const,
+      role: "toolResult" as const,
       toolCallId: "call123",
       content: [{ type: "output_text", output: "result" }],
     };
