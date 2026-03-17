@@ -12,7 +12,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/feishu";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/feishu";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveFeishuAccount,
   resolveFeishuCredentials,
