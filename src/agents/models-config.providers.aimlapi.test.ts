@@ -10,6 +10,7 @@ describe("AIMLAPI provider", () => {
 
   beforeEach(async () => {
     previousAimlapiKey = process.env.AIMLAPI_API_KEY;
+    delete process.env.AIMLAPI_API_KEY;
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-aimlapi-test-"));
   });
 

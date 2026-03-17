@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   formatAimlapiToolSchemaError,
@@ -75,14 +75,14 @@ describe("normalizeAimlapiAssistantNullContent", () => {
       messages: [
         { role: "user", content: "hi" },
         { role: "assistant", content: null, toolCalls: [{ id: "x" }] },
-      ] as unknown,
+      ] as AgentMessage[],
     });
     expect(normalized.replacedCount).toBe(1);
     expect((normalized.messages[1] as { content?: unknown }).content).toBe("");
   });
 
   it("does not modify non-aimlapi providers", () => {
-    const original = [{ role: "assistant", content: null }] as unknown;
+    const original = [{ role: "assistant", content: null }] as unknown as AgentMessage[];
     const normalized = normalizeAimlapiAssistantNullContent({
       provider: "openai",
       messages: original,

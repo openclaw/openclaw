@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveManifestProviderAuthChoice } from "./provider-auth-choices.js";
 
 const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<string, string>> = {
+  "aimlapi-api-key": "aimlapi",
   chutes: "chutes",
   "litellm-api-key": "litellm",
   "custom-api-key": "custom",

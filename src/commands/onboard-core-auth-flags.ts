@@ -1,6 +1,6 @@
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
-type OnboardCoreAuthOptionKey = keyof Pick<OnboardOptions, "litellmApiKey">;
+type OnboardCoreAuthOptionKey = keyof Pick<OnboardOptions, "aimlapiApiKey" | "litellmApiKey">;
 
 export type OnboardCoreAuthFlag = {
   optionKey: OnboardCoreAuthOptionKey;
@@ -11,6 +11,13 @@ export type OnboardCoreAuthFlag = {
 };
 
 export const CORE_ONBOARD_AUTH_FLAGS: ReadonlyArray<OnboardCoreAuthFlag> = [
+  {
+    optionKey: "aimlapiApiKey",
+    authChoice: "aimlapi-api-key",
+    cliFlag: "--aimlapi-api-key",
+    cliOption: "--aimlapi-api-key <key>",
+    description: "AI/ML API key",
+  },
   {
     optionKey: "litellmApiKey",
     authChoice: "litellm-api-key",

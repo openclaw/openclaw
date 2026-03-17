@@ -42,11 +42,10 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { ModelApi } from "../config/types.models.js";
-import { AIMLAPI_DEFAULT_MODEL_REF } from "./onboard-auth.credentials.js";
 import {
   applyAimlapiConfig,
   applyAimlapiProviderConfig,
-} from "./onboard-auth.config-core.js";
+} from "./auth-choice.apply.api-key-providers.js";
 import {
   MISTRAL_DEFAULT_MODEL_REF,
   ZAI_CODING_CN_BASE_URL,
@@ -54,6 +53,7 @@ import {
 } from "../plugin-sdk/provider-models.js";
 import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import {
+  AIMLAPI_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
   writeOAuthCredentials,
@@ -799,7 +799,9 @@ describe("applyAimlapiProviderConfig", () => {
 describe("applyAimlapiConfig", () => {
   it("sets correct primary model", () => {
     const cfg = applyAimlapiConfig({});
-    expect(cfg.agents?.defaults?.model?.primary).toBe(AIMLAPI_DEFAULT_MODEL_REF);
+    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
+      AIMLAPI_DEFAULT_MODEL_REF,
+    );
   });
 
   it("preserves existing model fallbacks", () => {
@@ -810,6 +812,8 @@ describe("applyAimlapiConfig", () => {
         },
       },
     });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+    expect(resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)).toEqual([
+      "anthropic/claude-opus-4-5",
+    ]);
   });
 });

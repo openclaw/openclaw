@@ -21,6 +21,14 @@ export type AuthChoiceGroup = {
 
 export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
+    value: "aimlapi-api-key",
+    label: "AI/ML API key",
+    hint: "Supports 300+ models via a single API key",
+    groupId: "aimlapi",
+    groupLabel: "AI/ML API",
+    groupHint: "Supports 300+ models via a single API key",
+  },
+  {
     value: "chutes",
     label: "Chutes (OAuth)",
     groupId: "chutes",

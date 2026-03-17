@@ -4,7 +4,10 @@ import {
   normalizeSecretInputModeInput,
   normalizeTokenProviderInput,
 } from "./auth-choice.apply-helpers.js";
-import { applyLiteLlmApiKeyProvider } from "./auth-choice.apply.api-key-providers.js";
+import {
+  applyAimlapiApiKeyProvider,
+  applyLiteLlmApiKeyProvider,
+} from "./auth-choice.apply.api-key-providers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import type { AuthChoice } from "./onboard-types.js";
 
@@ -60,6 +63,21 @@ export async function applyAuthChoiceApiProviders(
   });
   const normalizedTokenProvider = normalizeTokenProviderInput(params.opts?.tokenProvider);
   const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
+
+  const aimlapiResult = await applyAimlapiApiKeyProvider({
+    params,
+    authChoice,
+    config: nextConfig,
+    setConfig: (config) => (nextConfig = config),
+    getConfig: () => nextConfig,
+    normalizedTokenProvider,
+    requestedSecretInputMode,
+    applyProviderDefaultModel,
+    getAgentModelOverride: () => agentModelOverride,
+  });
+  if (aimlapiResult) {
+    return aimlapiResult;
+  }
 
   const litellmResult = await applyLiteLlmApiKeyProvider({
     params,

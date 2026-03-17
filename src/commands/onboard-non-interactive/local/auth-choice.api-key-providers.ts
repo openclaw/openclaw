@@ -3,7 +3,7 @@ import type { SecretInput } from "../../../config/types.secrets.js";
 import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.js";
 import { setAimlapiApiKey, setLitellmApiKey } from "../../../plugins/provider-auth-storage.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { applyAimlapiConfig } from "../../onboard-auth.config-core.js";
+import { applyAimlapiConfig } from "../../auth-choice.apply.api-key-providers.js";
 import { applyLitellmConfig } from "../../onboard-auth.config-litellm.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
