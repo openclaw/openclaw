@@ -3410,124 +3410,146 @@ description: test skill
     }
   });
 
-  it("flags open groupPolicy when tools.elevated is enabled", async () => {
-    const cfg: OpenClawConfig = {
-      tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
-      channels: { whatsapp: { groupPolicy: "open" } },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "security.exposure.open_groups_with_elevated",
-          severity: "critical",
-        }),
-      ]),
-    );
-  });
-
-  it("flags open groupPolicy when runtime/filesystem tools are exposed without guards", async () => {
-    const cfg: OpenClawConfig = {
-      channels: { whatsapp: { groupPolicy: "open" } },
-      tools: { elevated: { enabled: false } },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "security.exposure.open_groups_with_runtime_or_fs",
-          severity: "critical",
-        }),
-      ]),
-    );
-  });
-
-  it("does not flag runtime/filesystem exposure for open groups when sandbox mode is all", async () => {
-    const cfg: OpenClawConfig = {
-      channels: { whatsapp: { groupPolicy: "open" } },
-      tools: {
-        elevated: { enabled: false },
-        profile: "coding",
-      },
-      agents: {
-        defaults: {
-          sandbox: { mode: "all" },
+  it("evaluates open-group exposure findings", async () => {
+    const cases = [
+      {
+        name: "flags open groupPolicy when tools.elevated is enabled",
+        cfg: {
+          tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
+          channels: { whatsapp: { groupPolicy: "open" } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(res.findings).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                checkId: "security.exposure.open_groups_with_elevated",
+                severity: "critical",
+              }),
+            ]),
+          );
         },
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(
-      res.findings.some((f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs"),
-    ).toBe(false);
-  });
-
-  it("does not flag runtime/filesystem exposure for open groups when runtime is denied and fs is workspace-only", async () => {
-    const cfg: OpenClawConfig = {
-      channels: { whatsapp: { groupPolicy: "open" } },
-      tools: {
-        elevated: { enabled: false },
-        profile: "coding",
-        deny: ["group:runtime"],
-        fs: { workspaceOnly: true },
+      {
+        name: "flags open groupPolicy when runtime/filesystem tools are exposed without guards",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(res.findings).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                checkId: "security.exposure.open_groups_with_runtime_or_fs",
+                severity: "critical",
+              }),
+            ]),
+          );
+        },
       },
-    };
+      {
+        name: "does not flag runtime/filesystem exposure for open groups when sandbox mode is all",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+          agents: {
+            defaults: {
+              sandbox: { mode: "all" },
+            },
+          },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(
+            res.findings.some(
+              (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "does not flag runtime/filesystem exposure for open groups when runtime is denied and fs is workspace-only",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+            deny: ["group:runtime"],
+            fs: { workspaceOnly: true },
+          },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expect(
+            res.findings.some(
+              (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+            ),
+          ).toBe(false);
+        },
+      },
+    ] as const;
 
-    const res = await audit(cfg);
-
-    expect(
-      res.findings.some((f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs"),
-    ).toBe(false);
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        testCase.assert(res);
+      }),
+    );
   });
 
-  it("warns when config heuristics suggest a likely multi-user setup", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        discord: {
-          groupPolicy: "allowlist",
-          guilds: {
-            "1234567890": {
-              channels: {
-                "7777777777": { allow: true },
+  it("evaluates multi-user trust-model heuristics", async () => {
+    const cases = [
+      {
+        name: "warns when config heuristics suggest a likely multi-user setup",
+        cfg: {
+          channels: {
+            discord: {
+              groupPolicy: "allowlist",
+              guilds: {
+                "1234567890": {
+                  channels: {
+                    "7777777777": { allow: true },
+                  },
+                },
               },
             },
           },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          const finding = res.findings.find(
+            (f) => f.checkId === "security.trust_model.multi_user_heuristic",
+          );
+          expect(finding?.severity).toBe("warn");
+          expect(finding?.detail).toContain(
+            'channels.discord.groupPolicy="allowlist" with configured group targets',
+          );
+          expect(finding?.detail).toContain("personal-assistant");
+          expect(finding?.remediation).toContain('agents.defaults.sandbox.mode="all"');
         },
       },
-      tools: { elevated: { enabled: false } },
-    };
-
-    const res = await audit(cfg);
-    const finding = res.findings.find(
-      (f) => f.checkId === "security.trust_model.multi_user_heuristic",
-    );
-
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain(
-      'channels.discord.groupPolicy="allowlist" with configured group targets',
-    );
-    expect(finding?.detail).toContain("personal-assistant");
-    expect(finding?.remediation).toContain('agents.defaults.sandbox.mode="all"');
-  });
-
-  it("does not warn for multi-user heuristic when no shared-user signals are configured", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        discord: {
-          groupPolicy: "allowlist",
+      {
+        name: "does not warn for multi-user heuristic when no shared-user signals are configured",
+        cfg: {
+          channels: {
+            discord: {
+              groupPolicy: "allowlist",
+            },
+          },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          expectNoFinding(res, "security.trust_model.multi_user_heuristic");
         },
       },
-      tools: { elevated: { enabled: false } },
-    };
+    ] as const;
 
-    const res = await audit(cfg);
-
-    expectNoFinding(res, "security.trust_model.multi_user_heuristic");
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        testCase.assert(res);
+      }),
+    );
   });
 
   describe("maybeProbeGateway auth selection", () => {
