@@ -155,6 +155,7 @@ describe("extractGeminiCliCredentials", () => {
   }
 
   beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
     originalPath = process.env.PATH;
   });

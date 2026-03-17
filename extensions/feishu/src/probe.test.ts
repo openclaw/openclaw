@@ -6,7 +6,9 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-import { FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu, clearProbeCache } from "./probe.js";
+let FEISHU_PROBE_REQUEST_TIMEOUT_MS: typeof import("./probe.js").FEISHU_PROBE_REQUEST_TIMEOUT_MS;
+let probeFeishu: typeof import("./probe.js").probeFeishu;
+let clearProbeCache: typeof import("./probe.js").clearProbeCache;
 
 const DEFAULT_CREDS = { appId: "cli_123", appSecret: "secret" } as const; // pragma: allowlist secret
 const DEFAULT_SUCCESS_RESPONSE = {
@@ -93,7 +95,10 @@ async function readSequentialDefaultProbePair() {
 }
 
 describe("probeFeishu", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu, clearProbeCache } =
+      await import("./probe.js"));
     clearProbeCache();
     vi.restoreAllMocks();
   });
