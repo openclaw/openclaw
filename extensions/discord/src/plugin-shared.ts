@@ -1,9 +1,9 @@
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
-  formatAllowFromLowercase,
-} from "../../../src/plugin-sdk-internal/channel-config.js";
-import { type OpenClawConfig } from "../../../src/plugin-sdk-internal/discord.js";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/discord";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,

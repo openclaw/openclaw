@@ -5,7 +5,7 @@ import {
   resolveSignalAccount,
   resolveSignalReactionLevel,
   sendReactionSignal,
-} from "../../../plugin-sdk-internal/signal.js";
+} from "../../../plugin-sdk/signal.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { resolveReactionMessageId } from "./reaction-message-id.js";
 

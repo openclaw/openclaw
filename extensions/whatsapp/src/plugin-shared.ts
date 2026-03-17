@@ -1,4 +1,4 @@
-import { type ChannelPlugin } from "../../../src/plugin-sdk-internal/whatsapp.js";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/whatsapp";
 import { type ResolvedWhatsAppAccount } from "./accounts.js";
 
 async function loadWhatsAppChannelRuntime() {
