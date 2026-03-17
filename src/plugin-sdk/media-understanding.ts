@@ -5,12 +5,15 @@ export type {
   AudioTranscriptionResult,
   ImageDescriptionRequest,
   ImageDescriptionResult,
+  ImagesDescriptionInput,
+  ImagesDescriptionRequest,
+  ImagesDescriptionResult,
   MediaUnderstandingProvider,
   VideoDescriptionRequest,
   VideoDescriptionResult,
 } from "../media-understanding/types.js";
 
-export { describeImageWithModel } from "../media-understanding/providers/image.js";
+export { describeImageWithModel, describeImagesWithModel } from "../media-understanding/providers/image.js";
 export { transcribeOpenAiCompatibleAudio } from "../media-understanding/providers/openai-compatible-audio.js";
 export {
   assertOkOrThrowHttpError,

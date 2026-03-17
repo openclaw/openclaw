@@ -43,6 +43,16 @@ function findMediaUnderstandingProviderIdsForPlugin(pluginId: string) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function findMediaUnderstandingProviderForPlugin(pluginId: string) {
+  const entry = mediaUnderstandingProviderContractRegistry.find(
+    (candidate) => candidate.pluginId === pluginId,
+  );
+  if (!entry) {
+    throw new Error(`media-understanding provider contract missing for ${pluginId}`);
+  }
+  return entry.provider;
+}
+
 function findRegistrationForPlugin(pluginId: string) {
   const entry = pluginRegistrationContractRegistry.find(
     (candidate) => candidate.pluginId === pluginId,
@@ -140,5 +150,26 @@ describe("plugin contract registry", () => {
     expect(findSpeechProviderForPlugin("openai").listVoices).toEqual(expect.any(Function));
     expect(findSpeechProviderForPlugin("elevenlabs").listVoices).toEqual(expect.any(Function));
     expect(findSpeechProviderForPlugin("microsoft").listVoices).toEqual(expect.any(Function));
+  });
+
+  it("keeps bundled multi-image support explicit", () => {
+    expect(findMediaUnderstandingProviderForPlugin("anthropic").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("google").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("minimax").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("moonshot").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("openai").describeImages).toEqual(
+      expect.any(Function),
+    );
+    expect(findMediaUnderstandingProviderForPlugin("zai").describeImages).toEqual(
+      expect.any(Function),
+    );
   });
 });

@@ -25,6 +25,7 @@ import { DEFAULT_CONTEXT_TOKENS, normalizeModelCompat } from "openclaw/plugin-sd
 import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
+import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "zai";
@@ -333,6 +334,7 @@ const zaiPlugin = {
       fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
       isCacheTtlEligible: () => true,
     });
+    api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },
 };
 
