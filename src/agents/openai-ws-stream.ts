@@ -292,6 +292,7 @@ export function convertMessagesToInputItems(
   modelOverride?: ReplayModelInfo,
 ): InputItem[] {
   const items: InputItem[] = [];
+  const skippedCallIds = new Set<string>();
 
   for (const msg of messages) {
     const m = msg as AnyMessage & {
@@ -417,7 +418,6 @@ export function convertMessagesToInputItems(
       continue;
     }
     const [callId] = toolCallId.split("|", 2);
-    const skippedCallIds = new Set<string>();
     const parts = Array.isArray(m.content) ? contentToOpenAIParts(m.content, modelOverride) : [];
     const textOutput = contentToText(m.content);
     const imageParts = parts.filter((part) => part.type === "input_image");
