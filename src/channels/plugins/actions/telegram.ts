@@ -1,1 +1,2 @@
-export * from "../../../../extensions/telegram/src/channel-actions.js";
+// Public entrypoint for the Telegram channel action adapter.
+export * from "../../../plugin-sdk/telegram.js";

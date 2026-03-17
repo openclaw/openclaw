@@ -4,10 +4,12 @@ import {
   parseAgentSessionKey,
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
+  renderChatMobileToggle,
   renderChatSessionSelect,
   renderTab,
   renderSidebarConnectionStatus,
@@ -180,7 +182,7 @@ type DismissedUpdateBanner = {
 
 function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
   try {
-    const raw = localStorage.getItem(UPDATE_BANNER_DISMISS_KEY);
+    const raw = getSafeLocalStorage()?.getItem(UPDATE_BANNER_DISMISS_KEY);
     if (!raw) {
       return null;
     }
@@ -224,7 +226,7 @@ function dismissUpdateBanner(updateAvailable: unknown) {
     dismissedAtMs: Date.now(),
   };
   try {
-    localStorage.setItem(UPDATE_BANNER_DISMISS_KEY, JSON.stringify(payload));
+    getSafeLocalStorage()?.setItem(UPDATE_BANNER_DISMISS_KEY, JSON.stringify(payload));
   } catch {
     // ignore
   }
@@ -307,6 +309,7 @@ export function renderApp(state: AppViewState) {
   const navDrawerOpen = Boolean(state.navDrawerOpen && !chatFocus && !state.onboarding);
   const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
@@ -438,7 +441,10 @@ export function renderApp(state: AppViewState) {
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
-            <div class="topbar-status">${renderTopbarThemeModeToggle(state)}</div>
+            <div class="topbar-status">
+              ${isChat ? renderChatMobileToggle(state) : nothing}
+              ${renderTopbarThemeModeToggle(state)}
+            </div>
           </div>
         </div>
       </header>
@@ -1346,6 +1352,7 @@ export function renderApp(state: AppViewState) {
                 },
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
+                showToolCalls,
                 loading: state.chatLoading,
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,

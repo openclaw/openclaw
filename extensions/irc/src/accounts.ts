@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
 import {
   createAccountListHelpers,
   normalizeResolvedSecretInputString,

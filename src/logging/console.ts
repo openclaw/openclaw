@@ -145,6 +145,12 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already open",
 ] as const;
 
+const SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS = [
+  "DiscordMessageListener",
+  "DiscordReactionListener",
+  "DiscordReactionRemoveListener",
+] as const;
+
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) {
     return false;
@@ -154,7 +160,7 @@ function shouldSuppressConsoleMessage(message: string): boolean {
   }
   if (
     message.startsWith("[EventQueue] Slow listener detected") &&
-    message.includes("DiscordMessageListener")
+    SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS.some((listener) => message.includes(listener))
   ) {
     return true;
   }
