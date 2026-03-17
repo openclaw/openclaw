@@ -595,14 +595,12 @@ describe("OpenAIWebSocketManager", () => {
 
       manager.warmUp({
         model: "gpt-5.2",
-        tools: [{ type: "function", function: { name: "exec", description: "Run a command" } }],
+        tools: [{ type: "function", name: "exec", description: "Run a command" }],
       });
 
       const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
       expect(sent["tools"]).toHaveLength(1);
-      expect((sent["tools"] as Array<{ function?: { name?: string } }>)[0]?.function?.name).toBe(
-        "exec",
-      );
+      expect((sent["tools"] as Array<{ name?: string }>)[0]?.name).toBe("exec");
     });
   });
 

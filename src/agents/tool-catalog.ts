@@ -86,7 +86,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_search",
     description: "Search the web",
     sectionId: "web",
-    profiles: [],
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -94,7 +94,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_fetch",
     description: "Fetch web content",
     sectionId: "web",
-    profiles: [],
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -141,6 +141,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "sessions_spawn",
     label: "sessions_spawn",
     description: "Spawn sub-agent",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "sessions_yield",
+    label: "sessions_yield",
+    description: "End turn to receive sub-agent results",
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

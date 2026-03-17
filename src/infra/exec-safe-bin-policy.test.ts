@@ -10,8 +10,8 @@ import {
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 
-const SAFE_BIN_DOC_DENIED_FLAGS_START = "<!-- SAFE_BIN_DENIED_FLAGS:START -->";
-const SAFE_BIN_DOC_DENIED_FLAGS_END = "<!-- SAFE_BIN_DENIED_FLAGS:END -->";
+const SAFE_BIN_DOC_DENIED_FLAGS_START = '[//]: # "SAFE_BIN_DENIED_FLAGS:START"';
+const SAFE_BIN_DOC_DENIED_FLAGS_END = '[//]: # "SAFE_BIN_DENIED_FLAGS:END"';
 
 function buildDeniedFlagArgvVariants(flag: string): string[][] {
   const value = "blocked";
@@ -53,6 +53,12 @@ describe("exec safe bin policy sort", () => {
     expect(validateSafeBinArgv(["--ke=1,1"], sortProfile)).toBe(true);
   });
 
+  it("rejects missing or path-like values for allowed flags", () => {
+    expect(validateSafeBinArgv(["--key"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--key", "./fields.txt"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["-S", "C:\\temp\\buffer"], sortProfile)).toBe(false);
+  });
+
   it("blocks sort --compress-program in safe-bin mode", () => {
     expect(validateSafeBinArgv(["--compress-program=sh"], sortProfile)).toBe(false);
     expect(validateSafeBinArgv(["--compress-program", "sh"], sortProfile)).toBe(false);
@@ -75,6 +81,19 @@ describe("exec safe bin policy wc", () => {
   it("blocks wc --files0-from abbreviations in safe-bin mode", () => {
     expect(validateSafeBinArgv(["--files0-fro=list.txt"], wcProfile)).toBe(false);
     expect(validateSafeBinArgv(["--files0-fro", "list.txt"], wcProfile)).toBe(false);
+  });
+});
+
+describe("exec safe bin policy token hygiene", () => {
+  it("rejects path-like and glob positional tokens after the terminator", () => {
+    const grepProfile = SAFE_BIN_PROFILES.grep;
+    expect(validateSafeBinArgv(["-e", "needle", "--", "../secret.txt"], grepProfile)).toBe(false);
+    expect(validateSafeBinArgv(["-e", "needle", "--", "*.txt"], grepProfile)).toBe(false);
+  });
+
+  it("keeps stdin marker after the terminator non-positional", () => {
+    const grepProfile = SAFE_BIN_PROFILES.grep;
+    expect(validateSafeBinArgv(["-e", "needle", "--", "-"], grepProfile)).toBe(true);
   });
 });
 

@@ -1,8 +1,13 @@
+import { inspectDiscordAccount } from "../../extensions/discord/src/account-inspect.js";
+import { resolveSignalAccount } from "../../extensions/signal/src/accounts.js";
+import { inspectSlackAccount } from "../../extensions/slack/src/account-inspect.js";
+import { resolveSlackReplyToMode } from "../../extensions/slack/src/accounts.js";
+import { buildSlackThreadingToolContext } from "../../extensions/slack/src/threading-tool-context.js";
+import { inspectTelegramAccount } from "../../extensions/telegram/src/account-inspect.js";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
 } from "../config/group-policy.js";
-import { inspectDiscordAccount } from "../discord/account-inspect.js";
 import {
   formatAllowFromLowercase,
   formatNormalizedAllowFromEntries,
@@ -19,11 +24,6 @@ import {
 } from "../plugin-sdk/channel-config-helpers.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { resolveSignalAccount } from "../signal/accounts.js";
-import { inspectSlackAccount } from "../slack/account-inspect.js";
-import { resolveSlackReplyToMode } from "../slack/accounts.js";
-import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
-import { inspectTelegramAccount } from "../telegram/account-inspect.js";
 import { normalizeE164 } from "../utils.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -58,7 +58,7 @@ import type {
 } from "./plugins/types.js";
 import {
   resolveWhatsAppGroupIntroHint,
-  resolveWhatsAppMentionStripPatterns,
+  resolveWhatsAppMentionStripRegexes,
 } from "./plugins/whatsapp-shared.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, getChatChannelMeta } from "./registry.js";
 
@@ -303,7 +303,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveGroupIntroHint: resolveWhatsAppGroupIntroHint,
     },
     mentions: {
-      stripPatterns: ({ ctx }) => resolveWhatsAppMentionStripPatterns(ctx),
+      stripRegexes: ({ ctx }) => resolveWhatsAppMentionStripRegexes(ctx),
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => {
@@ -346,7 +346,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveDiscordGroupToolPolicy,
     },
     mentions: {
-      stripPatterns: () => ["<@!?\\d+>"],
+      stripRegexes: () => [/<@!?\d+>/g],
     },
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.channels?.discord?.replyToMode ?? "off",
@@ -484,7 +484,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveSlackGroupToolPolicy,
     },
     mentions: {
-      stripPatterns: () => ["<@[^>]+>"],
+      stripRegexes: () => [/<@[^>]+>/g],
     },
     threading: {
       resolveReplyToMode: ({ cfg, accountId, chatType }) =>

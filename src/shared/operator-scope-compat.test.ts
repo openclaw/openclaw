@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { roleScopesAllow } from "./operator-scope-compat.js";
 
 describe("roleScopesAllow", () => {
+  it("allows empty requested scope lists regardless of granted scopes", () => {
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: [],
+        allowedScopes: [],
+      }),
+    ).toBe(true);
+  });
+
   it("treats operator.read as satisfied by read/write/admin scopes", () => {
     expect(
       roleScopesAllow({
@@ -83,6 +93,40 @@ describe("roleScopesAllow", () => {
         role: "node",
         requestedScopes: ["system.run"],
         allowedScopes: ["operator.admin"],
+      }),
+    ).toBe(false);
+    expect(
+      roleScopesAllow({
+        role: " node ",
+        requestedScopes: [" system.run ", "system.run", "  "],
+        allowedScopes: ["system.run", "operator.admin"],
+      }),
+    ).toBe(true);
+  });
+
+  it("normalizes blank and duplicate scopes before evaluating", () => {
+    expect(
+      roleScopesAllow({
+        role: " operator ",
+        requestedScopes: [" operator.read ", "operator.read", "   "],
+        allowedScopes: [" operator.write ", "operator.write", ""],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects unsatisfied operator write scopes and empty allowed scopes", () => {
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.write"],
+        allowedScopes: ["operator.read"],
+      }),
+    ).toBe(false);
+    expect(
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: ["operator.read"],
+        allowedScopes: ["   "],
       }),
     ).toBe(false);
   });

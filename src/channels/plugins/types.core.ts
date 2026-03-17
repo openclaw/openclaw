@@ -209,6 +209,11 @@ export type ChannelSecurityContext<ResolvedAccount = unknown> = {
 };
 
 export type ChannelMentionAdapter = {
+  stripRegexes?: (params: {
+    ctx: MsgContext;
+    cfg: OpenClawConfig | undefined;
+    agentId?: string;
+  }) => RegExp[];
   stripPatterns?: (params: {
     ctx: MsgContext;
     cfg: OpenClawConfig | undefined;
@@ -288,6 +293,18 @@ export type ChannelMessagingAdapter = {
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+    resolveTarget?: (params: {
+      cfg: OpenClawConfig;
+      accountId?: string | null;
+      input: string;
+      normalized: string;
+      preferredKind?: ChannelDirectoryEntryKind | "channel";
+    }) => Promise<{
+      to: string;
+      kind: ChannelDirectoryEntryKind | "channel";
+      display?: string;
+      source?: "normalized" | "directory";
+    } | null>;
   };
   formatTargetDisplay?: (params: {
     target: string;

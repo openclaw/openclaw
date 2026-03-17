@@ -6,13 +6,13 @@ import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
-import { DEFAULT_BROWSER_DEFAULT_PROFILE_NAME } from "./constants.js";
 import {
   BrowserConflictError,
   BrowserProfileNotFoundError,
   BrowserResourceExhaustedError,
   BrowserValidationError,
 } from "./errors.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   allocateCdpPort,
   allocateColor,
@@ -27,14 +27,15 @@ export type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
-  driver?: "openclaw" | "extension";
+  driver?: "openclaw" | "extension" | "existing-session";
 };
 
 export type CreateProfileResult = {
   ok: true;
   profile: string;
-  cdpPort: number;
-  cdpUrl: string;
+  transport: "cdp" | "chrome-mcp";
+  cdpPort: number | null;
+  cdpUrl: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -79,7 +80,12 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
-    const driver = params.driver === "extension" ? "extension" : undefined;
+    const driver =
+      params.driver === "extension"
+        ? "extension"
+        : params.driver === "existing-session"
+          ? "existing-session"
+          : undefined;
 
     if (!isValidProfileName(name)) {
       throw new BrowserValidationError(
@@ -105,7 +111,12 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
 
     let profileConfig: BrowserProfileConfig;
     if (rawCdpUrl) {
-      const parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
+      let parsed: ReturnType<typeof parseHttpUrl>;
+      try {
+        parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
+      } catch (err) {
+        throw new BrowserValidationError(String(err));
+      }
       if (driver === "extension") {
         if (!isLoopbackHost(parsed.parsed.hostname)) {
           throw new BrowserValidationError(
@@ -118,6 +129,11 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
           );
         }
       }
+      if (driver === "existing-session") {
+        throw new BrowserValidationError(
+          "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
+        );
+      }
       profileConfig = {
         cdpUrl: parsed.normalized,
         ...(driver ? { driver } : {}),
@@ -127,17 +143,26 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       if (driver === "extension") {
         throw new BrowserValidationError("driver=extension requires an explicit loopback cdpUrl");
       }
-      const usedPorts = getUsedPorts(resolvedProfiles);
-      const range = cdpPortRange(state.resolved);
-      const cdpPort = allocateCdpPort(usedPorts, range);
-      if (cdpPort === null) {
-        throw new BrowserResourceExhaustedError("no available CDP ports in range");
+      if (driver === "existing-session") {
+        // existing-session uses Chrome MCP auto-connect; no CDP port needed
+        profileConfig = {
+          driver,
+          attachOnly: true,
+          color: profileColor,
+        };
+      } else {
+        const usedPorts = getUsedPorts(resolvedProfiles);
+        const range = cdpPortRange(state.resolved);
+        const cdpPort = allocateCdpPort(usedPorts, range);
+        if (cdpPort === null) {
+          throw new BrowserResourceExhaustedError("no available CDP ports in range");
+        }
+        profileConfig = {
+          cdpPort,
+          ...(driver ? { driver } : {}),
+          color: profileColor,
+        };
       }
-      profileConfig = {
-        cdpPort,
-        ...(driver ? { driver } : {}),
-        color: profileColor,
-      };
     }
 
     const nextConfig: OpenClawConfig = {
@@ -158,12 +183,14 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     if (!resolved) {
       throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
     }
+    const capabilities = getBrowserProfileCapabilities(resolved);
 
     return {
       ok: true,
       profile: name,
-      cdpPort: resolved.cdpPort,
-      cdpUrl: resolved.cdpUrl,
+      transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+      cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
+      cdpUrl: capabilities.usesChromeMcp ? null : resolved.cdpUrl,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,
     };
@@ -178,24 +205,23 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       throw new BrowserValidationError("invalid profile name");
     }
 
+    const state = ctx.state();
     const cfg = loadConfig();
     const profiles = cfg.browser?.profiles ?? {};
-    if (!(name in profiles)) {
-      throw new BrowserProfileNotFoundError(`profile "${name}" not found`);
-    }
-
-    const defaultProfile = cfg.browser?.defaultProfile ?? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME;
+    const defaultProfile = cfg.browser?.defaultProfile ?? state.resolved.defaultProfile;
     if (name === defaultProfile) {
       throw new BrowserValidationError(
         `cannot delete the default profile "${name}"; change browser.defaultProfile first`,
       );
     }
+    if (!(name in profiles)) {
+      throw new BrowserProfileNotFoundError(`profile "${name}" not found`);
+    }
 
     let deleted = false;
-    const state = ctx.state();
     const resolved = resolveProfile(state.resolved, name);
 
-    if (resolved?.cdpIsLoopback) {
+    if (resolved?.cdpIsLoopback && resolved.driver === "openclaw") {
       try {
         await ctx.forProfile(name).stopRunningBrowser();
       } catch {
