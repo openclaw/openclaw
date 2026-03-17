@@ -11,7 +11,6 @@ import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
-  buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
@@ -279,7 +278,6 @@ async function sendFormattedSignalMedia(ctx: {
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   ...createSignalPluginBase({
-    configSchema: buildChannelConfigSchema(SignalConfigSchema),
     setupWizard: signalSetupWizard,
     setup: signalSetupAdapter,
   }),
