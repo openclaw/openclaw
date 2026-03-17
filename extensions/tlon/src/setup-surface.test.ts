@@ -1,30 +1,9 @@
-import type { OpenClawConfig, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/tlon";
+import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk/tlon";
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import { createTestWizardPrompter, type WizardPrompter } from "../../test-utils/setup-wizard.js";
 import { tlonPlugin } from "./channel.js";
-
-const selectFirstOption = async <T>(params: { options: Array<{ value: T }> }): Promise<T> => {
-  const first = params.options[0];
-  if (!first) {
-    throw new Error("no options");
-  }
-  return first.value;
-};
-
-function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
-  return {
-    intro: vi.fn(async () => {}),
-    outro: vi.fn(async () => {}),
-    note: vi.fn(async () => {}),
-    select: selectFirstOption as WizardPrompter["select"],
-    multiselect: vi.fn(async () => []),
-    text: vi.fn(async () => "") as WizardPrompter["text"],
-    confirm: vi.fn(async () => false),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    ...overrides,
-  };
-}
 
 const tlonConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
   plugin: tlonPlugin,
@@ -33,7 +12,7 @@ const tlonConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
 
 describe("tlon setup wizard", () => {
   it("configures ship, auth, and discovery settings", async () => {
-    const prompter = createPrompter({
+    const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
         if (message === "Ship name") {
           return "sampel-palnet";
