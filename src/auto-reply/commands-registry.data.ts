@@ -483,20 +483,21 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "plugins",
       nativeName: "plugins",
-      description: "List, show, enable, or disable plugins.",
+      description: "List, install, show, enable, or disable plugins.",
       textAliases: ["/plugins", "/plugin"],
       category: "management",
       args: [
         {
           name: "action",
-          description: "list | show | get | enable | disable",
+          description: "list | install | show | get | enable | disable",
           type: "string",
-          choices: ["list", "show", "get", "enable", "disable"],
+          choices: ["list", "install", "show", "get", "enable", "disable"],
         },
         {
           name: "path",
-          description: "Plugin id or name",
+          description: "Plugin id, name, or install spec",
           type: "string",
+          captureRemaining: true,
         },
       ],
       argsParsing: "none",

@@ -38,6 +38,7 @@ They run immediately, are stripped before the model sees the message, and the re
     config: false,
     mcp: false,
     plugins: false,
+    pluginsInstall: false,
     debug: false,
     restart: false,
     allowFrom: {
@@ -63,6 +64,7 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.config` (default `false`) enables `/config` (reads/writes `openclaw.json`).
 - `commands.mcp` (default `false`) enables `/mcp` (reads/writes OpenClaw-managed MCP config under `mcp.servers`).
 - `commands.plugins` (default `false`) enables `/plugins` (plugin discovery/status plus enable/disable toggles).
+- `commands.pluginsInstall` (default `false`) enables `/plugins install ...` remote/local plugin installs. Keep this off unless chat-triggered installs are intentional.
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
   only authorization source for commands and directives (channel allowlists/pairing and `commands.useAccessGroups`
@@ -95,7 +97,7 @@ Text + native (when enabled):
 - `/tell <id|#> <message>` (alias for `/steer`)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
 - `/mcp show|get|set|unset` (manage OpenClaw MCP server config, owner-only; requires `commands.mcp: true`)
-- `/plugins list|show|get|enable|disable` (inspect discovered plugins and toggle enablement, owner-only for writes; requires `commands.plugins: true`)
+- `/plugins list|show|get|enable|disable|install` (inspect discovered plugins, toggle enablement, and install plugins; install also requires `commands.pluginsInstall: true`)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/usage off|tokens|full|cost` (per-response usage footer or local cost summary)
 - `/tts off|always|inbound|tagged|status|provider|limit|summary|audio` (control TTS; see [/tts](/tts))
@@ -240,7 +242,7 @@ Notes:
 
 ## Plugin updates
 
-`/plugins` lets operators inspect discovered plugins and toggle enablement in config. Read-only flows can use `/plugin` as an alias. Disabled by default; enable with `commands.plugins: true`.
+`/plugins` lets operators inspect discovered plugins, toggle enablement in config, and optionally install plugins from chat. Read-only flows can use `/plugin` as an alias. Disabled by default; enable with `commands.plugins: true`.
 
 Examples:
 
@@ -250,13 +252,18 @@ Examples:
 /plugin show context7
 /plugins enable context7
 /plugins disable context7
+/plugins install plugin-id@marketplace-name
 ```
 
 Notes:
 
 - `/plugins list` and `/plugins show` use real plugin discovery against the current workspace plus on-disk config.
 - `/plugins enable|disable` updates plugin config only; it does not install or uninstall plugins.
+- `/plugins install <spec>` requires both `commands.plugins: true` and `commands.pluginsInstall: true`.
+- `/plugins install` accepts the same install specs as `openclaw plugins install`, including local paths, npm specs, and `plugin@marketplace` shorthand.
+- Pasted Claude install text like `claude plugin install plugin-id@marketplace-name` is normalized to `/plugins install ...`.
 - After enable/disable changes, restart the gateway to apply them.
+- After installs, restart the gateway to load the new plugin.
 
 ## Surface notes
 

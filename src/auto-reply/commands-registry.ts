@@ -383,6 +383,11 @@ export function resolveCommandArgMenu(params: {
 
 export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {
   const trimmed = raw.trim();
+  const claudeInstallMatch = trimmed.match(/^claude\s+plugins?\s+install\s+(.+)$/i);
+  if (claudeInstallMatch) {
+    const spec = claudeInstallMatch[1]?.trim();
+    return spec ? `/plugins install ${spec}` : "/plugins install";
+  }
   if (!trimmed.startsWith("/")) {
     return trimmed;
   }

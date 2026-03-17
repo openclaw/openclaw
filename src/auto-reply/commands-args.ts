@@ -73,6 +73,9 @@ const formatPluginsArgs: CommandArgsFormatter = (values) =>
       if (action === "enable" || action === "disable") {
         return path ? `${action} ${path}` : action;
       }
+      if (action === "install") {
+        return path ? `${action} ${path}` : action;
+      }
       return undefined;
     },
   });

@@ -413,9 +413,9 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.http.endpoints.chatCompletions.images":
     "Image fetch/validation controls for OpenAI-compatible `image_url` parts.",
   "gateway.http.endpoints.chatCompletions.images.allowUrl":
-    "Allow server-side URL fetches for `image_url` parts (default: false; data URIs remain supported). Set this to `false` to disable URL fetching entirely.",
+    "Allow server-side URL fetches for `image_url` parts (default: false; data URIs remain supported).",
   "gateway.http.endpoints.chatCompletions.images.urlAllowlist":
-    "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards. Empty or omitted lists mean no hostname allowlist restriction.",
+    "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards.",
   "gateway.http.endpoints.chatCompletions.images.allowedMimes":
     "Allowed MIME types for `image_url` parts (case-insensitive list).",
   "gateway.http.endpoints.chatCompletions.images.maxBytes":
@@ -1019,10 +1019,6 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
-  "agents.defaults.imageGenerationModel.primary":
-    "Optional image-generation model (provider/model) used by the shared image generation capability.",
-  "agents.defaults.imageGenerationModel.fallbacks":
-    "Ordered fallback image-generation models (provider/model).",
   "agents.defaults.pdfModel.primary":
     "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
   "agents.defaults.pdfModel.fallbacks": "Ordered fallback PDF models (provider/model).",
@@ -1101,6 +1097,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
   "commands.plugins":
     "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
+  "commands.pluginsInstall":
+    "Allow /plugins install chat command to download and install plugins from local paths, npm specs, and Claude-compatible marketplaces (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart": "Allow /restart and gateway restart tool actions (default: true).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",

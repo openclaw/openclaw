@@ -4,6 +4,7 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { installManagedPlugin } from "../../plugins/install-managed.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import { buildPluginStatusReport, type PluginStatusReport } from "../../plugins/status.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
@@ -112,6 +113,50 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: { text: `⚠️ ${pluginsCommand.message}` },
+    };
+  }
+
+  if (pluginsCommand.action === "install") {
+    const installDisabled = requireCommandFlagEnabled(params.cfg, {
+      label: "/plugins install",
+      configKey: "pluginsInstall",
+    });
+    if (installDisabled) {
+      return installDisabled;
+    }
+    const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+      label: "/plugins install",
+      allowedScopes: ["operator.admin"],
+      missingText: "❌ /plugins install requires operator.admin for gateway clients.",
+    });
+    if (missingAdminScope) {
+      return missingAdminScope;
+    }
+    const loggerWarnings: string[] = [];
+    const result = await installManagedPlugin({
+      raw: pluginsCommand.spec,
+      logger: {
+        warn: (message: string) => loggerWarnings.push(message),
+      },
+    });
+    if (!result.ok) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${result.error}` },
+      };
+    }
+    const lines = [
+      ...result.notices.map((notice) => `ℹ️ ${notice}`),
+      ...result.warnings.map((warning) => `⚠️ ${warning}`),
+      ...loggerWarnings.map((warning) => `⚠️ ${warning}`),
+      result.mode === "linked"
+        ? `🔌 Plugin "${result.pluginId}" linked from ${result.installPath ?? "path"}.`
+        : `🔌 Plugin "${result.pluginId}" installed.`,
+      "Restart the gateway to apply.",
+    ];
+    return {
+      shouldContinue: false,
+      reply: { text: lines.join("\n") },
     };
   }
 

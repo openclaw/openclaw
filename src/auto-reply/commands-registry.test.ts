@@ -287,6 +287,12 @@ describe("commands registry", () => {
   it("normalizes dock command aliases", () => {
     expect(normalizeCommandBody("/dock_telegram")).toBe("/dock-telegram");
   });
+
+  it("normalizes Claude plugin install compatibility text", () => {
+    expect(normalizeCommandBody("claude plugin install superpowers@claude-plugins-official")).toBe(
+      "/plugins install superpowers@claude-plugins-official",
+    );
+  });
 });
 
 describe("commands registry args", () => {

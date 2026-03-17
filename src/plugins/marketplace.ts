@@ -767,6 +767,7 @@ export async function installPluginFromMarketplace(params: {
   marketplace: string;
   plugin: string;
   logger?: MarketplaceLogger;
+  extensionsDir?: string;
   timeoutMs?: number;
   mode?: "install" | "update";
   dryRun?: boolean;
@@ -809,6 +810,7 @@ export async function installPluginFromMarketplace(params: {
 
     const result = await installPluginFromPath({
       path: resolved.path,
+      extensionsDir: params.extensionsDir,
       logger: params.logger,
       mode: params.mode,
       dryRun: params.dryRun,

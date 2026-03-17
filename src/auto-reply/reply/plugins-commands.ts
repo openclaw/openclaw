@@ -1,6 +1,7 @@
 export type PluginsCommand =
   | { action: "list" }
   | { action: "show"; name?: string }
+  | { action: "install"; spec: string }
   | { action: "enable"; name: string }
   | { action: "disable"; name: string }
   | { action: "error"; message: string };
@@ -30,6 +31,16 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
     return { action: "show", name: name || undefined };
   }
 
+  if (action === "install") {
+    if (!name) {
+      return {
+        action: "error",
+        message: "Usage: /plugins install <path|npm-spec|plugin@marketplace>",
+      };
+    }
+    return { action: "install", spec: name };
+  }
+
   if (action === "enable" || action === "disable") {
     if (!name) {
       return {
@@ -42,6 +53,6 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
 
   return {
     action: "error",
-    message: "Usage: /plugins list|show|get|enable|disable [plugin]",
+    message: "Usage: /plugins list|install|show|get|enable|disable [plugin]",
   };
 }

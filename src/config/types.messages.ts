@@ -152,6 +152,8 @@ export type CommandsConfig = {
   mcp?: boolean;
   /** Allow /plugins command for plugin listing and enablement toggles (default: false). */
   plugins?: boolean;
+  /** Allow /plugins install command for plugin downloads and installs (default: false). */
+  pluginsInstall?: boolean;
   /** Allow /debug command (default: false). */
   debug?: boolean;
   /** Allow restart commands/tools (default: true). */
