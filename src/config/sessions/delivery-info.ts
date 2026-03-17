@@ -28,7 +28,7 @@ export function parseSessionThreadInfo(sessionKey: string | undefined): {
 
 export function extractDeliveryInfo(
   sessionKey: string | undefined,
-  opts?: { cfg?: OpenClawConfig },
+  opts?: { cfg?: OpenClawConfig; env?: NodeJS.ProcessEnv },
 ): {
   deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
   threadId: string | undefined;
@@ -41,7 +41,7 @@ export function extractDeliveryInfo(
   let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
   try {
     const cfg = opts?.cfg ?? loadConfig();
-    const storePath = resolveStorePath(cfg.session?.store);
+    const storePath = resolveStorePath(cfg.session?.store, { env: opts?.env });
     const store = loadSessionStore(storePath);
     let entry = store[sessionKey];
     if (!entry?.deliveryContext && baseSessionKey !== sessionKey) {

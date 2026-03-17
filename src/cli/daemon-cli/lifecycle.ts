@@ -176,6 +176,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
 
   let restartSentinelWritable = false;
   let restartSentinelMarkedInProgress = false;
+  let restartSentinelMarkedError = false;
   const markRestartSentinelInProgress = async () => {
     if (!restartSentinelWritable || restartSentinelMarkedInProgress) {
       return;
@@ -189,12 +190,28 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       // best-effort
     }
   };
+  const markRestartSentinelError = async () => {
+    if (!shouldNotify || !restartSentinelMarkedInProgress || restartSentinelMarkedError) {
+      return;
+    }
+    restartSentinelMarkedError = true;
+    try {
+      await transitionRestartSentinelStatus("error", {
+        allowedCurrentStatuses: ["in-progress"],
+      });
+    } catch {
+      // best-effort
+    }
+  };
 
   if (shouldNotify) {
     const { mergedEnv } = await resolveGatewayLifecycleContext(service);
     const daemonCfg = createConfigIO({ env: mergedEnv }).loadConfig();
     const mainSessionKey = resolveMainSessionKey(daemonCfg);
-    const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey, { cfg: daemonCfg });
+    const { deliveryContext, threadId } = extractDeliveryInfo(mainSessionKey, {
+      cfg: daemonCfg,
+      env: mergedEnv,
+    });
     const hasRoute = Boolean(deliveryContext?.channel && deliveryContext?.to);
     if (!hasRoute) {
       if (!json) {
@@ -275,6 +292,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             warnings.push(...diagnostics);
           }
 
+          await markRestartSentinelError();
           fail(
             `Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`,
             [
@@ -340,6 +358,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           warnings.push(...diagnostics);
         }
 
+        await markRestartSentinelError();
         fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
           formatCliCommand("openclaw gateway status --deep"),
           formatCliCommand("openclaw doctor"),
@@ -347,15 +366,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       },
     });
   } catch (err) {
-    if (shouldNotify && restartSentinelMarkedInProgress) {
-      try {
-        await transitionRestartSentinelStatus("error", {
-          allowedCurrentStatuses: ["in-progress"],
-        });
-      } catch {
-        // best-effort
-      }
-    }
+    await markRestartSentinelError();
     throw err;
   }
 

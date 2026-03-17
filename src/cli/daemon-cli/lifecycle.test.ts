@@ -336,6 +336,7 @@ describe("runDaemonRestart health checks", () => {
     expect(resolveMainSessionKey).toHaveBeenCalledWith(daemonCfg);
     expect(extractDeliveryInfo).toHaveBeenCalledWith("agent:daemon:daemon-main", {
       cfg: daemonCfg,
+      env: expect.objectContaining({ OPENCLAW_STATE_DIR: "/tmp/daemon-state" }),
     });
   });
 
@@ -396,6 +397,28 @@ describe("runDaemonRestart health checks", () => {
         allowedCurrentStatuses: ["in-progress"],
       }),
     );
+  });
+
+  it("marks restart sentinel as error before post-check fail exits", async () => {
+    const unhealthy: RestartHealthSnapshot = {
+      healthy: false,
+      staleGatewayPids: [],
+      runtime: { status: "stopped" },
+      portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+    };
+    waitForGatewayHealthyRestart.mockResolvedValue(unhealthy);
+
+    await expect(runDaemonRestart({ json: true, notify: true })).rejects.toThrow(
+      "Gateway restart timed out after 60s waiting for health checks.",
+    );
+
+    expect(transitionRestartSentinelStatus).toHaveBeenCalledWith(
+      "error",
+      expect.objectContaining({
+        allowedCurrentStatuses: ["in-progress"],
+      }),
+    );
+    expect(transitionRestartSentinelStatus).not.toHaveBeenCalledWith("ok", expect.anything());
   });
 
   it("fails restart when gateway remains unhealthy", async () => {

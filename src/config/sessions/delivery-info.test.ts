@@ -9,8 +9,10 @@ vi.mock("../io.js", () => ({
   loadConfig: () => ({}),
 }));
 
+const resolveStorePath = vi.fn(() => "/tmp/sessions.json");
+
 vi.mock("./paths.js", () => ({
-  resolveStorePath: () => "/tmp/sessions.json",
+  resolveStorePath: (...args: unknown[]) => resolveStorePath(...args),
 }));
 
 vi.mock("./store.js", () => ({
@@ -29,6 +31,7 @@ const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEn
 beforeEach(async () => {
   vi.resetModules();
   storeState.store = {};
+  resolveStorePath.mockClear();
   ({ extractDeliveryInfo, parseSessionThreadInfo } = await import("./delivery-info.js"));
 });
 
@@ -111,6 +114,21 @@ describe("extractDeliveryInfo", () => {
         accountId: "main",
       },
       threadId: "55",
+    });
+  });
+
+  it("resolves store path using provided environment", () => {
+    const sessionKey = "agent:main:webchat:dm:user-123";
+    storeState.store[sessionKey] = buildEntry({
+      channel: "webchat",
+      to: "webchat:user-123",
+      accountId: "default",
+    });
+
+    extractDeliveryInfo(sessionKey, { env: { OPENCLAW_STATE_DIR: "/tmp/daemon-state" } });
+
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, {
+      env: { OPENCLAW_STATE_DIR: "/tmp/daemon-state" },
     });
   });
 });
