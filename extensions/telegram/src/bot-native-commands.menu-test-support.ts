@@ -1,6 +1,6 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/telegram";
 import { expect, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
 import {
   createNativeCommandTestParams as createBaseNativeCommandTestParams,
   createTelegramPrivateCommandContext,
@@ -10,6 +10,13 @@ import {
 type RegisteredCommand = {
   command: string;
   description: string;
+};
+
+type CreateCommandBotResult = {
+  bot: RegisterTelegramNativeCommandsParams["bot"];
+  commandHandlers: Map<string, (ctx: unknown) => Promise<void>>;
+  sendMessage: ReturnType<typeof vi.fn>;
+  setMyCommands: ReturnType<typeof vi.fn>;
 };
 
 const skillCommandMocks = vi.hoisted(() => ({
@@ -23,8 +30,8 @@ const deliveryMocks = vi.hoisted(() => ({
 export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
 
-vi.mock("../../../src/auto-reply/skill-commands.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/auto-reply/skill-commands.js")>();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
     listSkillCommandsForAgents,
@@ -51,7 +58,7 @@ export function resetNativeCommandMenuMocks() {
   deliverReplies.mockResolvedValue({ delivered: true });
 }
 
-export function createCommandBot() {
+export function createCommandBot(): CreateCommandBotResult {
   const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
   const setMyCommands = vi.fn().mockResolvedValue(undefined);
@@ -79,4 +86,8 @@ export function createNativeCommandTestParams(
   });
 }
 
-export { createTelegramPrivateCommandContext as createPrivateCommandContext };
+export function createPrivateCommandContext(
+  params?: Parameters<typeof createTelegramPrivateCommandContext>[0],
+) {
+  return createTelegramPrivateCommandContext(params);
+}

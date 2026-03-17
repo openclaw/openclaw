@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
-import { applyAuthChoiceLoadedPluginProvider } from "../../commands/auth-choice.apply.plugin-provider.js";
 import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
@@ -9,17 +8,17 @@ import {
   requireOpenClawAgentDir,
   setupAuthTestEnv,
 } from "../../commands/test-wizard-helpers.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
+import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
 import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 import { requireProviderContractProvider, uniqueProviderContractProviders } from "./registry.js";
+import { registerProviders, requireProvider } from "./testkit.js";
 
 type ResolvePluginProviders =
-  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolvePluginProviders;
+  typeof import("../../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
 type ResolveProviderPluginChoice =
-  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").resolveProviderPluginChoice;
+  typeof import("../../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type RunProviderModelSelectedHook =
-  typeof import("../../commands/auth-choice.apply.plugin-provider.runtime.js").runProviderModelSelectedHook;
+  typeof import("../../plugins/provider-auth-choice.runtime.js").runProviderModelSelectedHook;
 
 const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn());
@@ -38,7 +37,7 @@ vi.mock("../../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: githubCopilotLoginCommandMock,
 }));
 
-vi.mock("../../commands/auth-choice.apply.plugin-provider.runtime.js", () => ({
+vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders: resolvePluginProvidersMock,
   resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
   runProviderModelSelectedHook: runProviderModelSelectedHookMock,
@@ -54,7 +53,7 @@ vi.mock("../../plugins/providers.js", async () => {
 });
 
 const { resolvePreferredProviderForAuthChoice } =
-  await import("../../commands/auth-choice.preferred-provider.js");
+  await import("../../plugins/provider-auth-choice-preference.js");
 
 type StoredAuthProfile = {
   type?: string;
@@ -66,22 +65,6 @@ type StoredAuthProfile = {
 };
 
 const qwenPortalPlugin = (await import("../../../extensions/qwen-portal-auth/index.js")).default;
-
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
-}
 
 describe("provider auth-choice contract", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -136,15 +119,15 @@ describe("provider auth-choice contract", () => {
     for (const scenario of pluginFallbackScenarios) {
       resolvePreferredProviderPluginProvidersMock.mockClear();
       await expect(
-        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice as AuthChoice }),
+        resolvePreferredProviderForAuthChoice({ choice: scenario.authChoice }),
       ).resolves.toBe(scenario.expectedProvider);
       expect(resolvePreferredProviderPluginProvidersMock).toHaveBeenCalled();
     }
 
     resolvePreferredProviderPluginProvidersMock.mockClear();
-    await expect(
-      resolvePreferredProviderForAuthChoice({ choice: "unknown" as AuthChoice }),
-    ).resolves.toBe(undefined);
+    await expect(resolvePreferredProviderForAuthChoice({ choice: "unknown" })).resolves.toBe(
+      undefined,
+    );
     expect(resolvePreferredProviderPluginProvidersMock).toHaveBeenCalled();
   });
 
