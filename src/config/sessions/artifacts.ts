@@ -59,12 +59,7 @@ function restoreSessionArchiveTimestamp(raw: string): string {
     const normalizedZone = zone === "Z" ? "Z" : zone.replace(/([+-]\d{2})-(\d{2})$/, "$1:$2");
     return `${datePart}T${hour}:${minute}:${second}${millis}${normalizedZone}`;
   }
-
-  const [datePart, timePart] = raw.split("T");
-  if (!datePart || !timePart) {
-    return raw;
-  }
-  return `${datePart}T${timePart.replace(/-/g, ":")}`;
+  return raw;
 }
 
 export function parseSessionArchiveTimestamp(
