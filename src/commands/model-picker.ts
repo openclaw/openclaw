@@ -11,9 +11,12 @@ import {
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { formatTokenK } from "./models/shared.js";
+
+export { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 
 const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
@@ -514,33 +517,6 @@ export async function promptModelAllowlist(params: {
     return {};
   }
   return { models: [] };
-}
-
-export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  const existingModels = defaults?.models;
-  const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
-      : undefined;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        model: {
-          ...(fallbacks ? { fallbacks } : undefined),
-          primary: model,
-        },
-        models: {
-          ...existingModels,
-          [model]: existingModels?.[model] ?? {},
-        },
-      },
-    },
-  };
 }
 
 export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): OpenClawConfig {

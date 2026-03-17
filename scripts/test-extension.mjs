@@ -65,6 +65,20 @@ function hasExtensionPackage(extensionId) {
   return fs.existsSync(path.join(repoRoot, "extensions", extensionId, "package.json"));
 }
 
+export function listAvailableExtensionIds() {
+  const extensionsDir = path.join(repoRoot, "extensions");
+  if (!fs.existsSync(extensionsDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((extensionId) => hasExtensionPackage(extensionId))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function detectChangedExtensionIds(changedPaths) {
   const extensionIds = new Set();
 
@@ -167,6 +181,7 @@ export function resolveExtensionTestPlan(params = {}) {
 function printUsage() {
   console.error("Usage: pnpm test:extension <extension-name|path> [vitest args...]");
   console.error("       node scripts/test-extension.mjs [extension-name|path] [vitest args...]");
+  console.error("       node scripts/test-extension.mjs --list");
   console.error(
     "       node scripts/test-extension.mjs --list-changed --base <git-ref> [--head <git-ref>]",
   );
@@ -176,9 +191,15 @@ async function run() {
   const rawArgs = process.argv.slice(2);
   const dryRun = rawArgs.includes("--dry-run");
   const json = rawArgs.includes("--json");
+  const list = rawArgs.includes("--list");
   const listChanged = rawArgs.includes("--list-changed");
   const args = rawArgs.filter(
-    (arg) => arg !== "--" && arg !== "--dry-run" && arg !== "--json" && arg !== "--list-changed",
+    (arg) =>
+      arg !== "--" &&
+      arg !== "--dry-run" &&
+      arg !== "--json" &&
+      arg !== "--list" &&
+      arg !== "--list-changed",
   );
 
   let base = "";
@@ -202,6 +223,18 @@ async function run() {
     }
   } else {
     passthroughArgs.push(...args);
+  }
+
+  if (list) {
+    const extensionIds = listAvailableExtensionIds();
+    if (json) {
+      process.stdout.write(`${JSON.stringify({ extensionIds }, null, 2)}\n`);
+    } else {
+      for (const extensionId of extensionIds) {
+        console.log(extensionId);
+      }
+    }
+    return;
   }
 
   if (listChanged) {
@@ -239,7 +272,9 @@ async function run() {
   }
 
   if (plan.testFiles.length === 0) {
-    console.error(`No tests found for ${plan.extensionDir}.`);
+    console.error(
+      `No tests found for ${plan.extensionDir}. Run "pnpm test:extension ${plan.extensionId} -- --dry-run" to inspect the resolved roots.`,
+    );
     process.exit(1);
   }
 

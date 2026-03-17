@@ -11,6 +11,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
+import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
@@ -198,6 +199,21 @@ const resolvePluginSdkAliasFile = (params: {
 const resolvePluginSdkAlias = (): string | null =>
   resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
+function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
+  return {
+    interopDefault: true,
+    // Prefer Node's native sync ESM loader for built dist/*.js modules so
+    // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
+    tryNative: true,
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+    ...(Object.keys(aliasMap).length > 0
+      ? {
+          alias: aliasMap,
+        }
+      : {}),
+  };
+}
+
 function resolvePluginRuntimeModulePath(params: LoaderModuleResolveParams = {}): string | null {
   try {
     const modulePath = resolveLoaderModulePath(params);
@@ -273,6 +289,7 @@ const resolvePluginSdkScopedAliasMap = (): Record<string, string> => {
 };
 
 export const __testing = {
+  buildPluginLoaderJitiOptions,
   listPluginSdkAliasCandidates,
   listPluginSdkExportedSubpaths,
   resolvePluginSdkAliasCandidateOrder,
@@ -478,6 +495,9 @@ function createPluginRecord(params: {
     hookNames: [],
     channelIds: [],
     providerIds: [],
+    speechProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
     webSearchProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
@@ -839,15 +859,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
       ...resolvePluginSdkScopedAliasMap(),
     };
-    jitiLoader = createJiti(import.meta.url, {
-      interopDefault: true,
-      extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-      ...(Object.keys(aliasMap).length > 0
-        ? {
-            alias: aliasMap,
-          }
-        : {}),
-    });
+    jitiLoader = createJiti(import.meta.url, buildPluginLoaderJitiOptions(aliasMap));
     return jitiLoader;
   };
 
@@ -1089,6 +1101,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const unsupportedCapabilities = (record.bundleCapabilities ?? []).filter(
         (capability) =>
           capability !== "skills" &&
+          capability !== "mcpServers" &&
           capability !== "settings" &&
           !(
             capability === "commands" &&
@@ -1103,6 +1116,36 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           source: record.source,
           message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
         });
+      }
+      if (
+        enableState.enabled &&
+        record.rootDir &&
+        record.bundleFormat &&
+        (record.bundleCapabilities ?? []).includes("mcpServers")
+      ) {
+        const runtimeSupport = inspectBundleMcpRuntimeSupport({
+          pluginId: record.id,
+          rootDir: record.rootDir,
+          bundleFormat: record.bundleFormat,
+        });
+        for (const message of runtimeSupport.diagnostics) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message,
+          });
+        }
+        if (runtimeSupport.unsupportedServerNames.length > 0) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId: record.id,
+            source: record.source,
+            message:
+              "bundle MCP servers use unsupported transports or incomplete configs " +
+              `(stdio only today): ${runtimeSupport.unsupportedServerNames.join(", ")}`,
+          });
+        }
       }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
