@@ -1,0 +1,35 @@
+# 1. 先进入仓库根目录，执行必要的准备命令
+- name: Prepare iOS project
+  run: |
+    pnpm install
+    ./scripts/ios-configure-signing.sh
+    cd apps/ios
+    xcodegen generate
+
+# 2. 进入 iOS 目录进行编译归档
+- name: Build iOS app (unsigned)
+  run: |
+    cd apps/ios
+    xcodebuild archive \
+      -project OpenClaw.xcodeproj \                # ✅ 使用 -project
+      -scheme OpenClaw \                            # ✅ scheme 名称
+      -configuration Release \
+      -archivePath $PWD/build/OpenClaw.xcarchive \
+      CODE_SIGN_IDENTITY="" \
+      CODE_SIGNING_REQUIRED=NO \
+      CODE_SIGNING_ALLOWED=NO
+
+    # 从归档中导出 IPA（如果不签名，可以手动打包）
+    mkdir -p $PWD/build/ipa
+    # 如果上面的 archive 成功，可以尝试用 xcodebuild -exportArchive 导出，但可能因签名问题失败。
+    # 更稳妥的方式是直接打包 .app 文件为 IPA
+    mkdir -p Payload
+    cp -r $PWD/build/OpenClaw.xcarchive/Products/Applications/OpenClaw.app Payload/
+    zip -r build/ipa/OpenClaw.ipa Payload
+
+# 3. 上传 IPA 产物（路径调整）
+- name: Upload IPA artifact
+  uses: actions/upload-artifact@v4
+  with:
+    name: OpenClaw-unsigned.ipa
+    path: apps/ios/build/ipa/OpenClaw.ipa      # ✅ 实际路径
