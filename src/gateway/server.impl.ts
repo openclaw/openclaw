@@ -1,4 +1,5 @@
 import path from "node:path";
+import { registerAcpNodeRuntimeBackend } from "../acp/runtime/acp-node.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -700,6 +701,17 @@ export async function startGatewayServer(
     broadcast("voicewake.changed", { triggers }, { dropIfSlow: true });
   };
   const hasMobileNodeConnected = () => hasConnectedMobileNode(nodeRegistry);
+  registerAcpNodeRuntimeBackend({
+    listNodes: () => nodeRegistry.listConnected(),
+    invokeNode: async ({ nodeId, command, params, timeoutMs, idempotencyKey }) =>
+      await nodeRegistry.invoke({
+        nodeId,
+        command,
+        params,
+        timeoutMs,
+        idempotencyKey,
+      }),
+  });
   applyGatewayLaneConcurrency(cfgAtStart);
 
   let cronState = buildGatewayCronService({

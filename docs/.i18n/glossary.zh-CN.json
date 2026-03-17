@@ -4,6 +4,54 @@
     "target": "OpenClaw"
   },
   {
+    "source": "ACP Node-Backed Runtime Architecture",
+    "target": "ACP Node-Backed Runtime Architecture"
+  },
+  {
+    "source": "ACP Node-Backed Runtime Program Plan",
+    "target": "ACP Node-Backed Runtime Program Plan"
+  },
+  {
+    "source": "ACP Node-Backed Runtime Protocol",
+    "target": "ACP Node-Backed Runtime Protocol"
+  },
+  {
+    "source": "ACP Node-Backed Runtime Verification Plan",
+    "target": "ACP Node-Backed Runtime Verification Plan"
+  },
+  {
+    "source": "ACP Node Foundation Slice 1 Builder Defense",
+    "target": "ACP Node Foundation Slice 1 Builder Defense"
+  },
+  {
+    "source": "ACP Node Foundation Slice 1 Fixup 2 Summary",
+    "target": "ACP Node Foundation Slice 1 Fixup 2 Summary"
+  },
+  {
+    "source": "ACP Node Foundation Slice 1 Fixup 3 Summary",
+    "target": "ACP Node Foundation Slice 1 Fixup 3 Summary"
+  },
+  {
+    "source": "ACP Node Foundation Slice 1 Fixup Summary",
+    "target": "ACP Node Foundation Slice 1 Fixup Summary"
+  },
+  {
+    "source": "ACP Node Runtime Consistency Audit",
+    "target": "ACP Node Runtime Consistency Audit"
+  },
+  {
+    "source": "ACP Node Runtime Synthesis",
+    "target": "ACP Node Runtime Synthesis"
+  },
+  {
+    "source": "ACP Node Runtime Test Harness Design",
+    "target": "ACP Node Runtime Test Harness Design"
+  },
+  {
+    "source": "ACP Node Runtime Touchpoint Map",
+    "target": "ACP Node Runtime Touchpoint Map"
+  },
+  {
     "source": "Gateway",
     "target": "Gateway 网关"
   },

@@ -52,6 +52,72 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
+const gatewayRuntimeMocks = vi.hoisted(() => ({
+  ensureSession: vi.fn(async () => ({})),
+  recordRunDeliveryTarget: vi.fn(async () => ({})),
+  getRun: vi.fn(async () => null),
+}));
+
+const projectionServiceMocks = vi.hoisted(() => ({
+  ensureProjection: vi.fn<
+    (
+      params?: unknown,
+      serviceParams?: {
+        store: unknown;
+        coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+      },
+    ) => Promise<void>
+  >(async () => undefined),
+  instances: [] as Array<{
+    store: unknown;
+    coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+  }>,
+}));
+
+const zodMocks = vi.hoisted(() => {
+  const createSchema = (): unknown =>
+    new Proxy(
+      {},
+      {
+        get: (_target, prop) => {
+          if (prop === "parse") {
+            return (value: unknown) => value;
+          }
+          if (prop === "safeParse") {
+            return (value: unknown) => ({ success: true, data: value });
+          }
+          if (prop === "spa") {
+            return async (value: unknown) => ({ success: true, data: value });
+          }
+          return (..._args: unknown[]) => createSchema();
+        },
+      },
+    );
+  const z = new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "coerce") {
+          return new Proxy(
+            {},
+            {
+              get:
+                () =>
+                (..._args: unknown[]) =>
+                  createSchema(),
+            },
+          );
+        }
+        if (prop === "ZodIssueCode") {
+          return {};
+        }
+        return (..._args: unknown[]) => createSchema();
+      },
+    },
+  );
+  return { z };
+});
+
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -87,6 +153,39 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   }),
 }));
 
+vi.mock("../../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("zod", () => zodMocks);
+
+vi.mock("../../acp/store/gateway-events.js", () => ({
+  getAcpGatewayNodeRuntime: () => ({
+    store: {
+      ensureSession: gatewayRuntimeMocks.ensureSession,
+      recordRunDeliveryTarget: gatewayRuntimeMocks.recordRunDeliveryTarget,
+      getRun: gatewayRuntimeMocks.getRun,
+    },
+  }),
+}));
+
+vi.mock("./dispatch-acp-replay.js", () => ({
+  AcpDurableProjectionService: class {
+    constructor(params: {
+      store: unknown;
+      coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+    }) {
+      projectionServiceMocks.instances.push(params);
+    }
+
+    ensureProjection = async (params: unknown) =>
+      await projectionServiceMocks.ensureProjection(
+        params,
+        projectionServiceMocks.instances.at(-1),
+      );
+  },
+}));
+
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
 const sessionKey = "agent:codex-acp:session-1";
 
@@ -96,9 +195,18 @@ function createDispatcher(): {
 } {
   const counts = { tool: 0, block: 0, final: 0 };
   const dispatcher: ReplyDispatcher = {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
+    sendToolResult: vi.fn(() => {
+      counts.tool += 1;
+      return true;
+    }),
+    sendBlockReply: vi.fn(() => {
+      counts.block += 1;
+      return true;
+    }),
+    sendFinalReply: vi.fn(() => {
+      counts.final += 1;
+      return true;
+    }),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
     markComplete: vi.fn(),
@@ -135,6 +243,9 @@ async function runDispatch(params: {
   shouldRouteToOriginating?: boolean;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
+  inboundAudio?: boolean;
+  sessionTtsAuto?: "always" | "off" | "inbound" | "tagged";
+  ttsChannel?: string;
 }) {
   return tryDispatchAcpReply({
     ctx: buildTestCtx({
@@ -147,7 +258,9 @@ async function runDispatch(params: {
     cfg: params.cfg ?? createAcpTestConfig(),
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     sessionKey,
-    inboundAudio: false,
+    inboundAudio: params.inboundAudio ?? false,
+    ...(params.sessionTtsAuto ? { sessionTtsAuto: params.sessionTtsAuto } : {}),
+    ...(params.ttsChannel ? { ttsChannel: params.ttsChannel } : {}),
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
       ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
@@ -232,6 +345,15 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
+    gatewayRuntimeMocks.ensureSession.mockReset();
+    gatewayRuntimeMocks.ensureSession.mockResolvedValue({});
+    gatewayRuntimeMocks.recordRunDeliveryTarget.mockReset();
+    gatewayRuntimeMocks.recordRunDeliveryTarget.mockResolvedValue({});
+    gatewayRuntimeMocks.getRun.mockReset();
+    gatewayRuntimeMocks.getRun.mockResolvedValue(null);
+    projectionServiceMocks.ensureProjection.mockReset();
+    projectionServiceMocks.ensureProjection.mockResolvedValue(undefined);
+    projectionServiceMocks.instances.length = 0;
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -341,6 +463,309 @@ describe("tryDispatchAcpReply", () => {
     await dispatchVisibleTurn(onReplyStart);
 
     expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists a run-scoped delivery target and starts durable projection for acp-node turns", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({
+        backend: "acp-node",
+      }),
+    });
+    managerMocks.runTurn.mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "reply from durable path",
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+      shouldRouteToOriginating: true,
+      ctxOverrides: {
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:thread-1",
+      },
+    });
+
+    expect(gatewayRuntimeMocks.ensureSession).toHaveBeenCalledWith({
+      sessionKey,
+    });
+    expect(gatewayRuntimeMocks.recordRunDeliveryTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        runId: expect.any(String),
+        channel: "telegram",
+        to: "telegram:thread-1",
+        routeMode: "originating",
+        sessionTtsAuto: "always",
+        ttsChannel: "telegram",
+      }),
+    );
+    expect(projectionServiceMocks.ensureProjection).toHaveBeenCalledTimes(1);
+    expect(projectionServiceMocks.ensureProjection.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        target: expect.objectContaining({
+          runId: expect.any(String),
+          channel: "telegram",
+          to: "telegram:thread-1",
+        }),
+        restartMode: false,
+        waitForRunStart: true,
+      }),
+    );
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: expect.any(String),
+      }),
+    );
+    expect(managerMocks.runTurn.mock.calls[0]?.[0]).not.toHaveProperty("onEvent");
+  });
+
+  it("shares live durable delivery state so routed counts and final TTS propagate through the dispatch result", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({
+        backend: "acp-node",
+      }),
+    });
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { kind: string; payload: { text?: string } };
+      if (params.kind === "final" && params.payload.text === "durable streamed block") {
+        return {
+          mediaUrl: "https://example.com/final-tts.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+    projectionServiceMocks.ensureProjection.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as { target: unknown };
+      const serviceParams = args[1] as
+        | {
+            coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+          }
+        | undefined;
+      const coordinator = serviceParams?.coordinatorFactory({
+        target: params.target,
+        restartMode: false,
+      }) as {
+        deliver: (
+          kind: "tool" | "block" | "final",
+          payload: { text?: string; mediaUrl?: string; audioAsVoice?: boolean },
+          meta?: { toolCallId?: string; allowEdit?: boolean },
+        ) => Promise<boolean>;
+      };
+      await coordinator.deliver(
+        "tool",
+        { text: "tool update" },
+        { toolCallId: "tool-1", allowEdit: false },
+      );
+      await coordinator.deliver("block", { text: "durable streamed block" });
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply from durable path",
+      dispatcher,
+      shouldRouteToOriginating: true,
+      ctxOverrides: {
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:thread-1",
+      },
+    });
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: {
+        tool: 1,
+        block: 1,
+        final: 1,
+      },
+    });
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(3);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        payload: expect.objectContaining({ text: "tool update" }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        payload: expect.objectContaining({ text: "durable streamed block" }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:thread-1",
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/final-tts.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+  });
+
+  it("uses confirmed session-route delivery for live durable projection instead of the queued dispatcher lane", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({
+        backend: "acp-node",
+      }),
+    });
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    projectionServiceMocks.ensureProjection.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as { target: unknown };
+      const serviceParams = args[1] as
+        | {
+            coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+          }
+        | undefined;
+      const coordinator = serviceParams?.coordinatorFactory({
+        target: params.target,
+        restartMode: false,
+      }) as {
+        deliver: (kind: "tool" | "block" | "final", payload: { text?: string }) => Promise<boolean>;
+      };
+      await coordinator.deliver("block", { text: "session route block" });
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply from session route durable path",
+      dispatcher,
+      shouldRouteToOriginating: false,
+      ctxOverrides: {
+        To: "discord:session-thread",
+      },
+    });
+
+    expect(result).toMatchObject({
+      counts: {
+        block: 1,
+      },
+    });
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "discord:session-thread",
+        payload: expect.objectContaining({ text: "session route block" }),
+      }),
+    );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not double live block state or final TTS input after a transient live retry", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey,
+      meta: createAcpSessionMeta({
+        backend: "acp-node",
+      }),
+    });
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    routeMocks.routeReply
+      .mockResolvedValueOnce({ ok: false, error: "transient" } as unknown as {
+        ok: boolean;
+        messageId: string;
+      })
+      .mockResolvedValueOnce({ ok: true, messageId: "block-1" })
+      .mockResolvedValueOnce({ ok: true, messageId: "final-tts" });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { kind: string; payload: { text?: string } };
+      if (params.kind === "final" && params.payload.text === "durable streamed block") {
+        return {
+          mediaUrl: "https://example.com/final-tts.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+    projectionServiceMocks.ensureProjection.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as { target: unknown };
+      const serviceParams = args[1] as
+        | {
+            coordinatorFactory: (params: { target: unknown; restartMode: boolean }) => unknown;
+          }
+        | undefined;
+      const firstCoordinator = serviceParams?.coordinatorFactory({
+        target: params.target,
+        restartMode: false,
+      }) as {
+        deliver: (kind: "block", payload: { text: string }) => Promise<boolean>;
+      };
+      const secondCoordinator = serviceParams?.coordinatorFactory({
+        target: params.target,
+        restartMode: false,
+      }) as {
+        deliver: (kind: "block", payload: { text: string }) => Promise<boolean>;
+      };
+      expect(await firstCoordinator.deliver("block", { text: "durable streamed block" })).toBe(
+        false,
+      );
+      expect(await secondCoordinator.deliver("block", { text: "durable streamed block" })).toBe(
+        true,
+      );
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply after retry",
+      dispatcher,
+      shouldRouteToOriginating: false,
+      ctxOverrides: {
+        To: "discord:session-thread",
+      },
+    });
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: {
+        tool: 0,
+        block: 1,
+        final: 1,
+      },
+    });
+    const finalTtsCalls = ttsMocks.maybeApplyTtsToPayload.mock.calls
+      .map(([params]) => params as { kind: string; payload: { text?: string } })
+      .filter((params) => params.kind === "final" && typeof params.payload.text === "string");
+    expect(finalTtsCalls).toEqual([
+      expect.objectContaining({
+        kind: "final",
+        payload: expect.objectContaining({
+          text: "durable streamed block",
+        }),
+      }),
+    ]);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "durable streamed block" }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "durable streamed block" }),
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/final-tts.mp3",
+        audioAsVoice: true,
+      }),
+    );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not start reply lifecycle for empty ACP prompt", async () => {

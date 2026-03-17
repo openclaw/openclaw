@@ -11,6 +11,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { sessionTranscriptHasIdempotencyKey } from "../../config/sessions.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyContent } from "../../interactive/payload.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -50,6 +51,8 @@ export type RouteReplyParams = {
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
+  /** Durable transcript idempotency key for mirrored delivery evidence. */
+  idempotencyKey?: string;
   /** Whether this message is being sent in a group/channel context */
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
@@ -136,6 +139,18 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: true };
   }
 
+  if (
+    params.mirror !== false &&
+    params.sessionKey &&
+    params.idempotencyKey &&
+    (await sessionTranscriptHasIdempotencyKey({
+      sessionKey: params.sessionKey,
+      idempotencyKey: params.idempotencyKey,
+    }))
+  ) {
+    return { ok: true };
+  }
+
   if (channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
@@ -192,6 +207,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
               agentId: resolvedAgentId,
               text,
               mediaUrls,
+              ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
               ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
               ...(params.groupId ? { groupId: params.groupId } : {}),
             }

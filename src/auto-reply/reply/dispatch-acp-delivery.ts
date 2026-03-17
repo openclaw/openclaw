@@ -1,3 +1,4 @@
+import type { AcpGatewayRunDeliveryTargetRecord } from "../../acp/store/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -11,6 +12,7 @@ import { routeReply } from "./route-reply.js";
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
   allowEdit?: boolean;
+  idempotencyKey?: string;
 };
 
 type ToolMessageHandle = {
@@ -25,9 +27,25 @@ type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
   accumulatedBlockText: string;
   blockCount: number;
+  deliveredSyntheticFinalKey: string | null;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
+
+export function createAcpDispatchDeliveryState(): AcpDispatchDeliveryState {
+  return {
+    startedReplyLifecycle: false,
+    accumulatedBlockText: "",
+    blockCount: 0,
+    deliveredSyntheticFinalKey: null,
+    routedCounts: {
+      tool: 0,
+      block: 0,
+      final: 0,
+    },
+    toolMessageByCallId: new Map(),
+  };
+}
 
 export type AcpDispatchDeliveryCoordinator = {
   startReplyLifecycle: () => Promise<void>;
@@ -38,14 +56,98 @@ export type AcpDispatchDeliveryCoordinator = {
   ) => Promise<boolean>;
   getBlockCount: () => number;
   getAccumulatedBlockText: () => string;
+  resolveSyntheticFinalPayload: () => Promise<ReplyPayload | null>;
+  hasDeliveredSyntheticFinal: (params: { cursorSeq: number; effectCount: number }) => boolean;
+  markSyntheticFinalDelivered: (params: { cursorSeq: number; effectCount: number }) => void;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
 
+export async function resolveAcpSyntheticFinalTtsPayload(params: {
+  cfg: OpenClawConfig;
+  accumulatedBlockText: string;
+  blockCount: number;
+  inboundAudio: boolean;
+  sessionTtsAuto?: TtsAutoMode;
+  ttsChannel?: string;
+}): Promise<ReplyPayload | null> {
+  if (params.blockCount <= 0 || !params.accumulatedBlockText.trim()) {
+    return null;
+  }
+  const ttsSyntheticReply = await maybeApplyTtsToPayload({
+    payload: { text: params.accumulatedBlockText },
+    cfg: params.cfg,
+    channel: params.ttsChannel,
+    kind: "final",
+    inboundAudio: params.inboundAudio,
+    ttsAuto: params.sessionTtsAuto,
+  });
+  if (!ttsSyntheticReply.mediaUrl) {
+    return null;
+  }
+  return {
+    mediaUrl: ttsSyntheticReply.mediaUrl,
+    ...(ttsSyntheticReply.audioAsVoice ? { audioAsVoice: ttsSyntheticReply.audioAsVoice } : {}),
+  };
+}
+
+export function buildAcpRunDeliveryTarget(params: {
+  sessionKey: string;
+  runId: string;
+  ctx: FinalizedMsgContext;
+  inboundAudio: boolean;
+  sessionTtsAuto?: TtsAutoMode;
+  ttsChannel?: string;
+  shouldRouteToOriginating: boolean;
+  originatingChannel?: string;
+  originatingTo?: string;
+  now?: number;
+}): AcpGatewayRunDeliveryTargetRecord | null {
+  const now = params.now ?? Date.now();
+  const routeMode =
+    params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo
+      ? "originating"
+      : "session";
+  const channel =
+    routeMode === "originating"
+      ? params.originatingChannel?.trim()
+      : String(params.ctx.Surface ?? params.ctx.Provider ?? "").trim();
+  const to =
+    routeMode === "originating" ? params.originatingTo?.trim() : String(params.ctx.To ?? "").trim();
+  if (!channel || !to) {
+    return null;
+  }
+  return {
+    targetKey: `${params.runId}:primary`,
+    targetId: "primary",
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    channel,
+    to,
+    ...((params.ctx.Surface ?? params.ctx.Provider)
+      ? { provider: String(params.ctx.Surface ?? params.ctx.Provider) }
+      : {}),
+    ...(params.ctx.AccountId ? { accountId: params.ctx.AccountId } : {}),
+    ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+    routeMode,
+    toolReplayPolicy: "append_only_after_restart",
+    ...(params.inboundAudio ? { inboundAudio: params.inboundAudio } : {}),
+    ...(params.sessionTtsAuto ? { sessionTtsAuto: params.sessionTtsAuto } : {}),
+    ...(params.ttsChannel ? { ttsChannel: params.ttsChannel } : {}),
+    createdAt: now,
+    updatedAt: now,
+    ...(params.ctx.ChatType === "group" || params.ctx.ChatType === "channel"
+      ? { isGroup: true }
+      : {}),
+    ...(params.ctx.NativeChannelId ? { groupId: params.ctx.NativeChannelId } : {}),
+  };
+}
+
 export function createAcpDispatchDeliveryCoordinator(params: {
   cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
-  dispatcher: ReplyDispatcher;
+  ctx?: FinalizedMsgContext;
+  dispatcher?: ReplyDispatcher;
+  target?: AcpGatewayRunDeliveryTargetRecord;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
@@ -53,18 +155,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingChannel?: string;
   originatingTo?: string;
   onReplyStart?: () => Promise<void> | void;
+  restartMode?: boolean;
+  state?: AcpDispatchDeliveryState;
 }): AcpDispatchDeliveryCoordinator {
-  const state: AcpDispatchDeliveryState = {
-    startedReplyLifecycle: false,
-    accumulatedBlockText: "",
-    blockCount: 0,
-    routedCounts: {
-      tool: 0,
-      block: 0,
-      final: 0,
-    },
-    toolMessageByCallId: new Map(),
-  };
+  const state = params.state ?? createAcpDispatchDeliveryState();
+  const inboundAudio = params.inboundAudio || params.target?.inboundAudio === true;
+  const sessionTtsAuto = params.sessionTtsAuto ?? params.target?.sessionTtsAuto;
+  const ttsChannel = params.ttsChannel ?? params.target?.ttsChannel;
+  const buildSyntheticFinalKey = (cursorSeq: number, effectCount: number) =>
+    `${cursorSeq}:${effectCount}`;
 
   const startReplyLifecycleOnce = async () => {
     if (state.startedReplyLifecycle) {
@@ -74,11 +173,35 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     await params.onReplyStart?.();
   };
 
+  const recordConfirmedBlockDelivery = (payload: ReplyPayload) => {
+    const text = payload.text?.trim();
+    if (!text) {
+      return;
+    }
+    if (state.accumulatedBlockText.length > 0) {
+      state.accumulatedBlockText += "\n";
+    }
+    state.accumulatedBlockText += payload.text!;
+    state.blockCount += 1;
+  };
+
   const tryEditToolMessage = async (
     payload: ReplyPayload,
     toolCallId: string,
   ): Promise<boolean> => {
-    if (!params.shouldRouteToOriginating || !params.originatingChannel || !params.originatingTo) {
+    const sessionKey = params.ctx?.SessionKey ?? params.target?.sessionKey;
+    if (!sessionKey) {
+      return false;
+    }
+    if (params.restartMode) {
+      return false;
+    }
+    const routeChannel =
+      params.target?.channel ??
+      (params.shouldRouteToOriginating ? params.originatingChannel : undefined);
+    const routeTo =
+      params.target?.to ?? (params.shouldRouteToOriginating ? params.originatingTo : undefined);
+    if (!routeChannel || !routeTo) {
       return false;
     }
     const handle = state.toolMessageByCallId.get(toolCallId);
@@ -102,7 +225,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           messageId: handle.messageId,
           message,
         },
-        sessionKey: params.ctx.SessionKey,
+        sessionKey,
       });
       state.routedCounts.tool += 1;
       return true;
@@ -119,14 +242,6 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
-    if (kind === "block" && payload.text?.trim()) {
-      if (state.accumulatedBlockText.length > 0) {
-        state.accumulatedBlockText += "\n";
-      }
-      state.accumulatedBlockText += payload.text;
-      state.blockCount += 1;
-    }
-
     if ((payload.text?.trim() ?? "").length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
       await startReplyLifecycleOnce();
     }
@@ -134,13 +249,26 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     const ttsPayload = await maybeApplyTtsToPayload({
       payload,
       cfg: params.cfg,
-      channel: params.ttsChannel,
+      channel: ttsChannel,
       kind,
-      inboundAudio: params.inboundAudio,
-      ttsAuto: params.sessionTtsAuto,
+      inboundAudio,
+      ttsAuto: sessionTtsAuto,
     });
 
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+    const routeChannel =
+      params.target?.channel ??
+      (params.shouldRouteToOriginating ? params.originatingChannel : undefined);
+    const routeTo =
+      params.target?.to ?? (params.shouldRouteToOriginating ? params.originatingTo : undefined);
+    const routeSessionKey = params.ctx?.SessionKey ?? params.target?.sessionKey;
+    const routeAccountId = params.ctx?.AccountId ?? params.target?.accountId;
+    const routeThreadId = params.ctx?.MessageThreadId ?? params.target?.threadId;
+    const routeProvider = params.ctx?.Surface ?? params.ctx?.Provider ?? params.target?.provider;
+    const shouldUseRouteReply =
+      Boolean(routeChannel && routeTo) &&
+      (params.target != null || params.shouldRouteToOriginating);
+
+    if (shouldUseRouteReply && routeChannel && routeTo) {
       const toolCallId = meta?.toolCallId?.trim();
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
         const edited = await tryEditToolMessage(ttsPayload, toolCallId);
@@ -151,12 +279,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 
       const result = await routeReply({
         payload: ttsPayload,
-        channel: params.originatingChannel,
-        to: params.originatingTo,
-        sessionKey: params.ctx.SessionKey,
-        accountId: params.ctx.AccountId,
-        threadId: params.ctx.MessageThreadId,
+        channel: routeChannel,
+        to: routeTo,
+        sessionKey: routeSessionKey,
+        ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
+        accountId: routeAccountId,
+        threadId: routeThreadId,
         cfg: params.cfg,
+        ...(params.target?.isGroup != null ? { isGroup: params.target.isGroup } : {}),
+        ...(params.target?.groupId ? { groupId: params.target.groupId } : {}),
       });
       if (!result.ok) {
         logVerbose(
@@ -164,12 +295,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         );
         return false;
       }
+      if (kind === "block") {
+        recordConfirmedBlockDelivery(payload);
+      }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
-          channel: params.originatingChannel,
-          accountId: params.ctx.AccountId,
-          to: params.originatingTo,
-          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          channel: routeChannel,
+          accountId: routeAccountId,
+          to: routeTo,
+          ...(routeThreadId != null ? { threadId: routeThreadId } : {}),
           messageId: result.messageId,
         });
       }
@@ -177,13 +311,22 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return true;
     }
 
-    if (kind === "tool") {
-      return params.dispatcher.sendToolResult(ttsPayload);
+    if (!params.dispatcher) {
+      logVerbose(
+        `dispatch-acp: no dispatcher or routable target available for acp/${kind}${routeProvider ? ` on ${routeProvider}` : ""}`,
+      );
+      return false;
     }
-    if (kind === "block") {
-      return params.dispatcher.sendBlockReply(ttsPayload);
+    const queued =
+      kind === "tool"
+        ? params.dispatcher.sendToolResult(ttsPayload)
+        : kind === "block"
+          ? params.dispatcher.sendBlockReply(ttsPayload)
+          : params.dispatcher.sendFinalReply(ttsPayload);
+    if (queued && kind === "block") {
+      recordConfirmedBlockDelivery(payload);
     }
-    return params.dispatcher.sendFinalReply(ttsPayload);
+    return queued;
   };
 
   return {
@@ -191,6 +334,24 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     deliver,
     getBlockCount: () => state.blockCount,
     getAccumulatedBlockText: () => state.accumulatedBlockText,
+    resolveSyntheticFinalPayload: async () =>
+      await resolveAcpSyntheticFinalTtsPayload({
+        cfg: params.cfg,
+        accumulatedBlockText: state.accumulatedBlockText,
+        blockCount: state.blockCount,
+        inboundAudio,
+        sessionTtsAuto,
+        ttsChannel,
+      }),
+    hasDeliveredSyntheticFinal: (syntheticFinal) =>
+      state.deliveredSyntheticFinalKey ===
+      buildSyntheticFinalKey(syntheticFinal.cursorSeq, syntheticFinal.effectCount),
+    markSyntheticFinalDelivered: (syntheticFinal) => {
+      state.deliveredSyntheticFinalKey = buildSyntheticFinalKey(
+        syntheticFinal.cursorSeq,
+        syntheticFinal.effectCount,
+      );
+    },
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;

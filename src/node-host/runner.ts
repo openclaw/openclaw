@@ -7,6 +7,7 @@ import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
+  NODE_ACP_COMMANDS,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_RUN_COMMANDS,
@@ -187,9 +188,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
+    caps: ["system", "acp:v1", ...(browserProxyEnabled ? ["browser"] : [])],
     commands: [
       ...NODE_SYSTEM_RUN_COMMANDS,
+      ...NODE_ACP_COMMANDS,
       ...NODE_EXEC_APPROVALS_COMMANDS,
       ...(browserProxyEnabled ? [NODE_BROWSER_PROXY_COMMAND] : []),
     ],

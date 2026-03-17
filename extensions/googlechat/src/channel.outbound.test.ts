@@ -1,16 +1,20 @@
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/googlechat";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./api.js", () => ({
-  sendGoogleChatMessage: sendGoogleChatMessageMock,
-  uploadGoogleChatAttachment: uploadGoogleChatAttachmentMock,
-}));
+vi.mock("./api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api.js")>();
+  return {
+    ...actual,
+    sendGoogleChatMessage: sendGoogleChatMessageMock,
+    uploadGoogleChatAttachment: uploadGoogleChatAttachmentMock,
+  };
+});
 
-import { googlechatPlugin } from "./channel.js";
-import { setGoogleChatRuntime } from "./runtime.js";
+let googlechatPlugin: typeof import("./channel.js").googlechatPlugin;
+let setGoogleChatRuntime: typeof import("./runtime.js").setGoogleChatRuntime;
 
 function createGoogleChatCfg(): OpenClawConfig {
   return {
@@ -50,6 +54,13 @@ function setupRuntimeMediaMocks(params: { loadFileName: string; loadBytes: strin
 
   return { loadWebMedia, fetchRemoteMedia };
 }
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ googlechatPlugin } = await import("./channel.js"));
+  ({ setGoogleChatRuntime } = await import("./runtime.js"));
+  vi.clearAllMocks();
+});
 
 describe("googlechatPlugin outbound sendMedia", () => {
   it("loads local media with mediaLocalRoots via runtime media loader", async () => {

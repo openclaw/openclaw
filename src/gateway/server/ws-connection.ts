@@ -11,6 +11,7 @@ import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
+import { handleNodeDisconnect } from "../server-node-events.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
@@ -248,6 +249,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         if (nodeId) {
           removeRemoteNodeInfo(nodeId);
           context.nodeUnsubscribeAll(nodeId);
+          void handleNodeDisconnect(nodeId).catch((err) => {
+            logGateway.warn(
+              `failed to mark ACP node disconnect for ${nodeId}: ${formatError(err)}`,
+            );
+          });
         }
       }
       logWs("out", "close", {

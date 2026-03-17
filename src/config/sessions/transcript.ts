@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
@@ -152,7 +153,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     return { ok: false, reason: "empty text" };
   }
 
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const resolvedAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(resolvedAgentId);
   const store = loadSessionStore(storePath, { skipCache: true });
   const entry = store[sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {
@@ -167,7 +169,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       sessionStore: store,
       storePath,
       sessionEntry: entry,
-      agentId: params.agentId,
+      agentId: resolvedAgentId,
       sessionsDir: path.dirname(storePath),
     });
     sessionFile = resolvedSessionFile.sessionFile;
@@ -215,6 +217,42 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };
+}
+
+export async function sessionTranscriptHasIdempotencyKey(params: {
+  agentId?: string;
+  sessionKey: string;
+  idempotencyKey: string;
+  storePath?: string;
+}): Promise<boolean> {
+  const sessionKey = params.sessionKey.trim();
+  const idempotencyKey = params.idempotencyKey.trim();
+  if (!sessionKey || !idempotencyKey) {
+    return false;
+  }
+
+  const resolvedAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(resolvedAgentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey] as SessionEntry | undefined;
+  if (!entry?.sessionId) {
+    return false;
+  }
+
+  try {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
+      agentId: resolvedAgentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    return await transcriptHasIdempotencyKey(resolvedSessionFile.sessionFile, idempotencyKey);
+  } catch {
+    return false;
+  }
 }
 
 async function transcriptHasIdempotencyKey(

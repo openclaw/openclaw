@@ -66,6 +66,7 @@ import {
 } from "../../server-constants.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import { handleNodeConnected } from "../../server-node-events.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -1020,6 +1021,21 @@ export function attachGatewayWsMessageHandler(params: {
             commands: nodeSession.commands,
             remoteIp: nodeSession.remoteIp,
           });
+          void handleNodeConnected({
+            nodeId: nodeSession.nodeId,
+            invokeNode: async ({ nodeId, command, params, timeoutMs, idempotencyKey }) =>
+              await context.nodeRegistry.invoke({
+                nodeId,
+                command,
+                params,
+                timeoutMs,
+                idempotencyKey,
+              }),
+          }).catch((err) =>
+            logGateway.warn(
+              `ACP node status reconcile failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+            ),
+          );
           void refreshRemoteNodeBins({
             nodeId: nodeSession.nodeId,
             platform: nodeSession.platform,

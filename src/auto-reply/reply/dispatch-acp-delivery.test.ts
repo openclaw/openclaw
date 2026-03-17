@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import {
+  createAcpDispatchDeliveryCoordinator,
+  createAcpDispatchDeliveryState,
+} from "./dispatch-acp-delivery.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -11,8 +14,24 @@ const ttsMocks = vi.hoisted(() => ({
   }),
 }));
 
+const routeMocks = vi.hoisted(() => ({
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+}));
+
+const messageActionMocks = vi.hoisted(() => ({
+  runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
+}));
+
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+
+vi.mock("./route-reply.js", () => ({
+  routeReply: (params: unknown) => routeMocks.routeReply(params),
+}));
+
+vi.mock("../../infra/outbound/message-action-runner.js", () => ({
+  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
 }));
 
 function createDispatcher(): ReplyDispatcher {
@@ -38,6 +57,50 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
     inboundAudio: false,
     shouldRouteToOriginating: false,
     ...(onReplyStart ? { onReplyStart } : {}),
+  });
+}
+
+function createRestartCoordinator() {
+  return createAcpDispatchDeliveryCoordinator({
+    cfg: createAcpTestConfig(),
+    target: {
+      targetKey: "run-1:primary",
+      targetId: "primary",
+      sessionKey: "agent:codex-acp:session-1",
+      runId: "run-1",
+      channel: "telegram",
+      to: "telegram:thread-1",
+      routeMode: "originating",
+      toolReplayPolicy: "append_only_after_restart",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    inboundAudio: false,
+    shouldRouteToOriginating: false,
+    restartMode: true,
+  });
+}
+
+function createSharedSessionRouteCoordinator(params?: {
+  state?: ReturnType<typeof createAcpDispatchDeliveryState>;
+}) {
+  return createAcpDispatchDeliveryCoordinator({
+    cfg: createAcpTestConfig(),
+    target: {
+      targetKey: "run-1:primary",
+      targetId: "primary",
+      sessionKey: "agent:codex-acp:session-1",
+      runId: "run-1",
+      channel: "discord",
+      to: "discord:session-thread",
+      routeMode: "session",
+      toolReplayPolicy: "append_only_after_restart",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    inboundAudio: false,
+    shouldRouteToOriginating: false,
+    ...(params?.state ? { state: params.state } : {}),
   });
 }
 
@@ -71,5 +134,67 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await coordinator.deliver("final", {});
 
     expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("downgrades restarted tool updates to append-only delivery for interleaved tool calls", async () => {
+    const coordinator = createRestartCoordinator();
+
+    await coordinator.deliver(
+      "tool",
+      { text: "tool-a pending" },
+      { toolCallId: "tool-a", allowEdit: true },
+    );
+    await coordinator.deliver(
+      "tool",
+      { text: "tool-b pending" },
+      { toolCallId: "tool-b", allowEdit: true },
+    );
+    await coordinator.deliver(
+      "tool",
+      { text: "tool-a completed" },
+      { toolCallId: "tool-a", allowEdit: true },
+    );
+    await coordinator.deliver(
+      "tool",
+      { text: "tool-b completed" },
+      { toolCallId: "tool-b", allowEdit: true },
+    );
+
+    expect(messageActionMocks.runMessageAction).not.toHaveBeenCalled();
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(4);
+    expect(routeMocks.routeReply.mock.calls.map(([params]) => params)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: "telegram",
+          to: "telegram:thread-1",
+          payload: expect.objectContaining({ text: "tool-a pending" }),
+        }),
+        expect.objectContaining({
+          channel: "telegram",
+          to: "telegram:thread-1",
+          payload: expect.objectContaining({ text: "tool-b completed" }),
+        }),
+      ]),
+    );
+  });
+
+  it("does not double confirmed block state when a live routed block send fails and later retries with shared state", async () => {
+    const state = createAcpDispatchDeliveryState();
+    const firstCoordinator = createSharedSessionRouteCoordinator({ state });
+    const secondCoordinator = createSharedSessionRouteCoordinator({ state });
+    routeMocks.routeReply
+      .mockResolvedValueOnce({ ok: false, error: "transient" } as unknown as {
+        ok: boolean;
+        messageId: string;
+      })
+      .mockResolvedValueOnce({ ok: true, messageId: "block-1" });
+
+    expect(await firstCoordinator.deliver("block", { text: "hello" })).toBe(false);
+    expect(firstCoordinator.getBlockCount()).toBe(0);
+    expect(firstCoordinator.getAccumulatedBlockText()).toBe("");
+
+    expect(await secondCoordinator.deliver("block", { text: "hello" })).toBe(true);
+    expect(secondCoordinator.getBlockCount()).toBe(1);
+    expect(secondCoordinator.getAccumulatedBlockText()).toBe("hello");
   });
 });

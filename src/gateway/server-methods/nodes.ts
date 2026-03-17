@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AcpGatewayStoreError } from "../../acp/store/store.js";
 import { loadConfig } from "../../config/config.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
@@ -95,6 +96,21 @@ type PendingNodeAction = {
 };
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
+
+function mapNodeEventErrorToRpcError(error: unknown) {
+  if (error instanceof AcpGatewayStoreError) {
+    const rpcCode =
+      error.code === "ACP_NODE_STORE_READ_FAILED" || error.code === "ACP_NODE_STORE_WRITE_FAILED"
+        ? ErrorCodes.UNAVAILABLE
+        : ErrorCodes.INVALID_REQUEST;
+    return errorShape(rpcCode, error.message, {
+      details: {
+        code: error.code,
+      },
+    });
+  }
+  return null;
+}
 
 async function resolveDirectNodePushConfig() {
   const auth = await resolveApnsAuthConfigFromEnv(process.env);
@@ -1129,8 +1145,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
           ? JSON.stringify(p.payload)
           : null;
     await respondUnavailableOnThrow(respond, async () => {
-      const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
+      const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeContext = {
         deps: context.deps,
         broadcast: context.broadcast,
@@ -1151,10 +1167,19 @@ export const nodeHandlers: GatewayRequestHandlers = {
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         logGateway: { warn: context.logGateway.warn },
       };
-      await handleNodeEvent(nodeContext, nodeId, {
-        event: p.event,
-        payloadJSON,
-      });
+      try {
+        await handleNodeEvent(nodeContext, nodeId, {
+          event: p.event,
+          payloadJSON,
+        });
+      } catch (error) {
+        const mapped = mapNodeEventErrorToRpcError(error);
+        if (mapped) {
+          respond(false, undefined, mapped);
+          return;
+        }
+        throw error;
+      }
       respond(true, { ok: true }, undefined);
     });
   },
