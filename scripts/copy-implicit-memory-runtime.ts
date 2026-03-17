@@ -28,8 +28,9 @@ function copyImplicitMemoryRuntime() {
   fs.copyFileSync(srcFile, distFile);
   if (verbose) {
     console.log("[copy-implicit-memory-runtime] Copied memory_manager.py");
+  } else {
+    console.log("[copy-implicit-memory-runtime] Copied implicit memory runtime asset.");
   }
-  console.log("[copy-implicit-memory-runtime] Copied implicit memory runtime asset.");
 }
 
 copyImplicitMemoryRuntime();

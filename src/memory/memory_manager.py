@@ -47,29 +47,25 @@ class MemoryManager:
                 try:
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
-                    conn.execute(
-                        """
+                    conn.executescript(
+                        f"""
+                        BEGIN;
+
                         CREATE TABLE IF NOT EXISTS user_experiences (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             trigger_intent TEXT NOT NULL,
                             implicit_rules TEXT NOT NULL,
                             created_at TEXT NOT NULL
-                        )
-                        """
-                    )
-                    conn.execute(
-                        f"""
+                        );
+
                         CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE_NAME}
                         USING fts5(
                             trigger_intent,
                             implicit_rules,
                             content='user_experiences',
                             content_rowid='id'
-                        )
-                        """
-                    )
-                    conn.executescript(
-                        f"""
+                        );
+
                         CREATE TRIGGER IF NOT EXISTS user_experiences_ai
                         AFTER INSERT ON user_experiences
                         BEGIN
@@ -94,10 +90,12 @@ class MemoryManager:
                             INSERT INTO {FTS_TABLE_NAME}(rowid, trigger_intent, implicit_rules)
                             VALUES (new.id, new.trigger_intent, new.implicit_rules);
                         END;
+
+                        COMMIT;
                         """
                     )
-                    conn.commit()
                 except sqlite3.OperationalError:
+                    conn.rollback()
                     self._logger.debug("FTS5 initialization failed for %s", self._db_path, exc_info=True)
                     raise
 

@@ -4,7 +4,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 
 const MEMORY_MANAGER_PATH = fileURLToPath(new URL("./memory_manager.py", import.meta.url));
 const PYTHON_CANDIDATES = ["python3", "python"] as const;
-const RETRIEVE_TIMEOUT_MS = 1_500;
+const RETRIEVE_TIMEOUT_MS = 5_000;
 const SAVE_TIMEOUT_MS = 2_000;
 const MAX_SAVED_RULE_CHARS = 4_000;
 const MAX_SAVED_INTENT_CHARS = 500;
