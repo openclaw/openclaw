@@ -42,6 +42,36 @@ import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from ".
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
+// --- Active bot topic tracking (#40475) ---
+// Tracks group topics where the bot was @-mentioned, so that subsequent thread
+// replies can skip the mention check without responding in unrelated threads.
+// Keyed by "chatId:topicId", value is the last-activity epoch-ms timestamp.
+const activeBotTopicTimestamps = new Map<string, number>();
+const ACTIVE_TOPIC_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function isActiveBotTopic(chatId: string, topicId: string): boolean {
+  const key = `${chatId}:${topicId}`;
+  const ts = activeBotTopicTimestamps.get(key);
+  if (ts == null) return false;
+  if (Date.now() - ts > ACTIVE_TOPIC_TTL_MS) {
+    activeBotTopicTimestamps.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function markActiveBotTopic(chatId: string, topicId: string): void {
+  const key = `${chatId}:${topicId}`;
+  activeBotTopicTimestamps.set(key, Date.now());
+  // Lazy eviction when the map grows large
+  if (activeBotTopicTimestamps.size > 500) {
+    const cutoff = Date.now() - ACTIVE_TOPIC_TTL_MS;
+    for (const [k, v] of activeBotTopicTimestamps) {
+      if (v < cutoff) activeBotTopicTimestamps.delete(k);
+    }
+  }
+}
+
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
 type PermissionError = {
@@ -1087,7 +1117,47 @@ export async function handleFeishuMessage(params: {
       groupConfig,
     }));
 
-    if (requireMention && !ctx.mentionedBot) {
+    // --- Thread follow-up mention bypass (#40475) ---
+    //
+    // In topic-scoped sessions (group_topic / group_topic_sender) a user
+    // @-mentions the bot once to start a conversation; the bot replies inside a
+    // thread.  Requiring @-mention for every subsequent reply makes topic
+    // sessions unusable.
+    //
+    // threadFollowUp controls this behavior:
+    //   "off"    — always require @-mention, even in threads (legacy)
+    //   "topic"  — skip @-mention for all thread replies in topic-scoped sessions
+    //   "active" — skip @-mention only in topics the bot was previously
+    //              @-mentioned in (prevents responding to unrelated human
+    //              threads) [default]
+    //
+    // Group-scoped sessions (groupSessionScope="group") are never affected
+    // regardless of this setting — threads there may be entirely unrelated to
+    // the bot.
+    const threadFollowUp: string =
+      groupConfig?.threadFollowUp ?? feishuCfg?.threadFollowUp ?? "active";
+    const isTopicScoped =
+      groupSession?.groupSessionScope === "group_topic" ||
+      groupSession?.groupSessionScope === "group_topic_sender";
+    const topicId = ctx.rootId || ctx.messageId;
+
+    // Record active topics when the bot is explicitly @-mentioned so that the
+    // "active" mode can recognise follow-ups later.
+    if (isTopicScoped && ctx.mentionedBot) {
+      markActiveBotTopic(ctx.chatId, topicId);
+    }
+
+    let skipMentionForThread = false;
+    if (isTopicScoped && ctx.rootId && !ctx.mentionedBot) {
+      if (threadFollowUp === "topic") {
+        skipMentionForThread = true;
+      } else if (threadFollowUp === "active") {
+        skipMentionForThread = isActiveBotTopic(ctx.chatId, ctx.rootId);
+      }
+      // threadFollowUp === "off" → skipMentionForThread stays false
+    }
+
+    if (requireMention && !ctx.mentionedBot && !skipMentionForThread) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
@@ -1107,6 +1177,16 @@ export async function handleFeishuMessage(params: {
         });
       }
       return;
+    }
+
+    // Refresh the active topic timestamp on successful follow-ups so that
+    // long-running conversations stay alive.
+    if (skipMentionForThread) {
+      markActiveBotTopic(ctx.chatId, ctx.rootId!);
+      log(
+        `feishu[${account.accountId}]: thread follow-up in group ${ctx.chatId} ` +
+          `(threadFollowUp=${threadFollowUp}, rootId=${ctx.rootId})`,
+      );
     }
   } else {
   }
