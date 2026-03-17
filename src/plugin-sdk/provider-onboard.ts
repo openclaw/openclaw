@@ -12,5 +12,5 @@ export {
   applyProviderConfigWithDefaultModel,
   applyProviderConfigWithDefaultModels,
   applyProviderConfigWithModelCatalog,
-} from "../commands/onboard-auth.config-shared.js";
+} from "../plugins/provider-onboarding-config.js";
 export { ensureModelAllowlistEntry } from "../commands/model-allowlist.js";

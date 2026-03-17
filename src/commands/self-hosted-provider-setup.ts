@@ -6,6 +6,7 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import type {
   ProviderDiscoveryContext,
   ProviderAuthResult,
@@ -13,7 +14,6 @@ import type {
   ProviderNonInteractiveApiKeyResult,
 } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthProfileConfig } from "./auth-profile-config.js";
 
 export {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,

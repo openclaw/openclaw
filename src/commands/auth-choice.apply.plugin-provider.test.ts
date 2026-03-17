@@ -44,7 +44,7 @@ vi.mock("../agents/agent-paths.js", () => ({
 }));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((config) => config));
-vi.mock("./onboard-auth.js", () => ({
+vi.mock("../plugins/provider-auth-helpers.js", () => ({
   applyAuthProfileConfig,
 }));
 
