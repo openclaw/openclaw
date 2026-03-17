@@ -9,7 +9,7 @@ import {
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
+import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -17,6 +17,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { normalizeTuiAliasName, parseTuiAliasArgs, saveTuiAliases } from "./tui-aliases.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
@@ -48,6 +49,7 @@ type CommandHandlerContext = {
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
   requestExit: () => void;
+  refreshAutocomplete: () => void;
 };
 
 function isBtwCommand(text: string): boolean {
@@ -76,6 +78,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     forgetLocalRunId,
     forgetLocalBtwRunId,
     requestExit,
+    refreshAutocomplete,
   } = context;
 
   const setAgent = async (id: string) => {
@@ -240,6 +243,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     openOverlay(settings);
     tui.requestRender();
   };
+
+  const persistAliases = async () => {
+    await saveTuiAliases(state.tuiAliases);
+    refreshAutocomplete();
+  };
+
+  const listAliases = () => {
+    const entries = Object.entries(state.tuiAliases).toSorted(([a], [b]) => a.localeCompare(b));
+    if (entries.length === 0) {
+      chatLog.addSystem("no aliases saved");
+      return;
+    }
+    for (const [name, prompt] of entries) {
+      chatLog.addSystem(`/${name} -> ${prompt}`);
+    }
+  };
+
+  const getReservedSlashNames = () =>
+    new Set(
+      getSlashCommands({
+        provider: state.sessionInfo.modelProvider,
+        model: state.sessionInfo.model,
+      }).map((command) => command.name),
+    );
 
   const handleCommand = async (raw: string) => {
     const { name, args } = parseCommand(raw);
@@ -493,6 +520,78 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "abort":
         await abortActive();
         break;
+      case "alias": {
+        if (!args) {
+          listAliases();
+          break;
+        }
+        const parsedArgs = parseTuiAliasArgs(args);
+        if (!parsedArgs) {
+          chatLog.addSystem("usage: /alias <name> <prompt> or /alias <name>");
+          break;
+        }
+        if (parsedArgs.length === 1) {
+          const aliasName = normalizeTuiAliasName(parsedArgs[0]);
+          if (!aliasName) {
+            chatLog.addSystem("alias names must match [a-z0-9][a-z0-9:_-]*");
+            break;
+          }
+          const aliasPrompt = state.tuiAliases[aliasName];
+          if (!aliasPrompt) {
+            chatLog.addSystem(`alias not found: ${aliasName}`);
+            break;
+          }
+          await sendMessage(aliasPrompt);
+          break;
+        }
+        const aliasName = normalizeTuiAliasName(parsedArgs[0] ?? "");
+        if (!aliasName) {
+          chatLog.addSystem("alias names must match [a-z0-9][a-z0-9:_-]*");
+          break;
+        }
+        const reserved = getReservedSlashNames();
+        if (reserved.has(aliasName)) {
+          chatLog.addSystem(`alias name is reserved: ${aliasName}`);
+          break;
+        }
+        const aliasPrompt = parsedArgs.slice(1).join(" ").trim();
+        if (!aliasPrompt) {
+          chatLog.addSystem("usage: /alias <name> <prompt> or /alias <name>");
+          break;
+        }
+        state.tuiAliases = {
+          ...state.tuiAliases,
+          [aliasName]: aliasPrompt,
+        };
+        try {
+          await persistAliases();
+          chatLog.addSystem(`alias saved: ${aliasName}`);
+        } catch (err) {
+          chatLog.addSystem(`alias save failed: ${sanitizeRenderableText(String(err))}`);
+        }
+        break;
+      }
+      case "unalias": {
+        const aliasName = normalizeTuiAliasName(args);
+        if (!aliasName) {
+          chatLog.addSystem("usage: /unalias <name>");
+          break;
+        }
+        if (!state.tuiAliases[aliasName]) {
+          chatLog.addSystem(`alias not found: ${aliasName}`);
+          break;
+        }
+        const nextAliases = { ...state.tuiAliases };
+        delete nextAliases[aliasName];
+        state.tuiAliases = nextAliases;
+        try {
+          await persistAliases();
+          chatLog.addSystem(`alias removed: ${aliasName}`);
+        } catch (err) {
+          chatLog.addSystem(`alias remove failed: ${sanitizeRenderableText(String(err))}`);
+        }
+        break;
+      }
       case "settings":
         openSettings();
         break;
