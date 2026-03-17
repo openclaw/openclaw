@@ -722,7 +722,7 @@ export async function resolvePluginConversationBindingApproval(params: {
   }
   pendingRequests.delete(params.approvalId);
   if (params.decision === "deny") {
-    await notifyPluginConversationBindingResolved({
+    dispatchPluginConversationBindingResolved({
       status: "denied",
       decision: "deny",
       request,
@@ -755,7 +755,7 @@ export async function resolvePluginConversationBindingApproval(params: {
   log.info(
     `plugin binding approved plugin=${request.pluginId} root=${request.pluginRoot} decision=${params.decision} channel=${request.conversation.channel} account=${request.conversation.accountId} conversation=${request.conversation.conversationId}`,
   );
-  await notifyPluginConversationBindingResolved({
+  dispatchPluginConversationBindingResolved({
     status: "approved",
     binding,
     decision: params.decision,
@@ -767,6 +767,20 @@ export async function resolvePluginConversationBindingApproval(params: {
     request,
     decision: params.decision,
   };
+}
+
+function dispatchPluginConversationBindingResolved(params: {
+  status: "approved" | "denied";
+  binding?: PluginConversationBinding;
+  decision: PluginConversationBindingResolutionDecision;
+  request: PendingPluginBindingRequest;
+}): void {
+  // Keep platform interaction acks fast even if the plugin does slow post-bind work.
+  queueMicrotask(() => {
+    void notifyPluginConversationBindingResolved(params).catch((error) => {
+      log.warn(`plugin binding resolved dispatch failed: ${String(error)}`);
+    });
+  });
 }
 
 async function notifyPluginConversationBindingResolved(params: {

@@ -69,6 +69,42 @@ OpenClaw resolves known Claude marketplace names from
 `~/.claude/plugins/known_marketplaces.json`. You can also pass an explicit
 marketplace source with `--marketplace`.
 
+## Conversation binding callbacks
+
+Plugins that bind a conversation can now react when an approval is resolved.
+
+Use `api.onConversationBindingResolved(...)` to receive a callback after a bind
+request is approved or denied:
+
+```ts
+export default {
+  id: "my-plugin",
+  register(api) {
+    api.onConversationBindingResolved(async (event) => {
+      if (event.status === "approved") {
+        // A binding now exists for this plugin + conversation.
+        console.log(event.binding?.conversationId);
+        return;
+      }
+
+      // The request was denied; clear any local pending state.
+      console.log(event.request.conversation.conversationId);
+    });
+  },
+};
+```
+
+Callback payload fields:
+
+- `status`: `"approved"` or `"denied"`
+- `decision`: `"allow-once"`, `"allow-always"`, or `"deny"`
+- `binding`: the resolved binding for approved requests
+- `request`: the original request summary, detach hint, sender id, and
+  conversation metadata
+
+This callback is notification-only. It does not change who is allowed to bind a
+conversation, and it runs after core approval handling finishes.
+
 ## Architecture
 
 OpenClaw's plugin system has four layers:
