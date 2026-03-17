@@ -222,6 +222,45 @@ wiz_graphql_with_retry() {
   printf '%s\n' "$response"
 }
 
+paginated_query() {
+  local query="$1"
+  local vars_json="$2"
+  local data_path="$3"
+  local max_pages="${4:-$WIZ_API_MAX_PAGES}"
+  local page=0
+  local all_nodes="[]"
+  local cursor="null"
+  local response page_nodes has_next end_cursor
+
+  while [[ "$page" -lt "$max_pages" ]]; do
+    local page_vars
+    if [[ "$cursor" == "null" ]]; then
+      page_vars="$vars_json"
+    else
+      page_vars="$(printf '%s\n' "$vars_json" | "$WIZ_API_JQ_BIN" -c --arg after "$cursor" '. + {after: $after}')"
+    fi
+
+    response="$(wiz_graphql_with_retry "$query" "$page_vars")"
+    page_nodes="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -c "${data_path}.nodes // []")"
+    all_nodes="$(printf '%s\n%s\n' "$all_nodes" "$page_nodes" | "$WIZ_API_JQ_BIN" -sc '.[0] + .[1]')"
+
+    has_next="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r "${data_path}.pageInfo.hasNextPage // false")"
+    if [[ "$has_next" != "true" ]]; then
+      break
+    fi
+
+    end_cursor="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r "${data_path}.pageInfo.endCursor // empty")"
+    if [[ -z "$end_cursor" ]]; then
+      break
+    fi
+
+    cursor="$end_cursor"
+    page=$((page + 1))
+  done
+
+  printf '%s\n' "$all_nodes" | "$WIZ_API_JQ_BIN" -c '.'
+}
+
 cmd_query() {
   local query_input="${1:-}"
   local vars_json="${2:-"{}"}"
@@ -272,6 +311,62 @@ cmd_print_plan() {
       maxPages: $maxPages,
       timeout: $timeout
     }'
+}
+
+cmd_issues() {
+  local first=50 max_pages="$WIZ_API_MAX_PAGES"
+  local severity="" status="" issue_type="" entity_type=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --severity)    severity="$2"; shift 2 ;;
+      --status)      status="$2"; shift 2 ;;
+      --type)        issue_type="$2"; shift 2 ;;
+      --entity-type) entity_type="$2"; shift 2 ;;
+      --first)       first="$2"; shift 2 ;;
+      --max-pages)   max_pages="$2"; shift 2 ;;
+      *) die "unknown issues flag: $1" ;;
+    esac
+  done
+
+  local filter_parts=()
+  if [[ -n "$severity" ]]; then
+    filter_parts+=("severity: [$(printf '%s' "$severity" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+  fi
+  if [[ -n "$status" ]]; then
+    filter_parts+=("status: [$(printf '%s' "$status" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+  fi
+  if [[ -n "$issue_type" ]]; then
+    filter_parts+=("type: [$(printf '%s' "$issue_type" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+  fi
+  if [[ -n "$entity_type" ]]; then
+    filter_parts+=("entityType: [$(printf '%s' "$entity_type" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')]")
+  fi
+
+  local filter_clause=""
+  if [[ "${#filter_parts[@]}" -gt 0 ]]; then
+    filter_clause="filterBy: { $(IFS=', '; printf '%s' "${filter_parts[*]}") },"
+  fi
+
+  local query
+  query="query(\$first: Int, \$after: String) {
+    issuesV2(first: \$first, after: \$after, ${filter_clause} orderBy: { field: SEVERITY, direction: DESC }) {
+      nodes {
+        id
+        sourceRule { name }
+        severity
+        status
+        type
+        entitySnapshot { name type }
+        createdAt
+        updatedAt
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }"
+
+  local vars_json
+  vars_json="$("$WIZ_API_JQ_BIN" -nc --argjson first "$first" '{ first: $first }')"
+  paginated_query "$query" "$vars_json" '.data.issuesV2' "$max_pages"
 }
 
 usage() {

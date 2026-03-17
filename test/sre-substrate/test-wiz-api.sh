@@ -186,5 +186,65 @@ query_result="$(
 assert_ok "query: returns data" \
   "printf '%s' '$query_result' | jq -e '.data.issues.nodes[0].id == \"iss-1\"' >/dev/null"
 
+printf '\n=== test-wiz-api: pagination ===\n'
+
+# --- mock curl that returns two pages ---
+cat >"${TMP}/mock-curl-paginate.sh" <<'CURL_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output_file=""
+data_payload=""
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    -o) output_file="$arg" ;;
+    --data) data_payload="$arg" ;;
+  esac
+  prev="$arg"
+done
+
+# Auth endpoint
+for arg in "$@"; do
+  case "$arg" in
+    */oauth/token)
+      printf '{"access_token":"pag-token","expires_in":3600}\n'
+      exit 0
+      ;;
+  esac
+done
+
+# Check if after cursor is set
+if printf '%s' "$data_payload" | jq -e '.variables.after == "cursor-1"' >/dev/null 2>&1; then
+  response='{"data":{"issuesV2":{"nodes":[{"id":"iss-2"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}'
+else
+  response='{"data":{"issuesV2":{"nodes":[{"id":"iss-1"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}'
+fi
+
+if [[ -n "$output_file" ]]; then
+  printf '%s' "$response" >"$output_file"
+  printf '200'
+else
+  printf '%s\n' "$response"
+fi
+CURL_EOF
+chmod +x "${TMP}/mock-curl-paginate.sh"
+
+paginated_result="$(
+  export WIZ_API_SKIP_VAULT=1
+  export WIZ_CLIENT_ID='pag-test-id'
+  export WIZ_CLIENT_SECRET='pag-test-secret'
+  export WIZ_API_CURL_BIN="${TMP}/mock-curl-paginate.sh"
+  export WIZ_API_JQ_BIN='jq'
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-pag.json"
+  "${SCRIPT_PATH}" issues --first 1 2>/dev/null
+)"
+
+assert_ok "pagination: merged 2 nodes" \
+  "printf '%s' '$paginated_result' | jq -e 'length == 2' >/dev/null"
+assert_ok "pagination: first node is iss-1" \
+  "printf '%s' '$paginated_result' | jq -e '.[0].id == \"iss-1\"' >/dev/null"
+assert_ok "pagination: second node is iss-2" \
+  "printf '%s' '$paginated_result' | jq -e '.[1].id == \"iss-2\"' >/dev/null"
+
 printf '\n=== Results: %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1
