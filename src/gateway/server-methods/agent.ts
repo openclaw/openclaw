@@ -26,6 +26,7 @@ import { resolveMessageChannelSelection } from "../../infra/outbound/channel-sel
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
@@ -116,6 +117,17 @@ function canonicalizeAbortSessionKey(params: {
     return lowered;
   }
   if (lowered.startsWith("agent:")) {
+    const parsed = parseAgentSessionKey(lowered);
+    if (parsed) {
+      const canonicalMainKey = resolveAgentMainSessionKey({
+        cfg: params.cfg,
+        agentId: parsed.agentId,
+      }).toLowerCase();
+      const configuredMainAlias = canonicalMainKey.split(":").slice(2).join(":");
+      if (parsed.rest === "main" || parsed.rest === configuredMainAlias) {
+        return canonicalMainKey;
+      }
+    }
     return lowered;
   }
   const activeAgentId =
