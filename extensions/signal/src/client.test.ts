@@ -3,19 +3,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fetchWithTimeoutMock = vi.fn();
 const resolveFetchMock = vi.fn();
 
-vi.mock("../../../src/infra/fetch.js", () => ({
-  resolveFetch: (...args: unknown[]) => resolveFetchMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    resolveFetch: (...args: unknown[]) => resolveFetchMock(...args),
+    generateSecureUuid: () => "test-id",
+  };
+});
 
-vi.mock("../../../src/infra/secure-random.js", () => ({
-  generateSecureUuid: () => "test-id",
-}));
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+  return {
+    ...actual,
+    fetchWithTimeout: (...args: unknown[]) => fetchWithTimeoutMock(...args),
+  };
+});
 
-vi.mock("../../../src/utils/fetch-timeout.js", () => ({
-  fetchWithTimeout: (...args: unknown[]) => fetchWithTimeoutMock(...args),
-}));
-
-import { signalRpcRequest } from "./client.js";
+async function importSignalClient() {
+  return await import("./client.js");
+}
 
 function rpcResponse(body: unknown, status = 200): Response {
   if (typeof body === "string") {
@@ -26,11 +33,13 @@ function rpcResponse(body: unknown, status = 200): Response {
 
 describe("signalRpcRequest", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.clearAllMocks();
     resolveFetchMock.mockReturnValue(vi.fn());
   });
 
   it("returns parsed RPC result", async () => {
+    const { signalRpcRequest } = await importSignalClient();
     fetchWithTimeoutMock.mockResolvedValueOnce(
       rpcResponse({ jsonrpc: "2.0", result: { version: "0.13.22" }, id: "test-id" }),
     );
@@ -43,6 +52,7 @@ describe("signalRpcRequest", () => {
   });
 
   it("throws a wrapped error when RPC response JSON is malformed", async () => {
+    const { signalRpcRequest } = await importSignalClient();
     fetchWithTimeoutMock.mockResolvedValueOnce(rpcResponse("not-json", 502));
 
     await expect(
@@ -56,6 +66,7 @@ describe("signalRpcRequest", () => {
   });
 
   it("throws when RPC response envelope has neither result nor error", async () => {
+    const { signalRpcRequest } = await importSignalClient();
     fetchWithTimeoutMock.mockResolvedValueOnce(rpcResponse({ jsonrpc: "2.0", id: "test-id" }));
 
     await expect(

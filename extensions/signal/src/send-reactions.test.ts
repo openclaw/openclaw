@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 
 const rpcMock = vi.fn();
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig: () => ({}),
@@ -25,12 +24,18 @@ vi.mock("./client.js", () => ({
   signalRpcRequest: (...args: unknown[]) => rpcMock(...args),
 }));
 
+async function importSignalReactions() {
+  return await import("./send-reactions.js");
+}
+
 describe("sendReactionSignal", () => {
   beforeEach(() => {
+    vi.resetModules();
     rpcMock.mockClear().mockResolvedValue({ timestamp: 123 });
   });
 
   it("uses recipients array and targetAuthor for uuid dms", async () => {
+    const { sendReactionSignal } = await importSignalReactions();
     await sendReactionSignal("uuid:123e4567-e89b-12d3-a456-426614174000", 123, "🔥");
 
     const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;
@@ -43,6 +48,7 @@ describe("sendReactionSignal", () => {
   });
 
   it("uses groupIds array and maps targetAuthorUuid", async () => {
+    const { sendReactionSignal } = await importSignalReactions();
     await sendReactionSignal("", 123, "✅", {
       groupId: "group-id",
       targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
@@ -55,6 +61,7 @@ describe("sendReactionSignal", () => {
   });
 
   it("defaults targetAuthor to recipient for removals", async () => {
+    const { removeReactionSignal } = await importSignalReactions();
     await removeReactionSignal("+15551230000", 456, "❌");
 
     const params = rpcMock.mock.calls[0]?.[1] as Record<string, unknown>;

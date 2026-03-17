@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import * as replyRuntimeModule from "openclaw/plugin-sdk/reply-runtime";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
-import { buildDispatchInboundCaptureMock } from "../../../../src/channels/plugins/contracts/inbound-testkit.js";
 import type { OpenClawConfig } from "../../../../src/config/types.js";
 import {
   createBaseSignalEventHandlerDeps,
@@ -18,15 +18,9 @@ function getCapturedCtx() {
   return capturedCtx as SignalMsgContext;
 }
 
-vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
-  return buildDispatchInboundCaptureMock(actual, (ctx) => {
-    capturedCtx = ctx as SignalMsgContext;
-  });
-});
-
-import { createSignalEventHandler } from "./event-handler.js";
 import { renderSignalMentions } from "./mentions.js";
+
+let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
 
 type GroupEventOpts = {
   message?: string;
@@ -102,6 +96,14 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
 }
 
 describe("signal mention gating", () => {
+  beforeAll(async () => {
+    vi.spyOn(replyRuntimeModule, "dispatchInboundMessage").mockImplementation(async (params) => {
+      capturedCtx = params.ctx as SignalMsgContext;
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    });
+    ({ createSignalEventHandler } = await import("./event-handler.js"));
+  });
+
   it("drops group messages without mention when requireMention is configured", async () => {
     capturedCtx = undefined;
     const handler = createMentionHandler({ requireMention: true });
