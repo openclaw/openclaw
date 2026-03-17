@@ -6,12 +6,6 @@ const log = createSubsystemLogger("modelscope-models");
 /** ModelScope Inference API — OpenAI-compatible chat completions. */
 export const MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1";
 
-/**
- * ModelScope does not use policy suffixes like :cheapest or :fastest.
- * All model selection is direct without router-based cost/speed policies.
- */
-export const MODELSCOPE_POLICY_SUFFIXES: readonly string[] = [];
-
 /** Default cost — all ModelScope models are currently free. */
 const MODELSCOPE_DEFAULT_COST = {
   input: 0,
