@@ -140,7 +140,7 @@ async function transferOwnership(
       need_notification: options?.need_notification ?? true,
       remove_old_owner: options?.remove_old_owner ?? false,
       stay_put: options?.stay_put ?? false,
-      old_owner_perm: options?.old_owner_perm,
+      old_owner_perm: options?.old_owner_perm ?? "full_access",
     },
     data: {
       member_type: memberType as "email" | "openid" | "userid",
