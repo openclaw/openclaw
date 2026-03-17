@@ -103,6 +103,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Sentry API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentry-api.sh`
 - Sentry CLI wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentry-cli.sh`
 - Wiz MCP launcher: `/home/node/.openclaw/skills/morpho-sre/scripts/wiz-mcp.sh`
+- Wiz API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh`
 - DB target helper: `/home/node/.openclaw/skills/morpho-sre/scripts/lib-db-target.sh`
 - DB evidence wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/db-evidence.sh`
 - Single-vault GraphQL evidence helper: `/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh`
@@ -135,6 +136,7 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - `erpc-context.sh`
   - `single-vault-graphql-evidence.sh`
   - `wiz-mcp.sh`
+  - `wiz-api.sh`
   - `rca-provider-codex.sh`
   - `rca-provider-claude.sh`
   - `rca-provider-openclaw-agent.sh`
@@ -167,6 +169,46 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
   - `morpho-infra/docs/operations/erpc-operations.md`
   - `morpho-infra/docs/guides/observability-stack-onboarding.md`
   - `morpho-infra/docs/services/api-endpoints.md`
+
+## Wiz API (Direct GraphQL)
+
+- `wiz-api.sh` authenticates via OAuth2 client credentials and queries the Wiz
+  GraphQL API directly at `https://api.eu26.app.wiz.io/graphql`.
+- Credential resolution: Vault `secret/wiz/api-token` > `WIZ_CLIENT_ID`/`WIZ_CLIENT_SECRET`.
+- Uses the same Vault secret as `wiz-mcp.sh` — no separate credentials needed.
+- Token is cached at `/tmp/wiz-api-token.json` (chmod 600) and auto-refreshed.
+- Pre-built subcommands auto-paginate (default max 10 pages).
+- Raw `query` subcommand does not auto-paginate.
+- Manual checks:
+
+```bash
+# Probe auth
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh --probe-auth | jq
+
+# Show config (redacted)
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh --print-plan | jq
+
+# Raw GraphQL query
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh query '{ issues(first: 5) { nodes { id severity } } }'
+
+# Vulnerabilities - critical + high, with known fix
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh vulns --severity critical,high --has-fix
+
+# Issues - open critical
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh issues --severity critical --status open
+
+# Cloud config findings
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh cloud-config --severity critical,high
+
+# Kubernetes cluster posture
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh k8s
+
+# Runtime security events
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh runtime --severity critical,high
+
+# Full posture summary (counts by severity)
+/home/node/.openclaw/skills/morpho-sre/scripts/wiz-api.sh summary | jq
+```
 
 ## Incident Workflow
 
