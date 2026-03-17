@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpGatewayStore } from "../acp/store/store.js";
 import { createProjectionRestartHarness } from "../acp/test-harness/restart-harness.js";
+import { __testing } from "../auto-reply/reply/dispatch-acp-replay.js";
 import { createAcpTestConfig } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
+import { appendAssistantMessageToSessionTranscript } from "../config/sessions.js";
 import { startAcpNodeProjectionRecovery } from "./server-startup.acp-node.js";
 
 const routeMocks = vi.hoisted(() => ({
@@ -73,6 +75,7 @@ const zodMocks = vi.hoisted(() => {
 vi.mock("zod", () => zodMocks);
 
 const tempRoots: string[] = [];
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function createStore() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-startup-"));
@@ -83,6 +86,27 @@ async function createStore() {
       storePath: path.join(root, "acp", "gateway-node-runtime-store.json"),
     }),
   };
+}
+
+async function seedTranscriptStore(params: {
+  root: string;
+  sessionKey: string;
+  sessionId?: string;
+}) {
+  process.env.OPENCLAW_STATE_DIR = params.root;
+  const storeDir = path.join(params.root, "agents", "main", "sessions");
+  await fs.mkdir(storeDir, { recursive: true });
+  await fs.writeFile(
+    path.join(storeDir, "sessions.json"),
+    JSON.stringify({
+      [params.sessionKey]: {
+        sessionId: params.sessionId ?? "acp-startup-session",
+        chatType: "direct",
+        channel: "telegram",
+      },
+    }),
+    "utf-8",
+  );
 }
 
 async function seedTerminalRun(
@@ -147,6 +171,7 @@ async function seedTerminalRun(
 }
 
 afterEach(async () => {
+  process.env.OPENCLAW_STATE_DIR = originalStateDir;
   routeMocks.routeReply.mockReset();
   routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
   ttsMocks.maybeApplyTtsToPayload.mockClear();
@@ -315,7 +340,7 @@ describe("startAcpNodeProjectionRecovery", () => {
     expect(routeMocks.routeReply).not.toHaveBeenCalled();
   });
 
-  it("converges a durable prepared synthetic final marker on startup without double-emitting output", async () => {
+  it("delivers a durable prepared synthetic final marker on startup when no transcript evidence exists", async () => {
     const { store } = await createStore();
     await seedTerminalRun(store, {
       sessionTtsAuto: "always",
@@ -340,6 +365,72 @@ describe("startAcpNodeProjectionRecovery", () => {
         audioAsVoice: true,
       },
       now: 21,
+    });
+
+    const result = await startAcpNodeProjectionRecovery({
+      cfg: createAcpTestConfig(),
+      store,
+    });
+    expect(result.started).toContain("run-1:primary");
+    await vi.waitFor(() => {
+      expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(async () => {
+      expect(await store.getCheckpoint("projector:run-1:primary")).toMatchObject({
+        runId: "run-1",
+        cursorSeq: 1,
+        deliveredEffectCount: 2,
+      });
+    });
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/startup-prepared-final.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+  });
+
+  it("converges a durable prepared synthetic final marker on startup without double-emitting output when transcript evidence proves it was already sent", async () => {
+    const { root, store } = await createStore();
+    await seedTerminalRun(store, {
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+    });
+    await seedTranscriptStore({
+      root,
+      sessionKey: "agent:main:acp:test-session",
+    });
+    await store.recordProjectorCheckpoint({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "primary",
+      cursorSeq: 1,
+      deliveredEffectCount: 1,
+      now: 20,
+    });
+    await store.recordProjectorPreparedSyntheticFinal({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "primary",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
+      payload: {
+        mediaUrl: "https://example.com/startup-prepared-final.mp3",
+        audioAsVoice: true,
+      },
+      now: 21,
+    });
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:acp:test-session",
+      mediaUrls: ["https://example.com/startup-prepared-final.mp3"],
+      idempotencyKey: __testing.buildSyntheticFinalIdempotencyKey({
+        runId: "run-1",
+        targetId: "primary",
+        cursorSeq: 1,
+        effectCount: 2,
+      }),
     });
 
     const result = await startAcpNodeProjectionRecovery({

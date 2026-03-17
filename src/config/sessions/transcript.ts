@@ -217,6 +217,41 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   return { ok: true, sessionFile };
 }
 
+export async function sessionTranscriptHasIdempotencyKey(params: {
+  agentId?: string;
+  sessionKey: string;
+  idempotencyKey: string;
+  storePath?: string;
+}): Promise<boolean> {
+  const sessionKey = params.sessionKey.trim();
+  const idempotencyKey = params.idempotencyKey.trim();
+  if (!sessionKey || !idempotencyKey) {
+    return false;
+  }
+
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey] as SessionEntry | undefined;
+  if (!entry?.sessionId) {
+    return false;
+  }
+
+  try {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    return await transcriptHasIdempotencyKey(resolvedSessionFile.sessionFile, idempotencyKey);
+  } catch {
+    return false;
+  }
+}
+
 async function transcriptHasIdempotencyKey(
   transcriptPath: string,
   idempotencyKey: string,

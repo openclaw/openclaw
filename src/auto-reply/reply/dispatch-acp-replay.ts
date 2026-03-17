@@ -4,6 +4,7 @@ import type {
   AcpGatewayTerminal,
 } from "../../acp/store/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { sessionTranscriptHasIdempotencyKey } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { sleep } from "../../utils.js";
 import type { ReplyPayload } from "../types.js";
@@ -12,6 +13,15 @@ import type { AcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js"
 
 const DEFAULT_PROJECTION_POLL_MS = 50;
 const DEFAULT_PROJECTION_RETRY_MS = 100;
+
+function buildSyntheticFinalIdempotencyKey(params: {
+  runId: string;
+  targetId: string;
+  cursorSeq: number;
+  effectCount: number;
+}): string {
+  return `acp:${params.runId}:${params.targetId}:synthetic-final:${params.cursorSeq}:${params.effectCount}`;
+}
 
 type AcpProjectionCoordinatorFactory = (params: {
   target: AcpGatewayRunDeliveryTargetRecord;
@@ -264,6 +274,12 @@ class AcpDurableProjectionRunner {
     const checkpoint = await this.params.store.getCheckpoint(
       `projector:${this.params.target.runId}:${this.params.target.targetId}`,
     );
+    const syntheticFinalIdempotencyKey = buildSyntheticFinalIdempotencyKey({
+      runId: this.params.target.runId,
+      targetId: this.params.target.targetId,
+      cursorSeq: params.cursorSeq,
+      effectCount: nextEffectCount,
+    });
     if (
       checkpoint?.pendingSyntheticFinalEffectCount === nextEffectCount &&
       checkpoint.pendingSyntheticFinalCursorSeq === params.cursorSeq
@@ -276,10 +292,17 @@ class AcpDurableProjectionRunner {
       return;
     }
 
+    const preparedSyntheticFinalPayload = this.resolvePreparedSyntheticFinalPayload({
+      checkpoint,
+      cursorSeq: params.cursorSeq,
+      effectCount: nextEffectCount,
+    });
     if (
-      checkpoint?.preparedSyntheticFinalEffectCount === nextEffectCount &&
-      checkpoint.preparedSyntheticFinalCursorSeq === params.cursorSeq &&
-      checkpoint.preparedSyntheticFinalMediaUrl
+      preparedSyntheticFinalPayload &&
+      (await sessionTranscriptHasIdempotencyKey({
+        sessionKey: this.params.target.sessionKey,
+        idempotencyKey: syntheticFinalIdempotencyKey,
+      }))
     ) {
       params.incrementDeliveredEffectCount();
       params.coordinator.markSyntheticFinalDelivered({
@@ -307,33 +330,38 @@ class AcpDurableProjectionRunner {
       return;
     }
 
-    const syntheticFinalPayload = await params.coordinator.resolveSyntheticFinalPayload();
+    let syntheticFinalPayload = preparedSyntheticFinalPayload;
     if (!syntheticFinalPayload) {
-      return;
-    }
-    const syntheticFinalMediaUrl = syntheticFinalPayload.mediaUrl;
-    if (!syntheticFinalMediaUrl) {
-      return;
+      syntheticFinalPayload = await params.coordinator.resolveSyntheticFinalPayload();
+      if (!syntheticFinalPayload) {
+        return;
+      }
+      const syntheticFinalMediaUrl = syntheticFinalPayload.mediaUrl;
+      if (!syntheticFinalMediaUrl) {
+        return;
+      }
+      await this.params.store.recordProjectorPreparedSyntheticFinal({
+        sessionKey: this.params.target.sessionKey,
+        runId: this.params.target.runId,
+        targetId: this.params.target.targetId,
+        cursorSeq: params.cursorSeq,
+        deliveredEffectCount: nextEffectCount,
+        payload: {
+          mediaUrl: syntheticFinalMediaUrl,
+          ...(typeof syntheticFinalPayload.audioAsVoice === "boolean"
+            ? { audioAsVoice: syntheticFinalPayload.audioAsVoice }
+            : {}),
+        },
+      });
     }
     params.incrementDeliveredEffectCount();
     if (params.skipRemainingRef() > 0) {
       params.decrementSkipRemaining();
       return;
     }
-    await this.params.store.recordProjectorPreparedSyntheticFinal({
-      sessionKey: this.params.target.sessionKey,
-      runId: this.params.target.runId,
-      targetId: this.params.target.targetId,
-      cursorSeq: params.cursorSeq,
-      deliveredEffectCount: params.deliveredEffectCountRef(),
-      payload: {
-        mediaUrl: syntheticFinalMediaUrl,
-        ...(typeof syntheticFinalPayload.audioAsVoice === "boolean"
-          ? { audioAsVoice: syntheticFinalPayload.audioAsVoice }
-          : {}),
-      },
+    const delivered = await params.coordinator.deliver("final", syntheticFinalPayload, {
+      idempotencyKey: syntheticFinalIdempotencyKey,
     });
-    const delivered = await params.coordinator.deliver("final", syntheticFinalPayload);
     if (!delivered) {
       throw new Error("ACP durable final-TTS delivery failed.");
     }
@@ -345,6 +373,26 @@ class AcpDurableProjectionRunner {
       cursorSeq: params.cursorSeq,
       deliveredEffectCount: params.deliveredEffectCountRef(),
     });
+  }
+
+  private resolvePreparedSyntheticFinalPayload(params: {
+    checkpoint: Awaited<ReturnType<AcpGatewayStore["getCheckpoint"]>>;
+    cursorSeq: number;
+    effectCount: number;
+  }): ReplyPayload | null {
+    if (
+      params.checkpoint?.preparedSyntheticFinalEffectCount !== params.effectCount ||
+      params.checkpoint.preparedSyntheticFinalCursorSeq !== params.cursorSeq ||
+      !params.checkpoint.preparedSyntheticFinalMediaUrl
+    ) {
+      return null;
+    }
+    return {
+      mediaUrl: params.checkpoint.preparedSyntheticFinalMediaUrl,
+      ...(typeof params.checkpoint.preparedSyntheticFinalAudioAsVoice === "boolean"
+        ? { audioAsVoice: params.checkpoint.preparedSyntheticFinalAudioAsVoice }
+        : {}),
+    };
   }
 
   private async recordSettledSyntheticFinalCheckpoint(params: {
@@ -467,6 +515,7 @@ export function getAcpDurableProjectionService(params: {
 }
 
 export const __testing = {
+  buildSyntheticFinalIdempotencyKey,
   resetAcpDurableProjectionServiceForTests() {
     acpDurableProjectionServiceSingleton?.stopAll();
     acpDurableProjectionServiceSingleton = null;

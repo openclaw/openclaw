@@ -12,6 +12,7 @@ import { routeReply } from "./route-reply.js";
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
   allowEdit?: boolean;
+  idempotencyKey?: string;
 };
 
 type ToolMessageHandle = {
@@ -281,6 +282,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         channel: routeChannel,
         to: routeTo,
         sessionKey: routeSessionKey,
+        ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
         accountId: routeAccountId,
         threadId: routeThreadId,
         cfg: params.cfg,

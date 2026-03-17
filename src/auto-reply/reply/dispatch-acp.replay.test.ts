@@ -4,11 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpGatewayStore } from "../../acp/store/store.js";
 import { createProjectionRestartHarness } from "../../acp/test-harness/restart-harness.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   createAcpDispatchDeliveryState,
 } from "./dispatch-acp-delivery.js";
-import { AcpDurableProjectionService } from "./dispatch-acp-replay.js";
+import { __testing, AcpDurableProjectionService } from "./dispatch-acp-replay.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 
 const routeMocks = vi.hoisted(() => ({
@@ -77,6 +78,7 @@ vi.mock("../../tts/tts.js", () => ({
 vi.mock("zod", () => zodMocks);
 
 const tempRoots: string[] = [];
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function createStore() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-replay-"));
@@ -162,7 +164,29 @@ async function seedTerminalRun(params: {
   });
 }
 
+async function seedTranscriptStore(params: {
+  root: string;
+  sessionKey: string;
+  sessionId?: string;
+}) {
+  process.env.OPENCLAW_STATE_DIR = params.root;
+  const storeDir = path.join(params.root, "agents", "main", "sessions");
+  await fs.mkdir(storeDir, { recursive: true });
+  await fs.writeFile(
+    path.join(storeDir, "sessions.json"),
+    JSON.stringify({
+      [params.sessionKey]: {
+        sessionId: params.sessionId ?? "acp-replay-session",
+        chatType: "direct",
+        channel: "telegram",
+      },
+    }),
+    "utf-8",
+  );
+}
+
 afterEach(async () => {
+  process.env.OPENCLAW_STATE_DIR = originalStateDir;
   routeMocks.routeReply.mockReset();
   routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
   ttsMocks.maybeApplyTtsToPayload.mockClear();
@@ -819,8 +843,188 @@ describe("AcpDurableProjectionService", () => {
     });
   });
 
-  it("converges after restart when the final was sent but every post-send durability write was lost", async () => {
+  it("retries the final after restart when the prepared marker was written but the send failed", async () => {
     const liveStore = await createStore();
+    await seedTerminalRun({
+      store: liveStore,
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-restart-after-send-fail",
+      channel: "telegram",
+      to: "telegram:thread-restart-fail",
+      text: "restart should retry the prepared final",
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+      now: 10,
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        kind: string;
+        payload: { text?: string };
+      };
+      if (
+        params.kind === "final" &&
+        params.payload.text === "restart should retry the prepared final"
+      ) {
+        return {
+          mediaUrl: "https://example.com/restart-send-fail-final.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+    await seedTranscriptStore({
+      root: path.dirname(path.dirname(liveStore.storePath)),
+      sessionKey: "agent:main:acp:test-session",
+    });
+
+    routeMocks.routeReply
+      .mockResolvedValueOnce({ ok: true, messageId: "block-1" })
+      .mockResolvedValueOnce({ ok: false, error: "transient final failure" } as unknown as {
+        ok: boolean;
+        messageId: string;
+      });
+
+    const cfg = createAcpTestConfig();
+    const liveService = new AcpDurableProjectionService({
+      store: liveStore,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    const liveProjection = liveService.ensureProjection({
+      cfg,
+      target: (await liveStore.getRunDeliveryTarget("run-restart-after-send-fail", "primary"))!,
+      shouldSendToolSummaries: true,
+      restartMode: false,
+      retryDelayMs: 10_000,
+      pollIntervalMs: 1,
+    });
+    await vi.waitFor(() => expect(routeMocks.routeReply).toHaveBeenCalledTimes(2));
+    liveService.stopAll();
+    await liveProjection;
+
+    expect(
+      await liveStore.getCheckpoint("projector:run-restart-after-send-fail:primary"),
+    ).toMatchObject({
+      runId: "run-restart-after-send-fail",
+      cursorSeq: 1,
+      deliveredEffectCount: 1,
+      preparedSyntheticFinalEffectCount: 2,
+      preparedSyntheticFinalCursorSeq: 1,
+      preparedSyntheticFinalMediaUrl: "https://example.com/restart-send-fail-final.mp3",
+      preparedSyntheticFinalAudioAsVoice: true,
+    });
+
+    routeMocks.routeReply.mockClear();
+    routeMocks.routeReply.mockResolvedValueOnce({
+      ok: false,
+      error: "restart final still failing",
+    } as never);
+    const restartedStore = new AcpGatewayStore({ storePath: liveStore.storePath });
+    const restartService = new AcpDurableProjectionService({
+      store: restartedStore,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    const failedRestartProjection = restartService.ensureProjection({
+      cfg,
+      target: (await restartedStore.getRunDeliveryTarget(
+        "run-restart-after-send-fail",
+        "primary",
+      ))!,
+      shouldSendToolSummaries: true,
+      restartMode: true,
+      retryDelayMs: 10_000,
+      pollIntervalMs: 1,
+    });
+    await vi.waitFor(() => expect(routeMocks.routeReply).toHaveBeenCalledTimes(1));
+    restartService.stopAll();
+    await failedRestartProjection;
+
+    expect(
+      await restartedStore.getCheckpoint("projector:run-restart-after-send-fail:primary"),
+    ).toMatchObject({
+      runId: "run-restart-after-send-fail",
+      cursorSeq: 1,
+      deliveredEffectCount: 1,
+      preparedSyntheticFinalEffectCount: 2,
+      preparedSyntheticFinalCursorSeq: 1,
+      preparedSyntheticFinalMediaUrl: "https://example.com/restart-send-fail-final.mp3",
+      preparedSyntheticFinalAudioAsVoice: true,
+    });
+
+    routeMocks.routeReply.mockClear();
+    routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "final-after-restart" });
+    const finalRestartService = new AcpDurableProjectionService({
+      store: restartedStore,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    await finalRestartService.ensureProjection({
+      cfg,
+      target: (await restartedStore.getRunDeliveryTarget(
+        "run-restart-after-send-fail",
+        "primary",
+      ))!,
+      shouldSendToolSummaries: true,
+      restartMode: true,
+      retryDelayMs: 1,
+      pollIntervalMs: 1,
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/restart-send-fail-final.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+    expect(
+      await restartedStore.getCheckpoint("projector:run-restart-after-send-fail:primary"),
+    ).toMatchObject({
+      runId: "run-restart-after-send-fail",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
+    });
+  });
+
+  it("converges after restart when the final was sent but every ACP post-send durability write was lost", async () => {
+    const liveStore = await createStore();
+    await seedTranscriptStore({
+      root: path.dirname(path.dirname(liveStore.storePath)),
+      sessionKey: "agent:main:acp:test-session",
+    });
     await seedTerminalRun({
       store: liveStore,
       sessionKey: "agent:main:acp:test-session",
@@ -894,6 +1098,16 @@ describe("AcpDurableProjectionService", () => {
     await vi.waitFor(() => expect(routeMocks.routeReply).toHaveBeenCalledTimes(2));
     liveService.stopAll();
     await liveProjection;
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:acp:test-session",
+      mediaUrls: ["https://example.com/restart-prepared-final.mp3"],
+      idempotencyKey: __testing.buildSyntheticFinalIdempotencyKey({
+        runId: "run-restart-prepared-final",
+        targetId: "primary",
+        cursorSeq: 1,
+        effectCount: 2,
+      }),
+    });
 
     expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
       1,
