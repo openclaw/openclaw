@@ -9,6 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RUNTIME_CTL="${ROOT_DIR}/scripts/telegram-live-runtime.sh"
+HELPER_MODULE="${ROOT_DIR}/scripts/lib/telegram-live-runtime-helpers.mjs"
 # shellcheck source=scripts/telegram-e2e/userbot-common.sh
 source "${SCRIPT_DIR}/userbot-common.sh"
 
@@ -122,6 +123,30 @@ if ! "${RUNTIME_CTL}" ensure; then
   exit 1
 fi
 
+# Canonical runtime claim lives in the worktree root `.env.local`. Prefer that
+# claimed tester bot token over any static bot token stored in Telegram E2E env.
+if [[ -f "${ROOT_DIR}/.env.local" ]]; then
+  claimed_bot_token="$(awk -F= '
+    /^[[:space:]]*(export[[:space:]]+)?TELEGRAM_BOT_TOKEN[[:space:]]*=/ {
+      value=$0
+      sub(/^[^=]*=/, "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^"|"$/, "", value)
+      gsub(/^'\''|'\''$/, "", value)
+      token=value
+    }
+    END {
+      if (token != "") {
+        print token
+      }
+    }
+  ' "${ROOT_DIR}/.env.local")"
+  if [[ -n "${claimed_bot_token:-}" ]]; then
+    TG_BOT_TOKEN="${claimed_bot_token}"
+    export TG_BOT_TOKEN
+  fi
+fi
+
 on_exit() {
   local status=$?
   trap - EXIT
@@ -185,6 +210,57 @@ tg_poll_json() {
   fi
 }
 
+clear_target_thread_session_state() {
+  # Live inheritance checks must make thread B look new to the isolated
+  # worktree runtime. Reused topics are fine, but stale per-thread session state
+  # would otherwise make the assertion non-deterministic across reruns.
+  local reset_output=""
+  reset_output="$(
+    WORKTREE_PATH="${ROOT_DIR}" \
+    TARGET_CHAT_ID="${CHAT}" \
+    TARGET_THREAD_ID="${THREAD_B_ID}" \
+    HELPER_MODULE="${HELPER_MODULE}" \
+    node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const helperPath = process.env.HELPER_MODULE;
+const worktreePath = process.env.WORKTREE_PATH;
+const chatId = process.env.TARGET_CHAT_ID;
+const threadId = process.env.TARGET_THREAD_ID;
+
+if (!helperPath || !worktreePath || !chatId || !threadId) {
+  throw new Error("missing session reset inputs");
+}
+
+const helpers = await import(pathToFileURL(helperPath).href);
+const profile = helpers.deriveTelegramLiveRuntimeProfile({ worktreePath });
+const sessionsPath = path.join(profile.runtimeStateDir, "agents", "main", "sessions", "sessions.json");
+
+if (!fs.existsSync(sessionsPath)) {
+  process.stdout.write("0\n");
+  process.exit(0);
+}
+
+const parsed = JSON.parse(fs.readFileSync(sessionsPath, "utf8"));
+const result = helpers.pruneTelegramThreadSessions({
+  agentId: "main",
+  chatId,
+  threadId,
+  sessions: parsed,
+});
+
+if (result.removedKeys.length > 0) {
+  fs.writeFileSync(sessionsPath, `${JSON.stringify(result.sessions, null, 2)}\n`, "utf8");
+}
+
+process.stdout.write(`${result.removedKeys.length}\n`);
+NODE
+  )"
+  echo "thread_b_session_reset_count=${reset_output:-0}"
+}
+
 find_thread_text() {
   local payload="$1"
   local needle="$2"
@@ -209,6 +285,9 @@ find_thread_text() {
 echo "Step 1: set model in thread A (${THREAD_A_REPLY_TO}) -> ${SET_MODEL}"
 set_payload="$(send_user_message "/model ${SET_MODEL}" "${THREAD_A_REPLY_TO}")"
 set_msg_id="$(jq -er '.message_id // 0' <<<"${set_payload}" 2>/dev/null || echo 0)"
+
+echo "Reset thread B isolated session state so it behaves like a new thread"
+clear_target_thread_session_state
 
 echo "Step 2: query model in thread B (${THREAD_B_REPLY_TO})"
 query_payload="$(send_user_message "/model" "${THREAD_B_REPLY_TO}")"

@@ -25,7 +25,9 @@ RUNTIME_OWNERSHIP="fail"
 RUNTIME_HEALTH="fail"
 RUNTIME_START_ACTION="not-started"
 RUNTIME_START_TIMEOUT_SECS="unknown"
-RUNTIME_PLUGIN_MODE="disabled"
+RUNTIME_PLUGIN_MODE="telegram-only"
+RUNTIME_STOP_RESULT="skip"
+STOPPED_RUNTIME_PID=""
 TOKEN_PRESENT="no"
 TOKEN_POOL_GUARD="fail"
 TOKEN_FINGERPRINT="none"
@@ -131,6 +133,38 @@ emit_runtime_log_summary() {
   echo "runtime_log_tail_end" >&2
 }
 
+clear_env_assignment_file() {
+  local file_path="$1"
+  local key="$2"
+  local clear_lines
+
+  clear_lines="$(
+    HELPER_MODULE="$HELPER_MODULE" FILE_PATH="$file_path" TARGET_KEY="$key" node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const helperPath = process.env.HELPER_MODULE;
+const filePath = process.env.FILE_PATH;
+const key = process.env.TARGET_KEY;
+
+if (!helperPath || !filePath || !key) {
+  process.exit(1);
+}
+
+const helpers = await import(pathToFileURL(helperPath).href);
+const content = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+const result = helpers.clearEnvAssignmentText({ key, content });
+
+fs.writeFileSync(filePath, result.content, "utf8");
+process.stdout.write(
+  `${result.removed ? "1" : "0"}\n${String(result.removedValue ?? "")}\n`,
+);
+NODE
+  )" || return 1
+
+  printf '%s' "$clear_lines"
+}
+
 resolve_profile() {
   if [[ ! -f "$HELPER_MODULE" ]]; then
     add_failure "helper_missing:${HELPER_MODULE}"
@@ -198,6 +232,32 @@ resolve_runtime_owner() {
   if [[ -n "$RUNTIME_WORKTREE" && "$RUNTIME_WORKTREE" == "$WORKTREE" ]] &&
     [[ "$runtime_cmd" == *" gateway run"* || "$runtime_cmd" == *"openclaw-gateway"* ]]; then
     RUNTIME_OWNERSHIP="ok"
+  fi
+}
+
+stop_owned_runtime() {
+  RUNTIME_STOP_RESULT="skip"
+  STOPPED_RUNTIME_PID=""
+
+  if [[ -n "$RUNTIME_PID" && "$RUNTIME_OWNERSHIP" == "ok" ]]; then
+    STOPPED_RUNTIME_PID="$RUNTIME_PID"
+    if kill "$RUNTIME_PID" 2>/dev/null; then
+      local waited=0
+      while [[ "$waited" -lt 15 ]]; do
+        if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
+          break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+      done
+      if kill -0 "$RUNTIME_PID" 2>/dev/null; then
+        kill -9 "$RUNTIME_PID" 2>/dev/null || true
+      fi
+      RUNTIME_STOP_RESULT="ok"
+    else
+      RUNTIME_STOP_RESULT="fail"
+      add_failure "runtime_stop_failed"
+    fi
   fi
 }
 
@@ -310,6 +370,10 @@ prepare_isolated_runtime_config() {
     add_failure "assigned_token_missing"
     return
   fi
+  if [[ -z "$RUNTIME_PORT" ]]; then
+    add_failure "runtime_port_missing"
+    return
+  fi
 
   RUNTIME_CONFIG_PATH="${RUNTIME_STATE_DIR}/openclaw.telegram-live.json"
   mkdir -p "$RUNTIME_STATE_DIR"
@@ -317,6 +381,7 @@ prepare_isolated_runtime_config() {
   if ! BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
     RUNTIME_CONFIG_PATH="$RUNTIME_CONFIG_PATH" \
     ASSIGNED_BOT_TOKEN="$ASSIGNED_BOT_TOKEN" \
+    RUNTIME_PORT="$RUNTIME_PORT" \
     node --input-type=module - <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
@@ -324,9 +389,10 @@ import path from "node:path";
 const basePath = process.env.BASE_CONFIG_PATH;
 const runtimeConfigPath = process.env.RUNTIME_CONFIG_PATH;
 const assignedToken = process.env.ASSIGNED_BOT_TOKEN;
+const runtimePort = Number.parseInt(process.env.RUNTIME_PORT ?? "", 10);
 
-if (!runtimeConfigPath || !assignedToken) {
-  throw new Error("Missing runtime config path or assigned token.");
+if (!runtimeConfigPath || !assignedToken || !Number.isFinite(runtimePort) || runtimePort <= 0) {
+  throw new Error("Missing runtime config path, assigned token, or runtime port.");
 }
 
 let config = {};
@@ -346,10 +412,16 @@ const controlUi =
   gateway.controlUi && typeof gateway.controlUi === "object" ? gateway.controlUi : {};
 config.gateway = {
   ...gateway,
+  port: runtimePort,
+  bind: "loopback",
   mode: "local",
   controlUi: {
     ...controlUi,
     enabled: false,
+    allowedOrigins: [
+      `http://localhost:${runtimePort}`,
+      `http://127.0.0.1:${runtimePort}`,
+    ],
   },
 };
 
@@ -360,9 +432,9 @@ const basePlugins = config.plugins && typeof config.plugins === "object" ? confi
 const pluginSlots =
   basePlugins.slots && typeof basePlugins.slots === "object" ? basePlugins.slots : {};
 
-// Force a Telegram-only runtime profile for worktree live tests. This avoids
-// unrelated channel/plugin startup side effects (for example other network
-// channels) that can mask Telegram runtime ownership/health checks.
+// Force a Telegram-only runtime profile for worktree live tests. Telegram is a
+// bundled channel plugin in this repo, so isolation must allow the telegram
+// plugin while still blocking unrelated plugins and memory slot side effects.
 delete telegram.accounts;
 config.channels = {
   telegram: {
@@ -373,7 +445,14 @@ config.channels = {
 };
 config.plugins = {
   ...basePlugins,
-  enabled: false,
+  enabled: true,
+  allow: ["telegram"],
+  entries: {
+    ...(basePlugins.entries && typeof basePlugins.entries === "object" ? basePlugins.entries : {}),
+    telegram: {
+      enabled: true,
+    },
+  },
   slots: {
     ...pluginSlots,
     memory: "none",
@@ -385,6 +464,82 @@ fs.writeFileSync(runtimeConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf
 NODE
   then
     add_failure "runtime_config_prepare_failed"
+  fi
+}
+
+sync_runtime_auth_profiles() {
+  if [[ -z "$RUNTIME_STATE_DIR" ]]; then
+    add_failure "runtime_state_dir_missing"
+    return
+  fi
+
+  # Worktree runtimes keep isolated state, but they still need the operator's
+  # existing auth profiles copied in so inbound Telegram messages can actually
+  # execute the same agent models as the stable runtime.
+  if ! BASE_CONFIG_PATH="$BASE_CONFIG_PATH" \
+    RUNTIME_STATE_DIR="$RUNTIME_STATE_DIR" \
+    node --input-type=module - <<'NODE'
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const basePath = process.env.BASE_CONFIG_PATH;
+const runtimeStateDir = process.env.RUNTIME_STATE_DIR;
+
+if (!runtimeStateDir) {
+  throw new Error("Missing runtime state dir.");
+}
+
+let config = {};
+if (basePath && fs.existsSync(basePath)) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(basePath, "utf8"));
+    if (parsed && typeof parsed === "object") {
+      config = parsed;
+    }
+  } catch {
+    // Ignore invalid base config here; auth sync simply falls back to defaults.
+  }
+}
+
+const agentEntries = new Map();
+const configuredAgents = Array.isArray(config?.agents?.list) ? config.agents.list : [];
+for (const entry of configuredAgents) {
+  if (!entry || typeof entry !== "object" || typeof entry.id !== "string" || !entry.id.trim()) {
+    continue;
+  }
+  agentEntries.set(entry.id, entry);
+}
+
+if (!agentEntries.has("main")) {
+  agentEntries.set("main", { id: "main" });
+}
+
+for (const [agentId, entry] of agentEntries) {
+  const sourceAgentDir =
+    typeof entry.agentDir === "string" && entry.agentDir.trim()
+      ? entry.agentDir.trim()
+      : path.join(os.homedir(), ".openclaw", "agents", agentId, "agent");
+  const sourceAuthPath = path.join(sourceAgentDir, "auth-profiles.json");
+  if (!fs.existsSync(sourceAuthPath)) {
+    continue;
+  }
+
+  const targetAuthPath = path.join(runtimeStateDir, "agents", agentId, "agent", "auth-profiles.json");
+  fs.mkdirSync(path.dirname(targetAuthPath), { recursive: true });
+
+  const sourceContent = fs.readFileSync(sourceAuthPath);
+  const targetContent = fs.existsSync(targetAuthPath) ? fs.readFileSync(targetAuthPath) : null;
+  if (targetContent && Buffer.compare(sourceContent, targetContent) === 0) {
+    continue;
+  }
+
+  fs.writeFileSync(targetAuthPath, sourceContent);
+  fs.chmodSync(targetAuthPath, 0o600);
+}
+NODE
+  then
+    add_failure "runtime_auth_sync_failed"
   fi
 }
 
@@ -444,6 +599,7 @@ ensure_command() {
 
   ensure_tester_bot_claim
   prepare_isolated_runtime_config
+  sync_runtime_auth_profiles
 
   resolve_runtime_owner
 
@@ -457,9 +613,11 @@ ensure_command() {
 
   if [[ "$FAIL" -eq 0 ]]; then
     local waited=0
-    local startup_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-120}"
+    # Cold isolated boots can take a couple of minutes on this repo because the
+    # runtime still initializes bundled services before Telegram is ready.
+    local startup_timeout="${OPENCLAW_TELEGRAM_LIVE_START_TIMEOUT_SECS:-240}"
     if [[ ! "$startup_timeout" =~ ^[0-9]+$ ]]; then
-      startup_timeout=120
+      startup_timeout=240
     fi
     RUNTIME_START_TIMEOUT_SECS="$startup_timeout"
     while [[ "$waited" -lt "$startup_timeout" ]]; do
@@ -497,41 +655,18 @@ ensure_command() {
   fi
 }
 
-stop_owned_runtime_if_present() {
-  resolve_profile
-  resolve_runtime_owner
-
-  local stopped_pid=""
-  local stop_result="skip"
-  if [[ -n "$RUNTIME_PID" && "$RUNTIME_OWNERSHIP" == "ok" ]]; then
-    stopped_pid="$RUNTIME_PID"
-    if kill "$RUNTIME_PID" 2>/dev/null; then
-      local waited=0
-      while [[ "$waited" -lt 15 ]]; do
-        if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
-          break
-        fi
-        sleep 1
-        waited=$((waited + 1))
-      done
-      if kill -0 "$RUNTIME_PID" 2>/dev/null; then
-        kill -9 "$RUNTIME_PID" 2>/dev/null || true
-      fi
-      stop_result="ok"
-    else
-      stop_result="fail"
-      add_failure "runtime_stop_failed"
-    fi
-  fi
-
+emit_handoff_proof_lines() {
   echo "handoff_worktree=${WORKTREE}"
   echo "handoff_runtime_port=${RUNTIME_PORT:-}"
-  echo "handoff_stopped_pid=${stopped_pid}"
-  echo "handoff_runtime_stop=${stop_result}"
+  echo "handoff_stopped_pid=${STOPPED_RUNTIME_PID}"
+  echo "handoff_runtime_stop=${RUNTIME_STOP_RESULT}"
 }
 
 handoff_main_command() {
-  stop_owned_runtime_if_present
+  resolve_profile
+  resolve_runtime_owner
+  stop_owned_runtime
+  emit_handoff_proof_lines
 
   local pre_health="fail"
   if openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
@@ -574,14 +709,75 @@ handoff_main_command() {
   fi
 }
 
+release_command() {
+  resolve_profile
+  resolve_runtime_owner
+
+  local env_local="${REPO_ROOT}/.env.local"
+  local release_token_present_before="no"
+  local release_token_cleared="no"
+  local release_token_fingerprint="none"
+  local release_runtime_pid="${RUNTIME_PID:-}"
+  local token_before=""
+
+  if [[ -f "$env_local" ]]; then
+    token_before="$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")"
+  fi
+
+  if [[ -n "$token_before" ]]; then
+    release_token_present_before="yes"
+    release_token_fingerprint="$(mask_token "$token_before")"
+  fi
+
+  if [[ -n "$RUNTIME_PID" && "$RUNTIME_OWNERSHIP" != "ok" ]]; then
+    add_failure "release_runtime_owned_by_other_worktree_or_process"
+  fi
+
+  if [[ "$FAIL" -eq 0 ]]; then
+    stop_owned_runtime
+  fi
+
+  if [[ "$FAIL" -eq 0 && "$release_token_present_before" == "yes" ]]; then
+    local clear_lines=""
+    local removed=""
+    if ! clear_lines="$(clear_env_assignment_file "$env_local" "TELEGRAM_BOT_TOKEN")"; then
+      add_failure "release_token_clear_failed"
+    else
+      removed="$(printf '%s\n' "$clear_lines" | sed -n '1p')"
+      if [[ "$removed" == "1" ]] && [[ -z "$(read_last_env_value "$env_local" "TELEGRAM_BOT_TOKEN")" ]]; then
+        release_token_cleared="yes"
+      else
+        add_failure "release_token_clear_failed"
+      fi
+    fi
+  fi
+
+  echo "release_worktree=${WORKTREE}"
+  echo "release_runtime_port=${RUNTIME_PORT:-}"
+  echo "release_runtime_pid=${release_runtime_pid}"
+  echo "release_runtime_stop=${RUNTIME_STOP_RESULT}"
+  echo "release_token_present_before=${release_token_present_before}"
+  echo "release_token_cleared=${release_token_cleared}"
+  echo "release_token_fingerprint=${release_token_fingerprint}"
+
+  if [[ "$FAIL" -ne 0 ]]; then
+    local reason
+    for reason in "${FAIL_REASONS[@]-}"; do
+      echo "error=${reason}" >&2
+    done
+    return 1
+  fi
+}
+
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/telegram-live-runtime.sh [ensure|handoff-main]
+  scripts/telegram-live-runtime.sh [ensure|handoff-main|release]
 
 Commands:
   ensure       Validate and ensure isolated Telegram live runtime ownership for this worktree.
   handoff-main Stop isolated worktree runtime (if owned) and recover stable main runtime.
+  release      Stop isolated worktree runtime (if owned) and clear this worktree tester bot claim.
 USAGE
 }
 
@@ -593,6 +789,9 @@ main() {
       ;;
     handoff-main)
       handoff_main_command
+      ;;
+    release)
+      release_command
       ;;
     -h|--help|help)
       usage

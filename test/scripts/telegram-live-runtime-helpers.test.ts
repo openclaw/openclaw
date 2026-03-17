@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  clearEnvAssignmentText,
   deriveTelegramLiveRuntimeProfile,
+  pruneTelegramThreadSessions,
   selectTelegramTesterToken,
 } from "../../scripts/lib/telegram-live-runtime-helpers.mjs";
 
@@ -69,5 +71,129 @@ describe("selectTelegramTesterToken", () => {
       reason: "pool_exhausted",
       selectedToken: null,
     });
+  });
+});
+
+describe("clearEnvAssignmentText", () => {
+  it("removes all matching assignments while preserving unrelated env entries", () => {
+    const result = clearEnvAssignmentText({
+      key: "TELEGRAM_BOT_TOKEN",
+      content: [
+        "OPENAI_API_KEY=abc",
+        "TELEGRAM_BOT_TOKEN=token-a",
+        "export TELEGRAM_BOT_TOKEN='token-b'",
+        "OTHER_FLAG=1",
+        "",
+      ].join("\n"),
+    });
+
+    expect(result).toEqual({
+      content: ["OPENAI_API_KEY=abc", "OTHER_FLAG=1", ""].join("\n"),
+      removed: true,
+      removedValue: "token-b",
+    });
+  });
+
+  it("keeps content unchanged when the assignment is absent", () => {
+    const content = ["OPENAI_API_KEY=abc", "OTHER_FLAG=1", ""].join("\n");
+    const result = clearEnvAssignmentText({
+      key: "TELEGRAM_BOT_TOKEN",
+      content,
+    });
+
+    expect(result).toEqual({
+      content,
+      removed: false,
+      removedValue: "",
+    });
+  });
+
+  it("preserves newline style when clearing a token assignment", () => {
+    const result = clearEnvAssignmentText({
+      key: "TELEGRAM_BOT_TOKEN",
+      content: 'OPENAI_API_KEY=abc\r\nTELEGRAM_BOT_TOKEN="token-a"\r\n',
+    });
+
+    expect(result).toEqual({
+      content: "OPENAI_API_KEY=abc\r\n",
+      removed: true,
+      removedValue: "token-a",
+    });
+  });
+});
+
+describe("pruneTelegramThreadSessions", () => {
+  it("removes only the targeted forum topic session and keeps future-thread defaults", () => {
+    const result = pruneTelegramThreadSessions({
+      agentId: "main",
+      chatId: "-1003841996303",
+      threadId: 4,
+      sessions: {
+        "agent:main:telegram:group:-1003841996303:topic:4": {
+          channel: "telegram",
+          groupId: "-1003841996303:topic:4",
+          deliveryContext: { channel: "telegram", to: "telegram:-1003841996303", threadId: 4 },
+          origin: {
+            provider: "telegram",
+            from: "telegram:group:-1003841996303:topic:4",
+            threadId: 4,
+          },
+        },
+        "agent:main:telegram:group:-1003841996303": {
+          futureThreadProviderOverride: "anthropic",
+          futureThreadModelOverride: "claude-sonnet-4-6",
+        },
+        "agent:main:telegram:group:-1003841996303:topic:3": {
+          channel: "telegram",
+          groupId: "-1003841996303:topic:3",
+          deliveryContext: { channel: "telegram", to: "telegram:-1003841996303", threadId: 3 },
+          origin: {
+            provider: "telegram",
+            from: "telegram:group:-1003841996303:topic:3",
+            threadId: 3,
+          },
+        },
+      },
+    });
+
+    expect(result.removedKeys).toEqual(["agent:main:telegram:group:-1003841996303:topic:4"]);
+    expect(result.sessions["agent:main:telegram:group:-1003841996303"]).toBeDefined();
+    expect(result.sessions["agent:main:telegram:group:-1003841996303:topic:3"]).toBeDefined();
+    expect(result.sessions["agent:main:telegram:group:-1003841996303:topic:4"]).toBeUndefined();
+  });
+
+  it("removes only the targeted DM thread session", () => {
+    const result = pruneTelegramThreadSessions({
+      agentId: "main",
+      chatId: "1336356696",
+      threadId: 38563,
+      sessions: {
+        "agent:main:telegram:default:direct:1336356696:thread:1336356696:38563": {
+          deliveryContext: { channel: "telegram", to: "telegram:1336356696", threadId: 38563 },
+          origin: {
+            provider: "telegram",
+            from: "telegram:1336356696",
+            to: "telegram:1336356696",
+            threadId: 38563,
+          },
+        },
+        "agent:main:telegram:default:direct:1336356696:thread:1336356696:38478": {
+          deliveryContext: { channel: "telegram", to: "telegram:1336356696", threadId: 38478 },
+          origin: {
+            provider: "telegram",
+            from: "telegram:1336356696",
+            to: "telegram:1336356696",
+            threadId: 38478,
+          },
+        },
+      },
+    });
+
+    expect(result.removedKeys).toEqual([
+      "agent:main:telegram:default:direct:1336356696:thread:1336356696:38563",
+    ]);
+    expect(
+      result.sessions["agent:main:telegram:default:direct:1336356696:thread:1336356696:38478"],
+    ).toBeDefined();
   });
 });
