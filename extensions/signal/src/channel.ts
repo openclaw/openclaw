@@ -5,8 +5,9 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
@@ -123,14 +124,7 @@ function buildSignalBaseSessionKey(params: {
   accountId?: string | null;
   peer: RoutePeer;
 }) {
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: "signal",
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    identityLinks: params.cfg.session?.identityLinks,
-  });
+  return buildOutboundBaseSessionKey({ ...params, channel: "signal" });
 }
 
 function resolveSignalOutboundSessionRoute(params: {

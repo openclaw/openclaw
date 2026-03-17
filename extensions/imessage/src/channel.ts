@@ -4,6 +4,7 @@ import {
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import {
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
@@ -14,7 +15,7 @@ import {
   resolveIMessageGroupToolPolicy,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/imessage";
-import { buildAgentSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { getIMessageRuntime } from "./runtime.js";
@@ -35,14 +36,7 @@ function buildIMessageBaseSessionKey(params: {
   accountId?: string | null;
   peer: RoutePeer;
 }) {
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: "imessage",
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    identityLinks: params.cfg.session?.identityLinks,
-  });
+  return buildOutboundBaseSessionKey({ ...params, channel: "imessage" });
 }
 
 function resolveIMessageOutboundSessionRoute(params: {
