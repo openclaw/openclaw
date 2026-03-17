@@ -4,14 +4,13 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles/store.js";
 import { createNonExitingRuntime } from "../../runtime.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import type {
   WizardMultiSelectParams,
   WizardPrompter,
   WizardProgress,
   WizardSelectParams,
 } from "../../wizard/prompts.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
+import { registerProviders, requireProvider } from "./testkit.js";
 
 type LoginOpenAICodexOAuth =
   (typeof import("../../plugins/provider-openai-codex-oauth.js"))["loginOpenAICodexOAuth"];
@@ -76,22 +75,6 @@ function buildAuthContext() {
       createVpsAwareHandlers: vi.fn<CreateVpsAwareHandlers>(),
     },
   };
-}
-
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
 }
 
 describe("provider auth contract", () => {

@@ -8,7 +8,7 @@ import { createInboundSlackTestContext } from "../../../../extensions/slack/src/
 import type { SlackMessageEvent } from "../../../../extensions/slack/src/types.js";
 import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { inboundCtxCapture } from "./inbound-contract-dispatch-mock.js";
+import { inboundCtxCapture } from "./inbound-testkit.js";
 import { expectChannelInboundContextContract } from "./suites.js";
 
 const signalCapture = vi.hoisted(() => ({ ctx: undefined as MsgContext | undefined }));

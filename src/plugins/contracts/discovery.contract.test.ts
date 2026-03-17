@@ -5,9 +5,8 @@ import {
 } from "../../agents/auth-profiles/store.js";
 import { QWEN_OAUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import { runProviderCatalog } from "../provider-discovery.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
+import { registerProviders, requireProvider } from "./testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
@@ -59,22 +58,6 @@ const modelStudioPlugin = (await import("../../../extensions/modelstudio/index.j
 const cloudflareAiGatewayPlugin = (
   await import("../../../extensions/cloudflare-ai-gateway/index.js")
 ).default;
-
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
-}
 
 function createModelConfig(id: string, name = id): ModelDefinitionConfig {
   return {
