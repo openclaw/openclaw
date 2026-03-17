@@ -153,8 +153,7 @@ describe("trigger handling", () => {
       const errorCases = [
         {
           error: "sandbox is not defined.",
-          expected:
-            "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: openclaw logs --follow",
+          expected: "⚠️ I hit a model error before replying. Please try again.",
         },
         {
           error: "Context window exceeded",
