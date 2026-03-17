@@ -30,6 +30,12 @@ export type PluginRuntimeCore = {
   tts: {
     textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
   };
+  mediaUnderstanding: {
+    runFile: typeof import("../../media-understanding/runtime.js").runMediaUnderstandingFile;
+    describeImageFile: typeof import("../../media-understanding/runtime.js").describeImageFile;
+    describeVideoFile: typeof import("../../media-understanding/runtime.js").describeVideoFile;
+    transcribeAudioFile: typeof import("../../media-understanding/runtime.js").transcribeAudioFile;
+  };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
   };
