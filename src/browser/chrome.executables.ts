@@ -23,6 +23,11 @@ const CHROMIUM_BUNDLE_IDS = new Set([
   "com.microsoft.EdgeBeta",
   "com.microsoft.EdgeDev",
   "com.microsoft.EdgeCanary",
+  // LaunchServices handler IDs differ from Info.plist CFBundleIdentifier
+  "com.microsoft.edgemac",
+  "com.microsoft.edgemac.beta",
+  "com.microsoft.edgemac.dev",
+  "com.microsoft.edgemac.canary",
   "org.chromium.Chromium",
   "com.vivaldi.Vivaldi",
   "com.operasoftware.Opera",
@@ -30,6 +35,16 @@ const CHROMIUM_BUNDLE_IDS = new Set([
   "com.yandex.desktop.yandex-browser",
   "company.thebrowser.Browser", // Arc
 ]);
+
+// LaunchServices handler IDs that differ from the app's CFBundleIdentifier.
+// osascript resolves apps by CFBundleIdentifier, so we fall back to the
+// canonical ID when the LaunchServices ID fails.
+const LAUNCHSERVICES_TO_CANONICAL_BUNDLE_ID: Record<string, string> = {
+  "com.microsoft.edgemac": "com.microsoft.Edge",
+  "com.microsoft.edgemac.beta": "com.microsoft.EdgeBeta",
+  "com.microsoft.edgemac.dev": "com.microsoft.EdgeDev",
+  "com.microsoft.edgemac.canary": "com.microsoft.EdgeCanary",
+};
 
 const CHROMIUM_DESKTOP_IDS = new Set([
   "google-chrome.desktop",
@@ -178,10 +193,19 @@ function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
     return null;
   }
 
-  const appPathRaw = execText("/usr/bin/osascript", [
+  let appPathRaw = execText("/usr/bin/osascript", [
     "-e",
     `POSIX path of (path to application id "${bundleId}")`,
   ]);
+  if (!appPathRaw) {
+    const canonicalId = LAUNCHSERVICES_TO_CANONICAL_BUNDLE_ID[bundleId];
+    if (canonicalId) {
+      appPathRaw = execText("/usr/bin/osascript", [
+        "-e",
+        `POSIX path of (path to application id "${canonicalId}")`,
+      ]);
+    }
+  }
   if (!appPathRaw) {
     return null;
   }

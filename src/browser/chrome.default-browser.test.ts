@@ -74,4 +74,45 @@ describe("browser default executable detection", () => {
 
     expect(exe?.path).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
   });
+
+  it("resolves Edge via LaunchServices handler ID fallback", () => {
+    const edgePath = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
+    vi.mocked(execFileSync).mockImplementation((cmd, args) => {
+      const argsStr = Array.isArray(args) ? args.join(" ") : "";
+      if (cmd === "/usr/bin/plutil" && argsStr.includes("LSHandlers")) {
+        return JSON.stringify([
+          { LSHandlerURLScheme: "http", LSHandlerRoleAll: "com.microsoft.edgemac" },
+        ]);
+      }
+      if (cmd === "/usr/bin/osascript" && argsStr.includes("path to application id")) {
+        // LaunchServices ID fails, canonical ID succeeds
+        if (argsStr.includes("com.microsoft.edgemac")) {
+          return "";
+        }
+        if (argsStr.includes("com.microsoft.Edge")) {
+          return "/Applications/Microsoft Edge.app";
+        }
+        return "";
+      }
+      if (cmd === "/usr/bin/defaults") {
+        return "Microsoft Edge";
+      }
+      return "";
+    });
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const value = String(p);
+      if (value.includes(launchServicesPlist)) {
+        return true;
+      }
+      return value === edgePath;
+    });
+
+    const exe = resolveBrowserExecutableForPlatform(
+      {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "darwin",
+    );
+
+    expect(exe?.path).toBe(edgePath);
+    expect(exe?.kind).toBe("edge");
+  });
 });
