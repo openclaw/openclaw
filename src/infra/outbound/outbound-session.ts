@@ -4,10 +4,12 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
-import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
+import type { RoutePeer } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import { buildOutboundBaseSessionKey } from "./base-session-key.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
+import { normalizeOutboundThreadId } from "./thread-id.js";
 
 export type OutboundSessionRoute = {
   sessionKey: string;
@@ -29,20 +31,6 @@ export type ResolveOutboundSessionRouteParams = {
   replyToId?: string | null;
   threadId?: string | number | null;
 };
-
-function normalizeThreadId(value?: string | number | null): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return undefined;
-    }
-    return String(Math.trunc(value));
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function stripProviderPrefix(raw: string, channel: string): string {
   const trimmed = raw.trim();
@@ -89,14 +77,7 @@ function buildBaseSessionKey(params: {
   accountId?: string | null;
   peer: RoutePeer;
 }): string {
-  return buildAgentSessionKey({
-    agentId: params.agentId,
-    channel: params.channel,
-    accountId: params.accountId,
-    peer: params.peer,
-    dmScope: params.cfg.session?.dmScope ?? "main",
-    identityLinks: params.cfg.session?.identityLinks,
-  });
+  return buildOutboundBaseSessionKey(params);
 }
 
 function resolveWhatsAppSession(
@@ -240,7 +221,7 @@ function resolveMattermostSession(
     channel: "mattermost",
     peer: { kind: isUser ? "direct" : "channel", id: rawId },
   });
-  const threadId = normalizeThreadId(params.replyToId ?? params.threadId);
+  const threadId = normalizeOutboundThreadId(params.replyToId ?? params.threadId);
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId,

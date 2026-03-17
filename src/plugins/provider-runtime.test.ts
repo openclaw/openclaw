@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectAugmentedCodexCatalog,
+  expectCodexBuiltInSuppression,
+  expectCodexMissingAuthHint,
+} from "./provider-runtime.test-support.js";
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
 type ResolvePluginProviders = typeof import("./providers.js").resolvePluginProviders;
@@ -23,30 +28,28 @@ vi.mock("./providers.js", () => ({
     resolveOwningPluginIdsForProviderMock(params as never),
 }));
 
-import {
-  augmentModelCatalogWithProviderPlugins,
-  buildProviderAuthDoctorHintWithPlugin,
-  buildProviderMissingAuthMessageWithPlugin,
-  formatProviderAuthProfileApiKeyWithPlugin,
-  prepareProviderExtraParams,
-  resolveProviderCacheTtlEligibility,
-  resolveProviderBinaryThinking,
-  resolveProviderBuiltInModelSuppression,
-  resolveProviderDefaultThinkingLevel,
-  resolveProviderModernModelRef,
-  resolveProviderUsageSnapshotWithPlugin,
-  resolveProviderCapabilitiesWithPlugin,
-  resolveProviderUsageAuthWithPlugin,
-  resolveProviderXHighThinking,
-  normalizeProviderResolvedModelWithPlugin,
-  prepareProviderDynamicModel,
-  prepareProviderRuntimeAuth,
-  resetProviderRuntimeHookCacheForTest,
-  refreshProviderOAuthCredentialWithPlugin,
-  resolveProviderRuntimePlugin,
-  runProviderDynamicModel,
-  wrapProviderStreamFn,
-} from "./provider-runtime.js";
+let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
+let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
+let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
+let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
+let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
+let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
+let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolveProviderBinaryThinking;
+let resolveProviderBuiltInModelSuppression: typeof import("./provider-runtime.js").resolveProviderBuiltInModelSuppression;
+let resolveProviderDefaultThinkingLevel: typeof import("./provider-runtime.js").resolveProviderDefaultThinkingLevel;
+let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
+let resolveProviderUsageSnapshotWithPlugin: typeof import("./provider-runtime.js").resolveProviderUsageSnapshotWithPlugin;
+let resolveProviderCapabilitiesWithPlugin: typeof import("./provider-runtime.js").resolveProviderCapabilitiesWithPlugin;
+let resolveProviderUsageAuthWithPlugin: typeof import("./provider-runtime.js").resolveProviderUsageAuthWithPlugin;
+let resolveProviderXHighThinking: typeof import("./provider-runtime.js").resolveProviderXHighThinking;
+let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.js").normalizeProviderResolvedModelWithPlugin;
+let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
+let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
+let resetProviderRuntimeHookCacheForTest: typeof import("./provider-runtime.js").resetProviderRuntimeHookCacheForTest;
+let refreshProviderOAuthCredentialWithPlugin: typeof import("./provider-runtime.js").refreshProviderOAuthCredentialWithPlugin;
+let resolveProviderRuntimePlugin: typeof import("./provider-runtime.js").resolveProviderRuntimePlugin;
+let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
+let wrapProviderStreamFn: typeof import("./provider-runtime.js").wrapProviderStreamFn;
 
 const MODEL: ProviderRuntimeModel = {
   id: "demo-model",
@@ -62,7 +65,32 @@ const MODEL: ProviderRuntimeModel = {
 };
 
 describe("provider-runtime", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      augmentModelCatalogWithProviderPlugins,
+      buildProviderAuthDoctorHintWithPlugin,
+      buildProviderMissingAuthMessageWithPlugin,
+      formatProviderAuthProfileApiKeyWithPlugin,
+      prepareProviderExtraParams,
+      resolveProviderCacheTtlEligibility,
+      resolveProviderBinaryThinking,
+      resolveProviderBuiltInModelSuppression,
+      resolveProviderDefaultThinkingLevel,
+      resolveProviderModernModelRef,
+      resolveProviderUsageSnapshotWithPlugin,
+      resolveProviderCapabilitiesWithPlugin,
+      resolveProviderUsageAuthWithPlugin,
+      resolveProviderXHighThinking,
+      normalizeProviderResolvedModelWithPlugin,
+      prepareProviderDynamicModel,
+      prepareProviderRuntimeAuth,
+      resetProviderRuntimeHookCacheForTest,
+      refreshProviderOAuthCredentialWithPlugin,
+      resolveProviderRuntimePlugin,
+      runProviderDynamicModel,
+      wrapProviderStreamFn,
+    } = await import("./provider-runtime.js"));
     resetProviderRuntimeHookCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
@@ -410,54 +438,9 @@ describe("provider-runtime", () => {
       }),
     ).toBe(true);
 
-    expect(
-      buildProviderMissingAuthMessageWithPlugin({
-        provider: "openai",
-        env: process.env,
-        context: {
-          env: process.env,
-          provider: "openai",
-          listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
-        },
-      }),
-    ).toContain("openai-codex/gpt-5.4");
-
-    expect(
-      resolveProviderBuiltInModelSuppression({
-        env: process.env,
-        context: {
-          env: process.env,
-          provider: "azure-openai-responses",
-          modelId: "gpt-5.3-codex-spark",
-        },
-      }),
-    ).toMatchObject({
-      suppress: true,
-      errorMessage: expect.stringContaining("openai-codex/gpt-5.3-codex-spark"),
-    });
-
-    await expect(
-      augmentModelCatalogWithProviderPlugins({
-        env: process.env,
-        context: {
-          env: process.env,
-          entries: [
-            { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-            { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
-            { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
-          ],
-        },
-      }),
-    ).resolves.toEqual([
-      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-      { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
-      {
-        provider: "openai-codex",
-        id: "gpt-5.3-codex-spark",
-        name: "gpt-5.3-codex-spark",
-      },
-    ]);
+    expectCodexMissingAuthHint(buildProviderMissingAuthMessageWithPlugin);
+    expectCodexBuiltInSuppression(resolveProviderBuiltInModelSuppression);
+    await expectAugmentedCodexCatalog(augmentModelCatalogWithProviderPlugins);
 
     expect(prepareDynamicModel).toHaveBeenCalledTimes(1);
     expect(refreshOAuth).toHaveBeenCalledTimes(1);
