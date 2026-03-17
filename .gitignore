@@ -95,13 +95,16 @@ USER.md
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json
-!.agent/workflows/
 /local/
 package-lock.json
 .claude/
 .agents/
 .agents
 .agent/
+# Explicitly allow tracked maintainer workflow and skill content (must follow .agent/.agents rules)
+!.agent/workflows/
+!.agents/skills/
+!.agents/maintainers.md
 skills-lock.json
 
 # Local iOS signing overrides
@@ -130,6 +133,8 @@ docker-compose.override.yml
 Makefile
 .dev-state
 mission-control-ui/
+.env.local.runtime
+
 
 
 .dev-state

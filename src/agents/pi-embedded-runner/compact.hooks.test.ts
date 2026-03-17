@@ -1,4 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+/**
+ * Compaction hooks test suite. If the Vitest worker hangs after startup on your host:
+ * - Run in isolation: pnpm test -- src/agents/pi-embedded-runner/compact.hooks.test.ts
+ * - Or with low profile: OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test -- src/agents/pi-embedded-runner/compact.hooks.test.ts
+ * - Or single fork: pnpm test -- src/agents/pi-embedded-runner/compact.hooks.test.ts --pool forks --poolOptions.forks.singleFork
+ */
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 const {
@@ -451,6 +457,11 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     embeddedLogWarn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     sessionAbortCompactionMock.mockReset();
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
+  });
+
+  afterAll(() => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   async function runDirectCompaction(customInstructions = TEST_CUSTOM_INSTRUCTIONS) {
