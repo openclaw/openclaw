@@ -9,6 +9,8 @@ export type SessionResetPolicy = {
   mode: SessionResetMode;
   atHour: number;
   idleMinutes?: number;
+  /** Minutes of grace after the daily boundary for recently active sessions. */
+  graceMinutes?: number;
 };
 
 export type SessionFreshness = {
@@ -116,7 +118,13 @@ export function resolveSessionResetPolicy(params: {
     idleMinutes = DEFAULT_IDLE_MINUTES;
   }
 
-  return { mode, atHour, idleMinutes };
+  const graceMinutesRaw = typeReset?.graceMinutes ?? baseReset?.graceMinutes;
+  const graceMinutes =
+    typeof graceMinutesRaw === "number" && Number.isFinite(graceMinutesRaw) && graceMinutesRaw > 0
+      ? Math.floor(graceMinutesRaw)
+      : undefined;
+
+  return { mode, atHour, idleMinutes, graceMinutes };
 }
 
 export function resolveChannelResetConfig(params: {
@@ -149,7 +157,18 @@ export function evaluateSessionFreshness(params: {
     params.policy.idleMinutes != null
       ? params.updatedAt + params.policy.idleMinutes * 60_000
       : undefined;
-  const staleDaily = dailyResetAt != null && params.updatedAt < dailyResetAt;
+  let staleDaily = dailyResetAt != null && params.updatedAt < dailyResetAt;
+  // Grace period: if the session was active within graceMinutes before the
+  // daily boundary, defer the reset so active late-night sessions aren't
+  // wiped mid-conversation (#49170).
+  if (staleDaily && dailyResetAt != null && params.policy.graceMinutes != null) {
+    const graceMs = params.policy.graceMinutes * 60_000;
+    const recentlyActive = params.updatedAt >= dailyResetAt - graceMs;
+    const withinGraceWindow = params.now < dailyResetAt + graceMs;
+    if (recentlyActive && withinGraceWindow) {
+      staleDaily = false;
+    }
+  }
   const staleIdle = idleExpiresAt != null && params.now > idleExpiresAt;
   return {
     fresh: !(staleDaily || staleIdle),

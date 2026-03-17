@@ -75,6 +75,8 @@ export type SessionResetConfig = {
   atHour?: number;
   /** Sliding idle window (minutes). When set with daily mode, whichever expires first wins. */
   idleMinutes?: number;
+  /** Grace period (minutes) for recently active sessions at the daily boundary. */
+  graceMinutes?: number;
 };
 export type SessionResetByTypeConfig = {
   direct?: SessionResetConfig;

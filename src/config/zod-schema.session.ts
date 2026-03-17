@@ -18,6 +18,7 @@ const SessionResetConfigSchema = z
     mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
     atHour: z.number().int().min(0).max(23).optional(),
     idleMinutes: z.number().int().positive().optional(),
+    graceMinutes: z.number().int().positive().optional(),
   })
   .strict();
 
