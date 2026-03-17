@@ -2,9 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createProjectionRestartHarness } from "../acp/test-harness/restart-harness.js";
+import { createAcpTestConfig } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
+import { startAcpNodeProjectionRecovery } from "./server-startup.acp-node.js";
 
 vi.mock("../channels/plugins/index.js", () => ({
   normalizeChannelId: vi.fn(),
@@ -319,6 +322,175 @@ describe("handleNodeEvent ACP worker ingress", () => {
       terminal: {
         terminalEventId: "term-1",
       },
+    });
+  });
+
+  it("replays accepted output before reconnect-delivered suffixes and does not redeliver duplicates", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-server-node-events-acp-"));
+    tempRoots.push(root);
+    const storePath = path.join(root, "acp", "gateway-node-runtime-store.json");
+    const runtime = new AcpGatewayNodeRuntime(new AcpGatewayStore({ storePath }));
+    acpGatewayTesting.setAcpGatewayNodeRuntimeForTests(runtime);
+
+    const lease = await runtime.store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 10,
+    });
+    await runtime.store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 10,
+    });
+    await runtime.store.recordRunDeliveryTarget({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      targetId: "primary",
+      channel: "telegram",
+      to: "telegram:a",
+      routeMode: "originating",
+      now: 11,
+    });
+
+    await handleNodeEvent(buildCtx(), "node-1", {
+      event: "acp.worker.event",
+      payloadJSON: JSON.stringify({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        seq: 1,
+        event: {
+          type: "text_delta",
+          stream: "output",
+          text: "replayed first.\n\n",
+        },
+      }),
+    });
+    await handleNodeDisconnect("node-1", {
+      now: 13,
+    });
+
+    const restartedRuntime = new AcpGatewayNodeRuntime(new AcpGatewayStore({ storePath }));
+    acpGatewayTesting.setAcpGatewayNodeRuntimeForTests(restartedRuntime);
+    const harness = createProjectionRestartHarness();
+    const recovery = await startAcpNodeProjectionRecovery({
+      cfg: createAcpTestConfig({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+            coalesceIdleMs: 0,
+            maxChunkChars: 64,
+          },
+        },
+      }),
+      store: restartedRuntime.store,
+      coordinatorFactory: harness.createCoordinatorFactory(),
+    });
+
+    expect(recovery.started).toContain("run-1:primary");
+    await vi.waitFor(() => {
+      expect(harness.deliveries).toHaveLength(1);
+      expect(harness.deliveries[0]).toMatchObject({
+        targetKey: "run-1:primary",
+        restartMode: true,
+        payload: expect.objectContaining({
+          text: expect.stringContaining("replayed first."),
+        }),
+      });
+    });
+
+    await handleNodeConnected({
+      nodeId: "node-1",
+      invokeNode: async () => ({
+        ok: true,
+        payload: {
+          nodeId: "node-1",
+          ok: true,
+          sessionKey: "agent:main:acp:test-session",
+          leaseId: lease.leaseId,
+          leaseEpoch: lease.leaseEpoch,
+          state: "running",
+          nodeRuntimeSessionId: "runtime-1",
+          nodeWorkerRunId: "worker-1",
+          workerProtocolVersion: 1,
+        },
+      }),
+      now: 14,
+    });
+
+    await handleNodeEvent(buildCtx(), "node-1", {
+      event: "acp.worker.event",
+      payloadJSON: JSON.stringify({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        seq: 1,
+        event: {
+          type: "text_delta",
+          stream: "output",
+          text: "replayed first.\n\n",
+        },
+      }),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    expect(harness.deliveries).toHaveLength(1);
+
+    await handleNodeEvent(buildCtx(), "node-1", {
+      event: "acp.worker.event",
+      payloadJSON: JSON.stringify({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        seq: 2,
+        event: {
+          type: "text_delta",
+          stream: "output",
+          text: "reconnected second.\n\n",
+        },
+      }),
+    });
+    await handleNodeEvent(buildCtx(), "node-1", {
+      event: "acp.worker.terminal",
+      payloadJSON: JSON.stringify({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        terminalEventId: "term-1",
+        finalSeq: 2,
+        terminal: {
+          kind: "completed",
+          stopReason: "end_turn",
+        },
+      }),
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.deliveries).toHaveLength(2);
+      expect(harness.deliveries.map((entry) => entry.payload.text)).toEqual([
+        expect.stringContaining("replayed first."),
+        expect.stringContaining("reconnected second."),
+      ]);
+    });
+
+    const projectionState = await restartedRuntime.store.getProjectionState({
+      runId: "run-1",
+      targetId: "primary",
+    });
+    expect(projectionState.checkpoint).toMatchObject({
+      cursorSeq: 2,
+      deliveredEffectCount: 2,
     });
   });
 
