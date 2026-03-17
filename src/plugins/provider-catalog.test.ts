@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildSingleProviderApiKeyCatalog } from "./provider-catalog.js";
+import { buildSingleProviderApiKeyCatalog, findCatalogTemplate } from "./provider-catalog.js";
 import type { ProviderCatalogContext } from "./types.js";
 
 function createCatalogContext(params: {
@@ -17,6 +17,19 @@ function createCatalogContext(params: {
 }
 
 describe("buildSingleProviderApiKeyCatalog", () => {
+  it("matches provider templates case-insensitively", () => {
+    const result = findCatalogTemplate({
+      entries: [
+        { provider: "OpenAI", id: "gpt-5.2" },
+        { provider: "other", id: "fallback" },
+      ],
+      providerId: "openai",
+      templateIds: ["missing", "GPT-5.2"],
+    });
+
+    expect(result).toEqual({ provider: "OpenAI", id: "gpt-5.2" });
+  });
+
   it("returns null when api key is missing", async () => {
     const result = await buildSingleProviderApiKeyCatalog({
       ctx: createCatalogContext({}),
