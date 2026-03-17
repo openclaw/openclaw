@@ -7,13 +7,8 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { resolveLineAccount } from "../api.js";
-import {
-  isLineConfigured,
-  listLineAccountIds,
-  parseLineAllowFromId,
-  patchLineAccountConfig,
-} from "./setup-core.js";
+import { listLineAccountIds, resolveLineAccount } from "../api.js";
+import { isLineConfigured, parseLineAllowFromId, patchLineAccountConfig } from "./setup-core.js";
 
 const channel = "line" as const;
 
