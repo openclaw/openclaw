@@ -135,5 +135,56 @@ assert_ok "auth: token cache file has 600 perms" \
 assert_ok "auth: token cache has expires_at" \
   "jq -e '.expires_at > 0' '${TMP}/token-auth.json' >/dev/null"
 
+printf '\n=== test-wiz-api: GraphQL execution ===\n'
+
+# --- mock curl that returns GraphQL data ---
+cat >"${TMP}/mock-curl-gql.sh" <<'CURL_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+http_code_file=""
+output_file=""
+args=("$@")
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+  case "${args[$i]}" in
+    */oauth/token)
+      printf '{"access_token":"gql-token","expires_in":3600,"token_type":"Bearer"}\n'
+      exit 0
+      ;;
+    -o)
+      i=$((i + 1))
+      output_file="${args[$i]}"
+      ;;
+    -w)
+      i=$((i + 1))
+      http_code_file="__write_code__"
+      ;;
+  esac
+  i=$((i + 1))
+done
+# GraphQL response
+response='{"data":{"issues":{"nodes":[{"id":"iss-1","severity":"CRITICAL"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}'
+if [[ -n "$output_file" ]]; then
+  printf '%s' "$response" >"$output_file"
+  printf '200'
+else
+  printf '%s\n' "$response"
+fi
+CURL_EOF
+chmod +x "${TMP}/mock-curl-gql.sh"
+
+query_result="$(
+  export WIZ_API_SKIP_VAULT=1
+  export WIZ_CLIENT_ID='gql-test-id'
+  export WIZ_CLIENT_SECRET='gql-test-secret'
+  export WIZ_API_CURL_BIN="${TMP}/mock-curl-gql.sh"
+  export WIZ_API_JQ_BIN='jq'
+  export WIZ_API_TOKEN_CACHE="${TMP}/token-gql.json"
+  "${SCRIPT_PATH}" query '{ issues(first: 5) { nodes { id severity } pageInfo { hasNextPage endCursor } } }' 2>/dev/null
+)"
+
+assert_ok "query: returns data" \
+  "printf '%s' '$query_result' | jq -e '.data.issues.nodes[0].id == \"iss-1\"' >/dev/null"
+
 printf '\n=== Results: %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1

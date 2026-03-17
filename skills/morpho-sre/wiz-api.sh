@@ -156,6 +156,89 @@ ensure_token() {
   authenticate
 }
 
+wiz_graphql_with_retry() {
+  local query="$1"
+  local vars_json="${2:-"{}"}"
+  local response error_msg tmp_body http_code payload
+
+  ensure_token
+
+  payload="$("$WIZ_API_JQ_BIN" -nc \
+    --arg query "$query" \
+    --argjson variables "$vars_json" \
+    '{ query: $query, variables: $variables }'
+  )" || die "failed to build GraphQL payload"
+
+  tmp_body="$(mktemp /tmp/wiz-api-body.XXXXXX)"
+
+  http_code="$(
+    "$WIZ_API_CURL_BIN" -sS --max-time "$WIZ_API_TIMEOUT" \
+      -o "$tmp_body" -w '%{http_code}' \
+      -H "Authorization: Bearer ${WIZ_API_BEARER_TOKEN}" \
+      -H 'Content-Type: application/json' \
+      --data "$payload" \
+      "$WIZ_API_URL"
+  )" || {
+    rm -f "$tmp_body"
+    die "GraphQL request failed (curl error)"
+  }
+
+  response="$(cat "$tmp_body")"
+  rm -f "$tmp_body"
+
+  # 401 → invalidate cache, re-auth, retry once
+  if [[ "$http_code" == "401" ]]; then
+    rm -f "$WIZ_API_TOKEN_CACHE"
+    WIZ_API_BEARER_TOKEN=""
+    authenticate
+
+    tmp_body="$(mktemp /tmp/wiz-api-body.XXXXXX)"
+    http_code="$(
+      "$WIZ_API_CURL_BIN" -sS --max-time "$WIZ_API_TIMEOUT" \
+        -o "$tmp_body" -w '%{http_code}' \
+        -H "Authorization: Bearer ${WIZ_API_BEARER_TOKEN}" \
+        -H 'Content-Type: application/json' \
+        --data "$payload" \
+        "$WIZ_API_URL"
+    )" || {
+      rm -f "$tmp_body"
+      die "GraphQL retry failed (curl error)"
+    }
+    response="$(cat "$tmp_body")"
+    rm -f "$tmp_body"
+  fi
+
+  if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+    die "GraphQL request returned HTTP ${http_code}: $(printf '%s' "$response" | head -c 200)"
+  fi
+
+  printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -e . >/dev/null 2>&1 || die "invalid JSON response"
+
+  if printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -e '.errors and (.errors | length > 0)' >/dev/null 2>&1; then
+    error_msg="$(printf '%s\n' "$response" | "$WIZ_API_JQ_BIN" -r '.errors[0].message // "unknown GraphQL error"')"
+    die "GraphQL error: ${error_msg}"
+  fi
+
+  printf '%s\n' "$response"
+}
+
+cmd_query() {
+  local query_input="${1:-}"
+  local vars_json="${2:-"{}"}"
+  [[ -n "$query_input" ]] || die "usage: query <graphql_string_or_@file> [variables_json]"
+
+  local query
+  if [[ "$query_input" == @* ]]; then
+    local file_path="${query_input#@}"
+    [[ -f "$file_path" ]] || die "query file not found: ${file_path}"
+    query="$(cat "$file_path")"
+  else
+    query="$query_input"
+  fi
+
+  wiz_graphql_with_retry "$query" "$vars_json" | "$WIZ_API_JQ_BIN" -c '.'
+}
+
 cmd_probe_auth() {
   ensure_token
   local now expires_at
