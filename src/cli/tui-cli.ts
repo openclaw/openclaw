@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { runTui } from "../tui/tui.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 
 export function registerTuiCli(program: Command) {
@@ -18,16 +17,31 @@ export function registerTuiCli(program: Command) {
     .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
     .option("--history-limit <n>", "History entries to load", "200")
+    .option("--theme <theme>", 'Color theme: "dark" (default) or "light"')
     .addHelpText(
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/tui", "docs.openclaw.ai/cli/tui")}\n`,
     )
     .action(async (opts) => {
       try {
+        // Set theme env var before TUI module loads so theme.ts picks it up
+        const themeOpt = opts.theme as string | undefined;
+        if (themeOpt === "light" || themeOpt === "dark") {
+          const { setTheme } = await import("../tui/theme/theme.js");
+          setTheme(themeOpt);
+        }
+
+        const { runTui } = await import("../tui/tui.js");
+
         const timeoutMs = parseTimeoutMs(opts.timeoutMs);
         if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
           defaultRuntime.error(
             `warning: invalid --timeout-ms "${String(opts.timeoutMs)}"; ignoring`,
+          );
+        }
+        if (themeOpt && themeOpt !== "light" && themeOpt !== "dark") {
+          defaultRuntime.error(
+            `warning: invalid --theme "${themeOpt}"; expected "dark" or "light". Using default.`,
           );
         }
         const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);

@@ -78,6 +78,24 @@ function isLightBackground(): boolean {
 /** Whether the terminal has a light background. Exported for testing only. */
 export const lightMode = isLightBackground();
 
+let _themeOverride: "light" | "dark" | undefined;
+
+/** Override theme at runtime via --theme CLI flag. Must be called before first palette access. */
+export function setTheme(mode: "light" | "dark"): void {
+  _themeOverride = mode;
+  process.env.OPENCLAW_THEME = mode;
+}
+
+function resolvedLightMode(): boolean {
+  if (_themeOverride === "light") {
+    return true;
+  }
+  if (_themeOverride === "dark") {
+    return false;
+  }
+  return lightMode;
+}
+
 export const darkPalette = {
   text: "#E8E3D5",
   dim: "#7B7F87",
@@ -126,7 +144,14 @@ export const lightPalette = {
   success: "#047857",
 } as const;
 
-export const palette = lightMode ? lightPalette : darkPalette;
+// Lazy palette: when setTheme() is called before first access, the override takes effect.
+// The Proxy defers property reads to the resolved palette at access time.
+export const palette: typeof darkPalette = new Proxy({} as typeof darkPalette, {
+  get(_target, prop) {
+    const active = resolvedLightMode() ? lightPalette : darkPalette;
+    return active[prop as keyof typeof darkPalette];
+  },
+});
 
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
