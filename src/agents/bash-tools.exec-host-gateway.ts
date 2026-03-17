@@ -66,6 +66,8 @@ export type ProcessGatewayAllowlistParams = {
   trustedSafeBinDirs?: ReadonlySet<string>;
   /** Sandbox context for sandbox-host exec — passed to runExecProcess when host=sandbox. */
   sandbox?: import("./bash-tools.exec-types.js").ExecToolDefaults["sandbox"];
+  /** Pre-resolved container workdir (from resolveSandboxWorkdir). Used for sandbox approval runs. */
+  containerWorkdir?: string | null;
 };
 
 export type ProcessGatewayAllowlistResult = {
@@ -277,7 +279,7 @@ export async function processGatewayAllowlist(
           workdir: params.workdir,
           env: params.env,
           sandbox: effectiveHost === "sandbox" ? params.sandbox : undefined,
-          containerWorkdir: effectiveHost === "sandbox" ? params.sandbox?.containerWorkdir ?? null : null,
+          containerWorkdir: effectiveHost === "sandbox" ? (params.containerWorkdir ?? params.sandbox?.containerWorkdir ?? null) : null,
           usePty: params.pty,
           warnings: params.warnings,
           maxOutput: params.maxOutput,

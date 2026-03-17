@@ -476,6 +476,7 @@ export function createExecTool(
           ask,
           host,
           sandbox: host === "sandbox" ? sandbox : undefined,
+          containerWorkdir: host === "sandbox" ? containerWorkdir : undefined,
           safeBins,
           safeBinProfiles,
           agentId,
