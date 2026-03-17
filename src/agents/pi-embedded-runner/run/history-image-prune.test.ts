@@ -8,7 +8,7 @@ function expectArrayMessageContent(
   message: AgentMessage | undefined,
   errorMessage: string,
 ): Array<{ type: string; text?: string; data?: string }> {
-  if (!message || !Array.isArray(message.content)) {
+  if (!message || !("content" in message) || !Array.isArray(message.content)) {
     throw new Error(errorMessage);
   }
   return message.content as Array<{ type: string; text?: string; data?: string }>;
