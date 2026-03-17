@@ -209,7 +209,7 @@
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
-- File size check on commit: when a commit touches a file, check whether it already exceeds or is approaching the ideal length for its language (~500 LOC for TypeScript/JavaScript, ~400 for Swift/Kotlin, ~600 for Go/Rust). If it does, split the file as part of the same PR — extract helpers, types, or logical units into neighboring modules. This improves modularity, reduces merge conflicts in multi-contributor workflows, and keeps code reviewable. Do not let a commit grow a file past these thresholds without actively considering a split. When oversize is intentional, add a file-level comment at the top of the file explaining the rationale (e.g. `// This file intentionally exceeds LOC guidelines because …`).
+- File size check on commit: when a commit touches a file that exceeds ~500 LOC, split it into logical modules in the same PR; when oversize is intentional, add a file-level comment at the top explaining the rationale.
 - PR submission template (canonical): `.github/pull_request_template.md`
 - Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
 - Read this when submitting a PR: `docs/help/submitting-a-pr.md` ([Submitting a PR](https://docs.openclaw.ai/help/submitting-a-pr))
