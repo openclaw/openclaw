@@ -91,6 +91,12 @@ export type SessionEntry = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /**
+   * Grace window for the first owner message after an explicit /new or /reset in a thread-bound
+   * session. While active, queued owner messages can carry startup-recovery instructions so
+   * interrupted Session Startup preload reads are completed before the turn ends.
+   */
+  postRotationStartupUntilMs?: number;
+  /**
    * Session-level stop cutoff captured when /stop is received.
    * Messages at/before this boundary are skipped to avoid replaying
    * queued pre-stop backlog.

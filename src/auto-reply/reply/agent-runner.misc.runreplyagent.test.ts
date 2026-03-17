@@ -217,6 +217,171 @@ describe("runReplyAgent onAgentRunStart", () => {
   });
 });
 
+describe("runReplyAgent queued post-rotation startup messages", () => {
+  it("wraps queued owner steer text when a Discord thread reset startup window is active", async () => {
+    const { queueEmbeddedPiMessage } = await import("../../agents/pi-embedded.js");
+    const queueEmbeddedPiMessageMock = vi.mocked(queueEmbeddedPiMessage);
+    queueEmbeddedPiMessageMock.mockReturnValueOnce(true);
+
+    const typing = createMockTypingController();
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun: {
+        prompt: "please continue",
+        summaryLine: "please continue",
+        enqueuedAt: Date.now(),
+        run: {
+          sessionId: "session",
+          sessionKey: "main",
+          messageProvider: "discord",
+          senderIsOwner: true,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp",
+          config: {},
+          skillsSnapshot: {},
+          provider: "anthropic",
+          model: "claude",
+          thinkLevel: "low",
+          verboseLevel: "off",
+          elevatedLevel: "off",
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          timeoutMs: 1_000,
+          blockReplyBreak: "message_end",
+        },
+      } as unknown as FollowupRun,
+      queueKey: "main",
+      resolvedQueue: { mode: "interrupt" } as QueueSettings,
+      shouldSteer: true,
+      shouldFollowup: false,
+      isActive: true,
+      isStreaming: true,
+      typing,
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingTo: "channel:thread-1",
+        AccountId: "primary",
+        MessageSid: "msg",
+        MessageThreadId: "thread-1",
+      } as unknown as TemplateContext,
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        postRotationStartupUntilMs: Date.now() + 30_000,
+      },
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toBeUndefined();
+    expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith(
+      "session",
+      expect.stringContaining("If any Session Startup preload reads were interrupted or skipped"),
+    );
+    expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith(
+      "session",
+      expect.stringContaining("Owner message:\n\nplease continue"),
+    );
+  });
+
+  it("clears the post-rotation startup window after a run completes", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-startup-window-")),
+      "sessions.json",
+    );
+    const sessionKey = "main";
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        postRotationStartupUntilMs: Date.now() + 30_000,
+      },
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun: {
+        prompt: "hello",
+        summaryLine: "hello",
+        enqueuedAt: Date.now(),
+        run: {
+          sessionId: "session",
+          sessionKey,
+          messageProvider: "discord",
+          senderIsOwner: true,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp",
+          config: {},
+          skillsSnapshot: {},
+          provider: "anthropic",
+          model: "claude",
+          thinkLevel: "low",
+          verboseLevel: "off",
+          elevatedLevel: "off",
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          timeoutMs: 1_000,
+          blockReplyBreak: "message_end",
+        },
+      } as unknown as FollowupRun,
+      queueKey: sessionKey,
+      resolvedQueue: { mode: "interrupt" } as QueueSettings,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: createMockTypingController(),
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingTo: "channel:thread-1",
+        AccountId: "primary",
+        MessageSid: "msg",
+        MessageThreadId: "thread-1",
+      } as unknown as TemplateContext,
+      sessionEntry: {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        postRotationStartupUntilMs: Date.now() + 30_000,
+      },
+      sessionStore: {
+        [sessionKey]: {
+          sessionId: "session",
+          updatedAt: Date.now(),
+          postRotationStartupUntilMs: Date.now() + 30_000,
+        },
+      },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toMatchObject({ text: "ok" });
+    const stored = loadSessionStore(storePath, { skipCache: true });
+    expect(stored[sessionKey]?.postRotationStartupUntilMs).toBeUndefined();
+  });
+});
+
 describe("runReplyAgent authProfileId fallback scoping", () => {
   it("drops authProfileId when provider changes during fallback", async () => {
     runWithModelFallbackMock.mockImplementationOnce(
