@@ -847,6 +847,18 @@ export function resolveSessionOptionGroups(
   }
   addOption(sessionKey);
 
+  // Ensure all configured agents appear as groups even when they have no
+  // persisted sessions yet.  Without this, switching away from a fresh agent
+  // removes it from the dropdown because the session store does not contain an
+  // entry for it.
+  const agents = state.agentsList?.agents ?? [];
+  for (const agent of agents) {
+    const groupId = `agent:${agent.id.toLowerCase()}`;
+    if (!groups.has(groupId)) {
+      addOption(`agent:${agent.id}:main`);
+    }
+  }
+
   for (const group of groups.values()) {
     const counts = new Map<string, number>();
     for (const option of group.options) {
