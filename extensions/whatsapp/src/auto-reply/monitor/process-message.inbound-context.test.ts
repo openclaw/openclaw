@@ -4,14 +4,34 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../../../src/channels/plugins/contracts/suites.js";
 
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
+  ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
+>;
+
 let capturedCtx: unknown;
 let capturedDispatchParams: unknown;
 let sessionDir: string | undefined;
 let sessionStorePath: string;
 let backgroundTasks: Set<Promise<unknown>>;
-const { deliverWebReplyMock } = vi.hoisted(() => ({
-  deliverWebReplyMock: vi.fn(async () => {}),
-}));
+const { deliverWebReplyMock, dispatchReplyWithBufferedBlockDispatcherMock, updateLastRouteMock } =
+  vi.hoisted(() => ({
+    deliverWebReplyMock: vi.fn(async () => {}),
+    dispatchReplyWithBufferedBlockDispatcherMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
+      async (
+        params: Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0],
+      ): Promise<DispatchReplyWithBufferedBlockDispatcherResult> => {
+        capturedDispatchParams = params;
+        capturedCtx = params.ctx;
+        return {
+          queuedFinal: false,
+          counts: {} as DispatchReplyWithBufferedBlockDispatcherResult["counts"],
+        };
+      },
+    ),
+    updateLastRouteMock: vi.fn(),
+  }));
 
 const defaultReplyLogger = {
   info: () => {},
@@ -83,31 +103,17 @@ function createWhatsAppDirectStreamingArgs(params?: {
   });
 }
 
-vi.mock("../../../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  // oxlint-disable-next-line typescript/no-explicit-any
-  dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
-    capturedDispatchParams = params;
-    capturedCtx = params.ctx;
-    return { queuedFinal: false };
-  }),
-}));
+const replyRuntime = await import("openclaw/plugin-sdk/reply-runtime");
+const deliverReplyModule = await import("../deliver-reply.js");
+const lastRouteModule = await import("./last-route.js");
+vi.spyOn(replyRuntime, "dispatchReplyWithBufferedBlockDispatcher").mockImplementation(
+  dispatchReplyWithBufferedBlockDispatcherMock,
+);
+vi.spyOn(deliverReplyModule, "deliverWebReply").mockImplementation(deliverWebReplyMock);
+vi.spyOn(lastRouteModule, "updateLastRouteInBackground").mockImplementation(updateLastRouteMock);
 
-vi.mock("./last-route.js", () => ({
-  trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
-    tasks.add(task);
-    void task.finally(() => {
-      tasks.delete(task);
-    });
-  },
-  updateLastRouteInBackground: vi.fn(),
-}));
-
-vi.mock("../deliver-reply.js", () => ({
-  deliverWebReply: deliverWebReplyMock,
-}));
-
-import { updateLastRouteInBackground } from "./last-route.js";
-import { processMessage } from "./process-message.js";
+const { updateLastRouteInBackground } = lastRouteModule;
+const { processMessage } = await import("./process-message.js");
 
 describe("web processMessage inbound context", () => {
   beforeEach(async () => {
@@ -115,6 +121,8 @@ describe("web processMessage inbound context", () => {
     capturedDispatchParams = undefined;
     backgroundTasks = new Set();
     deliverWebReplyMock.mockClear();
+    dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
+    updateLastRouteMock.mockClear();
     sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-process-message-"));
     sessionStorePath = path.join(sessionDir, "sessions.json");
   });
