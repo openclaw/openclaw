@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { DmPolicy } from "openclaw/plugin-sdk/whatsapp";
 import {
   DEFAULT_ACCOUNT_ID,
   formatCliCommand,
