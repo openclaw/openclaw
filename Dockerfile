@@ -145,6 +145,10 @@ COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
+# Extensions (telegram, discord, slack, etc.) are loaded as TypeScript at runtime via Jiti.
+# They import from relative paths like "../../../src/infra/outbound/send-deps.js", which
+# Jiti resolves to /app/src/. Without src/ here, all extension plugins fail to load.
+COPY --from=runtime-assets --chown=node:node /app/src ./src
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
