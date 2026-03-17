@@ -24,11 +24,14 @@ export function registerTuiCli(program: Command) {
     )
     .action(async (opts) => {
       try {
-        // Set theme env var before TUI module loads so theme.ts picks it up
+        // Set theme env var BEFORE TUI module loads so theme.ts picks it up at init
         const themeOpt = opts.theme as string | undefined;
         if (themeOpt === "light" || themeOpt === "dark") {
-          const { setTheme } = await import("../tui/theme/theme.js");
-          setTheme(themeOpt);
+          process.env.OPENCLAW_THEME = themeOpt;
+        } else if (themeOpt) {
+          defaultRuntime.error(
+            `warning: invalid --theme "${themeOpt}"; expected "dark" or "light". Using default.`,
+          );
         }
 
         const { runTui } = await import("../tui/tui.js");
@@ -37,11 +40,6 @@ export function registerTuiCli(program: Command) {
         if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
           defaultRuntime.error(
             `warning: invalid --timeout-ms "${String(opts.timeoutMs)}"; ignoring`,
-          );
-        }
-        if (themeOpt && themeOpt !== "light" && themeOpt !== "dark") {
-          defaultRuntime.error(
-            `warning: invalid --theme "${themeOpt}"; expected "dark" or "light". Using default.`,
           );
         }
         const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
