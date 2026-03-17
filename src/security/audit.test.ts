@@ -1150,66 +1150,65 @@ description: test skill
     );
   });
 
-  it("flags dangerous sandbox docker config (binds/network/seccomp/apparmor)", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            docker: {
-              binds: ["/etc/passwd:/mnt/passwd:ro", "/run:/run"],
-              network: "host",
-              seccompProfile: "unconfined",
-              apparmorProfile: "unconfined",
+  it("flags dangerous sandbox docker config", async () => {
+    const cases = [
+      {
+        name: "dangerous binds, host network, seccomp, and apparmor",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                docker: {
+                  binds: ["/etc/passwd:/mnt/passwd:ro", "/run:/run"],
+                  network: "host",
+                  seccompProfile: "unconfined",
+                  apparmorProfile: "unconfined",
+                },
+              },
             },
           },
-        },
+        } as OpenClawConfig,
+        expectedFindings: [
+          { checkId: "sandbox.dangerous_bind_mount", severity: "critical" },
+          { checkId: "sandbox.dangerous_network_mode", severity: "critical" },
+          { checkId: "sandbox.dangerous_seccomp_profile", severity: "critical" },
+          { checkId: "sandbox.dangerous_apparmor_profile", severity: "critical" },
+        ],
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "sandbox.dangerous_bind_mount", severity: "critical" }),
-        expect.objectContaining({
-          checkId: "sandbox.dangerous_network_mode",
-          severity: "critical",
-        }),
-        expect.objectContaining({
-          checkId: "sandbox.dangerous_seccomp_profile",
-          severity: "critical",
-        }),
-        expect.objectContaining({
-          checkId: "sandbox.dangerous_apparmor_profile",
-          severity: "critical",
-        }),
-      ]),
-    );
-  });
-
-  it("flags container namespace join network mode in sandbox config", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            docker: {
-              network: "container:peer",
+      {
+        name: "container namespace join network mode",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                docker: {
+                  network: "container:peer",
+                },
+              },
             },
           },
-        },
+        } as OpenClawConfig,
+        expectedFindings: [
+          {
+            checkId: "sandbox.dangerous_network_mode",
+            severity: "critical",
+            title: "Dangerous network mode in sandbox config",
+          },
+        ],
       },
-    };
-    const res = await audit(cfg);
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "sandbox.dangerous_network_mode",
-          severity: "critical",
-          title: "Dangerous network mode in sandbox config",
-        }),
-      ]),
+    ] as const;
+
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(res.findings, testCase.name).toEqual(
+          expect.arrayContaining(
+            testCase.expectedFindings.map((finding) => expect.objectContaining(finding)),
+          ),
+        );
+      }),
     );
   });
 
