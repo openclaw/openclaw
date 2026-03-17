@@ -1222,7 +1222,7 @@ Docs: https://docs.openclaw.ai
 - Signal/Sync message null-handling: treat `syncMessage` presence (including `null`) as sync envelope traffic so replayed sentTranscript payloads cannot bypass loop guards after daemon restart. Landed from contributor PR #31138 by @Sid-Qin. Thanks @Sid-Qin.
 - Infra/fs-safe: sanitize directory-read failures so raw `EISDIR` text never leaks to messaging surfaces, with regression tests for both root-scoped and direct safe reads. Landed from contributor PR #31205 by @polooooo. Thanks @polooooo.
 
-## Unreleased
+## 2026.2.27
 
 ### Changes
 
