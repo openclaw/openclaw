@@ -402,7 +402,7 @@ Notes:
 
 ### `image_generate`
 
-Generate one or more images with the configured image-generation model.
+Generate one or more images with the configured or inferred image-generation model.
 
 Core parameters:
 
@@ -416,7 +416,8 @@ Core parameters:
 
 Notes:
 
-- Only available when `agents.defaults.imageGenerationModel` is configured.
+- Available when `agents.defaults.imageGenerationModel` is configured, or when OpenClaw can infer a compatible image-generation default from your enabled providers plus available auth.
+- Explicit `agents.defaults.imageGenerationModel` still wins over any inferred default.
 - Use `action: "list"` to inspect registered providers, default models, supported model ids, sizes, resolutions, and edit support.
 - Returns local `MEDIA:<path>` lines so channels can deliver the generated files directly.
 - Uses the image-generation model directly (independent of the main chat model).
