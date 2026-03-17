@@ -13,6 +13,7 @@ let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+let healthRefreshGeneration = 0;
 
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
@@ -67,10 +68,22 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
+export function clearGatewayHealthRuntimeState(): void {
+  healthRefreshGeneration += 1;
+  healthCache = null;
+  healthRefresh = null;
+  broadcastHealthUpdate = null;
+}
+
 export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
+    // Guards against stale in-flight refresh writes after shutdown/startup boundaries.
+    const generation = healthRefreshGeneration;
     healthRefresh = (async () => {
       const snap = await getHealthSnapshot({ probe: opts?.probe });
+      if (generation !== healthRefreshGeneration) {
+        return snap;
+      }
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {
@@ -78,7 +91,9 @@ export async function refreshGatewayHealthSnapshot(opts?: { probe?: boolean }) {
       }
       return snap;
     })().finally(() => {
-      healthRefresh = null;
+      if (generation === healthRefreshGeneration) {
+        healthRefresh = null;
+      }
     });
   }
   return healthRefresh;

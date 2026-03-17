@@ -70,6 +70,7 @@ Do not edit these files under this plan:
 - [x] Add tests for container lifecycle and order
 - [x] Move fallback gateway context ownership into `RuntimeStateContainer` and clear it during shutdown
 - [x] Clear remote skills cache/registry state and health broadcast callback during gateway shutdown
+- [x] Clear gateway health cache and ignore stale in-flight refresh writes after shutdown resets
 
 ### Stage 3A: gateway startup decomposition
 

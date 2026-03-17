@@ -100,12 +100,12 @@ import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 import {
+  clearGatewayHealthRuntimeState,
   getHealthCache,
   getHealthVersion,
   getPresenceVersion,
   incrementPresenceVersion,
   refreshGatewayHealthSnapshot,
-  setBroadcastHealthUpdate,
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hooks.js";
 import { createReadinessChecker } from "./server/readiness.js";
@@ -962,7 +962,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
-      setBroadcastHealthUpdate(null);
+      clearGatewayHealthRuntimeState();
       clearSkillsRemoteState();
       runtimeState.secretsRuntime.clear();
       runtimeState.fallbackGatewayContext.clear();
