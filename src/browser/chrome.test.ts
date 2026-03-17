@@ -302,6 +302,24 @@ describe("browser chrome helpers", () => {
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
   });
 
+  it("blocks private CDP probes when strict SSRF policy is enabled", async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("should not be called"));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      isChromeReachable("http://127.0.0.1:12345", 50, {
+        dangerouslyAllowPrivateNetwork: false,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      isChromeReachable("ws://127.0.0.1:19999", 50, {
+        dangerouslyAllowPrivateNetwork: false,
+      }),
+    ).resolves.toBe(false);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("reports cdpReady only when Browser.getVersion command succeeds", async () => {
     await withMockChromeCdpServer({
       wsPath: "/devtools/browser/health",

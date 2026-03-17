@@ -1,10 +1,13 @@
+import type { MockFn } from "openclaw/plugin-sdk/test-utils";
 import { beforeEach, vi } from "vitest";
-import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
     deleteMessage: vi.fn(),
+    editForumTopic: vi.fn(),
     editMessageText: vi.fn(),
+    editMessageReplyMarkup: vi.fn(),
+    pinChatMessage: vi.fn(),
     sendChatAction: vi.fn(),
     sendMessage: vi.fn(),
     sendPoll: vi.fn(),
@@ -16,6 +19,7 @@ const { botApi, botCtorSpy } = vi.hoisted(() => ({
     sendAnimation: vi.fn(),
     setMessageReaction: vi.fn(),
     sendSticker: vi.fn(),
+    unpinChatMessage: vi.fn(),
   },
   botCtorSpy: vi.fn(),
 }));
@@ -60,8 +64,8 @@ vi.mock("grammy", () => ({
   InputFile: class {},
 }));
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig,

@@ -9,15 +9,12 @@ import {
 } from "./auth-choice.apply.plugin-provider.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/providers.js", () => ({
-  resolvePluginProviders,
-}));
-
 const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<() => { provider: ProviderPlugin; method: ProviderAuthMethod } | null>(),
 );
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../plugins/provider-wizard.js", () => ({
+vi.mock("./auth-choice.apply.plugin-provider.runtime.js", () => ({
+  resolvePluginProviders,
   resolveProviderPluginChoice,
   runProviderModelSelectedHook,
 }));
@@ -47,7 +44,7 @@ vi.mock("../agents/agent-paths.js", () => ({
 }));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((config) => config));
-vi.mock("./onboard-auth.js", () => ({
+vi.mock("../plugins/provider-auth-helpers.js", () => ({
   applyAuthProfileConfig,
 }));
 

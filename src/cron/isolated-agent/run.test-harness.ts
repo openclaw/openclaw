@@ -363,7 +363,7 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
-  resolveThinkingDefaultMock.mockReturnValue(undefined);
+  resolveThinkingDefaultMock.mockReturnValue("off");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
   isCliProviderMock.mockReturnValue(false);
 

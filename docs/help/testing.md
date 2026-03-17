@@ -61,7 +61,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 
 - Command: `pnpm test:e2e`
 - Config: `vitest.e2e.config.ts`
-- Files: `src/**/*.e2e.test.ts`
+- Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`
 - Runtime defaults:
   - Uses Vitest `vmForks` for faster file startup.
   - Uses adaptive workers (CI: 2-4, local: 4-8).
@@ -76,6 +76,23 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI (when enabled in the pipeline)
   - No real keys required
   - More moving parts than unit tests (can be slower)
+
+### E2E: OpenShell backend smoke
+
+- Command: `pnpm test:e2e:openshell`
+- File: `test/openshell-sandbox.e2e.test.ts`
+- Scope:
+  - Starts an isolated OpenShell gateway on the host via Docker
+  - Creates a sandbox from a temporary local Dockerfile
+  - Exercises OpenClaw's OpenShell backend over real `sandbox ssh-config` + SSH exec
+  - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
+- Expectations:
+  - Opt-in only; not part of the default `pnpm test:e2e` run
+  - Requires a local `openshell` CLI plus a working Docker daemon
+  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test gateway and sandbox
+- Useful overrides:
+  - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
+  - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
 
 ### Live (real providers + real models)
 
@@ -345,7 +362,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 ## Docker runners (optional “works in Linux” checks)
 
-These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted):
+These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount CLI auth homes like `~/.codex`, `~/.claude`, `~/.qwen`, and `~/.minimax` when present, then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
@@ -356,6 +373,9 @@ These run `pnpm test:live` inside the repo Docker image, mounting your local con
 The live-model Docker runners also bind-mount the current checkout read-only and
 stage it into a temporary workdir inside the container. This keeps the runtime
 image slim while still running Vitest against your exact local source/config.
+`test:docker:live-models` still runs `pnpm test:live`, so pass through
+`OPENCLAW_LIVE_GATEWAY_*` as well when you need to narrow or exclude gateway
+live coverage from that Docker lane.
 
 Manual ACP plain-language thread smoke (not CI):
 
@@ -367,7 +387,9 @@ Useful env vars:
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
 - `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
+- External CLI auth dirs under `$HOME` (`.codex`, `.claude`, `.qwen`, `.minimax`) are mounted read-only under `/host-auth/...`, then copied into `/home/node/...` before tests start
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
+- `OPENCLAW_LIVE_GATEWAY_PROVIDERS=...` / `OPENCLAW_LIVE_PROVIDERS=...` to filter providers in-container
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
 
 ## Docs sanity
