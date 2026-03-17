@@ -74,6 +74,7 @@
   "boolean-param",
   "channel-config-helpers",
   "channel-config-schema",
+  "channel-lifecycle",
   "channel-policy",
   "group-access",
   "directory-runtime",

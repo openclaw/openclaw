@@ -27,7 +27,7 @@ function runToolStreamCase(params: ToolStreamCase) {
     model: params.model,
     options: params.options,
     payload: { model: params.model.id, messages: [] },
-  }).payload;
+  }).payload as Record<string, unknown>;
 }
 
 describe("extra-params: Z.AI tool_stream support", () => {

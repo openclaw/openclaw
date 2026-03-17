@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildPluginStatusReport } from "./status.js";
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
+let buildPluginStatusReport: typeof import("./status.js").buildPluginStatusReport;
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => loadConfigMock(),
@@ -22,7 +22,8 @@ vi.mock("../agents/workspace.js", () => ({
 }));
 
 describe("buildPluginStatusReport", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     loadConfigMock.mockReturnValue({});
@@ -38,6 +39,7 @@ describe("buildPluginStatusReport", () => {
       services: [],
       commands: [],
     });
+    ({ buildPluginStatusReport } = await import("./status.js"));
   });
 
   it("forwards an explicit env to plugin loading", () => {

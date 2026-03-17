@@ -37,7 +37,7 @@ describe("Feishu Card Action Handler", () => {
 
   function createCardActionEvent(params: {
     token: string;
-    actionValue: unknown;
+    actionValue: Record<string, unknown>;
     chatId?: string;
     openId?: string;
     userId?: string;

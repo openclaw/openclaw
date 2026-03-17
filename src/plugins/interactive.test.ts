@@ -1,10 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as conversationBinding from "./conversation-binding.js";
+import type {
+  DiscordInteractiveDispatchContext,
+  SlackInteractiveDispatchContext,
+  TelegramInteractiveDispatchContext,
+} from "./interactive-dispatch-adapters.js";
 import {
   clearPluginInteractiveHandlers,
   dispatchPluginInteractiveHandler,
   registerPluginInteractiveHandler,
 } from "./interactive.js";
+import type {
+  PluginInteractiveDiscordHandlerContext,
+  PluginInteractiveSlackHandlerContext,
+  PluginInteractiveTelegramHandlerContext,
+} from "./types.js";
 
 let requestPluginConversationBindingMock: MockInstance<
   typeof conversationBinding.requestPluginConversationBinding
@@ -16,13 +26,46 @@ let getCurrentPluginConversationBindingMock: MockInstance<
   typeof conversationBinding.getCurrentPluginConversationBinding
 >;
 
+type InteractiveDispatchParams =
+  | {
+      channel: "telegram";
+      data: string;
+      callbackId: string;
+      ctx: TelegramInteractiveDispatchContext;
+      respond: PluginInteractiveTelegramHandlerContext["respond"];
+    }
+  | {
+      channel: "discord";
+      data: string;
+      interactionId: string;
+      ctx: DiscordInteractiveDispatchContext;
+      respond: PluginInteractiveDiscordHandlerContext["respond"];
+    }
+  | {
+      channel: "slack";
+      data: string;
+      interactionId: string;
+      ctx: SlackInteractiveDispatchContext;
+      respond: PluginInteractiveSlackHandlerContext["respond"];
+    };
+
 async function expectDedupedInteractiveDispatch(params: {
-  baseParams: Parameters<typeof dispatchPluginInteractiveHandler>[0];
+  baseParams: InteractiveDispatchParams;
   handler: ReturnType<typeof vi.fn>;
   expectedCall: unknown;
 }) {
-  const first = await dispatchPluginInteractiveHandler(params.baseParams);
-  const duplicate = await dispatchPluginInteractiveHandler(params.baseParams);
+  const dispatch = async (baseParams: InteractiveDispatchParams) => {
+    if (baseParams.channel === "telegram") {
+      return await dispatchPluginInteractiveHandler(baseParams);
+    }
+    if (baseParams.channel === "discord") {
+      return await dispatchPluginInteractiveHandler(baseParams);
+    }
+    return await dispatchPluginInteractiveHandler(baseParams);
+  };
+
+  const first = await dispatch(params.baseParams);
+  const duplicate = await dispatch(params.baseParams);
 
   expect(first).toEqual({ matched: true, handled: true, duplicate: false });
   expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });

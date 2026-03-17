@@ -1755,6 +1755,58 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.imageGenerationModel",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.imageGenerationModel.fallbacks",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "media",
+        "reliability"
+      ],
+      "label": "Image Generation Model Fallbacks",
+      "help": "Ordered fallback image-generation models (provider/model).",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.imageGenerationModel.fallbacks.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.imageGenerationModel.primary",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "media"
+      ],
+      "label": "Image Generation Model",
+      "help": "Optional image-generation model (provider/model) used by the shared image generation capability.",
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.imageMaxDimensionPx",
       "kind": "core",
       "type": "integer",
@@ -38213,6 +38265,20 @@
       "hasChildren": false
     },
     {
+      "path": "commands.mcp",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Allow /mcp",
+      "help": "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
+      "hasChildren": false
+    },
+    {
       "path": "commands.native",
       "kind": "core",
       "type": [
@@ -38306,6 +38372,20 @@
       ],
       "label": "Owner ID Hash Secret",
       "help": "Optional secret used to HMAC hash owner IDs when ownerDisplay=hash. Prefer env substitution.",
+      "hasChildren": false
+    },
+    {
+      "path": "commands.plugins",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Allow /plugins",
+      "help": "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
       "hasChildren": false
     },
     {
@@ -39846,7 +39926,7 @@
         "network"
       ],
       "label": "OpenAI Chat Completions Allow Image URLs",
-      "help": "Allow server-side URL fetches for `image_url` parts (default: false; data URIs remain supported).",
+      "help": "Allow server-side URL fetches for `image_url` parts (default: false; data URIs remain supported). Set this to `false` to disable URL fetching entirely.",
       "hasChildren": false
     },
     {
@@ -39911,7 +39991,7 @@
         "network"
       ],
       "label": "OpenAI Chat Completions Image URL Allowlist",
-      "help": "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards.",
+      "help": "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards. Empty or omitted lists mean no hostname allowlist restriction.",
       "hasChildren": true
     },
     {
@@ -42212,6 +42292,137 @@
       ],
       "label": "Sensitive Data Redaction Mode",
       "help": "Sensitive redaction mode: \"off\" disables built-in masking, while \"tools\" redacts sensitive tool/config payload fields. Keep \"tools\" in shared logs unless you have isolated secure log sinks.",
+      "hasChildren": false
+    },
+    {
+      "path": "mcp",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "MCP",
+      "help": "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
+      "hasChildren": true
+    },
+    {
+      "path": "mcp.servers",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "MCP Servers",
+      "help": "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+      "hasChildren": true
+    },
+    {
+      "path": "mcp.servers.*",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "mcp.servers.*.*",
+      "kind": "core",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "mcp.servers.*.args",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "mcp.servers.*.args.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "mcp.servers.*.command",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "mcp.servers.*.cwd",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "mcp.servers.*.env",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "mcp.servers.*.env.*",
+      "kind": "core",
+      "type": [
+        "boolean",
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "mcp.servers.*.url",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "mcp.servers.*.workingDirectory",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
