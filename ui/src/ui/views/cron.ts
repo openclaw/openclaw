@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
-import { t } from "../../i18n/index.ts";
+import { t, tPlural } from "../../i18n/index.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -388,9 +388,7 @@ export function renderCron(props: CronProps) {
     props.jobsSortDir !== "asc";
   const submitDisabledReason =
     blockedByValidation && !props.canSubmit
-      ? blockingFields.length === 1
-        ? t("cron.form.fixFields", { count: String(blockingFields.length) })
-        : t("cron.form.fixFieldsPlural", { count: String(blockingFields.length) })
+      ? tPlural("cron.form.fixFields", blockingFields.length)
       : "";
   return html`
     <section class="card cron-summary-strip">

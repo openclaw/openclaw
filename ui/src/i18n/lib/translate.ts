@@ -148,3 +148,56 @@ class I18nManager {
 
 export const i18n = new I18nManager();
 export const t = (key: string, params?: Record<string, string>) => i18n.t(key, params);
+
+/**
+ * Return the CLDR plural category for the current locale.
+ *
+ * Covers the rules used by every locale shipped today:
+ *  - "one"   → exactly 1  (all locales)
+ *  - "few"   → 2-4 except 12-14  (Russian and other Slavic locales)
+ *  - "other" → everything else
+ *
+ * See: https://www.unicode.org/cldr/charts/latest/supplemental/language_plural_rules.html
+ */
+function getPluralCategory(locale: Locale, count: number): "one" | "few" | "other" {
+  if (locale === "ru") {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    if (mod10 === 1 && mod100 !== 11) {
+      return "one";
+    }
+    if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) {
+      return "few";
+    }
+    return "other";
+  }
+  // All other shipped locales use the simple one/other split.
+  return count === 1 ? "one" : "other";
+}
+
+/**
+ * Pluralisation-aware translation.
+ *
+ * Given a base key like `"cron.form.fixFields"`, looks up:
+ *  - `cron.form.fixFields`        → category "one"   (count = 1)
+ *  - `cron.form.fixFieldsFew`     → category "few"   (count = 2-4, Russian)
+ *  - `cron.form.fixFieldsPlural`  → category "other" (count ≥ 5 or 0)
+ *
+ * Falls back gracefully: if "Few" key is missing, uses "Plural".
+ */
+export function tPlural(baseKey: string, count: number, params?: Record<string, string>): string {
+  const locale = i18n.getLocale();
+  const category = getPluralCategory(locale, count);
+  const merged = { ...params, count: String(count) };
+
+  if (category === "one") {
+    return t(baseKey, merged);
+  }
+  if (category === "few") {
+    const fewKey = `${baseKey}Few`;
+    const result = t(fewKey, merged);
+    // Fall back to Plural if Few key doesn't exist (returns the key itself on miss).
+    return result === fewKey ? t(`${baseKey}Plural`, merged) : result;
+  }
+  return t(`${baseKey}Plural`, merged);
+}

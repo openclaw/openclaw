@@ -108,6 +108,52 @@ describe("i18n", () => {
     );
   });
 
+  describe("tPlural", () => {
+    it("uses base key for count=1 in English", () => {
+      expect(translate.tPlural("cron.form.fixFields", 1)).toBe("Fix 1 field to continue.");
+    });
+
+    it("uses Plural key for count>1 in English", () => {
+      expect(translate.tPlural("cron.form.fixFields", 3)).toBe("Fix 3 fields to continue.");
+      expect(translate.tPlural("cron.form.fixFields", 12)).toBe("Fix 12 fields to continue.");
+    });
+
+    it("uses Few key for count 2-4 in Russian", async () => {
+      await translate.i18n.setLocale("ru");
+      expect(translate.tPlural("cron.form.fixFields", 2)).toBe(
+        "Исправьте 2 поля, чтобы продолжить.",
+      );
+      expect(translate.tPlural("cron.form.fixFields", 4)).toBe(
+        "Исправьте 4 поля, чтобы продолжить.",
+      );
+    });
+
+    it("uses Plural key for count 5+ in Russian", async () => {
+      await translate.i18n.setLocale("ru");
+      expect(translate.tPlural("cron.form.fixFields", 5)).toBe(
+        "Исправьте 5 полей, чтобы продолжить.",
+      );
+      expect(translate.tPlural("cron.form.fixFields", 12)).toBe(
+        "Исправьте 12 полей, чтобы продолжить.",
+      );
+    });
+
+    it("uses base key for count=1 in Russian", async () => {
+      await translate.i18n.setLocale("ru");
+      expect(translate.tPlural("cron.form.fixFields", 1)).toBe(
+        "Исправьте 1 поле, чтобы продолжить.",
+      );
+      expect(translate.tPlural("cron.form.fixFields", 21)).toBe(
+        "Исправьте 21 поле, чтобы продолжить.",
+      );
+    });
+
+    it("falls back to Plural if Few key is missing", () => {
+      // English has no Few key, so count=3 should use Plural
+      expect(translate.tPlural("cron.form.fixFields", 3)).toBe("Fix 3 fields to continue.");
+    });
+  });
+
   it("keeps the version label available in shipped locales", () => {
     expect((pt_BR.common as { version?: string }).version).toBeTruthy();
     expect((zh_CN.common as { version?: string }).version).toBeTruthy();
