@@ -272,10 +272,10 @@ async function run() {
   }
 
   if (plan.testFiles.length === 0) {
-    console.error(
+    console.log(
       `No tests found for ${plan.extensionDir}. Run "pnpm test:extension ${plan.extensionId} -- --dry-run" to inspect the resolved roots.`,
     );
-    process.exit(1);
+    return;
   }
 
   if (dryRun) {

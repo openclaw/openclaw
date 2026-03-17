@@ -325,9 +325,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "think":
         if (!args) {
-          const thinkingLevelOptions = config
-            ? { config }
-            : undefined;
+          const thinkingLevelOptions = config ? { config } : undefined;
           const levels = formatThinkingLevels(
             state.sessionInfo.modelProvider,
             state.sessionInfo.model,
@@ -368,11 +366,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "fast":
         if (!args || args === "status") {
-          chatLog.addSystem(
-            `fast mode: ${
-              state.sessionInfo.fastMode ? "on" : "off"
-            }`,
-          );
+          chatLog.addSystem(`fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`);
           break;
         }
         if (args !== "on" && args !== "off") {
