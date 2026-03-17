@@ -1,6 +1,8 @@
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
 import { applyTlonSetupConfig, type TlonSetupInput, tlonSetupAdapter } from "./setup-core.js";
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";

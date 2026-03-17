@@ -113,9 +113,11 @@ That means:
 Examples:
 
 - the bundled `openai` plugin owns OpenAI model-provider behavior and OpenAI
-  speech behavior
+  speech + media-understanding behavior
 - the bundled `elevenlabs` plugin owns ElevenLabs speech behavior
 - the bundled `microsoft` plugin owns Microsoft speech behavior
+- the bundled `google`, `minimax`, `mistral`, `moonshot`, and `zai` plugins own
+  their media-understanding backends
 - the `voice-call` plugin is a feature plugin: it owns call transport, tools,
   CLI, routes, and runtime, but it consumes core TTS/STT capability instead of
   inventing a second speech stack
@@ -166,6 +168,24 @@ For example, TTS follows this shape:
 - `voice-call` consumes the telephony TTS runtime helper
 
 That same pattern should be preferred for future capabilities.
+
+### Capability example: video understanding
+
+OpenClaw already treats image/audio/video understanding as one shared
+capability. The same ownership model applies there:
+
+1. core defines the media-understanding contract
+2. vendor plugins register `describeImage`, `transcribeAudio`, and
+   `describeVideo` as applicable
+3. channels and feature plugins consume the shared core behavior instead of
+   wiring directly to vendor code
+
+That avoids baking one provider's video assumptions into core. The plugin owns
+the vendor surface; core owns the capability contract and fallback behavior.
+
+If OpenClaw adds a new domain later, such as video generation, use the same
+sequence again: define the core capability first, then let vendor plugins
+register implementations against it.
 
 ## Compatible bundles
 
@@ -331,7 +351,8 @@ There are two layers of enforcement:
 2. **contract tests**
    Bundled plugins are captured in contract registries during test runs so
    OpenClaw can assert ownership explicitly. Today this is used for model
-   providers, web search providers, and bundled registration ownership.
+   providers, speech providers, web search providers, and bundled registration
+   ownership.
 
 The practical effect is that OpenClaw knows, up front, which plugin owns which
 surface. That lets core and channels compose seamlessly because ownership is
@@ -649,19 +670,32 @@ to think of as short-lived performance caches, not persistence.
 
 ## Runtime helpers
 
-Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
+Plugins can access selected core helpers via `api.runtime`. For TTS:
 
 ```ts
+const clip = await api.runtime.tts.textToSpeech({
+  text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
 const result = await api.runtime.tts.textToSpeechTelephony({
   text: "Hello from OpenClaw",
+  cfg: api.config,
+});
+
+const voices = await api.runtime.tts.listVoices({
+  provider: "elevenlabs",
   cfg: api.config,
 });
 ```
 
 Notes:
 
+- `textToSpeech` returns the normal core TTS output payload for file/voice-note surfaces.
 - Uses core `messages.tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
+- `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
+- Voice listings can include richer metadata such as locale, gender, and personality tags for provider-aware pickers.
 - OpenAI and ElevenLabs support telephony today. Microsoft does not.
 
 Plugins can also register speech providers via `api.registerSpeechProvider(...)`.
@@ -690,6 +724,28 @@ Notes:
 - The preferred ownership model is company-oriented: one vendor plugin can own
   text, speech, image, and future media providers as OpenClaw adds those
   capability contracts.
+
+For image/audio/video understanding, plugins register one typed
+media-understanding provider instead of a generic key/value bag:
+
+```ts
+api.registerMediaUnderstandingProvider({
+  id: "google",
+  capabilities: ["image", "audio", "video"],
+  describeImage: async (req) => ({ text: "..." }),
+  transcribeAudio: async (req) => ({ text: "..." }),
+  describeVideo: async (req) => ({ text: "..." }),
+});
+```
+
+Notes:
+
+- Keep orchestration, fallback, config, and channel wiring in core.
+- Keep vendor behavior in the provider plugin.
+- Additive expansion should stay typed: new optional methods, new optional
+  result fields, new optional capabilities.
+- If OpenClaw adds a new capability such as video generation later, define the
+  core capability contract first, then let vendor plugins register against it.
 
 For STT/transcription, plugins can call:
 
@@ -1268,6 +1324,7 @@ Plugins export either:
 - `registerChannel`
 - `registerProvider`
 - `registerSpeechProvider`
+- `registerMediaUnderstandingProvider`
 - `registerWebSearchProvider`
 - `registerHttpRoute`
 - `registerCommand`

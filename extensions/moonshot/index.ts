@@ -7,14 +7,15 @@ import {
   getScopedCredentialValue,
   setScopedCredentialValue,
 } from "../../src/agents/tools/web-search-plugin-factory.js";
-import {
-  applyMoonshotConfig,
-  applyMoonshotConfigCn,
-} from "../../src/commands/onboard-auth.config-core.js";
-import { MOONSHOT_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.models.js";
+import { moonshotProvider } from "../../src/media-understanding/providers/moonshot/index.js";
 import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import {
+  applyMoonshotConfig,
+  applyMoonshotConfigCn,
+  MOONSHOT_DEFAULT_MODEL_REF,
+} from "./onboard.js";
 import { buildMoonshotProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "moonshot";
@@ -35,7 +36,7 @@ const moonshotPlugin = {
           providerId: PROVIDER_ID,
           methodId: "api-key",
           label: "Kimi API key (.ai)",
-          hint: "Kimi K2.5 + Kimi Coding",
+          hint: "Kimi K2.5 + Kimi",
           optionKey: "moonshotApiKey",
           flagName: "--moonshot-api-key",
           envVar: "MOONSHOT_API_KEY",
@@ -48,14 +49,14 @@ const moonshotPlugin = {
             choiceLabel: "Kimi API key (.ai)",
             groupId: "moonshot",
             groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5 + Kimi Coding",
+            groupHint: "Kimi K2.5 + Kimi",
           },
         }),
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key-cn",
           label: "Kimi API key (.cn)",
-          hint: "Kimi K2.5 + Kimi Coding",
+          hint: "Kimi K2.5 + Kimi",
           optionKey: "moonshotApiKey",
           flagName: "--moonshot-api-key",
           envVar: "MOONSHOT_API_KEY",
@@ -68,7 +69,7 @@ const moonshotPlugin = {
             choiceLabel: "Kimi API key (.cn)",
             groupId: "moonshot",
             groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5 + Kimi Coding",
+            groupHint: "Kimi K2.5 + Kimi",
           },
         }),
       ],
@@ -99,6 +100,7 @@ const moonshotPlugin = {
         return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
       },
     });
+    api.registerMediaUnderstandingProvider(moonshotProvider);
     api.registerWebSearchProvider(
       createPluginBackedWebSearchProvider({
         id: "kimi",

@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { DmPolicy } from "openclaw/plugin-sdk/whatsapp";
 import {
   DEFAULT_ACCOUNT_ID,
   formatCliCommand,
@@ -13,7 +12,6 @@ import {
   type OpenClawConfig,
 } from "../../../src/plugin-sdk-internal/setup.js";
 import type { ChannelSetupWizard } from "../../../src/plugin-sdk-internal/setup.js";
-import { type DmPolicy } from "../../../src/plugin-sdk-internal/whatsapp.js";
 import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
 import { loginWeb } from "./login.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
