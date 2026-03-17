@@ -159,4 +159,16 @@ describe("implicit memory runtime", () => {
 
     expect(context).toContain("Preserve leading dashes in stored prompts.");
   });
+
+  it("avoids false-positive matches on shared common words", async () => {
+    await saveImplicitExperience({
+      scopeKey: "sender:discord:user-help",
+      intent: "help me write a poem",
+      rules: "Use rhyming couplets and 8-syllable lines.",
+    });
+
+    await expect(
+      retrieveImplicitContext("Can you help me deploy this container?", "sender:discord:user-help"),
+    ).resolves.toBeNull();
+  });
 });

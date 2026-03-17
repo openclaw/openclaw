@@ -18,6 +18,38 @@ DEFAULT_DB_PATH: Final[Path] = Path.home() / ".openclaw" / "implicit_memory.db"
 FTS_TABLE_NAME: Final[str] = "user_experiences_fts"
 MAX_CONTEXT_RESULTS: Final[int] = 3
 DB_PATH_ENV_VAR: Final[str] = "OPENCLAW_IMPLICIT_MEMORY_DB_PATH"
+MIN_OVERLAP_FOR_STRICT_MATCH: Final[int] = 2
+MIN_STRICT_TOKEN_COUNT: Final[int] = 3
+COMMON_QUERY_TOKENS: Final[frozenset[str]] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "be",
+        "can",
+        "do",
+        "for",
+        "help",
+        "how",
+        "i",
+        "is",
+        "it",
+        "me",
+        "my",
+        "near",
+        "not",
+        "of",
+        "on",
+        "or",
+        "please",
+        "the",
+        "this",
+        "to",
+        "what",
+        "you",
+    }
+)
 
 
 def resolve_default_db_path() -> Path:
@@ -66,6 +98,12 @@ class MemoryManager:
                             ADD COLUMN scope_key TEXT NOT NULL DEFAULT ''
                             """
                         )
+                    conn.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS idx_user_experiences_scope_key
+                        ON user_experiences (scope_key)
+                        """
+                    )
                     conn.execute(
                         f"""
                         CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE_NAME}
@@ -167,10 +205,11 @@ class MemoryManager:
             self._logger.debug("No FTS tokens extracted from query=%r", normalized_query)
             return None
 
+        query_tokens = self._extract_query_tokens(normalized_query)
         self._logger.debug("Retrieving implicit context for query=%r", normalized_query)
 
         with closing(self._connect()) as conn:
-            rows = conn.execute(
+            candidate_rows = conn.execute(
                 f"""
                 SELECT
                     ue.scope_key,
@@ -188,6 +227,7 @@ class MemoryManager:
                 (match_query, normalized_scope_key, MAX_CONTEXT_RESULTS),
             ).fetchall()
 
+        rows = self._filter_rows_by_token_overlap(candidate_rows, query_tokens)
         if not rows:
             self._logger.debug("No implicit context match found for query=%r", normalized_query)
             return None
@@ -213,14 +253,42 @@ class MemoryManager:
         return any(row["name"] == "scope_key" for row in rows)
 
     @staticmethod
-    def _build_match_query(user_query: str) -> str:
+    def _extract_query_tokens(user_query: str) -> list[str]:
         tokens = re.findall(r"[\w\u4e00-\u9fff]+", user_query.casefold())
         unique_tokens = list(dict.fromkeys(tokens))
-        if not unique_tokens:
+        significant_tokens = [
+            token
+            for token in unique_tokens
+            if len(token) > 2 and token not in COMMON_QUERY_TOKENS
+        ]
+        return significant_tokens or unique_tokens
+
+    @staticmethod
+    def _build_match_query(user_query: str) -> str:
+        query_tokens = MemoryManager._extract_query_tokens(user_query)
+        if not query_tokens:
             return ""
 
-        escaped_tokens = [f'"{token.replace(chr(34), chr(34) * 2)}"' for token in unique_tokens]
+        escaped_tokens = [f'"{token.replace(chr(34), chr(34) * 2)}"' for token in query_tokens]
         return " OR ".join(escaped_tokens)
+
+    @staticmethod
+    def _filter_rows_by_token_overlap(
+        rows: list[sqlite3.Row],
+        query_tokens: list[str],
+    ) -> list[sqlite3.Row]:
+        if not query_tokens:
+            return []
+
+        min_overlap = 1 if len(query_tokens) < MIN_STRICT_TOKEN_COUNT else MIN_OVERLAP_FOR_STRICT_MATCH
+        filtered_rows: list[sqlite3.Row] = []
+        for row in rows:
+            haystack = f"{row['trigger_intent']} {row['implicit_rules']}".casefold()
+            row_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+", haystack))
+            overlap = sum(1 for token in query_tokens if token in row_tokens)
+            if overlap >= min_overlap:
+                filtered_rows.append(row)
+        return filtered_rows
 
 
 def _build_parser() -> argparse.ArgumentParser:

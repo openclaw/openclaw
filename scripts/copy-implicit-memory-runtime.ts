@@ -12,7 +12,7 @@ const projectRoot = path.resolve(__dirname, "..");
 const verbose = process.env.OPENCLAW_BUILD_VERBOSE === "1";
 
 const srcFile = path.join(projectRoot, "src", "memory", "memory_manager.py");
-const distFile = path.join(projectRoot, "dist", "memory_manager.py");
+const distFile = path.join(projectRoot, "dist", "memory", "memory_manager.py");
 
 function copyImplicitMemoryRuntime() {
   if (!fs.existsSync(srcFile)) {
