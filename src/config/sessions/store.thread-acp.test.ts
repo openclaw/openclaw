@@ -131,4 +131,48 @@ describe("thread-bound ACP session metadata", () => {
 
     expect(result?.acp).toBeUndefined();
   });
+
+  it("copies acp to existing thread session without acp", async () => {
+    const baseKey = "agent:codex:acp:base-id";
+    const threadKey = `${baseKey}:thread:123`;
+
+    const baseSession: SessionEntry = {
+      sessionId: "base-session",
+      updatedAt: Date.now(),
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "acpx:v1:test",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+        identity: {
+          state: "resolved",
+          acpxRecordId: "base-record-id",
+          acpxSessionId: "base-session-id",
+          source: "ensure",
+          lastUpdatedAt: Date.now(),
+        },
+      },
+    };
+
+    const threadSession: SessionEntry = {
+      sessionId: "thread-session",
+      updatedAt: Date.now(),
+      origin: { provider: "telegram" } as SessionEntry["origin"],
+    };
+
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [baseKey]: baseSession, [threadKey]: threadSession }),
+    );
+
+    const result = await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: threadKey,
+      ctx: stubCtx(),
+    });
+
+    expect(result?.acp).toEqual(baseSession.acp);
+  });
 });
