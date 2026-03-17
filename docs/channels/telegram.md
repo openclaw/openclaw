@@ -72,6 +72,40 @@ openclaw pairing approve telegram <CODE>
 Token resolution order is account-aware. In practice, config values win over env fallback, and `TELEGRAM_BOT_TOKEN` only applies to the default account.
 </Note>
 
+## Multi-account routing
+
+When you configure more than one Telegram account, make the default account
+explicit and add account-scoped bindings for any non-default bot that should
+deliver inbound messages to an agent.
+
+```json5
+{
+  channels: {
+    telegram: {
+      defaultAccount: "default",
+      accounts: {
+        default: {
+          botToken: "123:abc",
+        },
+        parallel: {
+          botToken: "456:def",
+        },
+      },
+    },
+  },
+  bindings: [
+    { agentId: "main", match: { channel: "telegram", accountId: "default" } },
+    { agentId: "main", match: { channel: "telegram", accountId: "parallel" } },
+  ],
+}
+```
+
+- Bindings without `match.accountId` keep matching the default account only.
+- If a non-default account has no explicit binding, inbound messages can miss
+  normal agent routing.
+- Use different `agentId` values when each bot should route to a different
+  agent.
+
 ## Telegram side settings
 
 <AccordionGroup>
@@ -909,6 +943,7 @@ Primary reference:
 - Multi-account precedence:
   - When two or more account IDs are configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit.
   - If neither is set, OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns.
+  - Add explicit `bindings[].match.accountId` entries for non-default accounts that should receive inbound traffic; bindings without `accountId` keep matching the default account.
   - `channels.telegram.accounts.default.allowFrom` and `channels.telegram.accounts.default.groupAllowFrom` apply only to the `default` account.
   - Named accounts inherit `channels.telegram.allowFrom` and `channels.telegram.groupAllowFrom` when account-level values are unset.
   - Named accounts do not inherit `channels.telegram.accounts.default.allowFrom` / `groupAllowFrom`.
