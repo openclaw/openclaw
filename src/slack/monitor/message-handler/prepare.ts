@@ -401,10 +401,10 @@ export async function prepareSlackMessage(params: {
   const botOwnsThreadRoot = Boolean(
     ctx.botUserId && message.thread_ts && message.parent_user_id === ctx.botUserId,
   );
-  // Authorize incident-thread follow-ups only after an explicit summon, a
-  // bot-authored thread root, or cached proof that the bot already joined.
-  const hasApprovedIncidentThreadFollowupAuthorization =
-    explicitlyMentioned || botOwnsThreadRoot || hasThreadParticipation;
+  // Authorize incident-thread follow-ups only after an explicit @mention.
+  // Bot-authored roots and prior participation are intentionally excluded so
+  // the bot stays quiet in threads unless a human directly tags it.
+  const hasApprovedIncidentThreadFollowupAuthorization = explicitlyMentioned;
   const implicitMention = Boolean(
     allowImplicitMention &&
     !isDirectMessage &&
@@ -416,10 +416,8 @@ export async function prepareSlackMessage(params: {
     channelConfig?.allowHumanThreadFollowups &&
     isThreadReply &&
     !isBotMessage &&
-    // Security gate for the incidentRootOnly bypass: the channel must opt in,
-    // the message must be a human thread reply, and an explicit summon or
-    // prior bot participation must authorize this thread. This keeps routine
-    // incident-channel chatter from bypassing ingress.
+    // Security gate: the channel must opt in, the message must be a human
+    // thread reply, and only an explicit @mention authorizes the bypass.
     hasApprovedIncidentThreadFollowupAuthorization,
   );
 

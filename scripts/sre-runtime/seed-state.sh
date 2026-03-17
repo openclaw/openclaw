@@ -228,6 +228,7 @@ apply_slack_incident_channel_override() {
   tmp_config="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
   jq --arg monitoring_prompt_template "$monitoring_prompt" --arg monitoring_prompt_marker "$monitoring_prompt_marker" --argjson incident_channels "$channels_json" '
     .channels.slack.channels as $channels
+    | ($incident_channels | any(. == "#bug-report")) as $include_bug_report
     | ($incident_channels | map(select(. != "#bug-report"))) as $override_channels
     | ($channels["#bug-report"]) as $bug_report
     | ($channels["#platform-monitoring"].systemPrompt
@@ -235,16 +236,19 @@ apply_slack_incident_channel_override() {
     | (if $monitoring_prompt == $monitoring_prompt_marker then $monitoring_prompt_template else $monitoring_prompt end) as $resolved_monitoring_prompt
     | (($channels["#platform-monitoring"]
         // $channels["#public-api-monitoring"]) | .systemPrompt = $resolved_monitoring_prompt) as $monitoring_template
-    | if $bug_report == null or $monitoring_template == null then
-        error("missing seeded Slack incident channel templates")
+    | if $monitoring_template == null then
+        error("missing seeded Slack monitoring channel template")
+      elif $include_bug_report and $bug_report == null then
+        error("missing seeded Slack bug-report channel template")
       else
         .channels.slack.channels = (
-          reduce $override_channels[] as $channel
-            ({ "#bug-report": $bug_report }; . + { ($channel): $monitoring_template })
+          (if $include_bug_report then { "#bug-report": $bug_report } else {} end)
+          | reduce $override_channels[] as $channel
+              (.; . + { ($channel): $monitoring_template })
         )
       end
   ' "$CONFIG_PATH" >"$tmp_config"
-  jq -e '.channels.slack.channels | length > 0 and has("#bug-report")' "$tmp_config" >/dev/null || {
+  jq -e '.channels.slack.channels | length > 0' "$tmp_config" >/dev/null || {
     rm -f "$tmp_config"
     echo "seed-state:error produced invalid Slack incident channel config" >&2
     exit 1
