@@ -96,16 +96,6 @@ Mattermost 自动响应私信。频道行为由 `chatmode` 控制：
 - `onchar` 仍会响应显式 @提及。
 - `channels.mattermost.requireMention` 对旧配置仍然有效，但推荐使用 `chatmode`。
 
-## 线程与会话
-
-使用 `channels.mattermost.replyToMode` 控制频道和群组消息是留在主时间线，还是挂到触发消息下面的 thread。
-
-- `off`（默认）：只有入站消息本来就在 thread 里时，才继续走 thread。
-- `first`：顶级频道 / 群组消息会在该消息下启动 thread，并把后续对话路由到 thread-scoped session。
-- `all`：当前对 Mattermost 与 `first` 等价。
-- 私聊忽略这个设置，始终保持非线程。
-- 私聊里点击“回复某条消息”时，不会新开 session；被回复消息只作为引用上下文传给 agent，bot 的回包继续发在私聊主时间线。
-
 ## 访问控制（私信）
 
 - 默认：`channels.mattermost.dmPolicy = "pairing"`（未知发送者会收到配对码）。

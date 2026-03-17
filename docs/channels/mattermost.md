@@ -139,11 +139,6 @@ main channel or start a thread under the triggering post.
   conversation to a thread-scoped session.
 - `all`: same behavior as `first` for Mattermost today.
 - Direct messages ignore this setting and stay non-threaded.
-- Replying inside a DM keeps the same direct session; reply metadata is treated as
-  reference-only and outbound replies stay in the DM main timeline.
-- When a user replies to a DM message, OpenClaw keeps the replied post id/body as
-  reference context (`ReplyTo*`) so the agent can still tell which message was quoted
-  without forking the DM session.
 
 Config example:
 
