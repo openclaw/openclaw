@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
@@ -238,6 +239,34 @@ export async function readDockerPort(containerName: string, port: number) {
   }
   const mapped = Number.parseInt(match[1] ?? "", 10);
   return Number.isFinite(mapped) ? mapped : null;
+}
+
+let _isInContainer: boolean | null = null;
+export function isRunningInContainer(): boolean {
+  if (_isInContainer !== null) {
+    return _isInContainer;
+  }
+  try {
+    _isInContainer = fs.existsSync("/.dockerenv") || fs.existsSync("/run/.containerenv");
+  } catch {
+    _isInContainer = false;
+  }
+  return _isInContainer;
+}
+
+export async function readDockerContainerIP(
+  containerName: string,
+  networkName: string,
+): Promise<string | null> {
+  const fmt = `{{.NetworkSettings.Networks.${networkName}.IPAddress}}`;
+  const result = await execDocker(["inspect", "-f", fmt, containerName], {
+    allowFailure: true,
+  });
+  if (result.code !== 0) {
+    return null;
+  }
+  const ip = result.stdout.trim();
+  return ip && ip !== "<no value>" ? ip : null;
 }
 
 async function dockerImageExists(image: string) {

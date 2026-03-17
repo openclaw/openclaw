@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import os from "node:os";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
 import {
@@ -16,7 +17,9 @@ import {
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
+  isRunningInContainer,
   readDockerContainerEnvVar,
+  readDockerContainerIP,
   readDockerContainerLabel,
   readDockerPort,
 } from "./docker.js";
@@ -38,9 +41,13 @@ import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
 
-async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
+async function waitForSandboxCdp(params: {
+  cdpHost: string;
+  cdpPort: number;
+  timeoutMs: number;
+}): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
-  const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
+  const url = `http://${params.cdpHost}:${params.cdpPort}/json/version`;
   while (Date.now() < deadline) {
     try {
       const ctrl = new AbortController();
@@ -63,19 +70,21 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
 
 function buildSandboxBrowserResolvedConfig(params: {
   controlPort: number;
+  cdpHost: string;
   cdpPort: number;
   headless: boolean;
   evaluateEnabled: boolean;
 }): ResolvedBrowserConfig {
-  const cdpHost = "127.0.0.1";
+  const cdpHost = params.cdpHost;
   const cdpPortRange = deriveDefaultBrowserCdpPortRange(params.controlPort);
+  const cdpIsLoopback = cdpHost === "127.0.0.1" || cdpHost === "::1" || cdpHost === "localhost";
   return {
     enabled: true,
     evaluateEnabled: params.evaluateEnabled,
     controlPort: params.controlPort,
     cdpProtocol: "http",
     cdpHost,
-    cdpIsLoopback: true,
+    cdpIsLoopback,
     cdpPortRangeStart: cdpPortRange.start,
     cdpPortRangeEnd: cdpPortRange.end,
     remoteCdpTimeoutMs: 1500,
@@ -280,6 +289,31 @@ export async function ensureSandboxBrowser(params: {
   const mappedNoVnc = noVncEnabled
     ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
     : null;
+
+  // When gateway runs inside a container, 127.0.0.1:hostMappedPort is unreachable.
+  // Use browser container's IP on shared Docker network + internal CDP port instead.
+  let cdpHost = "127.0.0.1";
+  let cdpPort = mappedCdp;
+
+  if (isRunningInContainer()) {
+    // Auto-connect gateway to browser network (idempotent, no-op if already connected)
+    const hostname = os.hostname();
+    await execDocker(["network", "connect", browserDockerCfg.network, hostname], {
+      allowFailure: true,
+    });
+
+    const containerIP = await readDockerContainerIP(containerName, browserDockerCfg.network);
+    if (containerIP) {
+      cdpHost = containerIP;
+      cdpPort = params.cfg.browser.cdpPort; // internal port (e.g. 9222)
+    }
+    // Fall through to host-mapped port if IP lookup fails
+  }
+
+  let resolvedNoVncPort = mappedNoVnc;
+  if (isRunningInContainer() && cdpHost !== "127.0.0.1" && mappedNoVnc) {
+    resolvedNoVncPort = params.cfg.browser.noVncPort; // internal port
+  }
   if (noVncEnabled && !noVncPassword) {
     noVncPassword =
       (await readDockerContainerEnvVar(containerName, NOVNC_PASSWORD_ENV_KEY)) ?? undefined;
@@ -304,7 +338,7 @@ export async function ensureSandboxBrowser(params: {
   }
 
   const shouldReuse =
-    existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
+    existing && existing.containerName === containerName && existingProfile?.cdpPort === cdpPort;
   const authMatches =
     !existing ||
     (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
@@ -336,12 +370,13 @@ export async function ensureSandboxBrowser(params: {
             await execDocker(["start", containerName]);
           }
           const ok = await waitForSandboxCdp({
-            cdpPort: mappedCdp,
+            cdpHost,
+            cdpPort,
             timeoutMs: params.cfg.browser.autoStartTimeoutMs,
           });
           if (!ok) {
             throw new Error(
-              `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
+              `Sandbox browser CDP did not become reachable on ${cdpHost}:${cdpPort} within ${params.cfg.browser.autoStartTimeoutMs}ms.`,
             );
           }
         }
@@ -350,7 +385,8 @@ export async function ensureSandboxBrowser(params: {
     return await startBrowserBridgeServer({
       resolved: buildSandboxBrowserResolvedConfig({
         controlPort: 0,
-        cdpPort: mappedCdp,
+        cdpHost,
+        cdpPort,
         headless: params.cfg.browser.headless,
         evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
@@ -378,15 +414,15 @@ export async function ensureSandboxBrowser(params: {
     lastUsedAtMs: now,
     image: browserImage,
     configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
-    cdpPort: mappedCdp,
-    noVncPort: mappedNoVnc ?? undefined,
+    cdpPort: cdpPort,
+    noVncPort: resolvedNoVncPort ?? undefined,
   });
 
   const noVncUrl =
-    mappedNoVnc && noVncEnabled
+    resolvedNoVncPort && noVncEnabled
       ? (() => {
           const token = issueNoVncObserverToken({
-            noVncPort: mappedNoVnc,
+            noVncPort: resolvedNoVncPort,
             password: noVncPassword,
           });
           return buildNoVncObserverTokenUrl(resolvedBridge.baseUrl, token);
