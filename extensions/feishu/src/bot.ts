@@ -1823,9 +1823,7 @@ export async function handleFeishuMessage(params: {
 
         threadContext.threadStarterBody = threadStarterBody;
         threadContext.threadHistoryBody =
-          historyParts.length > 0 ? historyParts.join("
-
-") : undefined;
+          historyParts.length > 0 ? historyParts.join("\n\n") : undefined;
         log(
           `feishu[${account.accountId}]: populated thread bootstrap with starter=${threadStarterBody ? "yes" : "no"} history=${historyMessages.length}`,
         );
