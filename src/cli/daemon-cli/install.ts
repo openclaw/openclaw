@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -5,6 +7,8 @@ import {
 } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayStateDir } from "../../daemon/paths.js";
+import { isNvmNode } from "../../daemon/service-env.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -119,4 +123,50 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       });
     },
   });
+
+  // On Linux with nvm-installed Node, ensure NODE_EXTRA_CA_CERTS is in ~/.openclaw/.env
+  // so manual `openclaw gateway run` also picks up the system CA bundle via dotenv.
+  ensureNvmCaCertsInDotEnv({ env: process.env, json, warnings });
+}
+
+/**
+ * When Node.js is installed via nvm on Linux, write NODE_EXTRA_CA_CERTS to
+ * the global .env file so non-service runs (e.g. `openclaw gateway run`)
+ * also get the system CA bundle. The service environment already handles this
+ * via buildServiceEnvironment, but dotenv covers the manual-start path.
+ */
+function ensureNvmCaCertsInDotEnv(params: {
+  env: Record<string, string | undefined>;
+  json: boolean;
+  warnings: string[];
+}): void {
+  if (process.platform !== "linux" || !isNvmNode(params.env, process.execPath)) {
+    return;
+  }
+  if (params.env.NODE_EXTRA_CA_CERTS) {
+    return;
+  }
+
+  try {
+    const stateDir = resolveGatewayStateDir(params.env);
+    const envFile = path.join(stateDir, ".env");
+    const existing = fs.existsSync(envFile) ? fs.readFileSync(envFile, "utf8") : "";
+    if (existing.includes("NODE_EXTRA_CA_CERTS")) {
+      return;
+    }
+    const line = "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt\n";
+    const content = existing.endsWith("\n") || !existing ? existing + line : `${existing}\n${line}`;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(envFile, content, "utf8");
+
+    const message =
+      "nvm detected: wrote NODE_EXTRA_CA_CERTS to ~/.openclaw/.env for TLS compatibility";
+    if (params.json) {
+      params.warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  } catch {
+    // Best-effort; the service environment already has the var via buildServiceEnvironment.
+  }
 }

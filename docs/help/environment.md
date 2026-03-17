@@ -133,6 +133,25 @@ When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.home
 
 `OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using `$HOME` before use.
 
+## nvm users: web_fetch TLS failures
+
+If Node.js was installed via **nvm** (not the system package manager), the built-in `fetch()` uses
+nvm's bundled CA store, which may be missing modern root CAs (ISRG Root X1/X2 for Let's Encrypt,
+DigiCert Global Root G2, etc.). This causes `web_fetch` to fail with `"fetch failed"` on most HTTPS sites.
+
+Since `v2026.3.17`, `openclaw gateway install` on Linux automatically detects nvm and writes the
+fix to both the systemd service environment and `~/.openclaw/.env`.
+
+**Manual fix (for older versions or manual gateway starts):**
+
+Add to `~/.openclaw/.env`:
+
+```
+NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+```
+
+Then restart the gateway. This appends the system CA bundle to Node's bundled store.
+
 ## Related
 
 - [Gateway configuration](/gateway/configuration)

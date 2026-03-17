@@ -15,6 +15,28 @@ import {
   resolveNodeWindowsTaskName,
 } from "./constants.js";
 
+/** Standard system CA bundle path on Debian/Ubuntu/Alpine Linux. */
+const LINUX_SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
+
+/**
+ * Detect if Node.js was installed via nvm.
+ * nvm-installed Node uses a bundled CA certificate store that may be missing modern
+ * root CAs (ISRG Root X1/X2, DigiCert Global Root G2, etc.), causing TLS failures
+ * with Node's built-in fetch (undici) for the majority of real-world HTTPS sites.
+ *
+ * Pass `execPath` explicitly to also check the binary path (e.g. `process.execPath`).
+ * Without it, only the `NVM_DIR` env var is checked.
+ */
+export function isNvmNode(env?: Record<string, string | undefined>, execPath?: string): boolean {
+  if (env?.NVM_DIR) {
+    return true;
+  }
+  if (execPath !== undefined) {
+    return execPath.includes("/.nvm/");
+  }
+  return false;
+}
+
 export type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
   extraDirs?: string[];
@@ -322,8 +344,15 @@ function resolveSharedServiceEnvironmentFields(
   // On macOS, launchd services don't inherit the shell environment, so Node's undici/fetch
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
+  // On Linux, nvm-installed Node uses a bundled CA store that is missing modern root CAs.
+  // Default to the system CA bundle when nvm is detected so TLS works out of the box.
   const nodeCaCerts =
-    env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
+    env.NODE_EXTRA_CA_CERTS ??
+    (platform === "darwin"
+      ? "/etc/ssl/cert.pem"
+      : platform === "linux" && isNvmNode(env)
+        ? LINUX_SYSTEM_CA_BUNDLE
+        : undefined);
   const nodeUseSystemCa = env.NODE_USE_SYSTEM_CA ?? (platform === "darwin" ? "1" : undefined);
   return {
     stateDir,
