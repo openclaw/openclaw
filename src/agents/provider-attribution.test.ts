@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  listProviderAttributionPolicies,
   resolveProviderAttributionHeaders,
   resolveProviderAttributionIdentity,
   resolveProviderAttributionPolicy,
@@ -26,7 +27,9 @@ describe("provider attribution", () => {
       provider: "openrouter",
       enabledByDefault: true,
       verification: "vendor-documented",
+      hook: "request-headers",
       docsUrl: "https://openrouter.ai/docs/app-attribution",
+      reviewNote: "Documented app attribution headers. Verified in OpenClaw runtime wrapper.",
       product: "OpenClaw",
       version: "2026.3.14",
       headers: {
@@ -47,8 +50,36 @@ describe("provider attribution", () => {
     });
   });
 
-  it("does not resolve attribution for unsupported providers", () => {
-    expect(resolveProviderAttributionPolicy("openai")).toBeUndefined();
+  it("tracks SDK-hook-only providers without enabling them", () => {
+    expect(resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.14" })).toEqual({
+      provider: "openai",
+      enabledByDefault: false,
+      verification: "vendor-sdk-hook-only",
+      hook: "default-headers",
+      reviewNote:
+        "OpenAI JS SDK exposes defaultHeaders, but public app attribution support is not yet verified.",
+      product: "OpenClaw",
+      version: "2026.3.14",
+    });
     expect(resolveProviderAttributionHeaders("openai")).toBeUndefined();
+  });
+
+  it("lists the current attribution support matrix", () => {
+    expect(
+      listProviderAttributionPolicies({ OPENCLAW_VERSION: "2026.3.14" }).map((policy) => [
+        policy.provider,
+        policy.enabledByDefault,
+        policy.verification,
+        policy.hook,
+      ]),
+    ).toEqual([
+      ["openrouter", true, "vendor-documented", "request-headers"],
+      ["anthropic", false, "vendor-sdk-hook-only", "default-headers"],
+      ["google", false, "vendor-sdk-hook-only", "user-agent-extra"],
+      ["groq", false, "vendor-sdk-hook-only", "default-headers"],
+      ["mistral", false, "vendor-sdk-hook-only", "custom-user-agent"],
+      ["openai", false, "vendor-sdk-hook-only", "default-headers"],
+      ["together", false, "vendor-sdk-hook-only", "default-headers"],
+    ]);
   });
 });
