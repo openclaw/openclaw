@@ -554,6 +554,34 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("agent.wait preserves structured result payload arrays from deduped agent runs", async () => {
+    const structuredResult = [
+      { type: "text", text: "gateway final answer" },
+      { type: "text", text: "with extra context" },
+    ];
+    const agentSpy = vi.mocked(agentCommand);
+    agentSpy.mockResolvedValueOnce(structuredResult as never);
+
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-agent-result-array";
+      const agentRes = await rpcReq(ws, "agent", {
+        sessionKey: "main",
+        message: "return structured result blocks",
+        idempotencyKey: runId,
+      });
+      expect(agentRes.ok).toBe(true);
+      expect(agentRes.payload?.status).toBe("accepted");
+
+      const waitRes = await rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 1_000,
+      });
+      expect(waitRes.ok).toBe(true);
+      expect(waitRes.payload?.status).toBe("ok");
+      expect(waitRes.payload?.result).toEqual(structuredResult);
+    });
+  });
+
   test("agent.wait ignores stale chat dedupe when an agent run with the same runId is in flight", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     let resolveAgentRun: (() => void) | undefined;

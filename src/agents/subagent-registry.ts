@@ -1261,7 +1261,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     }
     if (waitResultText) {
       const nextFrozenResultText = capFrozenResultText(waitResultText);
-      if (entry.frozenResultText !== nextFrozenResultText) {
+      if (entry.frozenResultText == null && nextFrozenResultText) {
         entry.frozenResultText = nextFrozenResultText;
         entry.frozenResultCapturedAt = Date.now();
         mutated = true;

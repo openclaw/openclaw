@@ -108,4 +108,49 @@ describe("subagent registry agent.wait result fallback", () => {
     const firstCall = announceSpy.mock.calls[0]?.[0] as { roundOneReply?: string } | undefined;
     expect(firstCall?.roundOneReply).toBe("final answer from agent.wait");
   });
+
+  it("does not overwrite an existing frozen completion reply with agent.wait fallback text", async () => {
+    let releaseWait: (() => void) | undefined;
+    callGatewayMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseWait = () =>
+            resolve({
+              status: "ok",
+              startedAt: 100,
+              endedAt: 200,
+              result: "fallback text from agent.wait",
+            });
+        }),
+    );
+
+    mod.registerSubagentRun({
+      runId: "run-existing-frozen-result",
+      childSessionKey: "agent:main:subagent:child-existing-frozen-result",
+      requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+      requesterDisplayKey: "main",
+      task: "preserve richer frozen result",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const run = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === "run-existing-frozen-result");
+    expect(run).toBeDefined();
+    run!.frozenResultText = "richer reply captured from chat history";
+    run!.frozenResultCapturedAt = 123456;
+
+    releaseWait?.();
+    await waitForAnnounce();
+
+    expect(run?.frozenResultText).toBe("richer reply captured from chat history");
+    expect(run?.frozenResultCapturedAt).toBe(123456);
+
+    const firstCall = announceSpy.mock.calls[0]?.[0] as { roundOneReply?: string } | undefined;
+    expect(firstCall?.roundOneReply).toBe("richer reply captured from chat history");
+  });
 });
