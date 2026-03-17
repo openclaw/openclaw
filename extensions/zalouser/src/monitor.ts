@@ -1,13 +1,15 @@
 import {
   DM_GROUP_ACCESS_REASON,
+  resolveDmGroupAccessWithLists,
+} from "openclaw/plugin-sdk/channel-policy";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-  KeyedAsyncQueue,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
-  resolveDmGroupAccessWithLists,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/reply-history";
 import type {
   MarkdownTableMode,
   OpenClawConfig,

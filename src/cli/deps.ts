@@ -35,32 +35,32 @@ export function createDefaultDeps(): CliDeps {
   return {
     whatsapp: createLazySender(
       "whatsapp",
-      () => import("../plugin-sdk/whatsapp.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/whatsapp.js") as Promise<Record<string, unknown>>,
       "sendMessageWhatsApp",
     ),
     telegram: createLazySender(
       "telegram",
-      () => import("../plugin-sdk/telegram.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/telegram.js") as Promise<Record<string, unknown>>,
       "sendMessageTelegram",
     ),
     discord: createLazySender(
       "discord",
-      () => import("../plugin-sdk/discord.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/discord.js") as Promise<Record<string, unknown>>,
       "sendMessageDiscord",
     ),
     slack: createLazySender(
       "slack",
-      () => import("../plugin-sdk/slack.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/slack.js") as Promise<Record<string, unknown>>,
       "sendMessageSlack",
     ),
     signal: createLazySender(
       "signal",
-      () => import("../plugin-sdk/signal.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/signal.js") as Promise<Record<string, unknown>>,
       "sendMessageSignal",
     ),
     imessage: createLazySender(
       "imessage",
-      () => import("../plugin-sdk/imessage.js") as Promise<Record<string, unknown>>,
+      () => import("./send-runtime/imessage.js") as Promise<Record<string, unknown>>,
       "sendMessageIMessage",
     ),
   };

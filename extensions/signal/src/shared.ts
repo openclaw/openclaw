@@ -1,8 +1,8 @@
+import { createScopedAccountConfigAccessors } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-  createScopedAccountConfigAccessors,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-policy";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,

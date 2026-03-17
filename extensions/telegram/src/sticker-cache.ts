@@ -143,10 +143,10 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
 
 const STICKER_DESCRIPTION_PROMPT =
   "Describe this sticker image in 1-2 sentences. Focus on what the sticker depicts (character, object, action, emotion). Be concise and objective.";
-let imageRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/media-runtime")> | null = null;
+let imageRuntimePromise: Promise<typeof import("./media-understanding.runtime.js")> | null = null;
 
 function loadImageRuntime() {
-  imageRuntimePromise ??= import("openclaw/plugin-sdk/media-runtime");
+  imageRuntimePromise ??= import("./media-understanding.runtime.js");
   return imageRuntimePromise;
 }
 
