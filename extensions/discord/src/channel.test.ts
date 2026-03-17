@@ -5,7 +5,7 @@ import type {
   PluginRuntime,
 } from "openclaw/plugin-sdk/discord";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { discordPlugin } from "./channel.js";
 import { setDiscordRuntime } from "./runtime.js";
