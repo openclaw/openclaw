@@ -463,11 +463,7 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
 
   const kill = await execLaunchctl(["kill", "SIGTERM", serviceTarget]);
   if (kill.code !== 0 && !isLaunchctlNotLoaded(kill)) {
-    // Service may already be stopped; that's fine.
-    const detail = (kill.stderr || kill.stdout).trim();
-    if (!detail.toLowerCase().includes("no such process")) {
-      throw new Error(`launchctl kill failed: ${detail}`);
-    }
+    throw new Error(`launchctl kill failed: ${(kill.stderr || kill.stdout).trim()}`);
   }
   stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
