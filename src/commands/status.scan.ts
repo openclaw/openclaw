@@ -6,14 +6,13 @@ import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readBestEffortConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
-import type {
-  buildChannelsTable as buildChannelsTableFn,
-  collectChannelStatusIssues as collectChannelStatusIssuesFn,
-} from "./status.scan.runtime.js";
 import {
   buildTailscaleHttpsUrl,
   pickGatewaySelfPresence,
@@ -30,7 +29,6 @@ import { getUpdateCheckResult } from "./status.update.js";
 type DeferredResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
-let statusScanRuntimeModulePromise: Promise<typeof import("./status.scan.runtime.js")> | undefined;
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
@@ -40,10 +38,10 @@ function loadPluginRegistryModule() {
   return pluginRegistryModulePromise;
 }
 
-function loadStatusScanRuntimeModule() {
-  statusScanRuntimeModulePromise ??= import("./status.scan.runtime.js");
-  return statusScanRuntimeModulePromise;
-}
+const loadStatusScanRuntimeModule = createLazyRuntimeSurface(
+  () => import("./status.scan.runtime.js"),
+  ({ statusScanRuntime }) => statusScanRuntime,
+);
 
 function loadStatusScanDepsRuntimeModule() {
   statusScanDepsRuntimeModulePromise ??= import("./status.scan.deps.runtime.js");

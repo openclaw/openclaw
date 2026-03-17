@@ -18,6 +18,7 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectOpenGroupPolicyRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
@@ -37,12 +38,12 @@ import {
   parseBlueBubblesTarget,
 } from "./targets.js";
 
-let blueBubblesChannelRuntimePromise: Promise<typeof import("./channel.runtime.js")> | null = null;
+type BlueBubblesChannelRuntime = typeof import("./channel.runtime.js").blueBubblesChannelRuntime;
 
-function loadBlueBubblesChannelRuntime() {
-  blueBubblesChannelRuntimePromise ??= import("./channel.runtime.js");
-  return blueBubblesChannelRuntimePromise;
-}
+const loadBlueBubblesChannelRuntime = createLazyRuntimeSurface(
+  () => import("./channel.runtime.js"),
+  ({ blueBubblesChannelRuntime }) => blueBubblesChannelRuntime,
+);
 
 const meta = {
   id: "bluebubbles",
