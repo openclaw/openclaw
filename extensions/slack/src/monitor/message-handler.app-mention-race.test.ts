@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const logVerboseMock = vi.fn((_msg: string) => {});
+const shouldLogVerboseMock = vi.fn(() => false);
+
+vi.mock("../../../../src/globals.js", () => ({
+  logVerbose: (msg: string) => logVerboseMock(msg),
+  shouldLogVerbose: () => shouldLogVerboseMock(),
+  danger: (msg: string) => msg,
+}));
+
 const prepareSlackMessageMock =
   vi.fn<
     (params: {
@@ -120,6 +129,8 @@ describe("createSlackMessageHandler app_mention race handling", () => {
   beforeEach(() => {
     prepareSlackMessageMock.mockReset();
     dispatchPreparedSlackMessageMock.mockReset();
+    logVerboseMock.mockClear();
+    shouldLogVerboseMock.mockReset().mockReturnValue(false);
   });
 
   it("allows a single app_mention retry when message event was dropped before dispatch", async () => {
@@ -178,5 +189,33 @@ describe("createSlackMessageHandler app_mention race handling", () => {
 
     expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs unprepared drop in onFlush when verbose mode is enabled", async () => {
+    shouldLogVerboseMock.mockReturnValue(true);
+    prepareSlackMessageMock.mockResolvedValue(null);
+
+    const handler = createTestHandler();
+    await sendMessageEvent(handler, "1700000000.000300");
+
+    const dropCall = logVerboseMock.mock.calls.find((c) =>
+      c[0].includes("slack inbound: drop unprepared"),
+    );
+    expect(dropCall).toBeDefined();
+    expect(dropCall?.[0]).toContain("entries=1");
+    expect(dropCall?.[0]).toContain("source=message");
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch when prepared is null for a DM batch", async () => {
+    prepareSlackMessageMock.mockResolvedValue(null);
+
+    const handler = createTestHandler();
+
+    // Simulate two DMs arriving (same channel/debounce key) — both should be dropped
+    await sendMessageEvent(handler, "1700000000.000400");
+    await sendMessageEvent(handler, "1700000000.000500");
+
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
   });
 });

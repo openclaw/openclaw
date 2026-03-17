@@ -529,6 +529,9 @@ export async function prepareSlackMessage(params: {
     mediaMaxBytes: ctx.mediaMaxBytes,
   });
   if (!resolvedMessageContent) {
+    logVerbose(
+      `slack inbound: drop empty content channel=${message.channel} ts=${message.ts ?? "unknown"} isDirectMessage=${isDirectMessage} text_len=${(message.text ?? "").length} files=${message.files?.length ?? 0}`,
+    );
     return null;
   }
   const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
