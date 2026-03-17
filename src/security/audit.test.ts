@@ -2869,85 +2869,82 @@ description: test skill
     );
   });
 
-  it("scores gateway HTTP no-auth findings by exposure", async () => {
-    const cases: Array<{
-      name: string;
-      cfg: OpenClawConfig;
-      expectedSeverity: "warn" | "critical";
-      detailIncludes?: string[];
-    }> = [
-      {
-        name: "loopback no-auth",
-        cfg: {
-          gateway: {
-            bind: "loopback",
-            auth: { mode: "none" },
-            http: { endpoints: { chatCompletions: { enabled: true } } },
+  it.each([
+    {
+      name: "scores loopback gateway HTTP no-auth as warn",
+      cfg: {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "none" },
+          http: { endpoints: { chatCompletions: { enabled: true } } },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: { checkId: "gateway.http.no_auth", severity: "warn" },
+      detailIncludes: ["/tools/invoke", "/v1/chat/completions"],
+      auditOptions: { env: {} },
+    },
+    {
+      name: "scores remote gateway HTTP no-auth as critical",
+      cfg: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "none" },
+          http: { endpoints: { responses: { enabled: true } } },
+        },
+      } satisfies OpenClawConfig,
+      expectedFinding: { checkId: "gateway.http.no_auth", severity: "critical" },
+      auditOptions: { env: {} },
+    },
+    {
+      name: "does not report gateway.http.no_auth when auth mode is token",
+      cfg: {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "token", token: "secret" },
+          http: {
+            endpoints: {
+              chatCompletions: { enabled: true },
+              responses: { enabled: true },
+            },
           },
         },
-        expectedSeverity: "warn",
-        detailIncludes: ["/tools/invoke", "/v1/chat/completions"],
-      },
-      {
-        name: "remote no-auth",
-        cfg: {
-          gateway: {
-            bind: "lan",
-            auth: { mode: "none" },
-            http: { endpoints: { responses: { enabled: true } } },
+      } satisfies OpenClawConfig,
+      expectedNoFinding: "gateway.http.no_auth",
+      auditOptions: { env: {} },
+    },
+    {
+      name: "reports HTTP API session-key override surfaces when enabled",
+      cfg: {
+        gateway: {
+          http: {
+            endpoints: {
+              chatCompletions: { enabled: true },
+              responses: { enabled: true },
+            },
           },
         },
-        expectedSeverity: "critical",
-      },
-    ];
+      } satisfies OpenClawConfig,
+      expectedFinding: { checkId: "gateway.http.session_key_override_enabled", severity: "info" },
+    },
+  ])("$name", async (testCase) => {
+    const res = await audit(testCase.cfg, testCase.auditOptions);
 
-    await Promise.all(
-      cases.map(async (testCase) => {
-        const res = await audit(testCase.cfg, { env: {} });
-        expectFinding(res, "gateway.http.no_auth", testCase.expectedSeverity);
-        if (testCase.detailIncludes) {
-          const finding = res.findings.find((entry) => entry.checkId === "gateway.http.no_auth");
-          for (const text of testCase.detailIncludes) {
-            expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
-          }
+    if (testCase.expectedFinding) {
+      expect(res.findings).toEqual(
+        expect.arrayContaining([expect.objectContaining(testCase.expectedFinding)]),
+      );
+      if (testCase.detailIncludes) {
+        const finding = res.findings.find(
+          (entry) => entry.checkId === testCase.expectedFinding?.checkId,
+        );
+        for (const text of testCase.detailIncludes) {
+          expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
         }
-      }),
-    );
-  });
-
-  it("does not report gateway.http.no_auth when auth mode is token", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        auth: { mode: "token", token: "secret" },
-        http: {
-          endpoints: {
-            chatCompletions: { enabled: true },
-            responses: { enabled: true },
-          },
-        },
-      },
-    };
-
-    const res = await audit(cfg, { env: {} });
-    expectNoFinding(res, "gateway.http.no_auth");
-  });
-
-  it("reports HTTP API session-key override surfaces when enabled", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        http: {
-          endpoints: {
-            chatCompletions: { enabled: true },
-            responses: { enabled: true },
-          },
-        },
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expectFinding(res, "gateway.http.session_key_override_enabled", "info");
+      }
+    }
+    if (testCase.expectedNoFinding) {
+      expectNoFinding(res, testCase.expectedNoFinding);
+    }
   });
 
   it("warns when state/config look like a synced folder", async () => {
