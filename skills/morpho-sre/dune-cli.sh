@@ -190,11 +190,13 @@ probe_auth() {
   printf '  DUNE_ALLOW_MUTATIONS: %s\n' "${DUNE_ALLOW_MUTATIONS:-0}"
   printf '  dune binary:          %s\n' "$(command -v "$DUNE_CLI_BIN" 2>/dev/null || echo "(not found)")"
 
-  # Attempt resolution
-  if load_api_key 2>/dev/null; then
+  # Attempt resolution in a subshell so die() doesn't kill the probe
+  if (load_api_key) 2>/dev/null; then
+    # Re-run in main shell to capture the variables
+    load_api_key 2>/dev/null || true
     printf '  resolution:           OK (source: %s, key: %s)\n' "$DUNE_CREDENTIAL_SOURCE" "$(redact_key "$DUNE_API_KEY")"
   else
-    printf '  resolution:           FAILED\n'
+    printf '  resolution:           FAILED (run with DUNE_API_KEY=<key> or configure Vault)\n'
   fi
 }
 
