@@ -805,7 +805,8 @@ export async function compactEmbeddedPiSessionDirect(
           process.env.GIGACHAT_BASE_URL?.trim() ??
           "https://gigachat.devices.sberbank.ru/api/v1";
         const gigachatStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-        const profileId = authProfileId?.trim() || "gigachat:default";
+        const profileId =
+          apiKeyInfo?.profileId?.trim() || authProfileId?.trim() || "gigachat:default";
         const gigachatCred =
           gigachatStore.profiles[profileId] ?? gigachatStore.profiles["gigachat:default"];
         const gigachatMeta = gigachatCred?.type === "api_key" ? gigachatCred.metadata : undefined;

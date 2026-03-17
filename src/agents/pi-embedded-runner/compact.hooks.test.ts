@@ -47,6 +47,7 @@ const {
       authStorage: { setRuntimeApiKey: vi.fn() },
       modelRegistry: {},
     })),
+    ensureAuthProfileStoreMock: vi.fn(),
     sessionCompactImpl: vi.fn(async () => ({
       summary: "summary",
       firstKeptEntryId: "entry-1",
@@ -324,6 +325,7 @@ vi.mock("./sandbox-info.js", () => ({
 vi.mock("./model.js", () => ({
   buildModelAliasLines: vi.fn(() => []),
   resolveModel: resolveModelMock,
+  resolveModelAsync: resolveModelMock,
 }));
 
 vi.mock("./session-manager-cache.js", () => ({
@@ -345,6 +347,7 @@ vi.mock("./utils.js", () => ({
 
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
+import { getApiKeyForModel } from "../model-auth.js";
 import { compactEmbeddedPiSessionDirect, compactEmbeddedPiSession } from "./compact.js";
 
 const TEST_SESSION_ID = "session-1";
@@ -869,6 +872,74 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       provider: "gigachat",
       model: "GigaChat-2-Max",
       authProfileId: "gigachat:business",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("uses metadata from the resolved GigaChat auth profile during compaction", async () => {
+    resolveModelMock.mockReturnValue({
+      model: {
+        provider: "gigachat",
+        api: "openai-completions",
+        id: "GigaChat-2-Max",
+        input: ["text"],
+        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+    vi.mocked(getApiKeyForModel).mockResolvedValueOnce({
+      apiKey: "test",
+      mode: "api_key",
+      profileId: "gigachat:business",
+    });
+    ensureAuthProfileStoreMock.mockReturnValue({
+      profiles: {
+        "gigachat:default": {
+          type: "api_key",
+          provider: "gigachat",
+          metadata: {
+            authMode: "oauth",
+            insecureTls: "false",
+            scope: "GIGACHAT_API_PERS",
+          },
+        },
+        "gigachat:business": {
+          type: "api_key",
+          provider: "gigachat",
+          metadata: {
+            authMode: "basic",
+            insecureTls: "true",
+            scope: "GIGACHAT_API_B2B",
+          },
+        },
+      },
+    });
+    sessionCompactImpl.mockImplementation(async () => {
+      expect(createGigachatStreamFnMock).toHaveBeenCalledWith({
+        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+        authMode: "basic",
+        insecureTls: true,
+        scope: "GIGACHAT_API_B2B",
+      });
+      return {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        details: { ok: true },
+      };
+    });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      provider: "gigachat",
+      model: "GigaChat-2-Max",
       customInstructions: "focus on decisions",
     });
 
