@@ -1,4 +1,8 @@
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  createMessageActionDiscoveryContext,
+  resolveMessageActionDiscoveryChannelId,
+} from "../channels/plugins/message-action-discovery.js";
 import type {
   ChannelAgentTool,
   ChannelMessageActionName,
@@ -24,26 +28,15 @@ export function listChannelSupportedActions(params: {
   agentId?: string | null;
   requesterSenderId?: string | null;
 }): ChannelMessageActionName[] {
-  if (!params.channel) {
+  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
+  if (!channelId) {
     return [];
   }
-  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
+  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
   if (!plugin?.actions?.listActions) {
     return [];
   }
-  const cfg = params.cfg ?? ({} as OpenClawConfig);
-  return runPluginListActions(plugin, {
-    cfg,
-    currentChannelId: params.currentChannelId,
-    currentChannelProvider: params.channel,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    accountId: params.accountId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    requesterSenderId: params.requesterSenderId,
-  });
+  return runPluginListActions(plugin, createMessageActionDiscoveryContext(params));
 }
 
 /**
@@ -65,19 +58,13 @@ export function listAllChannelSupportedActions(params: {
     if (!plugin.actions?.listActions) {
       continue;
     }
-    const cfg = params.cfg ?? ({} as OpenClawConfig);
-    const channelActions = runPluginListActions(plugin, {
-      cfg,
-      currentChannelId: params.currentChannelId,
-      currentChannelProvider: plugin.id,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
-      accountId: params.accountId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      agentId: params.agentId,
-      requesterSenderId: params.requesterSenderId,
-    });
+    const channelActions = runPluginListActions(
+      plugin,
+      createMessageActionDiscoveryContext({
+        ...params,
+        currentChannelProvider: plugin.id,
+      }),
+    );
     for (const action of channelActions) {
       actions.add(action);
     }

@@ -86,6 +86,7 @@ function createChannelPlugin(params: {
   label: string;
   docsPath: string;
   blurb: string;
+  aliases?: string[];
   actions?: ChannelMessageActionName[];
   listActions?: NonNullable<NonNullable<ChannelPlugin["actions"]>["listActions"]>;
   capabilities?: readonly ChannelMessageCapability[];
@@ -101,6 +102,7 @@ function createChannelPlugin(params: {
       selectionLabel: params.label,
       docsPath: params.docsPath,
       blurb: params.blurb,
+      aliases: params.aliases,
     },
     capabilities: { chatTypes: ["direct", "group"], media: true },
     config: {
@@ -639,6 +641,28 @@ describe("message tool description", () => {
     // Other configured channels are also listed
     expect(tool.description).toContain("Other configured channels:");
     expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
+  });
+
+  it("normalizes channel aliases before building the current channel description", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      aliases: ["sig"],
+      actions: ["send", "react"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "sig",
+    });
+
+    expect(tool.description).toContain("Current channel (signal) supports: react, send.");
   });
 
   it("does not include 'Other configured channels' when only one channel is configured", () => {
