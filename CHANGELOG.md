@@ -140,6 +140,7 @@ Docs: https://docs.openclaw.ai
 - Mattermost/DM send: retry transient direct-channel creation failures for DM deliveries, with configurable backoff and per-request timeout. (#42398) Thanks @JonathanJing.
 - Telegram/network: unify API and media fetches under the same sticky IPv4 and pinned-IP fallback chain, and re-validate pinned override addresses against SSRF policy. (#49148) Thanks @obviyus.
 - Agents/prompt composition: append bootstrap truncation warnings to the current-turn prompt and add regression coverage for stable system-prompt cache invariants. (#49237) Thanks @scoootscooob.
+- Discord/system events: handle channel/thread rename, icon change, and channel follow system messages so they no longer trigger unwanted agent responses. (#24108)
 
 ## 2026.3.13
 

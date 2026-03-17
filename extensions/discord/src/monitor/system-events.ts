@@ -9,6 +9,10 @@ export function resolveDiscordSystemEvent(message: Message, location: string): s
       return buildDiscordSystemEvent(message, location, "added a recipient");
     case MessageType.RecipientRemove:
       return buildDiscordSystemEvent(message, location, "removed a recipient");
+    case MessageType.ChannelNameChange:
+      return buildDiscordSystemEvent(message, location, "changed channel/thread name");
+    case MessageType.ChannelIconChange:
+      return buildDiscordSystemEvent(message, location, "changed channel icon");
     case MessageType.UserJoin:
       return buildDiscordSystemEvent(message, location, "user joined");
     case MessageType.GuildBoost:
@@ -19,6 +23,8 @@ export function resolveDiscordSystemEvent(message: Message, location: string): s
       return buildDiscordSystemEvent(message, location, "boosted the server (Tier 2 reached)");
     case MessageType.GuildBoostTier3:
       return buildDiscordSystemEvent(message, location, "boosted the server (Tier 3 reached)");
+    case MessageType.ChannelFollowAdd:
+      return buildDiscordSystemEvent(message, location, "added a channel follow");
     case MessageType.ThreadCreated:
       return buildDiscordSystemEvent(message, location, "created a thread");
     case MessageType.AutoModerationAction:
