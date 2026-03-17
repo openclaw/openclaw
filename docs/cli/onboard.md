@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw onboard` (interactive onboarding wizard)"
+summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
 read_when:
   - You want guided setup for gateway, workspace, auth, channels, and skills
 title: "onboard"
@@ -7,13 +7,13 @@ title: "onboard"
 
 # `openclaw onboard`
 
-Interactive onboarding wizard (local or remote Gateway setup).
+Interactive onboarding for local or remote Gateway setup.
 
 ## Related guides
 
-- CLI onboarding hub: [Onboarding Wizard (CLI)](/start/wizard)
+- CLI onboarding hub: [Onboarding (CLI)](/start/wizard)
 - Onboarding overview: [Onboarding Overview](/start/onboarding-overview)
-- CLI onboarding reference: [CLI Onboarding Reference](/start/wizard-cli-reference)
+- CLI onboarding reference: [CLI Setup Reference](/start/wizard-cli-reference)
 - CLI automation: [CLI Automation](/start/wizard-cli-automation)
 - macOS onboarding: [Onboarding (macOS App)](/start/onboarding)
 
@@ -140,7 +140,7 @@ Flow notes:
 
 - `quickstart`: minimal prompts, auto-generates a gateway token.
 - `manual`: full prompts for port/bind/auth (alias of `advanced`).
-- Local onboarding DM scope behavior: [CLI Onboarding Reference](/start/wizard-cli-reference#outputs-and-internals).
+- Local onboarding DM scope behavior: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals).
 - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
 - Custom Provider: connect any OpenAI or Anthropic compatible endpoint,
   including hosted providers not listed. Use Unknown to auto-detect.

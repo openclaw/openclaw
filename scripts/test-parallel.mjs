@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
 
 // On Windows, `.cmd` launchers can fail with `spawn EINVAL` when invoked without a shell
 // (especially under GitHub Actions + Git Bash). Use `shell: true` and let the shell resolve pnpm.
@@ -59,7 +60,6 @@ const unitIsolatedFilesRaw = [
   // Skills discovery/snapshot suites are filesystem-heavy and high-variance in vmForks lanes.
   "src/agents/skills.test.ts",
   "src/agents/skills.buildworkspaceskillsnapshot.test.ts",
-  "src/browser/extension-relay.test.ts",
   "extensions/acpx/src/runtime.test.ts",
   // Shell-heavy script harness can contend under vmForks startup bursts.
   "test/scripts/ios-team-id.test.ts",
@@ -303,13 +303,6 @@ const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
   const [flag] = arg.split("=", 1);
   return SINGLE_RUN_ONLY_FLAGS.has(flag);
 });
-const channelPrefixes = [
-  "extensions/telegram/",
-  "extensions/discord/",
-  "extensions/whatsapp/",
-  "src/browser/",
-  "src/line/",
-];
 const baseConfigPrefixes = ["src/agents/", "src/auto-reply/", "src/commands/", "test/", "ui/"];
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 const walkTestFiles = (rootDir) => {
@@ -353,14 +346,14 @@ const inferTarget = (fileFilter) => {
   if (fileFilter.endsWith(".e2e.test.ts")) {
     return { owner: "e2e", isolated };
   }
+  if (channelTestPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
+    return { owner: "channels", isolated };
+  }
   if (fileFilter.startsWith("extensions/")) {
     return { owner: "extensions", isolated };
   }
   if (fileFilter.startsWith("src/gateway/")) {
     return { owner: "gateway", isolated };
-  }
-  if (channelPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
-    return { owner: "channels", isolated };
   }
   if (baseConfigPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
     return { owner: "base", isolated };

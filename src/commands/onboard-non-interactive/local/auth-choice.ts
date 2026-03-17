@@ -1,23 +1,14 @@
-import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
-import { normalizeProviderId } from "../../../agents/model-selection.js";
-import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
-import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
-import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
+import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
-  applyMinimaxApiConfig,
-  applyMinimaxApiConfigCn,
-  applyZaiConfig,
   setCloudflareAiGatewayConfig,
-  setMinimaxApiKey,
-  setZaiApiKey,
 } from "../../onboard-auth.js";
 import {
   applyCustomApiConfig,
@@ -26,7 +17,6 @@ import {
   resolveCustomProviderId,
 } from "../../onboard-custom.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
-import { detectZaiEndpoint } from "../../zai-endpoint-detect.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
@@ -42,7 +32,13 @@ export async function applyNonInteractiveAuthChoice(params: {
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
 }): Promise<OpenClawConfig | null> {
-  const { authChoice, opts, runtime, baseConfig } = params;
+  const { opts, runtime, baseConfig } = params;
+  const authChoice = normalizeApiKeyTokenProviderAuthChoice({
+    authChoice: params.authChoice,
+    tokenProvider: opts.tokenProvider,
+    config: params.nextConfig,
+    env: process.env,
+  });
   let nextConfig = params.nextConfig;
   const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
   if (opts.secretInputMode && !requestedSecretInputMode) {
@@ -179,61 +175,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     return pluginProviderChoice;
   }
 
-  if (authChoice === "token") {
-    const providerRaw = opts.tokenProvider?.trim();
-    if (!providerRaw) {
-      runtime.error("Missing --token-provider for --auth-choice token.");
-      runtime.exit(1);
-      return null;
-    }
-    const provider = normalizeProviderId(providerRaw);
-    if (provider !== "anthropic") {
-      runtime.error("Only --token-provider anthropic is supported for --auth-choice token.");
-      runtime.exit(1);
-      return null;
-    }
-    const tokenRaw = normalizeSecretInput(opts.token);
-    if (!tokenRaw) {
-      runtime.error("Missing --token for --auth-choice token.");
-      runtime.exit(1);
-      return null;
-    }
-    const tokenError = validateAnthropicSetupToken(tokenRaw);
-    if (tokenError) {
-      runtime.error(tokenError);
-      runtime.exit(1);
-      return null;
-    }
-
-    let expires: number | undefined;
-    const expiresInRaw = opts.tokenExpiresIn?.trim();
-    if (expiresInRaw) {
-      try {
-        expires = Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
-      } catch (err) {
-        runtime.error(`Invalid --token-expires-in: ${String(err)}`);
-        runtime.exit(1);
-        return null;
-      }
-    }
-
-    const profileId = opts.tokenProfileId?.trim() || buildTokenProfileId({ provider, name: "" });
-    upsertAuthProfile({
-      profileId,
-      credential: {
-        type: "token",
-        provider,
-        token: tokenRaw.trim(),
-        ...(expires ? { expires } : {}),
-      },
-    });
-    return applyAuthProfileConfig(nextConfig, {
-      profileId,
-      provider,
-      mode: "token",
-    });
-  }
-
   const simpleApiKeyChoice = await applySimpleNonInteractiveApiKeyChoice({
     authChoice,
     nextConfig,
@@ -246,72 +187,6 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (simpleApiKeyChoice !== undefined) {
     return simpleApiKeyChoice;
-  }
-
-  if (
-    authChoice === "zai-api-key" ||
-    authChoice === "zai-coding-global" ||
-    authChoice === "zai-coding-cn" ||
-    authChoice === "zai-global" ||
-    authChoice === "zai-cn"
-  ) {
-    const resolved = await resolveApiKey({
-      provider: "zai",
-      cfg: baseConfig,
-      flagValue: opts.zaiApiKey,
-      flagName: "--zai-api-key",
-      envVar: "ZAI_API_KEY",
-      runtime,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setZaiApiKey(value, undefined, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "zai:default",
-      provider: "zai",
-      mode: "api_key",
-    });
-
-    // Determine endpoint from authChoice or detect from the API key.
-    let endpoint: "global" | "cn" | "coding-global" | "coding-cn" | undefined;
-    let modelIdOverride: string | undefined;
-
-    if (authChoice === "zai-coding-global") {
-      endpoint = "coding-global";
-    } else if (authChoice === "zai-coding-cn") {
-      endpoint = "coding-cn";
-    } else if (authChoice === "zai-global") {
-      endpoint = "global";
-    } else if (authChoice === "zai-cn") {
-      endpoint = "cn";
-    }
-
-    if (endpoint) {
-      const detected = await detectZaiEndpoint({ apiKey: resolved.key, endpoint });
-      if (detected) {
-        modelIdOverride = detected.modelId;
-      }
-    } else {
-      const detected = await detectZaiEndpoint({ apiKey: resolved.key });
-      if (detected) {
-        endpoint = detected.endpoint;
-        modelIdOverride = detected.modelId;
-      } else {
-        endpoint = "global";
-      }
-    }
-
-    return applyZaiConfig(nextConfig, {
-      endpoint,
-      ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
-    });
   }
 
   if (authChoice === "cloudflare-ai-gateway-api-key") {
@@ -378,38 +253,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     );
     runtime.exit(1);
     return null;
-  }
-
-  if (authChoice === "minimax-global-api" || authChoice === "minimax-cn-api") {
-    const isCn = authChoice === "minimax-cn-api";
-    const profileId = isCn ? "minimax:cn" : "minimax:global";
-    const resolved = await resolveApiKey({
-      provider: "minimax",
-      cfg: baseConfig,
-      flagValue: opts.minimaxApiKey,
-      flagName: "--minimax-api-key",
-      envVar: "MINIMAX_API_KEY",
-      runtime,
-      // Disable profile fallback: both regions share provider "minimax", so an existing
-      // Global profile key must not be silently reused when configuring CN (and vice versa).
-      allowProfile: false,
-    });
-    if (!resolved) {
-      return null;
-    }
-    if (
-      !(await maybeSetResolvedApiKey(resolved, (value) =>
-        setMinimaxApiKey(value, undefined, profileId, apiKeyStorageOptions),
-      ))
-    ) {
-      return null;
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId,
-      provider: "minimax",
-      mode: "api_key",
-    });
-    return isCn ? applyMinimaxApiConfigCn(nextConfig) : applyMinimaxApiConfig(nextConfig);
   }
 
   if (authChoice === "custom-api-key") {
@@ -487,7 +330,6 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
-    authChoice === "openai-codex" ||
     authChoice === "qwen-portal" ||
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"

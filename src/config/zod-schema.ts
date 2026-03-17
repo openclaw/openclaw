@@ -11,7 +11,7 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
-import { InstallRecordShape } from "./zod-schema.installs.js";
+import { PluginInstallRecordShape } from "./zod-schema.installs.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -359,13 +359,9 @@ export const OpenClawSchema = z
               .object({
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
+                userDataDir: z.string().optional(),
                 driver: z
-                  .union([
-                    z.literal("openclaw"),
-                    z.literal("clawd"),
-                    z.literal("extension"),
-                    z.literal("existing-session"),
-                  ])
+                  .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
                   .optional(),
                 attachOnly: z.boolean().optional(),
                 color: HexColorSchema,
@@ -376,11 +372,13 @@ export const OpenClawSchema = z
                 {
                   message: "Profile must set cdpPort or cdpUrl",
                 },
-              ),
+              )
+              .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
+                message: 'Profile userDataDir is only supported with driver="existing-session"',
+              }),
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
-        relayBindHost: z.union([z.string().ipv4(), z.string().ipv6()]).optional(),
       })
       .strict()
       .optional(),
@@ -696,6 +694,8 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
+        channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
+        channelMaxRestartsPerHour: z.number().int().min(1).optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
@@ -726,6 +726,7 @@ export const OpenClawSchema = z
               ])
               .optional(),
             debounceMs: z.number().int().min(0).optional(),
+            deferralTimeoutMs: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),
@@ -833,6 +834,21 @@ export const OpenClawSchema = z
           .optional(),
       })
       .strict()
+      .superRefine((gateway, ctx) => {
+        const effectiveHealthCheckMinutes = gateway.channelHealthCheckMinutes ?? 5;
+        if (
+          gateway.channelStaleEventThresholdMinutes != null &&
+          effectiveHealthCheckMinutes !== 0 &&
+          gateway.channelStaleEventThresholdMinutes < effectiveHealthCheckMinutes
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["channelStaleEventThresholdMinutes"],
+            message:
+              "channelStaleEventThresholdMinutes should be >= channelHealthCheckMinutes to avoid delayed stale detection",
+          });
+        }
+      })
       .optional(),
     memory: MemorySchema,
     skills: z
@@ -893,7 +909,7 @@ export const OpenClawSchema = z
             z.string(),
             z
               .object({
-                ...InstallRecordShape,
+                ...PluginInstallRecordShape,
               })
               .strict(),
           )

@@ -10,7 +10,7 @@ import {
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
-} from "../agents/models-config.providers.js";
+} from "../agents/models-config.providers.static.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -84,6 +84,7 @@ import {
   MODELSTUDIO_GLOBAL_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_REF,
 } from "./onboard-auth.models.js";
+export { applyAuthProfileConfig } from "./auth-profile-config.js";
 
 function mergeProviderModels<T extends { id: string }>(
   existingProvider: Record<string, unknown> | undefined,
@@ -126,6 +127,7 @@ export function applyZaiProviderConfig(
 
   const defaultModels = [
     buildZaiModelDefinition({ id: "glm-5" }),
+    buildZaiModelDefinition({ id: "glm-5-turbo" }),
     buildZaiModelDefinition({ id: "glm-4.7" }),
     buildZaiModelDefinition({ id: "glm-4.7-flash" }),
     buildZaiModelDefinition({ id: "glm-4.7-flashx" }),
@@ -337,7 +339,7 @@ export function applyVeniceProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 
 /**
  * Apply Venice provider configuration AND set Venice as the default model.
- * Use this when Venice is the primary provider choice during onboarding.
+ * Use this when Venice is the primary provider choice during setup.
  */
 export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyVeniceProviderConfig(cfg);
@@ -367,7 +369,7 @@ export function applyTogetherProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 
 /**
  * Apply Together provider configuration AND set Together as the default model.
- * Use this when Together is the primary provider choice during onboarding.
+ * Use this when Together is the primary provider choice during setup.
  */
 export function applyTogetherConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyTogetherProviderConfig(cfg);
@@ -476,83 +478,11 @@ export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig
 
 /**
  * Apply Kilo Gateway provider configuration AND set Kilo Gateway as the default model.
- * Use this when Kilo Gateway is the primary provider choice during onboarding.
+ * Use this when Kilo Gateway is the primary provider choice during setup.
  */
 export function applyKilocodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyKilocodeProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, KILOCODE_DEFAULT_MODEL_REF);
-}
-
-export function applyAuthProfileConfig(
-  cfg: OpenClawConfig,
-  params: {
-    profileId: string;
-    provider: string;
-    mode: "api_key" | "oauth" | "token";
-    email?: string;
-    preferProfileFirst?: boolean;
-  },
-): OpenClawConfig {
-  const normalizedProvider = params.provider.toLowerCase();
-  const profiles = {
-    ...cfg.auth?.profiles,
-    [params.profileId]: {
-      provider: params.provider,
-      mode: params.mode,
-      ...(params.email ? { email: params.email } : {}),
-    },
-  };
-
-  const configuredProviderProfiles = Object.entries(cfg.auth?.profiles ?? {})
-    .filter(([, profile]) => profile.provider.toLowerCase() === normalizedProvider)
-    .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
-
-  // Maintain `auth.order` when it already exists. Additionally, if we detect
-  // mixed auth modes for the same provider (e.g. legacy oauth + newly selected
-  // api_key), create an explicit order to keep the newly selected profile first.
-  const existingProviderOrder = cfg.auth?.order?.[params.provider];
-  const preferProfileFirst = params.preferProfileFirst ?? true;
-  const reorderedProviderOrder =
-    existingProviderOrder && preferProfileFirst
-      ? [
-          params.profileId,
-          ...existingProviderOrder.filter((profileId) => profileId !== params.profileId),
-        ]
-      : existingProviderOrder;
-  const hasMixedConfiguredModes = configuredProviderProfiles.some(
-    ({ profileId, mode }) => profileId !== params.profileId && mode !== params.mode,
-  );
-  const derivedProviderOrder =
-    existingProviderOrder === undefined && preferProfileFirst && hasMixedConfiguredModes
-      ? [
-          params.profileId,
-          ...configuredProviderProfiles
-            .map(({ profileId }) => profileId)
-            .filter((profileId) => profileId !== params.profileId),
-        ]
-      : undefined;
-  const order =
-    existingProviderOrder !== undefined
-      ? {
-          ...cfg.auth?.order,
-          [params.provider]: reorderedProviderOrder?.includes(params.profileId)
-            ? reorderedProviderOrder
-            : [...(reorderedProviderOrder ?? []), params.profileId],
-        }
-      : derivedProviderOrder
-        ? {
-            ...cfg.auth?.order,
-            [params.provider]: derivedProviderOrder,
-          }
-        : cfg.auth?.order;
-  return {
-    ...cfg,
-    auth: {
-      ...cfg.auth,
-      profiles,
-      ...(order ? { order } : {}),
-    },
-  };
 }
 
 export function applyQianfanProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

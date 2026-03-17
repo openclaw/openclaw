@@ -76,6 +76,7 @@ export async function sendTelegramWithThreadFallback<T>(params: {
 export function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
   thread?: TelegramThreadSpec | null;
+  silent?: boolean;
 }): Record<string, unknown> {
   const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
@@ -84,6 +85,9 @@ export function buildTelegramSendParams(opts?: {
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;
+  }
+  if (opts?.silent === true) {
+    params.disable_notification = true;
   }
   return params;
 }
@@ -100,12 +104,14 @@ export async function sendTelegramText(
     textMode?: "markdown" | "html";
     plainText?: string;
     linkPreview?: boolean;
+    silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     thread: opts?.thread,
+    silent: opts?.silent,
   });
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;
