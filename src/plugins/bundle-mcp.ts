@@ -117,7 +117,11 @@ function expandBundleRootPlaceholders(value: string, rootDir: string): string {
   if (!value.includes(CLAUDE_PLUGIN_ROOT_PLACEHOLDER)) {
     return value;
   }
-  return value.split(CLAUDE_PLUGIN_ROOT_PLACEHOLDER).join(rootDir);
+  // After substituting the rootDir (which may use OS-native separators on
+  // Windows) the remainder of the template string may still have forward
+  // slashes, producing mixed separators like C:\foo/bar.  Normalize to make
+  // the result consistent on all platforms.
+  return path.normalize(value.split(CLAUDE_PLUGIN_ROOT_PLACEHOLDER).join(rootDir));
 }
 
 function absolutizeBundleMcpServer(params: {
