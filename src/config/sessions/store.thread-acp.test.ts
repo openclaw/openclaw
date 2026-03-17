@@ -96,6 +96,41 @@ describe("thread-bound ACP session metadata", () => {
     expect(result?.acp).toEqual(baseSession.acp);
   });
 
+  it("copies acp metadata for Telegram topic session", async () => {
+    const baseKey = "agent:codex:acp:base-id";
+    const baseSession: SessionEntry = {
+      sessionId: "base-session",
+      updatedAt: Date.now(),
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "acpx:v1:test",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+        identity: {
+          state: "resolved",
+          acpxRecordId: "topic-record-id",
+          acpxSessionId: "topic-session-id",
+          source: "ensure",
+          lastUpdatedAt: Date.now(),
+        },
+      },
+    };
+
+    fs.writeFileSync(storePath, JSON.stringify({ [baseKey]: baseSession }));
+
+    // Telegram topic format
+    const topicKey = `${baseKey}:topic:123`;
+    const result = await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: topicKey,
+      ctx: stubCtx(),
+    });
+
+    expect(result?.acp).toEqual(baseSession.acp);
+  });
+
   it("does not copy if thread session already has acp metadata", async () => {
     const baseKey = "agent:codex:acp:base-id";
     const threadKey = `${baseKey}:thread:123`;

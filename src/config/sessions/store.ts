@@ -775,10 +775,12 @@ export async function recordSessionMetaFromInbound(params: {
       });
 
       // Copy ACP metadata from base session to thread-bound session
-      if (!existing?.acp && resolved.normalizedKey.includes(":thread:")) {
+      if (!existing?.acp) {
+        const topicIndex = resolved.normalizedKey.lastIndexOf(":topic:");
         const threadIndex = resolved.normalizedKey.lastIndexOf(":thread:");
-        if (threadIndex > 0) {
-          const baseKey = resolved.normalizedKey.substring(0, threadIndex);
+        const markerIndex = Math.max(topicIndex, threadIndex);
+        if (markerIndex > 0) {
+          const baseKey = resolved.normalizedKey.substring(0, markerIndex);
           const baseSession = store[baseKey];
           if (baseSession?.acp) {
             if (!patch) {
