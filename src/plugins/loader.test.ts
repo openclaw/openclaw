@@ -1589,12 +1589,13 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     ).toBe(true);
   });
 
-  it("registers channel plugins", () => {
+  it("handles single-plugin channel, context engine, and cli validation", () => {
     useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "channel-demo",
-      filename: "channel-demo.cjs",
-      body: `module.exports = { id: "channel-demo", register(api) {
+    const scenarios = [
+      {
+        label: "registers channel plugins",
+        pluginId: "channel-demo",
+        body: `module.exports = { id: "channel-demo", register(api) {
   api.registerChannel({
     plugin: {
       id: "demo",
@@ -1614,25 +1615,15 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     }
   });
 } };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["channel-demo"],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const channel = registry.channels.find((entry) => entry.plugin.id === "demo");
+          expect(channel).toBeDefined();
+        },
       },
-    });
-
-    const channel = registry.channels.find((entry) => entry.plugin.id === "demo");
-    expect(channel).toBeDefined();
-  });
-
-  it("rejects duplicate channel ids during plugin registration", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "channel-dup",
-      filename: "channel-dup.cjs",
-      body: `module.exports = { id: "channel-dup", register(api) {
+      {
+        label: "rejects duplicate channel ids during plugin registration",
+        pluginId: "channel-dup",
+        body: `module.exports = { id: "channel-dup", register(api) {
   api.registerChannel({
     plugin: {
       id: "demo",
@@ -1670,24 +1661,71 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
     }
   });
 } };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["channel-dup"],
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.channels.filter((entry) => entry.plugin.id === "demo")).toHaveLength(1);
+          expect(
+            registry.diagnostics.some(
+              (entry) =>
+                entry.level === "error" &&
+                entry.pluginId === "channel-dup" &&
+                entry.message === "channel already registered: demo (channel-dup)",
+            ),
+          ).toBe(true);
+        },
       },
-    });
+      {
+        label: "rejects plugin context engine ids reserved by core",
+        pluginId: "context-engine-core-collision",
+        body: `module.exports = { id: "context-engine-core-collision", register(api) {
+  api.registerContextEngine("legacy", () => ({}));
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === "context-engine-core-collision" &&
+                diag.message === "context engine id reserved by core: legacy",
+            ),
+          ).toBe(true);
+        },
+      },
+      {
+        label: "requires plugin CLI registrars to declare explicit command roots",
+        pluginId: "cli-missing-metadata",
+        body: `module.exports = { id: "cli-missing-metadata", register(api) {
+  api.registerCli(() => {});
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliRegistrars).toHaveLength(0);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === "cli-missing-metadata" &&
+                diag.message === "cli registration missing explicit commands metadata",
+            ),
+          ).toBe(true);
+        },
+      },
+    ] as const;
 
-    expect(registry.channels.filter((entry) => entry.plugin.id === "demo")).toHaveLength(1);
-    expect(
-      registry.diagnostics.some(
-        (entry) =>
-          entry.level === "error" &&
-          entry.pluginId === "channel-dup" &&
-          entry.message === "channel already registered: demo (channel-dup)",
-      ),
-    ).toBe(true);
+    for (const scenario of scenarios) {
+      const plugin = writePlugin({
+        id: scenario.pluginId,
+        filename: `${scenario.pluginId}.cjs`,
+        body: scenario.body,
+      });
+
+      const registry = loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: [scenario.pluginId],
+        },
+      });
+
+      scenario.assert(registry);
+    }
   });
 
   it("registers plugin http routes", () => {
@@ -1817,87 +1855,6 @@ module.exports = { id: "skipped", register() { throw new Error("skipped plugin s
         scenario.label,
       ).toBe(true);
     }
-  });
-
-  it("rejects plugin context engine ids reserved by core", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "context-engine-core-collision",
-      filename: "context-engine-core-collision.cjs",
-      body: `module.exports = { id: "context-engine-core-collision", register(api) {
-  api.registerContextEngine("legacy", () => ({}));
-} };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["context-engine-core-collision"],
-      },
-    });
-
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.level === "error" &&
-          diag.pluginId === "context-engine-core-collision" &&
-          diag.message === "context engine id reserved by core: legacy",
-      ),
-    ).toBe(true);
-  });
-
-  it("requires plugin CLI registrars to declare explicit command roots", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "cli-missing-metadata",
-      filename: "cli-missing-metadata.cjs",
-      body: `module.exports = { id: "cli-missing-metadata", register(api) {
-  api.registerCli(() => {});
-} };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["cli-missing-metadata"],
-      },
-    });
-
-    expect(registry.cliRegistrars).toHaveLength(0);
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.level === "error" &&
-          diag.pluginId === "cli-missing-metadata" &&
-          diag.message === "cli registration missing explicit commands metadata",
-      ),
-    ).toBe(true);
-  });
-
-  it("registers http routes", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "http-route-demo",
-      filename: "http-route-demo.cjs",
-      body: `module.exports = { id: "http-route-demo", register(api) {
-  api.registerHttpRoute({ path: "/demo", auth: "gateway", handler: async (_req, res) => { res.statusCode = 200; res.end("ok"); } });
-} };`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["http-route-demo"],
-      },
-    });
-
-    const route = registry.httpRoutes.find((entry) => entry.pluginId === "http-route-demo");
-    expect(route).toBeDefined();
-    expect(route?.path).toBe("/demo");
-    expect(route?.auth).toBe("gateway");
-    expect(route?.match).toBe("exact");
-    const httpPlugin = registry.plugins.find((entry) => entry.id === "http-route-demo");
-    expect(httpPlugin?.httpRoutes).toBe(1);
   });
 
   it("rewrites removed registerHttpHandler failures into migration diagnostics", () => {
