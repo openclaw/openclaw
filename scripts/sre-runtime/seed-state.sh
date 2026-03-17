@@ -285,17 +285,51 @@ Never mention or target any other channel.
 EOF
 }
 
+resolve_cron_channels() {
+  # Build the list of monitoring channels that need cron jobs.
+  # Uses OPENCLAW_SRE_SLACK_INCIDENT_CHANNELS when set (env-aware),
+  # otherwise falls back to both platform + staging channels.
+  # bug-report is excluded — it is reactive-only, no cron needed.
+  if [ -n "$SLACK_INCIDENT_CHANNELS_RAW" ]; then
+    printf '%s' "$SLACK_INCIDENT_CHANNELS_RAW" \
+      | tr ',\n' '\n' \
+      | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+      | grep -v '^$' \
+      | sed 's/^#*//' \
+      | grep -v '^bug-report$' \
+      | sort -u
+  else
+    printf '%s\n' "platform-monitoring" "staging-infra-monitoring"
+  fi
+}
+
 seed_managed_cron_jobs() {
   local cron_dir now_s now_ms existing_json tmp_store
-  local platform_message staging_message
   cron_dir="$(dirname "$CRON_STORE_PATH")"
   mkdir -p "$cron_dir"
   chmod 700 "$cron_dir" || true
 
   now_s="$(date +%s)"
   now_ms=$((now_s * 1000))
-  platform_message="$(build_managed_cron_prompt "#platform-monitoring")"
-  staging_message="$(build_managed_cron_prompt "#staging-infra-monitoring")"
+
+  # Build a JSON array of cron job templates from the resolved channels.
+  local cron_channels_json='[]'
+  local channel
+  while IFS= read -r channel; do
+    [ -n "$channel" ] || continue
+    local slug message
+    slug="$(printf '%s' "$channel" | tr ' ' '-')"
+    message="$(build_managed_cron_prompt "#${channel}")"
+    cron_channels_json="$(jq -n \
+      --argjson arr "$cron_channels_json" \
+      --arg id "sre-12h-${slug}" \
+      --arg name "SRE 12h ${channel}" \
+      --arg desc "Managed OpenClaw cron job for #${channel} every 12 hours." \
+      --arg msg "$message" \
+      --arg to "channel:#${channel}" \
+      '$arr + [{id: $id, name: $name, description: $desc, message: $msg, to: $to}]'
+    )"
+  done < <(resolve_cron_channels)
 
   existing_json='{"version":1,"jobs":[]}'
   if [ -f "$CRON_STORE_PATH" ]; then
@@ -311,8 +345,7 @@ seed_managed_cron_jobs() {
   jq -n \
     --argjson existing "$existing_json" \
     --argjson now_ms "$now_ms" \
-    --arg platform_message "$platform_message" \
-    --arg staging_message "$staging_message" \
+    --argjson cron_channels "$cron_channels_json" \
     '
       def merge_job($jobs; $template):
         ($jobs | map(select(.id == $template.id)) | .[0]) as $current
@@ -327,70 +360,40 @@ seed_managed_cron_jobs() {
         ($jobs | map(select(.id != $template.id))) + [merge_job($jobs; $template)];
       ($existing // {version: 1, jobs: []}) as $store
       | ($store.jobs // []) as $jobs
-      | {
-          version: 1,
-          jobs:
-            (
-              $jobs
-              | upsert_job(
-                  .;
-                  {
-                    id: "sre-12h-platform-monitoring",
-                    agentId: "sre",
-                    name: "SRE 12h platform monitoring",
-                    description: "Managed OpenClaw cron job for the platform monitoring channel every 12 hours.",
-                    enabled: true,
-                    createdAtMs: $now_ms,
-                    updatedAtMs: $now_ms,
-                    schedule: {kind: "cron", expr: "0 */12 * * *", tz: "UTC"},
-                    sessionTarget: "isolated",
-                    wakeMode: "now",
-                    payload: {
-                      kind: "agentTurn",
-                      message: $platform_message,
-                      lightContext: true
-                    },
-                    delivery: {
-                      mode: "announce",
-                      channel: "slack",
-                      to: "channel:#platform-monitoring"
-                    }
-                  }
-                )
-              | upsert_job(
-                  .;
-                  {
-                    id: "sre-12h-staging-monitoring",
-                    agentId: "sre",
-                    name: "SRE 12h staging monitoring",
-                    description: "Managed OpenClaw cron job for the staging infra monitoring channel every 12 hours.",
-                    enabled: true,
-                    createdAtMs: $now_ms,
-                    updatedAtMs: $now_ms,
-                    schedule: {kind: "cron", expr: "0 */12 * * *", tz: "UTC"},
-                    sessionTarget: "isolated",
-                    wakeMode: "now",
-                    payload: {
-                      kind: "agentTurn",
-                      message: $staging_message,
-                      lightContext: true
-                    },
-                    delivery: {
-                      mode: "announce",
-                      channel: "slack",
-                      to: "channel:#staging-infra-monitoring"
-                    }
-                  }
-                )
-            )
-        }
+      | reduce $cron_channels[] as $ch (
+          $jobs;
+          upsert_job(
+            .;
+            {
+              id: $ch.id,
+              agentId: "sre",
+              name: $ch.name,
+              description: $ch.description,
+              enabled: true,
+              createdAtMs: $now_ms,
+              updatedAtMs: $now_ms,
+              schedule: {kind: "cron", expr: "0 */12 * * *", tz: "UTC"},
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: {
+                kind: "agentTurn",
+                message: $ch.message,
+                lightContext: true
+              },
+              delivery: {
+                mode: "announce",
+                channel: "slack",
+                to: $ch.to
+              }
+            }
+          )
+        )
+      | {version: 1, jobs: .}
     ' >"$tmp_store"
   jq -e '
     .version == 1 and
     (.jobs | type == "array") and
-    (.jobs | length) >= 2 and
-    any(.jobs[]; .id == "sre-12h-platform-monitoring") and
-    any(.jobs[]; .id == "sre-12h-staging-monitoring")
+    (.jobs | length) >= 1
   ' "$tmp_store" >/dev/null || {
     rm -f "$tmp_store"
     echo "seed-state:error produced invalid cron store" >&2
@@ -399,6 +402,7 @@ seed_managed_cron_jobs() {
   chmod 600 "$tmp_store" || true
   mv "$tmp_store" "$CRON_STORE_PATH"
   trap - EXIT
+  echo "seed-state:cron-jobs seeded=$(jq '.jobs | length' "$CRON_STORE_PATH") channels=$(resolve_cron_channels | tr '\n' ',' | sed 's/,$//')"
 }
 
 mkdir -p \

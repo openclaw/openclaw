@@ -59,12 +59,39 @@ test -d "$STATE_DIR/workspace/memory"
 test -d "$STATE_DIR/workspace-sre/memory"
 ls "$STATE_DIR"/workspace/memory/*.md >/dev/null 2>&1
 ls "$STATE_DIR"/workspace-sre/memory/*.md >/dev/null 2>&1
+# Default (no env override): both channels get cron jobs
 jq -e '
   (.jobs | map(.id) | sort) == ([
     "sre-12h-platform-monitoring",
-    "sre-12h-staging-monitoring"
+    "sre-12h-staging-infra-monitoring"
   ] | sort)
 ' "$STATE_DIR/cron/jobs.json" >/dev/null
+
+# Dev env override: only staging-infra-monitoring gets a cron job
+DEV_STATE="$TMP_ROOT/state-dev"
+OPENCLAW_SRE_RUNTIME_REPO_DIR="$RUNTIME_REPO" \
+OPENCLAW_STATE_DIR="$DEV_STATE" \
+OPENCLAW_CONFIG_PATH="$DEV_STATE/openclaw.json" \
+OPENCLAW_SRE_SLACK_INCIDENT_CHANNELS="staging-infra-monitoring" \
+bash "$REPO_ROOT/scripts/sre-runtime/seed-state.sh" >/dev/null
+jq -e '
+  (.jobs | map(.id)) == ["sre-12h-staging-infra-monitoring"]
+' "$DEV_STATE/cron/jobs.json" >/dev/null
+
+# Prd env override: only platform-monitoring and public-api-monitoring (bug-report excluded)
+PRD_STATE="$TMP_ROOT/state-prd"
+OPENCLAW_SRE_RUNTIME_REPO_DIR="$RUNTIME_REPO" \
+OPENCLAW_STATE_DIR="$PRD_STATE" \
+OPENCLAW_CONFIG_PATH="$PRD_STATE/openclaw.json" \
+OPENCLAW_SRE_SLACK_INCIDENT_CHANNELS="bug-report,platform-monitoring,public-api-monitoring" \
+bash "$REPO_ROOT/scripts/sre-runtime/seed-state.sh" >/dev/null
+jq -e '
+  (.jobs | map(.id) | sort) == ([
+    "sre-12h-platform-monitoring",
+    "sre-12h-public-api-monitoring"
+  ] | sort)
+' "$PRD_STATE/cron/jobs.json" >/dev/null
+
 test -d "$STATE_DIR/skills/foundry-evm-debug"
 test -f "$STATE_DIR/skills/argocd-diff/SKILL.md"
 test -f "$STATE_DIR/skills/eks-troubleshoot/SKILL.md"
