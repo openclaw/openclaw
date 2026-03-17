@@ -100,6 +100,7 @@ describe("inspectGatewayRestart", () => {
 
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    vi.useRealTimers();
   });
 
   it("treats a gateway listener child pid as healthy ownership", async () => {
@@ -249,5 +250,53 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("bounds restart probe timeouts to the remaining retry budget", async () => {
+    vi.useFakeTimers();
+    classifyPortListener.mockReturnValue("unknown");
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: null,
+    });
+
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ commandLine: "" }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const promise = waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      attempts: 3,
+      delayMs: 500,
+    });
+
+    await vi.runAllTimersAsync();
+    const snapshot = await promise;
+
+    expect(snapshot.healthy).toBe(false);
+    expect(probeGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        timeoutMs: 1_500,
+      }),
+    );
+    expect(probeGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        timeoutMs: 1_000,
+      }),
+    );
+    expect(probeGateway).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        timeoutMs: 500,
+      }),
+    );
   });
 });

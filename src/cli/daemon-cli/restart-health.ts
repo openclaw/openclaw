@@ -16,6 +16,7 @@ export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
 );
 export const DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS = 10_000;
+const MIN_RESTART_PROBE_TIMEOUT_MS = 250;
 
 export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
@@ -60,7 +61,33 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   );
 }
 
-async function confirmGatewayReachable(port: number): Promise<boolean> {
+function clampRestartProbeTimeoutMs(timeoutMs?: number): number | null {
+  if (timeoutMs == null) {
+    return DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS;
+  }
+  if (timeoutMs < MIN_RESTART_PROBE_TIMEOUT_MS) {
+    return null;
+  }
+  return Math.min(DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS, timeoutMs);
+}
+
+function createRestartHealthDeadline(attempts: number, delayMs: number): number | null {
+  const totalBudgetMs = attempts * delayMs;
+  return totalBudgetMs > 0 ? Date.now() + totalBudgetMs : null;
+}
+
+function getRemainingRestartBudgetMs(deadline: number | null): number | undefined {
+  if (deadline == null) {
+    return undefined;
+  }
+  return Math.max(0, deadline - Date.now());
+}
+
+async function confirmGatewayReachable(port: number, timeoutMs?: number): Promise<boolean> {
+  const boundedTimeoutMs = clampRestartProbeTimeoutMs(timeoutMs);
+  if (boundedTimeoutMs == null) {
+    return false;
+  }
   const token = process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
   const password = process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
   const probe = await probeGateway({
@@ -68,13 +95,16 @@ async function confirmGatewayReachable(port: number): Promise<boolean> {
     auth: token || password ? { token, password } : undefined,
     // Restart health runs during the gateway's hottest startup and recovery windows.
     // Give local handshakes extra budget so busy embedded runs do not look like a dead gateway.
-    timeoutMs: DEFAULT_LOCAL_GATEWAY_REACHABILITY_TIMEOUT_MS,
+    timeoutMs: boundedTimeoutMs,
     includeDetails: false,
   });
   return probe.ok || looksLikeAuthClose(probe.close?.code, probe.close?.reason);
 }
 
-async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealthSnapshot> {
+async function inspectGatewayPortHealth(
+  port: number,
+  probeTimeoutMs?: number,
+): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
   try {
     portUsage = await inspectPortUsage(port);
@@ -91,7 +121,7 @@ async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealth
   let healthy = false;
   if (portUsage.status === "busy") {
     try {
-      healthy = await confirmGatewayReachable(port);
+      healthy = await confirmGatewayReachable(port, probeTimeoutMs);
     } catch {
       // best-effort probe
     }
@@ -105,6 +135,7 @@ export async function inspectGatewayRestart(params: {
   port: number;
   env?: NodeJS.ProcessEnv;
   includeUnknownListenersAsStale?: boolean;
+  probeTimeoutMs?: number;
 }): Promise<GatewayRestartSnapshot> {
   const env = params.env ?? process.env;
   let runtime: GatewayServiceRuntime = { status: "unknown" };
@@ -129,7 +160,7 @@ export async function inspectGatewayRestart(params: {
 
   if (portUsage.status === "busy" && runtime.status !== "running") {
     try {
-      const reachable = await confirmGatewayReachable(params.port);
+      const reachable = await confirmGatewayReachable(params.port, params.probeTimeoutMs);
       if (reachable) {
         return {
           runtime,
@@ -171,7 +202,7 @@ export async function inspectGatewayRestart(params: {
   let healthy = running && ownsPort;
   if (!healthy && running && portUsage.status === "busy") {
     try {
-      healthy = await confirmGatewayReachable(params.port);
+      healthy = await confirmGatewayReachable(params.port, params.probeTimeoutMs);
     } catch {
       // best-effort probe
     }
@@ -214,12 +245,14 @@ export async function waitForGatewayHealthyRestart(params: {
 }): Promise<GatewayRestartSnapshot> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
+  const deadline = createRestartHealthDeadline(attempts, delayMs);
 
   let snapshot = await inspectGatewayRestart({
     service: params.service,
     port: params.port,
     env: params.env,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
+    probeTimeoutMs: getRemainingRestartBudgetMs(deadline),
   });
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -235,6 +268,7 @@ export async function waitForGatewayHealthyRestart(params: {
       port: params.port,
       env: params.env,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
+      probeTimeoutMs: getRemainingRestartBudgetMs(deadline),
     });
   }
 
@@ -248,15 +282,16 @@ export async function waitForGatewayHealthyListener(params: {
 }): Promise<GatewayPortHealthSnapshot> {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
+  const deadline = createRestartHealthDeadline(attempts, delayMs);
 
-  let snapshot = await inspectGatewayPortHealth(params.port);
+  let snapshot = await inspectGatewayPortHealth(params.port, getRemainingRestartBudgetMs(deadline));
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {
       return snapshot;
     }
     await sleep(delayMs);
-    snapshot = await inspectGatewayPortHealth(params.port);
+    snapshot = await inspectGatewayPortHealth(params.port, getRemainingRestartBudgetMs(deadline));
   }
 
   return snapshot;
