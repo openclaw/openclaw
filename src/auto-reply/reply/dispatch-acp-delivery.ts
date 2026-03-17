@@ -26,6 +26,7 @@ type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
   accumulatedBlockText: string;
   blockCount: number;
+  deliveredSyntheticFinalKey: string | null;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
@@ -35,6 +36,7 @@ export function createAcpDispatchDeliveryState(): AcpDispatchDeliveryState {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
     blockCount: 0,
+    deliveredSyntheticFinalKey: null,
     routedCounts: {
       tool: 0,
       block: 0,
@@ -54,6 +56,8 @@ export type AcpDispatchDeliveryCoordinator = {
   getBlockCount: () => number;
   getAccumulatedBlockText: () => string;
   resolveSyntheticFinalPayload: () => Promise<ReplyPayload | null>;
+  hasDeliveredSyntheticFinal: (params: { cursorSeq: number; effectCount: number }) => boolean;
+  markSyntheticFinalDelivered: (params: { cursorSeq: number; effectCount: number }) => void;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -157,6 +161,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   const inboundAudio = params.inboundAudio || params.target?.inboundAudio === true;
   const sessionTtsAuto = params.sessionTtsAuto ?? params.target?.sessionTtsAuto;
   const ttsChannel = params.ttsChannel ?? params.target?.ttsChannel;
+  const buildSyntheticFinalKey = (cursorSeq: number, effectCount: number) =>
+    `${cursorSeq}:${effectCount}`;
 
   const startReplyLifecycleOnce = async () => {
     if (state.startedReplyLifecycle) {
@@ -335,6 +341,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         sessionTtsAuto,
         ttsChannel,
       }),
+    hasDeliveredSyntheticFinal: (syntheticFinal) =>
+      state.deliveredSyntheticFinalKey ===
+      buildSyntheticFinalKey(syntheticFinal.cursorSeq, syntheticFinal.effectCount),
+    markSyntheticFinalDelivered: (syntheticFinal) => {
+      state.deliveredSyntheticFinalKey = buildSyntheticFinalKey(
+        syntheticFinal.cursorSeq,
+        syntheticFinal.effectCount,
+      );
+    },
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;

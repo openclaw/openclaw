@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpGatewayStore } from "../../acp/store/store.js";
 import { createProjectionRestartHarness } from "../../acp/test-harness/restart-harness.js";
-import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
+import {
+  createAcpDispatchDeliveryCoordinator,
+  createAcpDispatchDeliveryState,
+} from "./dispatch-acp-delivery.js";
 import { AcpDurableProjectionService } from "./dispatch-acp-replay.js";
 import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
 
@@ -605,6 +608,212 @@ describe("AcpDurableProjectionService", () => {
     );
     expect(await store.getCheckpoint("projector:run-final-checkpoint:primary")).toMatchObject({
       runId: "run-final-checkpoint",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
+    });
+  });
+
+  it("converges when the fallback pending-final marker write fails after a successful final send", async () => {
+    const store = await createStore();
+    await seedTerminalRun({
+      store,
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-final-marker-write",
+      channel: "telegram",
+      to: "telegram:thread-marker",
+      text: "marker write failure should still converge",
+      sessionTtsAuto: "always",
+      ttsChannel: "telegram",
+      now: 10,
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        kind: string;
+        payload: { text?: string };
+      };
+      if (
+        params.kind === "final" &&
+        params.payload.text === "marker write failure should still converge"
+      ) {
+        return {
+          mediaUrl: "https://example.com/marker-final-tts.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+
+    const originalRecordProjectorCheckpoint = store.recordProjectorCheckpoint.bind(store);
+    const originalRecordProjectorPendingSyntheticFinal =
+      store.recordProjectorPendingSyntheticFinal.bind(store);
+    let failFinalCheckpointOnce = true;
+    let failPendingMarkerOnce = true;
+    vi.spyOn(store, "recordProjectorCheckpoint").mockImplementation(async (params) => {
+      if (
+        failFinalCheckpointOnce &&
+        params.runId === "run-final-marker-write" &&
+        params.deliveredEffectCount === 2
+      ) {
+        failFinalCheckpointOnce = false;
+        throw new Error("synthetic final checkpoint failed before fallback marker");
+      }
+      return await originalRecordProjectorCheckpoint(params);
+    });
+    vi.spyOn(store, "recordProjectorPendingSyntheticFinal").mockImplementation(async (params) => {
+      if (failPendingMarkerOnce && params.runId === "run-final-marker-write") {
+        failPendingMarkerOnce = false;
+        throw new Error("pending marker write failed");
+      }
+      return await originalRecordProjectorPendingSyntheticFinal(params);
+    });
+
+    const cfg = createAcpTestConfig();
+    const service = new AcpDurableProjectionService({
+      store,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
+          shouldRouteToOriginating: false,
+          restartMode,
+        }),
+    });
+
+    await service.ensureProjection({
+      cfg,
+      target: (await store.getRunDeliveryTarget("run-final-marker-write", "primary"))!,
+      shouldSendToolSummaries: true,
+      restartMode: true,
+      retryDelayMs: 1,
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "marker write failure should still converge",
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/marker-final-tts.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+    expect(await store.getCheckpoint("projector:run-final-marker-write:primary")).toMatchObject({
+      runId: "run-final-marker-write",
+      cursorSeq: 1,
+      deliveredEffectCount: 2,
+    });
+  });
+
+  it("does not double-emit the final when live retry re-enters after marker-write failure", async () => {
+    const store = await createStore();
+    await seedTerminalRun({
+      store,
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-live-marker-retry",
+      channel: "discord",
+      to: "discord:session-thread",
+      text: "live retry should not resend final",
+      sessionTtsAuto: "always",
+      ttsChannel: "discord",
+      now: 10,
+    });
+    ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        kind: string;
+        payload: { text?: string };
+      };
+      if (params.kind === "final" && params.payload.text === "live retry should not resend final") {
+        return {
+          mediaUrl: "https://example.com/live-retry-final-tts.mp3",
+          audioAsVoice: true,
+        };
+      }
+      return params.payload;
+    });
+
+    const originalRecordProjectorCheckpoint = store.recordProjectorCheckpoint.bind(store);
+    const originalRecordProjectorPendingSyntheticFinal =
+      store.recordProjectorPendingSyntheticFinal.bind(store);
+    let finalCheckpointFailuresRemaining = 2;
+    let failPendingMarkerOnce = true;
+    vi.spyOn(store, "recordProjectorCheckpoint").mockImplementation(async (params) => {
+      if (
+        params.runId === "run-live-marker-retry" &&
+        params.deliveredEffectCount === 2 &&
+        finalCheckpointFailuresRemaining > 0
+      ) {
+        finalCheckpointFailuresRemaining -= 1;
+        throw new Error("synthetic final checkpoint failed");
+      }
+      return await originalRecordProjectorCheckpoint(params);
+    });
+    vi.spyOn(store, "recordProjectorPendingSyntheticFinal").mockImplementation(async (params) => {
+      if (failPendingMarkerOnce && params.runId === "run-live-marker-retry") {
+        failPendingMarkerOnce = false;
+        throw new Error("pending marker write failed");
+      }
+      return await originalRecordProjectorPendingSyntheticFinal(params);
+    });
+
+    const sharedState = createAcpDispatchDeliveryState();
+    const cfg = createAcpTestConfig();
+    const service = new AcpDurableProjectionService({
+      store,
+      coordinatorFactory: ({ target, restartMode }) =>
+        createAcpDispatchDeliveryCoordinator({
+          cfg,
+          target,
+          dispatcher: createDispatcherStub(),
+          inboundAudio: target.inboundAudio === true,
+          sessionTtsAuto: target.sessionTtsAuto,
+          ttsChannel: target.ttsChannel,
+          shouldRouteToOriginating: false,
+          restartMode,
+          state: sharedState,
+        }),
+    });
+
+    await service.ensureProjection({
+      cfg,
+      target: (await store.getRunDeliveryTarget("run-live-marker-retry", "primary"))!,
+      shouldSendToolSummaries: true,
+      restartMode: false,
+      retryDelayMs: 1,
+      pollIntervalMs: 1,
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          text: "live retry should not resend final",
+        }),
+      }),
+    );
+    expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          mediaUrl: "https://example.com/live-retry-final-tts.mp3",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+    expect(await store.getCheckpoint("projector:run-live-marker-retry:primary")).toMatchObject({
+      runId: "run-live-marker-retry",
       cursorSeq: 1,
       deliveredEffectCount: 2,
     });

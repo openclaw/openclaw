@@ -269,10 +269,21 @@ class AcpDurableProjectionRunner {
       checkpoint.pendingSyntheticFinalCursorSeq === params.cursorSeq
     ) {
       params.incrementDeliveredEffectCount();
-      await this.params.store.recordProjectorCheckpoint({
-        sessionKey: this.params.target.sessionKey,
-        runId: this.params.target.runId,
-        targetId: this.params.target.targetId,
+      await this.recordSettledSyntheticFinalCheckpoint({
+        cursorSeq: params.cursorSeq,
+        deliveredEffectCount: params.deliveredEffectCountRef(),
+      });
+      return;
+    }
+
+    if (
+      params.coordinator.hasDeliveredSyntheticFinal({
+        cursorSeq: params.cursorSeq,
+        effectCount: nextEffectCount,
+      })
+    ) {
+      params.incrementDeliveredEffectCount();
+      await this.recordSettledSyntheticFinalCheckpoint({
         cursorSeq: params.cursorSeq,
         deliveredEffectCount: params.deliveredEffectCountRef(),
       });
@@ -292,20 +303,50 @@ class AcpDurableProjectionRunner {
     if (!delivered) {
       throw new Error("ACP durable final-TTS delivery failed.");
     }
-    await this.params.store.recordProjectorPendingSyntheticFinal({
-      sessionKey: this.params.target.sessionKey,
-      runId: this.params.target.runId,
-      targetId: this.params.target.targetId,
+    params.coordinator.markSyntheticFinalDelivered({
+      cursorSeq: params.cursorSeq,
+      effectCount: params.deliveredEffectCountRef(),
+    });
+    await this.recordSettledSyntheticFinalCheckpoint({
       cursorSeq: params.cursorSeq,
       deliveredEffectCount: params.deliveredEffectCountRef(),
     });
-    await this.params.store.recordProjectorCheckpoint({
-      sessionKey: this.params.target.sessionKey,
-      runId: this.params.target.runId,
-      targetId: this.params.target.targetId,
-      cursorSeq: params.cursorSeq,
-      deliveredEffectCount: params.deliveredEffectCountRef(),
-    });
+  }
+
+  private async recordSettledSyntheticFinalCheckpoint(params: {
+    cursorSeq: number;
+    deliveredEffectCount: number;
+  }): Promise<void> {
+    try {
+      await this.params.store.recordProjectorCheckpoint({
+        sessionKey: this.params.target.sessionKey,
+        runId: this.params.target.runId,
+        targetId: this.params.target.targetId,
+        cursorSeq: params.cursorSeq,
+        deliveredEffectCount: params.deliveredEffectCount,
+      });
+      return;
+    } catch (checkpointError) {
+      try {
+        await this.params.store.recordProjectorPendingSyntheticFinal({
+          sessionKey: this.params.target.sessionKey,
+          runId: this.params.target.runId,
+          targetId: this.params.target.targetId,
+          cursorSeq: params.cursorSeq,
+          deliveredEffectCount: params.deliveredEffectCount,
+        });
+      } catch {
+        await this.params.store.recordProjectorCheckpoint({
+          sessionKey: this.params.target.sessionKey,
+          runId: this.params.target.runId,
+          targetId: this.params.target.targetId,
+          cursorSeq: params.cursorSeq,
+          deliveredEffectCount: params.deliveredEffectCount,
+        });
+        return;
+      }
+      throw checkpointError;
+    }
   }
 }
 
