@@ -44,7 +44,7 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
     state.toolLoopWarningBuckets = new Map();
   }
   const bucket = Math.floor(count / LOOP_WARNING_BUCKET_SIZE);
-  const lastBucket = state.toolLoopWarningBuckets.get(warningKey) ?? 0;
+  const lastBucket = state.toolLoopWarningBuckets.get(warningKey) ?? -1;
   if (bucket <= lastBucket) {
     return false;
   }

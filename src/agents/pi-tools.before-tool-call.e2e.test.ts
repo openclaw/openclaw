@@ -7,7 +7,12 @@ import {
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
+import {
+  BROWSER_SEARCH_CRITICAL_THRESHOLD,
+  BROWSER_SEARCH_WARNING_THRESHOLD,
+  CRITICAL_THRESHOLD,
+  GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+} from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 vi.mock("../plugins/hook-runner-global.js");
@@ -132,10 +137,28 @@ describe("before_tool_call loop detection behavior", () => {
     };
   }
 
+  function createBrowserSearchFixture() {
+    const execute = vi
+      .fn()
+      .mockImplementation(async (_toolCallId: string, params: { url: string }) => {
+        return {
+          content: [{ type: "text", text: `results for ${params.url}` }],
+          details: { url: params.url },
+        };
+      });
+    return {
+      tool: createWrappedTool("browser", execute),
+      paramsForQuery: (query: string, host = "www.google.com") => ({
+        action: "open",
+        url: `https://${host}/search?q=${encodeURIComponent(query)}`,
+      }),
+    };
+  }
+
   function expectCriticalLoopEvent(
     loopEvent: DiagnosticToolLoopEvent | undefined,
     params: {
-      detector: "ping_pong" | "known_poll_no_progress";
+      detector: "ping_pong" | "known_poll_no_progress" | "browser_search_storm";
       toolName: string;
       count?: number;
     },
@@ -191,6 +214,71 @@ describe("before_tool_call loop detection behavior", () => {
         tool.execute(`poll-progress-${i}`, params, undefined, undefined),
       ).resolves.toBeDefined();
     }
+  });
+
+  it("emits structured warning diagnostic events for browser search storms", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { tool, paramsForQuery } = createBrowserSearchFixture();
+
+      for (let i = 0; i < BROWSER_SEARCH_WARNING_THRESHOLD; i += 1) {
+        await tool.execute(
+          `browser-search-${i}`,
+          paramsForQuery(`openclaw issue ${i}`),
+          undefined,
+          undefined,
+        );
+      }
+
+      await tool.execute(
+        `browser-search-${BROWSER_SEARCH_WARNING_THRESHOLD}`,
+        paramsForQuery(`openclaw issue ${BROWSER_SEARCH_WARNING_THRESHOLD}`),
+        undefined,
+        undefined,
+      );
+
+      const browserWarns = emitted.filter(
+        (evt) => evt.level === "warning" && evt.detector === "browser_search_storm",
+      );
+      expect(browserWarns).toHaveLength(1);
+      const loopEvent = browserWarns[0];
+      expect(loopEvent?.type).toBe("tool.loop");
+      expect(loopEvent?.level).toBe("warning");
+      expect(loopEvent?.action).toBe("warn");
+      expect(loopEvent?.detector).toBe("browser_search_storm");
+      expect(loopEvent?.count).toBe(BROWSER_SEARCH_WARNING_THRESHOLD);
+      expect(loopEvent?.toolName).toBe("browser");
+    });
+  });
+
+  it("blocks browser search storms at critical threshold and emits critical diagnostic events", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { tool, paramsForQuery } = createBrowserSearchFixture();
+
+      for (let i = 0; i < BROWSER_SEARCH_CRITICAL_THRESHOLD; i += 1) {
+        await tool.execute(
+          `browser-search-critical-${i}`,
+          paramsForQuery(`openclaw fix ${i}`, i % 2 === 0 ? "www.google.com" : "www.bing.com"),
+          undefined,
+          undefined,
+        );
+      }
+
+      await expect(
+        tool.execute(
+          `browser-search-critical-${BROWSER_SEARCH_CRITICAL_THRESHOLD}`,
+          paramsForQuery(`openclaw fix ${BROWSER_SEARCH_CRITICAL_THRESHOLD}`, "www.bing.com"),
+          undefined,
+          undefined,
+        ),
+      ).rejects.toThrow("CRITICAL");
+
+      const loopEvent = emitted.at(-1);
+      expectCriticalLoopEvent(loopEvent, {
+        detector: "browser_search_storm",
+        toolName: "browser",
+        count: BROWSER_SEARCH_CRITICAL_THRESHOLD,
+      });
+    });
   });
 
   it("keeps generic repeated calls warn-only below global breaker", async () => {

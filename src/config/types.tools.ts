@@ -148,6 +148,8 @@ export type ToolLoopDetectionDetectorConfig = {
   knownPollNoProgress?: boolean;
   /** Enable warning/blocking for no-progress ping-pong alternating patterns. */
   pingPong?: boolean;
+  /** Enable warning/blocking for repeated browser search-page opens across changing queries. */
+  browserSearchStorm?: boolean;
 };
 
 export type ToolLoopDetectionConfig = {
@@ -159,6 +161,10 @@ export type ToolLoopDetectionConfig = {
   warningThreshold?: number;
   /** Critical threshold for blocking repetitive loops (default: 20). */
   criticalThreshold?: number;
+  /** Warning threshold for browser search storms across changing queries (default: 4). */
+  browserSearchWarningThreshold?: number;
+  /** Critical threshold for browser search storms across changing queries (default: 8). */
+  browserSearchCriticalThreshold?: number;
   /** Global no-progress breaker threshold (default: 30). */
   globalCircuitBreakerThreshold?: number;
   /** Detector toggles. */

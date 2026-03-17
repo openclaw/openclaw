@@ -11,11 +11,21 @@ export type SessionState = {
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
 };
 
+export type BrowserSearchLoopHint = {
+  host: string;
+  queryHash: string;
+};
+
+export type ToolCallLoopHint = {
+  browserSearch?: BrowserSearchLoopHint;
+};
+
 export type ToolCallRecord = {
   toolName: string;
   argsHash: string;
   toolCallId?: string;
   resultHash?: string;
+  loopHint?: ToolCallLoopHint;
   timestamp: number;
 };
 

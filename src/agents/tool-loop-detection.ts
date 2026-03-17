@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
-import type { SessionState } from "../logging/diagnostic-session-state.js";
+import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 
@@ -10,7 +10,8 @@ export type LoopDetectorKind =
   | "generic_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
-  | "ping_pong";
+  | "ping_pong"
+  | "browser_search_storm";
 
 export type LoopDetectionResult =
   | { stuck: false }
@@ -27,17 +28,22 @@ export type LoopDetectionResult =
 export const TOOL_CALL_HISTORY_SIZE = 30;
 export const WARNING_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
+export const BROWSER_SEARCH_WARNING_THRESHOLD = 4;
+export const BROWSER_SEARCH_CRITICAL_THRESHOLD = 8;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
   warningThreshold: WARNING_THRESHOLD,
   criticalThreshold: CRITICAL_THRESHOLD,
+  browserSearchWarningThreshold: BROWSER_SEARCH_WARNING_THRESHOLD,
+  browserSearchCriticalThreshold: BROWSER_SEARCH_CRITICAL_THRESHOLD,
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   detectors: {
     genericRepeat: true,
     knownPollNoProgress: true,
     pingPong: true,
+    browserSearchStorm: true,
   },
 };
 
@@ -46,11 +52,14 @@ type ResolvedLoopDetectionConfig = {
   historySize: number;
   warningThreshold: number;
   criticalThreshold: number;
+  browserSearchWarningThreshold: number;
+  browserSearchCriticalThreshold: number;
   globalCircuitBreakerThreshold: number;
   detectors: {
     genericRepeat: boolean;
     knownPollNoProgress: boolean;
     pingPong: boolean;
+    browserSearchStorm: boolean;
   };
 };
 
@@ -70,6 +79,14 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
     config?.criticalThreshold,
     DEFAULT_LOOP_DETECTION_CONFIG.criticalThreshold,
   );
+  let browserSearchWarningThreshold = asPositiveInt(
+    config?.browserSearchWarningThreshold,
+    DEFAULT_LOOP_DETECTION_CONFIG.browserSearchWarningThreshold,
+  );
+  let browserSearchCriticalThreshold = asPositiveInt(
+    config?.browserSearchCriticalThreshold,
+    DEFAULT_LOOP_DETECTION_CONFIG.browserSearchCriticalThreshold,
+  );
   let globalCircuitBreakerThreshold = asPositiveInt(
     config?.globalCircuitBreakerThreshold,
     DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
@@ -77,6 +94,9 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
 
   if (criticalThreshold <= warningThreshold) {
     criticalThreshold = warningThreshold + 1;
+  }
+  if (browserSearchCriticalThreshold <= browserSearchWarningThreshold) {
+    browserSearchCriticalThreshold = browserSearchWarningThreshold + 1;
   }
   if (globalCircuitBreakerThreshold <= criticalThreshold) {
     globalCircuitBreakerThreshold = criticalThreshold + 1;
@@ -87,6 +107,8 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
     historySize: asPositiveInt(config?.historySize, DEFAULT_LOOP_DETECTION_CONFIG.historySize),
     warningThreshold,
     criticalThreshold,
+    browserSearchWarningThreshold,
+    browserSearchCriticalThreshold,
     globalCircuitBreakerThreshold,
     detectors: {
       genericRepeat:
@@ -95,6 +117,9 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
         config?.detectors?.knownPollNoProgress ??
         DEFAULT_LOOP_DETECTION_CONFIG.detectors.knownPollNoProgress,
       pingPong: config?.detectors?.pingPong ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.pingPong,
+      browserSearchStorm:
+        config?.detectors?.browserSearchStorm ??
+        DEFAULT_LOOP_DETECTION_CONFIG.detectors.browserSearchStorm,
     },
   };
 }
@@ -142,6 +167,91 @@ function stableStringifyFallback(value: unknown): string {
     }
     return Object.prototype.toString.call(value);
   }
+}
+
+type BrowserSearchMatcher = {
+  hostPattern: RegExp;
+  pathPattern: RegExp;
+  queryParam: string;
+};
+
+type BrowserSearchLoopRecord = NonNullable<
+  NonNullable<ToolCallRecord["loopHint"]>["browserSearch"]
+>;
+
+const BROWSER_SEARCH_MATCHERS: BrowserSearchMatcher[] = [
+  { hostPattern: /(^|\.)google\./, pathPattern: /^\/search$/, queryParam: "q" },
+  { hostPattern: /(^|\.)bing\.com$/, pathPattern: /^\/search$/, queryParam: "q" },
+  { hostPattern: /(^|\.)search\.brave\.com$/, pathPattern: /^\/search$/, queryParam: "q" },
+  { hostPattern: /(^|\.)duckduckgo\.com$/, pathPattern: /^\/(?:html)?\/?$/, queryParam: "q" },
+  { hostPattern: /(^|\.)baidu\.com$/, pathPattern: /^\/s$/, queryParam: "wd" },
+  { hostPattern: /(^|\.)yahoo\.com$/, pathPattern: /^\/search$/, queryParam: "p" },
+  { hostPattern: /(^|\.)yandex\./, pathPattern: /^\/search$/, queryParam: "text" },
+];
+
+function normalizeHostname(hostname: string): string {
+  const lowered = hostname.toLowerCase();
+  return lowered.startsWith("www.") ? lowered.slice(4) : lowered;
+}
+
+function extractBrowserSearchLoopHint(
+  toolName: string,
+  params: unknown,
+): BrowserSearchLoopRecord | undefined {
+  if (toolName !== "browser" || !isPlainObject(params)) {
+    return undefined;
+  }
+  const action = params.action;
+  if (action !== "open" && action !== "navigate") {
+    return undefined;
+  }
+
+  const rawUrl =
+    typeof params.targetUrl === "string"
+      ? params.targetUrl
+      : typeof params.url === "string"
+        ? params.url
+        : undefined;
+  if (!rawUrl) {
+    return undefined;
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(rawUrl);
+  } catch {
+    return undefined;
+  }
+
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    return undefined;
+  }
+
+  const host = normalizeHostname(parsedUrl.hostname);
+  const path = parsedUrl.pathname.toLowerCase();
+  for (const matcher of BROWSER_SEARCH_MATCHERS) {
+    if (!matcher.hostPattern.test(host) || !matcher.pathPattern.test(path)) {
+      continue;
+    }
+    const rawQuery = parsedUrl.searchParams.get(matcher.queryParam)?.trim();
+    if (!rawQuery) {
+      return undefined;
+    }
+    return {
+      host,
+      queryHash: digestStable(rawQuery.toLowerCase()),
+    };
+  }
+
+  return undefined;
+}
+
+function extractToolCallLoopHint(toolName: string, params: unknown): ToolCallRecord["loopHint"] {
+  const browserSearch = extractBrowserSearchLoopHint(toolName, params);
+  if (browserSearch) {
+    return { browserSearch };
+  }
+  return undefined;
 }
 
 function isKnownPollToolCall(toolName: string, params: unknown): boolean {
@@ -365,6 +475,31 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
   return [signatureA, signatureB].toSorted().join("|");
 }
 
+function getBrowserSearchStormStats(
+  history: ToolCallRecord[],
+  currentSearch: BrowserSearchLoopRecord,
+): {
+  count: number;
+  uniqueHosts: number;
+  uniqueQueries: number;
+} {
+  const recentSearches = history
+    .map((record) => record.loopHint?.browserSearch)
+    .filter((search): search is BrowserSearchLoopRecord => Boolean(search));
+
+  const uniqueHosts = new Set(recentSearches.map((search) => search.host));
+  uniqueHosts.add(currentSearch.host);
+
+  const uniqueQueries = new Set(recentSearches.map((search) => search.queryHash));
+  uniqueQueries.add(currentSearch.queryHash);
+
+  return {
+    count: recentSearches.length,
+    uniqueHosts: uniqueHosts.size,
+    uniqueQueries: uniqueQueries.size,
+  };
+}
+
 /**
  * Detect if an agent is stuck in a repetitive tool call loop.
  * Checks if the same tool+params combination has been called excessively.
@@ -385,6 +520,7 @@ export function detectToolCallLoop(
   const noProgressStreak = noProgress.count;
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
+  const browserSearch = extractBrowserSearchLoopHint(toolName, params);
 
   if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
     log.error(
@@ -470,6 +606,45 @@ export function detectToolCallLoop(
     };
   }
 
+  if (browserSearch && resolvedConfig.detectors.browserSearchStorm) {
+    const browserSearchStats = getBrowserSearchStormStats(history, browserSearch);
+    const hasVariedSearches =
+      browserSearchStats.uniqueQueries >= 2 || browserSearchStats.uniqueHosts >= 2;
+    if (
+      hasVariedSearches &&
+      browserSearchStats.count >= resolvedConfig.browserSearchCriticalThreshold
+    ) {
+      log.error(
+        `Critical browser search storm detected: repeated search-page opens count=${browserSearchStats.count}`,
+      );
+      return {
+        stuck: true,
+        level: "critical",
+        detector: "browser_search_storm",
+        count: browserSearchStats.count,
+        message: `CRITICAL: Browser search pages have been opened ${browserSearchStats.count} times across changing queries or search engines. This appears to be a browser search storm. Session execution blocked to prevent runaway browsing and network amplification.`,
+        warningKey: "browser-search:storm",
+      };
+    }
+
+    if (
+      hasVariedSearches &&
+      browserSearchStats.count >= resolvedConfig.browserSearchWarningThreshold
+    ) {
+      log.warn(
+        `Browser search storm warning: repeated search-page opens count=${browserSearchStats.count}`,
+      );
+      return {
+        stuck: true,
+        level: "warning",
+        detector: "browser_search_storm",
+        count: browserSearchStats.count,
+        message: `WARNING: Browser search pages have been opened ${browserSearchStats.count} times across changing queries or search engines. Stop broad browser searching and either narrow the task, use web_search/web_fetch, or report failure.`,
+        warningKey: "browser-search:storm",
+      };
+    }
+  }
+
   // Generic detector: warn-only for repeated identical calls.
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
@@ -514,6 +689,7 @@ export function recordToolCall(
     toolName,
     argsHash: hashToolCall(toolName, params),
     toolCallId,
+    loopHint: extractToolCallLoopHint(toolName, params),
     timestamp: Date.now(),
   });
 
@@ -578,6 +754,7 @@ export function recordToolCallOutcome(
       argsHash,
       toolCallId: params.toolCallId,
       resultHash,
+      loopHint: extractToolCallLoopHint(params.toolName, params.toolParams),
       timestamp: Date.now(),
     });
   }
