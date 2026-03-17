@@ -3,13 +3,17 @@ import type { WebInboundMsg } from "../types.js";
 
 export function resolvePeerId(msg: WebInboundMsg) {
   if (msg.chatType === "group") {
-    return msg.conversationId ?? msg.from;
+    return msg.conversationId ?? msg.from ?? "unknown";
   }
   if (msg.senderE164) {
     return normalizeE164(msg.senderE164) ?? msg.senderE164;
   }
-  if (msg.from.includes("@")) {
-    return jidToE164(msg.from) ?? msg.from;
+  const directPeerSource = msg.from ?? msg.conversationId;
+  if (!directPeerSource) {
+    return "unknown";
   }
-  return normalizeE164(msg.from) ?? msg.from;
+  if (directPeerSource.includes("@")) {
+    return jidToE164(directPeerSource) ?? directPeerSource;
+  }
+  return normalizeE164(directPeerSource) ?? directPeerSource;
 }

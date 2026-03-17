@@ -59,8 +59,9 @@ async function resolveWhatsAppCommandAuthorized(params: {
   }
 
   const isGroup = params.msg.chatType === "group";
+  const directPeerSource = params.msg.from ?? params.msg.conversationId ?? "";
   const senderE164 = normalizeE164(
-    isGroup ? (params.msg.senderE164 ?? "") : (params.msg.senderE164 ?? params.msg.from ?? ""),
+    isGroup ? (params.msg.senderE164 ?? "") : (params.msg.senderE164 ?? directPeerSource),
   );
   if (!senderE164) {
     return false;
@@ -151,7 +152,9 @@ export async function processMessage(params: {
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
 }) {
-  const conversationId = params.msg.conversationId ?? params.msg.from;
+  const conversationId = params.msg.conversationId ?? params.msg.from ?? "unknown";
+  const directPeerSource = params.msg.from ?? params.msg.conversationId;
+  const directFrom = directPeerSource ?? "unknown";
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
     agentId: params.route.agentId,
@@ -223,7 +226,7 @@ export async function processMessage(params: {
     {
       connectionId: params.connectionId,
       correlationId,
-      from: params.msg.chatType === "group" ? conversationId : params.msg.from,
+      from: params.msg.chatType === "group" ? conversationId : directFrom,
       to: params.msg.to,
       body: elide(combinedBody, 240),
       mediaType: params.msg.mediaType ?? null,
@@ -232,7 +235,7 @@ export async function processMessage(params: {
     "inbound web message",
   );
 
-  const fromDisplay = params.msg.chatType === "group" ? conversationId : params.msg.from;
+  const fromDisplay = params.msg.chatType === "group" ? conversationId : directFrom;
   const kindLabel = params.msg.mediaType ? `, ${params.msg.mediaType}` : "";
   whatsappInboundLog.info(
     `Inbound message ${fromDisplay} -> ${params.msg.to} (${params.msg.chatType}${kindLabel}, ${combinedBody.length} chars)`,
@@ -247,11 +250,14 @@ export async function processMessage(params: {
           if (params.msg.senderE164) {
             return normalizeE164(params.msg.senderE164);
           }
-          // In direct chats, `msg.from` is already the canonical conversation id.
-          if (params.msg.from.includes("@")) {
-            return jidToE164(params.msg.from);
+          if (!directPeerSource) {
+            return "unknown";
           }
-          return normalizeE164(params.msg.from);
+          // In direct chats, `msg.from` is already the canonical conversation id.
+          if (directPeerSource.includes("@")) {
+            return jidToE164(directPeerSource);
+          }
+          return normalizeE164(directPeerSource);
         })()
       : undefined;
 
@@ -278,7 +284,8 @@ export async function processMessage(params: {
   const isSelfChat =
     params.msg.chatType !== "group" &&
     Boolean(params.msg.selfE164) &&
-    normalizeE164(params.msg.from) === normalizeE164(params.msg.selfE164 ?? "");
+    Boolean(directPeerSource) &&
+    normalizeE164(directPeerSource) === normalizeE164(params.msg.selfE164 ?? "");
   const responsePrefix =
     prefixOptions.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
@@ -302,7 +309,7 @@ export async function processMessage(params: {
     InboundHistory: inboundHistory,
     RawBody: params.msg.body,
     CommandBody: params.msg.body,
-    From: params.msg.from,
+    From: directFrom,
     To: params.msg.to,
     SessionKey: params.route.sessionKey,
     AccountId: params.route.accountId,
@@ -314,7 +321,7 @@ export async function processMessage(params: {
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,
     ChatType: params.msg.chatType,
-    ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
+    ConversationLabel: params.msg.chatType === "group" ? conversationId : directFrom,
     GroupSubject: params.msg.groupSubject,
     GroupMembers: formatGroupMembers({
       participants: params.msg.groupParticipants,
@@ -330,7 +337,7 @@ export async function processMessage(params: {
     Provider: "whatsapp",
     Surface: "whatsapp",
     OriginatingChannel: "whatsapp",
-    OriginatingTo: params.msg.from,
+    OriginatingTo: directFrom,
   });
 
   // Only update main session's lastRoute when DM actually IS the main session.
