@@ -102,6 +102,8 @@ const {
 const { registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
   await import("../infra/outbound/session-binding-service.js");
 
+type PluginBindingRequest = Awaited<ReturnType<typeof requestPluginConversationBinding>>;
+
 function createAdapter(channel: string, accountId: string): SessionBindingAdapter {
   return {
     channel,
@@ -117,6 +119,26 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
     touch: sessionBindingState.touch,
     unbind: sessionBindingState.unbind,
   };
+}
+
+async function resolveRequestedBinding(request: PluginBindingRequest) {
+  expect(["pending", "bound"]).toContain(request.status);
+  if (request.status === "pending") {
+    const approved = await resolvePluginConversationBindingApproval({
+      approvalId: request.approvalId,
+      decision: "allow-once",
+      senderId: "user-1",
+    });
+    expect(approved.status).toBe("approved");
+    if (approved.status !== "approved") {
+      throw new Error("expected approved bind result");
+    }
+    return approved.binding;
+  }
+  if (request.status === "bound") {
+    return request.binding;
+  }
+  throw new Error("expected pending or bound bind result");
 }
 
 describe("plugin conversation binding approvals", () => {
@@ -485,25 +507,7 @@ describe("plugin conversation binding approvals", () => {
       binding: { summary: "Bind this conversation to Codex thread abc." },
     });
 
-    expect(["pending", "bound"]).toContain(request.status);
-    const binding =
-      request.status === "pending"
-        ? await resolvePluginConversationBindingApproval({
-            approvalId: request.approvalId,
-            decision: "allow-once",
-            senderId: "user-1",
-          }).then((approved) => {
-            expect(approved.status).toBe("approved");
-            if (approved.status !== "approved") {
-              throw new Error("expected approved bind result");
-            }
-            return approved.binding;
-          })
-        : request.status === "bound"
-          ? request.binding
-          : (() => {
-              throw new Error("expected pending or bound bind result");
-            })();
+    const binding = await resolveRequestedBinding(request);
 
     expect(binding).toEqual(
       expect.objectContaining({
@@ -546,25 +550,7 @@ describe("plugin conversation binding approvals", () => {
       },
     });
 
-    expect(["pending", "bound"]).toContain(request.status);
-    const binding =
-      request.status === "pending"
-        ? await resolvePluginConversationBindingApproval({
-            approvalId: request.approvalId,
-            decision: "allow-once",
-            senderId: "user-1",
-          }).then((approved) => {
-            expect(approved.status).toBe("approved");
-            if (approved.status !== "approved") {
-              throw new Error("expected approved bind result");
-            }
-            return approved.binding;
-          })
-        : request.status === "bound"
-          ? request.binding
-          : (() => {
-              throw new Error("expected pending or bound bind result");
-            })();
+    const binding = await resolveRequestedBinding(request);
 
     expect(binding).toEqual(
       expect.objectContaining({
