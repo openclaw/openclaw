@@ -1,10 +1,10 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildVercelAiGatewayProvider } from "../../src/agents/models-config.providers.discovery.js";
 import {
   applyVercelAiGatewayConfig,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
 } from "../../src/commands/onboard-auth.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { buildVercelAiGatewayProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "vercel-ai-gateway";
 

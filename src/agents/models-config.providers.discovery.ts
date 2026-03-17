@@ -1,14 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
-import {
-  discoverHuggingfaceModels,
-  HUGGINGFACE_BASE_URL,
-  HUGGINGFACE_MODEL_CATALOG,
-  buildHuggingfaceModelDefinition,
-} from "./huggingface-models.js";
-import { discoverKilocodeModels } from "./kilocode-models.js";
 import {
   enrichOllamaModelsWithContext,
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
@@ -24,9 +16,11 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "./self-hosted-provider-defaults.js";
 import { SGLANG_DEFAULT_BASE_URL, SGLANG_PROVIDER_LABEL } from "./sglang-defaults.js";
-import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
-import { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
 import { VLLM_DEFAULT_BASE_URL, VLLM_PROVIDER_LABEL } from "./vllm-defaults.js";
+export { buildHuggingfaceProvider } from "../../extensions/huggingface/provider-catalog.js";
+export { buildKilocodeProviderWithDiscovery } from "../../extensions/kilocode/provider-catalog.js";
+export { buildVeniceProvider } from "../../extensions/venice/provider-catalog.js";
+export { buildVercelAiGatewayProvider } from "../../extensions/vercel-ai-gateway/provider-catalog.js";
 
 export { resolveOllamaApiBase } from "./ollama-models.js";
 
@@ -145,15 +139,6 @@ async function discoverOpenAICompatibleLocalModels(params: {
   }
 }
 
-export async function buildVeniceProvider(): Promise<ProviderConfig> {
-  const models = await discoverVeniceModels();
-  return {
-    baseUrl: VENICE_BASE_URL,
-    api: "openai-completions",
-    models,
-  };
-}
-
 export async function buildOllamaProvider(
   configuredBaseUrl?: string,
   opts?: { quiet?: boolean },
@@ -163,27 +148,6 @@ export async function buildOllamaProvider(
     baseUrl: resolveOllamaApiBase(configuredBaseUrl),
     api: "ollama",
     models,
-  };
-}
-
-export async function buildHuggingfaceProvider(discoveryApiKey?: string): Promise<ProviderConfig> {
-  const resolvedSecret = discoveryApiKey?.trim() ?? "";
-  const models =
-    resolvedSecret !== ""
-      ? await discoverHuggingfaceModels(resolvedSecret)
-      : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
-  return {
-    baseUrl: HUGGINGFACE_BASE_URL,
-    api: "openai-completions",
-    models,
-  };
-}
-
-export async function buildVercelAiGatewayProvider(): Promise<ProviderConfig> {
-  return {
-    baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
-    api: "anthropic-messages",
-    models: await discoverVercelAiGatewayModels(),
   };
 }
 
@@ -216,19 +180,6 @@ export async function buildSglangProvider(params?: {
   });
   return {
     baseUrl,
-    api: "openai-completions",
-    models,
-  };
-}
-
-/**
- * Build the Kilocode provider with dynamic model discovery from the gateway
- * API. Falls back to the static catalog on failure.
- */
-export async function buildKilocodeProviderWithDiscovery(): Promise<ProviderConfig> {
-  const models = await discoverKilocodeModels();
-  return {
-    baseUrl: KILOCODE_BASE_URL,
     api: "openai-completions",
     models,
   };

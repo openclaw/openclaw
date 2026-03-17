@@ -1,7 +1,7 @@
 import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { buildVeniceProvider } from "../../src/agents/models-config.providers.discovery.js";
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.js";
 import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { buildVeniceProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "venice";
 
