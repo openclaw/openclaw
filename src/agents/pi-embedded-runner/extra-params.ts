@@ -1,7 +1,10 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { resolveBedrockBearerToken } from "../../agents/model-auth.js";
+import {
+  resolveBedrockBearerToken,
+  shouldInjectBedrockBearerWrapper,
+} from "../../agents/model-auth.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -292,12 +295,10 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
   }
 
-  if (normalizeProviderId(provider) === "amazon-bedrock") {
+  if (shouldInjectBedrockBearerWrapper(provider, cfg)) {
     const bearerToken = resolveBedrockBearerToken();
-    if (bearerToken) {
-      log.debug(`applying Bedrock bearer token auth header for ${provider}/${modelId}`);
-      agent.streamFn = createBedrockBearerTokenWrapper(agent.streamFn, bearerToken);
-    }
+    log.debug(`applying Bedrock bearer token auth header for ${provider}/${modelId}`);
+    agent.streamFn = createBedrockBearerTokenWrapper(agent.streamFn, bearerToken!);
   }
 
   // Guard Google payloads against invalid negative thinking budgets emitted by

@@ -234,6 +234,26 @@ export function resolveBedrockBearerToken(
   return normalizeOptionalSecretInput(env[AWS_BEARER_ENV]);
 }
 
+/**
+ * Returns true when the Bedrock bearer token wrapper should be injected.
+ * Only true when:
+ * 1. Provider normalizes to amazon-bedrock
+ * 2. AWS_BEARER_TOKEN_BEDROCK env var is set
+ * 3. Auth override is either undefined (implicit) or "aws-sdk" — if the user
+ *    explicitly configured api-key/oauth/token, that credential path takes
+ *    precedence and the bearer wrapper must not overwrite it.
+ */
+export function shouldInjectBedrockBearerWrapper(provider: string, cfg?: OpenClawConfig): boolean {
+  if (normalizeProviderId(provider) !== "amazon-bedrock") {
+    return false;
+  }
+  if (!resolveBedrockBearerToken()) {
+    return false;
+  }
+  const authOverride = resolveProviderAuthOverride(cfg, provider);
+  return authOverride === undefined || authOverride === "aws-sdk";
+}
+
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env[AWS_BEARER_ENV]?.trim()) {
     return AWS_BEARER_ENV;

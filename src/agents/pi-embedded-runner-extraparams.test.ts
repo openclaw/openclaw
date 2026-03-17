@@ -2397,7 +2397,6 @@ describe("applyExtraParamsToAgent", () => {
     },
   );
 
-<<<<<<< HEAD
   it("strips prompt cache fields for non-OpenAI openai-responses endpoints", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "custom-proxy",

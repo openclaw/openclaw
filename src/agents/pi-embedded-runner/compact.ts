@@ -53,8 +53,8 @@ import {
   getApiKeyForModel,
   resolveBedrockBearerToken,
   resolveModelAuthMode,
+  shouldInjectBedrockBearerWrapper,
 } from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
@@ -844,17 +844,15 @@ export async function compactEmbeddedPiSessionDirect(
       // The main run flow applies this via applyExtraParamsToAgent, but
       // compaction creates its session directly — without the wrapper,
       // compaction calls would fail when only bearer token auth is set.
-      if (normalizeProviderId(provider) === "amazon-bedrock") {
+      if (shouldInjectBedrockBearerWrapper(provider, params.config)) {
         const bearerToken = resolveBedrockBearerToken();
-        if (bearerToken) {
-          log.debug(
-            `applying Bedrock bearer token auth header for compaction (${provider}/${modelId})`,
-          );
-          session.agent.streamFn = createBedrockBearerTokenWrapper(
-            session.agent.streamFn,
-            bearerToken,
-          );
-        }
+        log.debug(
+          `applying Bedrock bearer token auth header for compaction (${provider}/${modelId})`,
+        );
+        session.agent.streamFn = createBedrockBearerTokenWrapper(
+          session.agent.streamFn,
+          bearerToken!,
+        );
       }
 
       applySystemPromptOverrideToSession(session, systemPromptOverride());
