@@ -3253,6 +3253,15 @@ module.exports = {
     expect(resolved).toBe(srcFile);
   });
 
+  it("prefers dist plugin runtime module when loader runs from dist", () => {
+    const { root, distFile } = createPluginRuntimeAliasFixture();
+
+    const resolved = __testing.resolvePluginRuntimeModulePath({
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
+  });
+
   it("resolves plugin runtime module from package root when loader runs from transpiler cache path", () => {
     const { root, srcFile } = createPluginRuntimeAliasFixture();
 

@@ -112,6 +112,33 @@ function listBundledPluginBuildEntries(): Record<string, string> {
 
 const bundledPluginBuildEntries = listBundledPluginBuildEntries();
 
+function buildBundledHookEntries(): Record<string, string> {
+  const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
+  const entries: Record<string, string> = {};
+
+  if (!fs.existsSync(hooksRoot)) {
+    return entries;
+  }
+
+  for (const dirent of fs.readdirSync(hooksRoot, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) {
+      continue;
+    }
+
+    const hookName = dirent.name;
+    const handlerPath = path.join(hooksRoot, hookName, "handler.ts");
+    if (!fs.existsSync(handlerPath)) {
+      continue;
+    }
+
+    entries[`bundled/${hookName}/handler`] = handlerPath;
+  }
+
+  return entries;
+}
+
+const bundledHookEntries = buildBundledHookEntries();
+
 function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
@@ -130,33 +157,34 @@ function buildCoreDistEntries(): Record<string, string> {
     "line/accounts": "src/line/accounts.ts",
     "line/send": "src/line/send.ts",
     "line/template-messages": "src/line/template-messages.ts",
+    "plugins/runtime/index": "src/plugins/runtime/index.ts",
+    "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
   };
 }
 
 const coreDistEntries = buildCoreDistEntries();
 
+function buildUnifiedDistEntries(): Record<string, string> {
+  return {
+    ...coreDistEntries,
+    ...Object.fromEntries(
+      Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
+        `plugin-sdk/${entry}`,
+        source,
+      ]),
+    ),
+    ...bundledPluginBuildEntries,
+    ...bundledHookEntries,
+  };
+}
+
 export default defineConfig([
   nodeBuildConfig({
-    // Build the root dist entrypoints together so they can share hashed chunks
-    // instead of emitting near-identical copies across separate builds.
-    entry: coreDistEntries,
-  }),
-  nodeBuildConfig({
-    // Bundle all plugin-sdk entries in a single build so the bundler can share
-    // common chunks instead of duplicating them per entry (~712MB heap saved).
-    entry: buildPluginSdkEntrySources(),
-    outDir: "dist/plugin-sdk",
-  }),
-  nodeBuildConfig({
-    // Bundle bundled plugin entrypoints so built gateway startup can load JS
-    // directly from dist/extensions instead of transpiling extensions/*.ts via Jiti.
-    entry: bundledPluginBuildEntries,
-    outDir: "dist",
+    // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
+    // and bundled hooks in one graph so runtime singletons are emitted once.
+    entry: buildUnifiedDistEntries(),
     deps: {
       neverBundle: ["@lancedb/lancedb"],
     },
-  }),
-  nodeBuildConfig({
-    entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
   }),
 ]);
