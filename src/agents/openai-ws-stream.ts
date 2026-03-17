@@ -422,7 +422,9 @@ export function convertMessagesToInputItems(
     const textOutput = contentToText(m.content);
     const imageParts = parts.filter((part) => part.type === "input_image");
     // Skip if callId was skipped in function_call (model switch scenario)
+    // and remove it so later valid calls with same ID are not blocked
     if (skippedCallIds.has(callId)) {
+      skippedCallIds.delete(callId);
       continue;
     }
     items.push({
