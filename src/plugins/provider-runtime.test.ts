@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  expectAugmentedCodexCatalog,
+  expectCodexBuiltInSuppression,
+  expectCodexMissingAuthHint,
+} from "./provider-runtime.test-support.js";
 import type { ProviderPlugin, ProviderRuntimeModel } from "./types.js";
 
 type ResolvePluginProviders = typeof import("./providers.js").resolvePluginProviders;
@@ -433,54 +438,9 @@ describe("provider-runtime", () => {
       }),
     ).toBe(true);
 
-    expect(
-      buildProviderMissingAuthMessageWithPlugin({
-        provider: "openai",
-        env: process.env,
-        context: {
-          env: process.env,
-          provider: "openai",
-          listProfileIds: (providerId) => (providerId === "openai-codex" ? ["p1"] : []),
-        },
-      }),
-    ).toContain("openai-codex/gpt-5.4");
-
-    expect(
-      resolveProviderBuiltInModelSuppression({
-        env: process.env,
-        context: {
-          env: process.env,
-          provider: "azure-openai-responses",
-          modelId: "gpt-5.3-codex-spark",
-        },
-      }),
-    ).toMatchObject({
-      suppress: true,
-      errorMessage: expect.stringContaining("openai-codex/gpt-5.3-codex-spark"),
-    });
-
-    await expect(
-      augmentModelCatalogWithProviderPlugins({
-        env: process.env,
-        context: {
-          env: process.env,
-          entries: [
-            { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-            { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
-            { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
-          ],
-        },
-      }),
-    ).resolves.toEqual([
-      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-      { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
-      {
-        provider: "openai-codex",
-        id: "gpt-5.3-codex-spark",
-        name: "gpt-5.3-codex-spark",
-      },
-    ]);
+    expectCodexMissingAuthHint(buildProviderMissingAuthMessageWithPlugin);
+    expectCodexBuiltInSuppression(resolveProviderBuiltInModelSuppression);
+    await expectAugmentedCodexCatalog(augmentModelCatalogWithProviderPlugins);
 
     expect(prepareDynamicModel).toHaveBeenCalledTimes(1);
     expect(refreshOAuth).toHaveBeenCalledTimes(1);
