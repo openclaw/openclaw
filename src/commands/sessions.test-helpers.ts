@@ -5,22 +5,36 @@ import path from "node:path";
 import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
+const DEFAULT_SESSIONS_CONFIG = {
+  agents: {
+    defaults: {
+      model: { primary: "pi:opus" },
+      models: { "pi:opus": {} },
+      contextTokens: 32000,
+    },
+  },
+};
+
+let sessionsConfig: unknown = DEFAULT_SESSIONS_CONFIG;
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => sessionsConfig,
+  };
+});
+
 export function mockSessionsConfig() {
-  vi.mock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
-    return {
-      ...actual,
-      loadConfig: () => ({
-        agents: {
-          defaults: {
-            model: { primary: "pi:opus" },
-            models: { "pi:opus": {} },
-            contextTokens: 32000,
-          },
-        },
-      }),
-    };
-  });
+  resetMockSessionsConfig();
+}
+
+export function resetMockSessionsConfig() {
+  sessionsConfig = DEFAULT_SESSIONS_CONFIG;
+}
+
+export function setMockSessionsConfig(next: unknown) {
+  sessionsConfig = next;
 }
 
 export function makeRuntime(params?: { throwOnError?: boolean }): {

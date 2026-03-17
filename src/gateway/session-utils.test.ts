@@ -10,6 +10,7 @@ import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
@@ -121,6 +122,33 @@ describe("gateway session utils", () => {
     // Mixed-case main alias must also resolve to the configured mainKey (idempotent)
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:MAIN" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "MAIN" })).toBe("agent:ops:work");
+  });
+
+  test("getSessionDefaults prefers provider-qualified context windows when model ids collide", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: "claude-opus-4-6", contextWindow: 200_000 }],
+          },
+          "custom-synai996-space": {
+            models: [{ id: "claude-opus-4-6", contextWindow: 16_000 }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: { "anthropic/claude-opus-4-6": {} },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(getSessionDefaults(cfg)).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+      contextTokens: 200_000,
+    });
   });
 
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {

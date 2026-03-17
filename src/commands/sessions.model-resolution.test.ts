@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockSessionsConfig, runSessionsJson, writeStore } from "./sessions.test-helpers.js";
+import {
+  mockSessionsConfig,
+  resetMockSessionsConfig,
+  runSessionsJson,
+  setMockSessionsConfig,
+  writeStore,
+} from "./sessions.test-helpers.js";
 
 mockSessionsConfig();
 
@@ -9,6 +15,7 @@ type SessionsJsonPayload = {
   sessions?: Array<{
     key: string;
     model?: string | null;
+    contextTokens?: number | null;
   }>;
 };
 
@@ -39,6 +46,7 @@ describe("sessionsCommand model resolution", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetMockSessionsConfig();
   });
 
   it("prefers runtime model fields for subagent sessions in JSON output", async () => {
@@ -59,5 +67,44 @@ describe("sessionsCommand model resolution", () => {
       "subagent-2",
     );
     expect(model).toBe("gpt-5.3-codex");
+  });
+
+  it("uses provider-qualified context windows in JSON output when model ids collide", async () => {
+    setMockSessionsConfig({
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: "claude-opus-4-6", contextWindow: 200_000 }],
+          },
+          "custom-synai996-space": {
+            models: [{ id: "claude-opus-4-6", contextWindow: 16_000 }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: { "anthropic/claude-opus-4-6": {} },
+        },
+      },
+    });
+
+    const store = writeStore(
+      {
+        "agent:research:subagent:demo": {
+          sessionId: "subagent-3",
+          updatedAt: Date.now() - 2 * 60_000,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+        },
+      },
+      "sessions-context-collision",
+    );
+
+    const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+    const row = payload.sessions?.find((entry) => entry.key === "agent:research:subagent:demo");
+
+    expect(row?.model).toBe("claude-opus-4-6");
+    expect(row?.contextTokens).toBe(200_000);
   });
 });

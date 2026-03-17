@@ -1,4 +1,4 @@
-import { lookupContextTokens } from "../../agents/context.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
@@ -159,11 +159,20 @@ function ensureMemoryFlushSafetyHints(text: string): string {
 }
 
 export function resolveMemoryFlushContextWindowTokens(params: {
+  cfg?: OpenClawConfig;
+  providerId?: string;
   modelId?: string;
   agentCfgContextTokens?: number;
 }): number {
   return (
-    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
+    params.agentCfgContextTokens ??
+    resolveContextTokensForModel({
+      cfg: params.cfg,
+      provider: params.providerId,
+      model: params.modelId,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    }) ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }
 

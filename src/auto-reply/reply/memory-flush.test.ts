@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   DEFAULT_MEMORY_FLUSH_PROMPT,
+  resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushPromptForRun,
   resolveMemoryFlushRelativePathForRun,
 } from "./memory-flush.js";
@@ -60,5 +61,30 @@ describe("DEFAULT_MEMORY_FLUSH_PROMPT", () => {
     // Agents must not create YYYY-MM-DD-HHMM.md variants alongside the canonical file
     expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("timestamped variant");
     expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("YYYY-MM-DD.md");
+  });
+});
+
+describe("resolveMemoryFlushContextWindowTokens", () => {
+  it("prefers provider-qualified context windows when duplicate model ids exist", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: "claude-opus-4-6", contextWindow: 200_000 }],
+          },
+          "custom-synai996-space": {
+            models: [{ id: "claude-opus-4-6", contextWindow: 16_000 }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveMemoryFlushContextWindowTokens({
+      cfg,
+      providerId: "anthropic",
+      modelId: "claude-opus-4-6",
+    });
+
+    expect(result).toBe(200_000);
   });
 });

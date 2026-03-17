@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createModelSelectionState } from "./model-selection.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -262,6 +262,32 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
+  });
+});
+
+describe("resolveContextTokens", () => {
+  it("prefers provider-qualified context windows when duplicate model ids exist", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: "claude-opus-4-6", contextWindow: 200_000 }],
+          },
+          "custom-synai996-space": {
+            models: [{ id: "claude-opus-4-6", contextWindow: 16_000 }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveContextTokens({
+      cfg,
+      agentCfg: undefined,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(result).toBe(200_000);
   });
 });
 
