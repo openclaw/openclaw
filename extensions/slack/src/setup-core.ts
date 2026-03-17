@@ -22,92 +22,12 @@ import {
 } from "../../../src/plugin-sdk-internal/setup.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { listSlackAccountIds, resolveSlackAccount, type ResolvedSlackAccount } from "./accounts.js";
-
-const channel = "slack" as const;
-
-function buildSlackManifest(botName: string) {
-  const safeName = botName.trim() || "OpenClaw";
-  const manifest = {
-    display_information: {
-      name: safeName,
-      description: `${safeName} connector for OpenClaw`,
-    },
-    features: {
-      bot_user: {
-        display_name: safeName,
-        always_online: false,
-      },
-      app_home: {
-        messages_tab_enabled: true,
-        messages_tab_read_only_enabled: false,
-      },
-      slash_commands: [
-        {
-          command: "/openclaw",
-          description: "Send a message to OpenClaw",
-          should_escape: false,
-        },
-      ],
-    },
-    oauth_config: {
-      scopes: {
-        bot: [
-          "chat:write",
-          "channels:history",
-          "channels:read",
-          "groups:history",
-          "im:history",
-          "mpim:history",
-          "users:read",
-          "app_mentions:read",
-          "reactions:read",
-          "reactions:write",
-          "pins:read",
-          "pins:write",
-          "emoji:read",
-          "commands",
-          "files:read",
-          "files:write",
-        ],
-      },
-    },
-    settings: {
-      socket_mode_enabled: true,
-      event_subscriptions: {
-        bot_events: [
-          "app_mention",
-          "message.channels",
-          "message.groups",
-          "message.im",
-          "message.mpim",
-          "reaction_added",
-          "reaction_removed",
-          "member_joined_channel",
-          "member_left_channel",
-          "channel_rename",
-          "pin_added",
-          "pin_removed",
-        ],
-      },
-    },
-  };
-  return JSON.stringify(manifest, null, 2);
-}
-
-function buildSlackSetupLines(botName = "OpenClaw"): string[] {
-  return [
-    "1) Slack API -> Create App -> From scratch or From manifest (with the JSON below)",
-    "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
-    "3) Install App to workspace to get the xoxb- bot token",
-    "4) Enable Event Subscriptions (socket) for message events",
-    "5) App Home -> enable the Messages tab for DMs",
-    "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
-    `Docs: ${formatDocsLink("/slack", "slack")}`,
-    "",
-    "Manifest (JSON):",
-    buildSlackManifest(botName),
-  ];
-}
+import {
+  buildSlackSetupLines,
+  isSlackSetupAccountConfigured,
+  setSlackChannelAllowlist,
+  SLACK_CHANNEL as channel,
+} from "./shared.js";
 
 function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
   return patchChannelConfigForAccount({
@@ -116,28 +36,6 @@ function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawCon
     accountId,
     patch: { enabled: true },
   });
-}
-
-function setSlackChannelAllowlist(
-  cfg: OpenClawConfig,
-  accountId: string,
-  channelKeys: string[],
-): OpenClawConfig {
-  const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
-  return patchChannelConfigForAccount({
-    cfg,
-    channel,
-    accountId,
-    patch: { channels },
-  });
-}
-
-function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
-  const hasConfiguredBotToken =
-    Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
-  const hasConfiguredAppToken =
-    Boolean(account.appToken?.trim()) || hasConfiguredSecretInput(account.config.appToken);
-  return hasConfiguredBotToken && hasConfiguredAppToken;
 }
 
 export const slackSetupAdapter: ChannelSetupAdapter = {
@@ -256,7 +154,7 @@ export function createSlackSetupWizardProxy(
       title: "Slack socket mode tokens",
       lines: buildSlackSetupLines(),
       shouldShow: ({ cfg, accountId }) =>
-        !isSlackAccountConfigured(resolveSlackAccount({ cfg, accountId })),
+        !isSlackSetupAccountConfigured(resolveSlackAccount({ cfg, accountId })),
     },
     envShortcut: {
       prompt: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
@@ -265,7 +163,7 @@ export function createSlackSetupWizardProxy(
         accountId === DEFAULT_ACCOUNT_ID &&
         Boolean(process.env.SLACK_BOT_TOKEN?.trim()) &&
         Boolean(process.env.SLACK_APP_TOKEN?.trim()) &&
-        !isSlackAccountConfigured(resolveSlackAccount({ cfg, accountId })),
+        !isSlackSetupAccountConfigured(resolveSlackAccount({ cfg, accountId })),
       apply: ({ cfg, accountId }) => enableSlackAccount(cfg, accountId),
     },
     credentials: [
