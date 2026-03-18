@@ -148,6 +148,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "thread-ownership",
   "tlon",
   "voice-call",
+  "whatsapp",
   "twitch",
   "zalo",
   "zalouser",
