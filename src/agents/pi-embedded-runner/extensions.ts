@@ -11,6 +11,7 @@ import { computeEffectiveSettings } from "../pi-extensions/context-pruning/setti
 import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import { resolveModel } from "./model.js";
 
 function resolveContextWindowTokens(params: {
   cfg: OpenClawConfig | undefined;
@@ -61,6 +62,33 @@ function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
   return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
+/**
+ * Resolve the model to use for compaction summarization.
+ * When `agents.defaults.compaction.model` is set (e.g. "arouter/fast"),
+ * that model is resolved and used instead of the primary agent model.
+ * Falls back to `fallback` when the override is unset or cannot be resolved.
+ */
+export function resolveCompactionModelOverride(
+  compactionModelStr: string | undefined,
+  cfg: OpenClawConfig | undefined,
+  fallback: Model<Api> | undefined,
+): Model<Api> | undefined {
+  if (!compactionModelStr) {
+    return fallback;
+  }
+  const slash = compactionModelStr.indexOf("/");
+  if (slash <= 0 || slash >= compactionModelStr.length - 1) {
+    return fallback;
+  }
+  const provider = compactionModelStr.slice(0, slash).trim();
+  const modelId = compactionModelStr.slice(slash + 1).trim();
+  if (!provider || !modelId) {
+    return fallback;
+  }
+  const { model } = resolveModel(provider, modelId, undefined, cfg);
+  return model ?? fallback;
+}
+
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -87,7 +115,7 @@ export function buildEmbeddedExtensionFactories(params: {
       customInstructions: compactionCfg?.customInstructions,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? false,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
-      model: params.model,
+      model: resolveCompactionModelOverride(compactionCfg?.model, params.cfg, params.model),
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
     });
     factories.push(compactionSafeguardExtension);
