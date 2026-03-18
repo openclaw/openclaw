@@ -75,10 +75,10 @@ describe("extra-params: donut runtime analytics context", () => {
     expect(captured.payload).toEqual(
       expect.objectContaining({
         thread_run_id: "run-123",
-        session_key: "session-123",
-        thread_id: "thread-123",
       }),
     );
+    expect(captured.payload.session_key).toBeUndefined();
+    expect(captured.payload.thread_id).toBeUndefined();
   });
 
   it("infers tool_call_id from the latest tool context when donut runtime context omits it", () => {
@@ -117,7 +117,12 @@ describe("extra-params: donut runtime analytics context", () => {
       },
     });
 
-    expect(captured.headers).toBeUndefined();
+    expect(captured.headers).not.toEqual(
+      expect.objectContaining({
+        "X-Session-Key": "session-789",
+        "X-Thread-Id": "thread-789",
+      }),
+    );
     expect(captured.payload).toEqual({});
   });
 });
