@@ -121,6 +121,8 @@ const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
 const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 521, 522, 523, 524, 529]);
+const GENERIC_PROVIDER_INTERNAL_ERROR_RE = /an error occurred while processing your request/i;
+const SUPPORT_REQUEST_ID_RE = /(?:request[\s_-]*id)\s*[:#]?\s*([a-z0-9-]{8,})/i;
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -233,6 +235,27 @@ function isLikelyHttpErrorText(raw: string): boolean {
   }
   const message = match[2].toLowerCase();
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
+}
+
+function extractSupportRequestId(raw: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  return raw.match(SUPPORT_REQUEST_ID_RE)?.[1];
+}
+
+function isGenericProviderInternalError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    GENERIC_PROVIDER_INTERNAL_ERROR_RE.test(trimmed) &&
+    (/help\.openai\.com/i.test(trimmed) || SUPPORT_REQUEST_ID_RE.test(trimmed))
+  );
 }
 
 function shouldRewriteContextOverflowText(raw: string): boolean {
@@ -388,6 +411,13 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return "LLM request failed with an unknown error.";
   }
 
+  if (isGenericProviderInternalError(trimmed)) {
+    const requestId = extractSupportRequestId(trimmed);
+    return requestId
+      ? `The AI service returned an internal error. Please try again in a moment. (request_id: ${requestId})`
+      : "The AI service returned an internal error. Please try again in a moment.";
+  }
+
   const leadingStatus = extractLeadingHttpStatus(trimmed);
   if (leadingStatus && isCloudflareOrHtmlErrorPage(trimmed)) {
     return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
@@ -476,6 +506,10 @@ export function formatAssistantErrorText(
     return transientCopy;
   }
 
+  if (isGenericProviderInternalError(raw)) {
+    return formatRawAssistantErrorForUi(raw);
+  }
+
   if (isTimeoutErrorMessage(raw)) {
     return "LLM request timed out.";
   }
@@ -525,6 +559,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isGenericProviderInternalError(trimmed)) {
+      return formatRawAssistantErrorForUi(trimmed);
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
@@ -805,6 +843,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "timeout";
   }
   if (isJsonApiInternalServerError(raw)) {
+    return "timeout";
+  }
+  if (isGenericProviderInternalError(raw)) {
     return "timeout";
   }
   if (isRateLimitErrorMessage(raw)) {

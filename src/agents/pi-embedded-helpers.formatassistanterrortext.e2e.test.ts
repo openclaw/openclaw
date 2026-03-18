@@ -102,6 +102,15 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  it("rewrites generic provider internal errors with support request ids", () => {
+    const msg = makeAssistantError(
+      "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 7a3da80b-ed7d-4a91-a33a-a6e0328fc2bc in your message.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service returned an internal error. Please try again in a moment. (request_id: 7a3da80b-ed7d-4a91-a33a-a6e0328fc2bc)",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -135,6 +144,16 @@ describe("formatRawAssistantErrorForUi", () => {
 
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
+    );
+  });
+
+  it("formats plain provider internal errors with request ids", () => {
+    expect(
+      formatRawAssistantErrorForUi(
+        "An error occurred while processing your request. Please include the request ID 7a3da80b-ed7d-4a91-a33a-a6e0328fc2bc in your message.",
+      ),
+    ).toBe(
+      "The AI service returned an internal error. Please try again in a moment. (request_id: 7a3da80b-ed7d-4a91-a33a-a6e0328fc2bc)",
     );
   });
 });

@@ -384,4 +384,12 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+
+  it("classifies generic provider internal errors as timeout for failover", () => {
+    expect(
+      classifyFailoverReason(
+        "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 7a3da80b-ed7d-4a91-a33a-a6e0328fc2bc in your message.",
+      ),
+    ).toBe("timeout");
+  });
 });
