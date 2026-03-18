@@ -14,6 +14,7 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -240,28 +241,7 @@ const constrainLegacyPromptInjectionHook = (
   };
 };
 
-export function createEmptyPluginRegistry(): PluginRegistry {
-  return {
-    plugins: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    speechProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    webSearchProviders: [],
-    gatewayHandlers: {},
-    httpRoutes: [],
-    cliRegistrars: [],
-    services: [],
-    commands: [],
-    conversationBindingResolvedHandlers: [],
-    diagnostics: [],
-  };
-}
+export { createEmptyPluginRegistry } from "./registry-empty.js";
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
