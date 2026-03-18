@@ -69,10 +69,6 @@ function resolveExaApiKey(
   const exaConfig = resolveExaConfig(config, searchConfig);
   return (
     readConfiguredSecretString(exaConfig.apiKey, "plugins.entries.exa.config.webSearch.apiKey") ??
-    readConfiguredSecretString(
-      (searchConfig as Record<string, unknown> | undefined)?.apiKey,
-      "tools.web.search.apiKey",
-    ) ??
     readProviderEnvValue(["EXA_API_KEY"])
   );
 }

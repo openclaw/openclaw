@@ -12,6 +12,7 @@ const GENERIC_WEB_SEARCH_KEYS = new Set([
 
 const LEGACY_PROVIDER_MAP = {
   brave: "brave",
+  exa: "exa",
   firecrawl: "firecrawl",
   gemini: "google",
   grok: "xai",
@@ -122,7 +123,7 @@ export function normalizeLegacyWebSearchConfig<T>(raw: T): T {
     setPluginWebSearchConfig(nextRoot, LEGACY_PROVIDER_MAP.brave, braveConfig);
   }
 
-  for (const providerId of ["firecrawl", "gemini", "grok", "kimi", "perplexity"] as const) {
+  for (const providerId of ["exa", "firecrawl", "gemini", "grok", "kimi", "perplexity"] as const) {
     const scoped = copyLegacyProviderConfig(search, providerId);
     if (!scoped || Object.keys(scoped).length === 0) {
       continue;
