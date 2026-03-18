@@ -71,10 +71,43 @@ export function getShellConfig(): { shell: string; args: string[] } {
 
       // PowerShell needs -NoProfile -NonInteractive to suppress profile
       // banners and prompt hooks that leak into stdout or hang exec.
-      // For bare name overrides, use the full discovery chain (Program Files,
-      // ProgramW6432, SystemRoot, PATH) instead of PATH-only lookup.
       if (name === "pwsh" || name === "powershell") {
-        const psShell = path.isAbsolute(shellPath) ? shellPath : resolvePowerShellPath();
+        let psShell = shellPath;
+        if (!path.isAbsolute(psShell)) {
+          // PATH lookup failed — probe standard install locations for the
+          // *requested* flavor only. pwsh (7) and powershell (5.1) are not
+          // interchangeable (5.1 lacks && support), so never cross-resolve.
+          if (name === "pwsh") {
+            const programFiles =
+              process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
+            const candidates = [
+              path.join(programFiles, "PowerShell", "7", "pwsh.exe"),
+              ...(process.env.ProgramW6432 && process.env.ProgramW6432 !== programFiles
+                ? [path.join(process.env.ProgramW6432, "PowerShell", "7", "pwsh.exe")]
+                : []),
+            ];
+            for (const c of candidates) {
+              if (fs.existsSync(c)) {
+                psShell = c;
+                break;
+              }
+            }
+          } else {
+            const systemRoot = process.env.SystemRoot || process.env.WINDIR;
+            if (systemRoot) {
+              const ps51 = path.join(
+                systemRoot,
+                "System32",
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe",
+              );
+              if (fs.existsSync(ps51)) {
+                psShell = ps51;
+              }
+            }
+          }
+        }
         return { shell: psShell, args: ["-NoProfile", "-NonInteractive", "-Command"] };
       }
 
