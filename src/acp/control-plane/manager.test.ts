@@ -432,7 +432,7 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
   });
 
-  it("passes persisted ACP identity back into ensureSession for configured bindings after restart", async () => {
+  it("passes persisted ACP backend session identity back into ensureSession for configured bindings after restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -451,7 +451,6 @@ describe("AcpSessionManager", () => {
             state: "resolved",
             source: "status",
             acpxSessionId: "acpx-sid-1",
-            agentSessionId: "agent-sid-1",
             lastUpdatedAt: Date.now(),
           },
         },
@@ -471,7 +470,7 @@ describe("AcpSessionManager", () => {
       expect.objectContaining({
         sessionKey,
         agent: "codex",
-        resumeSessionId: "agent-sid-1",
+        resumeSessionId: "acpx-sid-1",
       }),
     );
   });

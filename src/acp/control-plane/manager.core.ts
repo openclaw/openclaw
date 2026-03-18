@@ -12,6 +12,7 @@ import {
   identityEquals,
   isSessionIdentityPending,
   mergeSessionIdentity,
+  resolveRuntimeResumeSessionId,
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
 } from "../runtime/session-identity.js";
@@ -972,20 +973,22 @@ export class AcpSessionManager {
 
     const backend = this.deps.requireRuntimeBackend(configuredBackend || undefined);
     const runtime = backend.runtime;
+    const previousMeta = params.meta;
+    const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
+    const resumeSessionId = resolveRuntimeResumeSessionId(previousIdentity);
     const ensured = await withAcpRuntimeErrorBoundary({
       run: async () =>
         await runtime.ensureSession({
           sessionKey: params.sessionKey,
           agent,
           mode,
+          ...(resumeSessionId ? { resumeSessionId } : {}),
           cwd,
         }),
       fallbackCode: "ACP_SESSION_INIT_FAILED",
       fallbackMessage: "Could not initialize ACP session runtime.",
     });
 
-    const previousMeta = params.meta;
-    const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
     const now = Date.now();
     const effectiveCwd = normalizeText(ensured.cwd) ?? cwd;
     const nextRuntimeOptions = normalizeRuntimeOptions({
