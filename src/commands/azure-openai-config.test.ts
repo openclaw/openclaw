@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   AZURE_OPENAI_DEFAULT_API_VERSION,
   applyAzureOpenAIConfig,
+  isAzureOpenAIModernModelRef,
   normalizeAzureOpenAIBaseUrl,
   normalizeAzureOpenAIApiVersion,
   normalizeAzureOpenAIModelId,
+  supportsAzureOpenAIXHighThinking,
 } from "./azure-openai-config.js";
 
 describe("azure-openai-config", () => {
@@ -74,5 +76,44 @@ describe("azure-openai-config", () => {
       },
     );
     expect(cfg.agents?.defaults?.models?.["azure-openai-responses/gpt-4.1"]?.params).toEqual({});
+  });
+
+  it("assigns GPT-5.4 class token limits to Azure model definitions", () => {
+    const cfg = applyAzureOpenAIConfig(
+      {},
+      {
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+        modelId: "gpt-5.4",
+      },
+    );
+    const model = cfg.models?.providers?.["azure-openai-responses"]?.models?.find(
+      (entry) => entry.id === "gpt-5.4",
+    );
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
+  });
+
+  it("keeps baseline token limits for non GPT-5.4 Azure models", () => {
+    const cfg = applyAzureOpenAIConfig(
+      {},
+      {
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+        modelId: "gpt-4.1",
+      },
+    );
+    const model = cfg.models?.providers?.["azure-openai-responses"]?.models?.find(
+      (entry) => entry.id === "gpt-4.1",
+    );
+    expect(model?.contextWindow).toBe(200000);
+    expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("marks Azure GPT-5.4 class models as xhigh + modern", () => {
+    expect(supportsAzureOpenAIXHighThinking("gpt-5.4")).toBe(true);
+    expect(supportsAzureOpenAIXHighThinking("gpt-5.4-pro")).toBe(true);
+    expect(supportsAzureOpenAIXHighThinking("gpt-4.1")).toBe(false);
+    expect(isAzureOpenAIModernModelRef("gpt-5.4")).toBe(true);
+    expect(isAzureOpenAIModernModelRef("gpt-5.4-pro")).toBe(true);
+    expect(isAzureOpenAIModernModelRef("gpt-4.1")).toBe(false);
   });
 });

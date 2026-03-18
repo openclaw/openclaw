@@ -73,6 +73,7 @@ describe("listThinkingLevels", () => {
   it("includes xhigh for provider-advertised models", () => {
     providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       (provider === "openai" && ["gpt-5.2", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
+      (provider === "azure-openai-responses" && ["gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
       (provider === "openai-codex" &&
         ["gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"].includes(
           context.modelId,
@@ -88,6 +89,8 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevels("openai", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
+    expect(listThinkingLevels("azure-openai-responses", "gpt-5.4")).toContain("xhigh");
+    expect(listThinkingLevels("azure-openai-responses", "gpt-5.4-pro")).toContain("xhigh");
     expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("github-copilot", "gpt-5.2")).toContain("xhigh");
     expect(listThinkingLevels("github-copilot", "gpt-5.2-codex")).toContain("xhigh");
@@ -95,6 +98,7 @@ describe("listThinkingLevels", () => {
 
   it("excludes xhigh for non-codex models", () => {
     expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
+    expect(listThinkingLevels("azure-openai-responses", "gpt-4.1")).not.toContain("xhigh");
   });
 
   it("always includes adaptive", () => {

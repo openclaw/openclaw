@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   augmentBundledProviderCatalog,
   resolveBundledProviderBuiltInModelSuppression,
+  resolveBundledProviderModernModelRef,
+  resolveBundledProviderXHighThinking,
 } from "./provider-catalog-metadata.js";
 import {
   resolveNonBundledProviderPluginIds,
@@ -327,6 +329,10 @@ export function resolveProviderXHighThinking(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderThinkingPolicyContext;
 }) {
+  const bundledResult = resolveBundledProviderXHighThinking(params.context);
+  if (typeof bundledResult === "boolean") {
+    return bundledResult;
+  }
   return resolveProviderRuntimePlugin(params)?.supportsXHighThinking?.(params.context);
 }
 
@@ -347,6 +353,10 @@ export function resolveProviderModernModelRef(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderModernModelPolicyContext;
 }) {
+  const bundledResult = resolveBundledProviderModernModelRef(params.context);
+  if (typeof bundledResult === "boolean") {
+    return bundledResult;
+  }
   return resolveProviderRuntimePlugin(params)?.isModernModelRef?.(params.context);
 }
 

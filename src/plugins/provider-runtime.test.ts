@@ -451,6 +451,46 @@ describe("provider-runtime", () => {
 
   it("resolves bundled catalog hooks without loading provider plugins", async () => {
     expect(
+      resolveProviderXHighThinking({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          modelId: "gpt-5.4",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderXHighThinking({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          modelId: "gpt-4.1",
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      resolveProviderModernModelRef({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          modelId: "gpt-5.4-pro",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveProviderModernModelRef({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          modelId: "gpt-4.1",
+        },
+      }),
+    ).toBe(false);
+
+    expect(
       resolveProviderBuiltInModelSuppression({
         env: process.env,
         context: {

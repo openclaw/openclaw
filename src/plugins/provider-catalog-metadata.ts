@@ -7,8 +7,19 @@ import type {
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const AZURE_OPENAI_PROVIDER_ID = "azure-openai-responses";
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
+const AZURE_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.4-pro"] as const;
+const AZURE_MODERN_MODEL_IDS = ["gpt-5.4", "gpt-5.4-pro"] as const;
+
+function matchesExactOrPrefix(modelId: string, candidates: readonly string[]): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return candidates.some((candidate) => {
+    const key = candidate.toLowerCase();
+    return normalized === key || normalized.startsWith(`${key}-`);
+  });
+}
 
 export function resolveBundledProviderBuiltInModelSuppression(
   context: ProviderBuiltInModelSuppressionContext,
@@ -23,6 +34,26 @@ export function resolveBundledProviderBuiltInModelSuppression(
     suppress: true,
     errorMessage: `Unknown model: ${context.provider}/${OPENAI_DIRECT_SPARK_MODEL_ID}. ${OPENAI_DIRECT_SPARK_MODEL_ID} is only supported via openai-codex OAuth. Use openai-codex/${OPENAI_DIRECT_SPARK_MODEL_ID}.`,
   };
+}
+
+export function resolveBundledProviderXHighThinking(context: {
+  provider: string;
+  modelId: string;
+}): boolean | undefined {
+  if (normalizeProviderId(context.provider) !== AZURE_OPENAI_PROVIDER_ID) {
+    return undefined;
+  }
+  return matchesExactOrPrefix(context.modelId, AZURE_XHIGH_MODEL_IDS);
+}
+
+export function resolveBundledProviderModernModelRef(context: {
+  provider: string;
+  modelId: string;
+}): boolean | undefined {
+  if (normalizeProviderId(context.provider) !== AZURE_OPENAI_PROVIDER_ID) {
+    return undefined;
+  }
+  return matchesExactOrPrefix(context.modelId, AZURE_MODERN_MODEL_IDS);
 }
 
 export function augmentBundledProviderCatalog(

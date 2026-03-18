@@ -9,6 +9,25 @@ export const AZURE_OPENAI_PROVIDER_ID = "azure-openai-responses";
 export const AZURE_OPENAI_DEFAULT_MODEL_ID = "gpt-4.1";
 export const AZURE_OPENAI_DEFAULT_MODEL_REF = `${AZURE_OPENAI_PROVIDER_ID}/${AZURE_OPENAI_DEFAULT_MODEL_ID}`;
 export const AZURE_OPENAI_DEFAULT_API_VERSION = "v1";
+const AZURE_GPT_54_CONTEXT_TOKENS = 1_050_000;
+const AZURE_GPT_54_MAX_TOKENS = 128_000;
+
+function normalizeAzureModelIdForPolicy(modelId: string): string {
+  return modelId.trim().toLowerCase();
+}
+
+function isAzureGpt54ClassModel(modelId: string): boolean {
+  const normalized = normalizeAzureModelIdForPolicy(modelId);
+  return normalized === "gpt-5.4" || normalized === "gpt-5.4-pro";
+}
+
+export function supportsAzureOpenAIXHighThinking(modelId: string): boolean {
+  return isAzureGpt54ClassModel(modelId);
+}
+
+export function isAzureOpenAIModernModelRef(modelId: string): boolean {
+  return isAzureGpt54ClassModel(modelId);
+}
 
 function isAzureHost(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase();
@@ -64,14 +83,15 @@ export function normalizeAzureOpenAIBaseUrl(value: string): string {
 }
 
 function buildAzureModelDefinition(modelId: string): ModelDefinitionConfig {
+  const isGpt54Class = isAzureGpt54ClassModel(modelId);
   return {
     id: modelId,
     name: `Azure OpenAI ${modelId}`,
     reasoning: false,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
-    maxTokens: 8192,
+    contextWindow: isGpt54Class ? AZURE_GPT_54_CONTEXT_TOKENS : 200000,
+    maxTokens: isGpt54Class ? AZURE_GPT_54_MAX_TOKENS : 8192,
     compat: { supportsStore: false },
   };
 }
