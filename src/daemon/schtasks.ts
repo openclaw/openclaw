@@ -219,6 +219,30 @@ async function assertSchtasksAvailable() {
   throw new Error(`schtasks unavailable: ${detail || "unknown error"}`.trim());
 }
 
+// Validate that required dist files exist before installation
+async function validateDistFilesExist(programArguments: string[]): Promise<void> {
+  const nodeArg = programArguments.find((arg) => arg.includes("node.exe") || arg === "node");
+  if (!nodeArg) return;
+  
+  const scriptArg = programArguments.find((arg) => arg.endsWith(".js") || arg.endsWith(".mjs"));
+  if (!scriptArg) return;
+  
+  // Check if it's a relative path that needs dist check
+  if (path.isAbsolute(scriptArg)) {
+    const distDir = path.dirname(scriptArg);
+    try {
+      await fs.access(distDir);
+    } catch {
+      const hint = process.platform === "win32"
+        ? "\n\nHint: The dist directory appears to be missing. Try running 'openclaw update' or 'pnpm build' to rebuild."
+        : "";
+      throw new Error(
+        `Cannot install scheduled task: directory not found: ${distDir}${hint}`
+      );
+    }
+  }
+}
+
 export async function installScheduledTask({
   env,
   stdout,
@@ -228,6 +252,12 @@ export async function installScheduledTask({
   description,
 }: GatewayServiceInstallArgs): Promise<{ scriptPath: string }> {
   await assertSchtasksAvailable();
+  
+  // Validate dist files exist on Windows to prevent ESM loader errors
+  if (process.platform === "win32") {
+    await validateDistFilesExist(programArguments);
+  }
+  
   const scriptPath = resolveTaskScriptPath(env);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
