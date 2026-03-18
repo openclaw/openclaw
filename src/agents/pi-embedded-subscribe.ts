@@ -19,7 +19,7 @@ import type {
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
-import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
+import { normalizeUsage, type UsageLike } from "./usage.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
