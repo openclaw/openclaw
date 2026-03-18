@@ -110,11 +110,17 @@ function createLazy<T>(loader: () => Promise<T>): () => T | null {
       return s.mod;
     }
     if (!s.promise) {
-      s.promise = loader().then((m) => {
-        s.mod = m;
-        _pendingUpdate?.();
-        return m;
-      });
+      s.promise = loader()
+        .then((m) => {
+          s.mod = m;
+          _pendingUpdate?.();
+          return m;
+        })
+        .catch((err) => {
+          console.error("Failed to load lazy module:", err);
+          s.promise = null; // allow retry
+          return null as unknown as T;
+        });
     }
     return null;
   };
