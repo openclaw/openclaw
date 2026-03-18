@@ -1027,6 +1027,7 @@
                   "tools/agent-send",
                   "tools/subagents",
                   "tools/acp-agents",
+                  "tools/agentfield",
                   "tools/multi-agent-sandbox-tools"
                 ]
               },
