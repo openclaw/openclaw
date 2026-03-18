@@ -137,7 +137,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const rawReason = result.reason?.trim();
   const isCancellation =
     rawReason?.toLowerCase() === "compaction cancelled" ||
-    rawReason?.toLowerCase() === "compaction canceled";
+    rawReason?.toLowerCase() === "compaction canceled" ||
+    rawReason?.toLowerCase() === "no real conversation messages";
   // Treat SDK cancellations (e.g. safeguard deciding context is too low) as
   // skips rather than failures — the system worked as intended.
   const compactLabel = result.ok
