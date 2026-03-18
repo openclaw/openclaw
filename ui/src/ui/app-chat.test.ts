@@ -73,7 +73,7 @@ describe("handleSendChat", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps bare slash-command model changes raw in the chat header cache", async () => {
+  it("caches uniquely resolved slash-command model changes as qualified refs", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -124,8 +124,8 @@ describe("handleSendChat", () => {
       model: "gpt-5-mini",
     });
     expect(host.chatModelOverrides.main).toEqual({
-      kind: "raw",
-      value: "gpt-5-mini",
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
     });
   });
 });
