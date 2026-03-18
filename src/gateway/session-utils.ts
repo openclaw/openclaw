@@ -835,9 +835,9 @@ export function resolveSessionModelIdentityRef(
       if (parsedRuntime) {
         return { provider: parsedRuntime.provider, model: parsedRuntime.model };
       }
-      return { model: runtimeModel };
     }
-    return { model: runtimeModel };
+    // Provider inference failed; fall through to resolveSessionModelRef which
+    // has override fields and defaults and always returns a provider.
   }
   const resolved = resolveSessionModelRef(cfg, entry, agentId);
   return { provider: resolved.provider, model: resolved.model };
