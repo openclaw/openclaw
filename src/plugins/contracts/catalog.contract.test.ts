@@ -4,17 +4,16 @@ import {
   expectCodexBuiltInSuppression,
   expectCodexMissingAuthHint,
 } from "../provider-runtime.test-support.js";
-import {
-  resolveProviderContractPluginIdsForProvider,
-  resolveProviderContractProvidersForPluginIds,
-  uniqueProviderContractProviders,
-} from "./registry.js";
 
 type ResolvePluginProviders = typeof import("../providers.js").resolvePluginProviders;
 type ResolveOwningPluginIdsForProvider =
   typeof import("../providers.js").resolveOwningPluginIdsForProvider;
 type ResolveNonBundledProviderPluginIds =
   typeof import("../providers.js").resolveNonBundledProviderPluginIds;
+
+let resolveProviderContractPluginIdsForProvider: typeof import("./registry.js").resolveProviderContractPluginIdsForProvider;
+let resolveProviderContractProvidersForPluginIds: typeof import("./registry.js").resolveProviderContractProvidersForPluginIds;
+let uniqueProviderContractProviders: typeof import("./registry.js").uniqueProviderContractProviders;
 
 const resolvePluginProvidersMock = vi.hoisted(() =>
   vi.fn<ResolvePluginProviders>((_) => uniqueProviderContractProviders),
@@ -44,6 +43,11 @@ let resolveProviderBuiltInModelSuppression: typeof import("../provider-runtime.j
 describe("provider catalog contract", () => {
   beforeEach(async () => {
     vi.resetModules();
+    ({
+      resolveProviderContractPluginIdsForProvider,
+      resolveProviderContractProvidersForPluginIds,
+      uniqueProviderContractProviders,
+    } = await import("./registry.js"));
     ({
       augmentModelCatalogWithProviderPlugins,
       buildProviderMissingAuthMessageWithPlugin,

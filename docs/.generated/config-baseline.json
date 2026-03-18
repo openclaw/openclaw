@@ -23201,6 +23201,56 @@
       "hasChildren": false
     },
     {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry.initialDelayMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry.maxDelayMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry.maxRetries",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.accounts.*.dmChannelRetry.timeoutMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.mattermost.accounts.*.dmPolicy",
       "kind": "channel",
       "type": "string",
@@ -23703,6 +23753,56 @@
       "path": "channels.mattermost.defaultAccount",
       "kind": "channel",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry.initialDelayMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry.maxDelayMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry.maxRetries",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.dmChannelRetry.timeoutMs",
+      "kind": "channel",
+      "type": "integer",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -37601,12 +37701,13 @@
       "path": "channels.zalouser.accounts.*.groupPolicy",
       "kind": "channel",
       "type": "string",
-      "required": false,
+      "required": true,
       "enumValues": [
         "open",
         "disabled",
         "allowlist"
       ],
+      "defaultValue": "allowlist",
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -37903,12 +38004,13 @@
       "path": "channels.zalouser.groupPolicy",
       "kind": "channel",
       "type": "string",
-      "required": false,
+      "required": true,
       "enumValues": [
         "open",
         "disabled",
         "allowlist"
       ],
+      "defaultValue": "allowlist",
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -39699,7 +39801,7 @@
         "network"
       ],
       "label": "Control UI Allowed Origins",
-      "help": "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled.",
+      "help": "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting [\"*\"] means allow any browser origin and should be avoided outside tightly controlled local testing.",
       "hasChildren": true
     },
     {
@@ -41038,7 +41140,7 @@
         "access"
       ],
       "label": "Hooks Allowed Agent IDs",
-      "help": "Allowlist of agent IDs that hook mappings are allowed to target when selecting execution agents. Use this to constrain automation events to dedicated service agents.",
+      "help": "Allowlist of agent IDs that hook mappings are allowed to target when selecting execution agents. Use this to constrain automation events to dedicated service agents and reduce blast radius if a hook token is exposed.",
       "hasChildren": true
     },
     {
@@ -42156,7 +42258,7 @@
         "security"
       ],
       "label": "Hooks Auth Token",
-      "help": "Shared bearer token checked by hooks ingress for request authentication before mappings run. Use environment substitution and rotate regularly when webhook endpoints are internet-accessible.",
+      "help": "Shared bearer token checked by hooks ingress for request authentication before mappings run. Treat holders as full-trust callers for the hook ingress surface, not as a separate non-owner role. Use environment substitution and rotate regularly when webhook endpoints are internet-accessible.",
       "hasChildren": false
     },
     {
@@ -46257,6 +46359,127 @@
     },
     {
       "path": "plugins.entries.byteplus.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/chutes-provider",
+      "help": "OpenClaw Chutes.ai provider plugin (plugin: chutes)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.chutes.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/chutes-provider Config",
+      "help": "Plugin-defined config payload for chutes.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/chutes-provider",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.chutes.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.chutes.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.chutes.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.chutes.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,
