@@ -8,4 +8,4 @@ FILE="$2"
 MODEL="${3:-fal-ai/veo3.1/fast/image-to-video}"
 DURATION="${4:-5s}"
 
-blink animate "$PROMPT" "$FILE" --model "$MODEL" --duration "$DURATION" --json
+blink ai animate "$PROMPT" "$FILE" --model "$MODEL" --duration "$DURATION" --json

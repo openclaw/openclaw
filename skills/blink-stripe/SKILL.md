@@ -1,0 +1,60 @@
+---
+name: blink-stripe
+description: >
+  Access Stripe Connect data: customers, subscriptions, invoices, charges, and
+  payouts. Use when asked to check revenue, look up customers, or manage billing.
+  Requires a linked Stripe connection.
+metadata:
+  { "blink": { "requires_env": ["BLINK_API_KEY", "BLINK_AGENT_ID"], "connector": "stripe" } }
+---
+
+# Blink Stripe
+
+Access the user's linked Stripe account. Provider key: `stripe`.
+
+## Get account balance
+```bash
+bash scripts/call.sh stripe /balance GET
+```
+
+## List customers
+```bash
+bash scripts/call.sh stripe /customers GET '{"limit":20}'
+```
+
+## Get a specific customer
+```bash
+bash scripts/call.sh stripe /customers/{id} GET
+```
+
+## List recent charges
+```bash
+bash scripts/call.sh stripe /charges GET '{"limit":10}'
+```
+
+## List subscriptions
+```bash
+bash scripts/call.sh stripe /subscriptions GET '{"status":"active","limit":20}'
+```
+
+## Get a subscription
+```bash
+bash scripts/call.sh stripe /subscriptions/{id} GET
+```
+
+## List invoices
+```bash
+bash scripts/call.sh stripe /invoices GET '{"limit":10}'
+```
+
+## List payouts
+```bash
+bash scripts/call.sh stripe /payouts GET '{"limit":10}'
+```
+
+## Common use cases
+- "What's my current Stripe balance?" → GET /balance
+- "Find customer john@example.com" → GET /customers?email=john@example.com
+- "Show recent payments" → GET /charges
+- "List all active subscriptions" → GET /subscriptions?status=active
+- "Check MRR or revenue data" → GET /charges with date filters

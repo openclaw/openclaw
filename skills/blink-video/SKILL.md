@@ -54,20 +54,20 @@ When a user sends you a photo attachment, OpenClaw saves it to disk. Use `animat
 ```bash
 bash scripts/animate-file.sh \
   "Add gentle motion, camera slowly panning right" \
-  "/data/agents/default/agent/photo.jpg"
+  "/data/agents/main/agent/photo.jpg"
 ```
 
 ## Animate a local file with specific model and duration
 ```bash
 bash scripts/animate-file.sh \
   "Dramatic cinematic movement, slow zoom in" \
-  "/data/agents/default/agent/photo.jpg" \
+  "/data/agents/main/agent/photo.jpg" \
   "fal-ai/veo3.1/image-to-video" "8s" "16:9"
 ```
 
 ## Find where OpenClaw saved an attachment
 ```bash
-ls -lt /data/agents/default/agent/ | head -10
+ls -lt /data/agents/main/agent/ | head -10
 ```
 
 ## Generate without audio
