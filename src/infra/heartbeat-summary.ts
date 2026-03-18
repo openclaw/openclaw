@@ -31,13 +31,31 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const list = cfg.agents?.list ?? [];
+  const defaults = cfg.agents?.defaults?.heartbeat;
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+
+  // When some agents have explicit heartbeat config, use opt-in model
+  // (only agents with explicit heartbeat are enabled)
   if (hasExplicit) {
     return list.some(
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
   }
-  return resolvedAgentId === resolveDefaultAgentId(cfg);
+
+  // When defaults.heartbeat is configured and no agent has explicit heartbeat,
+  // all configured agents (or default agent if no list) inherit heartbeat enablement
+  if (defaults) {
+    // If no explicit agent list, enable for default agent
+    if (list.length === 0) {
+      return resolvedAgentId === defaultAgentId;
+    }
+    // If agent list exists, enable for all listed agents
+    return list.some((entry) => normalizeAgentId(entry?.id) === resolvedAgentId);
+  }
+
+  // No defaults, no explicit heartbeat -> only default agent is enabled
+  return resolvedAgentId === defaultAgentId;
 }
 
 export function resolveHeartbeatIntervalMs(
