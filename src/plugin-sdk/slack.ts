@@ -80,4 +80,4 @@ export {
 export { recordSlackThreadParticipation } from "../../extensions/slack/api.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
 export { createSlackActions } from "../channels/plugins/slack.actions.js";
-export type { SlackActionContext } from "../agents/tools/slack-actions.js";
+export type { SlackActionContext } from "../../extensions/slack/runtime-api.js";
