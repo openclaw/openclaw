@@ -49,7 +49,7 @@ export class KeyedAsyncQueue {
 
   async waitForIdle(): Promise<void> {
     while (this.tails.size > 0) {
-      await Promise.allSettled([...this.tails.values()]);
+      await Promise.allSettled(this.tails.values());
     }
   }
 }
