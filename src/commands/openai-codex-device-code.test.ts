@@ -52,7 +52,7 @@ describe("loginOpenAICodexDeviceCode", () => {
     vi.clearAllMocks();
   });
 
-  it("runs codex login with mirrored output and imports the resulting credentials", async () => {
+  it("runs codex login --device-auth with mirrored output and imports the resulting credentials", async () => {
     const accessToken = buildJwt({
       "https://api.openai.com/profile.email": "user@example.com",
     });
@@ -76,7 +76,7 @@ describe("loginOpenAICodexDeviceCode", () => {
 
     const result = await loginOpenAICodexDeviceCode();
 
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(["codex", "login"], {
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(["codex", "login", "--device-auth"], {
       timeoutMs: 600_000,
       env: { NODE_OPTIONS: "", OPENAI_API_KEY: undefined },
       mirrorStdout: true,
@@ -98,7 +98,7 @@ describe("loginOpenAICodexDeviceCode", () => {
     );
   });
 
-  it("fails when codex login exits non-zero", async () => {
+  it("fails when codex device-auth login exits non-zero", async () => {
     mocks.detectBinary.mockResolvedValue(true);
     mocks.runCommandWithTimeout.mockResolvedValue({
       stdout: "",
@@ -109,6 +109,8 @@ describe("loginOpenAICodexDeviceCode", () => {
       termination: "exit",
     });
 
-    await expect(loginOpenAICodexDeviceCode()).rejects.toThrow("Codex CLI login failed (exit 1).");
+    await expect(loginOpenAICodexDeviceCode()).rejects.toThrow(
+      "Codex CLI device-auth login failed (exit 1).",
+    );
   });
 });

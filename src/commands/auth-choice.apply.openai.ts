@@ -114,14 +114,14 @@ export async function applyAuthChoiceOpenAI(
     if (isOpenAICodexCliChoice) {
       await params.prompter.note(
         [
-          "Starting Codex CLI login.",
-          "Complete the Codex CLI sign-in flow shown in this terminal.",
+          "Starting Codex CLI device-auth login.",
+          "Complete the device-auth flow shown in this terminal.",
         ].join("\n"),
         "OpenAI Codex CLI",
       );
       creds = await loginOpenAICodexDeviceCode();
       if (!creds) {
-        throw new Error("Codex CLI login did not return credentials.");
+        throw new Error("Codex CLI device-auth login did not return credentials.");
       }
     } else {
       try {

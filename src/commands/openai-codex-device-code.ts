@@ -41,9 +41,9 @@ export async function loginOpenAICodexDeviceCode(): Promise<OAuthCredentials> {
     throw new Error("Codex CLI not found. Install with: npm install -g @openai/codex");
   }
 
-  const result = await runCommandWithTimeout(["codex", "login"], {
+  const result = await runCommandWithTimeout(["codex", "login", "--device-auth"], {
     timeoutMs: CODEX_LOGIN_TIMEOUT_MS,
-    // Prevent ambient API-key auth from short-circuiting the Codex CLI login flow.
+    // Prevent ambient API-key auth from short-circuiting the device-auth flow.
     env: { NODE_OPTIONS: "", OPENAI_API_KEY: undefined },
     mirrorStdout: true,
     mirrorStderr: true,
@@ -53,7 +53,7 @@ export async function loginOpenAICodexDeviceCode(): Promise<OAuthCredentials> {
     const details = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
     throw new Error(
       [
-        `Codex CLI login failed (exit ${String(result.code)}).`,
+        `Codex CLI device-auth login failed (exit ${String(result.code)}).`,
         details ? `Output:\n${details}` : "No output captured.",
       ].join("\n"),
     );
@@ -62,7 +62,7 @@ export async function loginOpenAICodexDeviceCode(): Promise<OAuthCredentials> {
   const creds = readCodexCliCredentials();
   if (!creds) {
     throw new Error(
-      "Codex CLI login completed, but credentials were not found in ~/.codex/auth.json or keychain.",
+      "Codex CLI device-auth login completed, but credentials were not found in ~/.codex/auth.json or keychain.",
     );
   }
 

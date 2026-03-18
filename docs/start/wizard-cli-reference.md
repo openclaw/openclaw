@@ -138,7 +138,7 @@ What you set:
     You can name it; blank uses default.
   </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI login)">
-    Runs `codex login`, then imports the resulting credentials into OpenClaw.
+    Runs `codex login --device-auth`, then imports the resulting credentials into OpenClaw.
   </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.

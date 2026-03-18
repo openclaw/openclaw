@@ -236,7 +236,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(
       modelsAuthLoginCommand({ provider: "openai-codex", method: "cli" }, runtime),
-    ).rejects.toThrow("Codex CLI login did not return credentials.");
+    ).rejects.toThrow("Codex CLI device-auth login did not return credentials.");
   });
 
   it("rejects unknown built-in openai-codex auth methods", async () => {

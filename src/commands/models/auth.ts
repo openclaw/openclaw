@@ -331,8 +331,8 @@ async function runBuiltInOpenAICodexLogin(params: {
       ? await (async () => {
           await params.prompter.note(
             [
-              "Starting Codex CLI login.",
-              "Complete the Codex CLI sign-in flow shown in this terminal.",
+              "Starting Codex CLI device-auth login.",
+              "Complete the device-auth flow shown in this terminal.",
             ].join("\n"),
             "OpenAI Codex CLI",
           );
@@ -350,7 +350,7 @@ async function runBuiltInOpenAICodexLogin(params: {
   if (!creds) {
     throw new Error(
       method === "cli"
-        ? "Codex CLI login did not return credentials."
+        ? "Codex CLI device-auth login did not return credentials."
         : "OpenAI Codex OAuth did not return credentials.",
     );
   }

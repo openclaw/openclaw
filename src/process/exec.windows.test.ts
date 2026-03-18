@@ -93,7 +93,7 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
-  it("wraps codex.cmd via cmd.exe in runCommandWithTimeout", async () => {
+  it("wraps codex.cmd device-auth login via cmd.exe in runCommandWithTimeout", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
 
@@ -102,13 +102,15 @@ describe("windows command wrapper behavior", () => {
     );
 
     try {
-      const result = await runCommandWithTimeout(["codex", "login"], { timeoutMs: 1000 });
+      const result = await runCommandWithTimeout(["codex", "login", "--device-auth"], {
+        timeoutMs: 1000,
+      });
       expect(result.code).toBe(0);
       const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
       expectCmdWrappedInvocation({
         captured,
         expectedComSpec,
-        expectedCommandLine: "codex.cmd login",
+        expectedCommandLine: "codex.cmd login --device-auth",
       });
     } finally {
       platformSpy.mockRestore();

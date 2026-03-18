@@ -241,7 +241,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "openai-codex-cli",
     label: "OpenAI Codex CLI login",
-    hint: "Runs `codex login` and imports the resulting credentials",
+    hint: "Runs `codex login --device-auth` and imports the resulting credentials",
   },
   { value: "chutes", label: "Chutes (OAuth)" },
   {

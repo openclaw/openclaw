@@ -58,7 +58,7 @@ openclaw models auth login --provider openai-codex
 # Run Codex CLI login in the wizard
 openclaw onboard --auth-choice openai-codex-cli
 
-# Or import credentials after Codex CLI login
+# Or import credentials after Codex CLI device-auth login
 openclaw models auth login --provider openai-codex --method cli
 ```
 
