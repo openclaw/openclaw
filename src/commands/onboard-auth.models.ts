@@ -234,7 +234,7 @@ export function buildGigachatModelDefinition(): ModelDefinitionConfig {
     id: GIGACHAT_DEFAULT_MODEL_ID,
     name: "GigaChat 2 Max",
     reasoning: false,
-    input: ["text", "image"],
+    input: ["text"],
     cost: GIGACHAT_DEFAULT_COST,
     contextWindow: GIGACHAT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: GIGACHAT_DEFAULT_MAX_TOKENS,

@@ -16,13 +16,13 @@ const emptyCfg: OpenClawConfig = {};
 
 describe("GigaChat provider config", () => {
   describe("buildGigachatModelDefinition", () => {
-    it("marks GigaChat 2 Max as image-capable", () => {
+    it("keeps GigaChat 2 Max text-only until multimodal support lands", () => {
       const model = buildGigachatModelDefinition();
 
       expect(model.id).toBe(GIGACHAT_DEFAULT_MODEL_ID);
       expect(model.name).toBe("GigaChat 2 Max");
       expect(model.reasoning).toBe(false);
-      expect(model.input).toEqual(["text", "image"]);
+      expect(model.input).toEqual(["text"]);
       expect(model.contextWindow).toBe(GIGACHAT_DEFAULT_CONTEXT_WINDOW);
       expect(model.maxTokens).toBe(GIGACHAT_DEFAULT_MAX_TOKENS);
       expect(model.cost).toEqual(GIGACHAT_DEFAULT_COST);
@@ -30,14 +30,14 @@ describe("GigaChat provider config", () => {
   });
 
   describe("applyGigachatProviderConfig", () => {
-    it("registers the image-capable default model", () => {
+    it("registers the text-only default model", () => {
       const result = applyGigachatProviderConfig(emptyCfg);
       const provider = result.models?.providers?.gigachat;
       const model = provider?.models?.find((entry) => entry.id === GIGACHAT_DEFAULT_MODEL_ID);
 
       expect(provider?.baseUrl).toBe(GIGACHAT_BASE_URL);
       expect(provider?.api).toBe("openai-completions");
-      expect(model?.input).toEqual(["text", "image"]);
+      expect(model?.input).toEqual(["text"]);
     });
 
     it("sets the default GigaChat alias without changing the selected primary model", () => {
