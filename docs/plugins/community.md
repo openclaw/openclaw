@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **MAX** — Connect OpenClaw to MAX messenger (max.ru) via Bot API. Supports DMs and group chats with streaming replies and typing indicators.
+  npm: `@olegbalbekov/openclaw-max`
+  repo: `https://github.com/olegbalbekov/openclaw-max`
+  install: `openclaw plugins install @olegbalbekov/openclaw-max`
