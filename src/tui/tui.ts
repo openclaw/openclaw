@@ -188,7 +188,13 @@ export function resolveCtrlCAction(params: {
 
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
-  let tuiAliases = await loadTuiAliases();
+  let tuiAliases: Record<string, string> = {};
+  let tuiAliasesLoadWarning: string | null = null;
+  try {
+    tuiAliases = await loadTuiAliases();
+  } catch (error) {
+    tuiAliasesLoadWarning = `alias load failed: ${String(error)}`;
+  }
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
@@ -422,6 +428,9 @@ export async function runTui(opts: TuiOptions) {
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
+  if (tuiAliasesLoadWarning) {
+    chatLog.addSystem(tuiAliasesLoadWarning);
+  }
   const editor = new CustomEditor(tui, editorTheme);
   const root = new Container();
   root.addChild(header);

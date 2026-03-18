@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { saveTuiAliases } from "./tui-aliases.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 
 vi.mock("./tui-aliases.js", async () => {
@@ -12,6 +13,11 @@ vi.mock("./tui-aliases.js", async () => {
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
+
+beforeEach(() => {
+  vi.mocked(saveTuiAliases).mockReset();
+  vi.mocked(saveTuiAliases).mockResolvedValue(undefined);
+});
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
@@ -308,5 +314,33 @@ describe("tui command handlers", () => {
     expect(state.tuiAliases).toEqual({});
     expect(addSystem).toHaveBeenCalledWith("alias removed: review");
     expect(refreshAutocomplete).toHaveBeenCalled();
+  });
+
+  it("does not mutate aliases in memory when save fails", async () => {
+    vi.mocked(saveTuiAliases).mockRejectedValueOnce(new Error("disk full"));
+    const { handleCommand, addSystem, refreshAutocomplete, state } = createHarness();
+
+    await handleCommand('/alias review "check the PR"');
+
+    expect(state.tuiAliases).toEqual({});
+    expect(addSystem).toHaveBeenCalledWith("alias save failed: Error: disk full");
+    expect(refreshAutocomplete).not.toHaveBeenCalled();
+  });
+
+  it("does not delete aliases in memory when remove fails", async () => {
+    vi.mocked(saveTuiAliases).mockRejectedValueOnce(new Error("disk full"));
+    const { handleCommand, addSystem, refreshAutocomplete, state } = createHarness({
+      tuiAliases: {
+        review: "check the PR",
+      },
+    });
+
+    await handleCommand("/unalias review");
+
+    expect(state.tuiAliases).toEqual({
+      review: "check the PR",
+    });
+    expect(addSystem).toHaveBeenCalledWith("alias remove failed: Error: disk full");
+    expect(refreshAutocomplete).not.toHaveBeenCalled();
   });
 });
