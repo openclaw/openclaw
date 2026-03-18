@@ -242,6 +242,19 @@ function stripSameProviderPrefix(params: { provider: string; modelId: string }):
   return modelId.toLowerCase().startsWith(prefix) ? modelId.slice(prefix.length) : modelId;
 }
 
+function resolveSameProviderModelIds(params: { provider: string; modelId: string }) {
+  const alternateModelId = stripSameProviderPrefix(params);
+  const preserveQualifiedModelId =
+    normalizeProviderId(params.provider) === "openrouter" &&
+    alternateModelId !== params.modelId;
+  return {
+    alternateModelId,
+    fallbackLookupModelId: alternateModelId,
+    runtimeModelId: preserveQualifiedModelId ? params.modelId : alternateModelId,
+    shouldTryAlternateExplicit: !preserveQualifiedModelId && alternateModelId !== params.modelId,
+  };
+}
+
 export function resolveModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -257,11 +270,12 @@ export function resolveModelWithRegistry(params: {
     return explicitModel.model;
   }
 
-  const alternateModelId = stripSameProviderPrefix({
-    provider: params.provider,
-    modelId: params.modelId,
-  });
-  if (alternateModelId !== params.modelId) {
+  const { alternateModelId, fallbackLookupModelId, runtimeModelId, shouldTryAlternateExplicit } =
+    resolveSameProviderModelIds({
+      provider: params.provider,
+      modelId: params.modelId,
+    });
+  if (shouldTryAlternateExplicit) {
     const alternateExplicitModel = resolveExplicitModelWithRegistry({
       ...params,
       modelId: alternateModelId,
@@ -274,16 +288,16 @@ export function resolveModelWithRegistry(params: {
     }
   }
 
-  const { provider, modelId, cfg, modelRegistry, agentDir } = params;
+  const { provider, cfg, modelRegistry, agentDir } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const pluginDynamicModel = runProviderDynamicModel({
-    provider,
+    provider: params.provider,
     config: cfg,
     context: {
       config: cfg,
       agentDir,
       provider,
-      modelId,
+      modelId: runtimeModelId,
       modelRegistry,
       providerConfig,
     },
@@ -297,7 +311,7 @@ export function resolveModelWithRegistry(params: {
     });
   }
 
-  const fallbackModelId = alternateModelId !== modelId ? alternateModelId : modelId;
+  const fallbackModelId = fallbackLookupModelId;
   const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === fallbackModelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
@@ -311,8 +325,8 @@ export function resolveModelWithRegistry(params: {
       cfg,
       agentDir,
       model: {
-        id: fallbackModelId,
-        name: fallbackModelId,
+        id: runtimeModelId,
+        name: runtimeModelId,
         api: providerConfig?.api ?? "openai-responses",
         provider,
         baseUrl: providerConfig?.baseUrl,
@@ -382,6 +396,11 @@ export async function resolveModelAsync(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const { alternateModelId, runtimeModelId, shouldTryAlternateExplicit } =
+    resolveSameProviderModelIds({
+      provider,
+      modelId,
+    });
   const explicitModel = resolveExplicitModelWithRegistry({
     provider,
     modelId,
@@ -396,6 +415,30 @@ export async function resolveModelAsync(
       modelRegistry,
     };
   }
+  if (explicitModel?.kind === "resolved") {
+    return { model: explicitModel.model, authStorage, modelRegistry };
+  }
+
+  if (shouldTryAlternateExplicit) {
+    const alternateExplicitModel = resolveExplicitModelWithRegistry({
+      provider,
+      modelId: alternateModelId,
+      modelRegistry,
+      cfg,
+      agentDir: resolvedAgentDir,
+    });
+    if (alternateExplicitModel?.kind === "suppressed") {
+      return {
+        error: buildUnknownModelError(provider, modelId),
+        authStorage,
+        modelRegistry,
+      };
+    }
+    if (alternateExplicitModel?.kind === "resolved") {
+      return { model: alternateExplicitModel.model, authStorage, modelRegistry };
+    }
+  }
+
   if (!explicitModel) {
     const providerPlugin = resolveProviderRuntimePlugin({
       provider,
@@ -409,23 +452,20 @@ export async function resolveModelAsync(
           config: cfg,
           agentDir: resolvedAgentDir,
           provider,
-          modelId,
+          modelId: runtimeModelId,
           modelRegistry,
           providerConfig: resolveConfiguredProviderConfig(cfg, provider),
         },
       });
     }
   }
-  const model =
-    explicitModel?.kind === "resolved"
-      ? explicitModel.model
-      : resolveModelWithRegistry({
-          provider,
-          modelId,
-          modelRegistry,
-          cfg,
-          agentDir: resolvedAgentDir,
-        });
+  const model = resolveModelWithRegistry({
+    provider,
+    modelId,
+    modelRegistry,
+    cfg,
+    agentDir: resolvedAgentDir,
+  });
   if (model) {
     return { model, authStorage, modelRegistry };
   }
