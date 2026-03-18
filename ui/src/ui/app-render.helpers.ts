@@ -26,6 +26,30 @@ type SessionDefaultsSnapshot = {
   mainKey?: string;
 };
 
+/**
+ * Per-session chat draft cache.
+ *
+ * When the user switches sessions, the current unsent message is saved here
+ * keyed by the *old* session key, and the draft for the *new* session (if any)
+ * is restored into `chatMessage`.  This keeps each session's work-in-progress
+ * text across switches without persisting to disk.
+ */
+const chatDraftCache = new Map<string, string>();
+
+export function saveChatDraft(state: AppViewState): void {
+  const key = state.sessionKey;
+  const draft = state.chatMessage;
+  if (draft) {
+    chatDraftCache.set(key, draft);
+  } else {
+    chatDraftCache.delete(key);
+  }
+}
+
+export function restoreChatDraft(state: AppViewState): void {
+  state.chatMessage = chatDraftCache.get(state.sessionKey) ?? "";
+}
+
 function resolveSidebarChatSessionKey(state: AppViewState): string {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
@@ -42,8 +66,9 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 }
 
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
+  saveChatDraft(state);
   state.sessionKey = sessionKey;
-  state.chatMessage = "";
+  restoreChatDraft(state);
   state.chatStream = null;
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
@@ -488,8 +513,9 @@ export function renderChatMobileToggle(state: AppViewState) {
 }
 
 function switchChatSession(state: AppViewState, nextSessionKey: string) {
+  saveChatDraft(state);
   state.sessionKey = nextSessionKey;
-  state.chatMessage = "";
+  restoreChatDraft(state);
   state.chatStream = null;
   // P1: Clear queued chat items from the previous session
   (state as unknown as { chatQueue: unknown[] }).chatQueue = [];
