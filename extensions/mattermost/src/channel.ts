@@ -5,9 +5,11 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createAttachedChannelResultAdapter,
   createChannelDirectoryAdapter,
   createLoggedPairingApprovalNotifier,
   createMessageToolButtonsSchema,
+  createScopedAccountReplyToModeResolver,
   type ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
@@ -308,14 +310,17 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
   threading: {
-    resolveReplyToMode: ({ cfg, accountId, chatType }) => {
-      const account = resolveMattermostAccount({ cfg, accountId: accountId ?? "default" });
-      const kind =
-        chatType === "direct" || chatType === "group" || chatType === "channel"
-          ? chatType
-          : "channel";
-      return resolveMattermostReplyToMode(account, kind);
-    },
+    resolveReplyToMode: createScopedAccountReplyToModeResolver({
+      resolveAccount: (cfg, accountId) =>
+        resolveMattermostAccount({ cfg, accountId: accountId ?? "default" }),
+      resolveReplyToMode: (account, chatType) =>
+        resolveMattermostReplyToMode(
+          account,
+          chatType === "direct" || chatType === "group" || chatType === "channel"
+            ? chatType
+            : "channel",
+        ),
+    }),
   },
   reload: { configPrefixes: ["channels.mattermost"] },
   configSchema: buildChannelConfigSchema(MattermostConfigSchema),
@@ -385,33 +390,32 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
-      const result = await sendMessageMattermost(to, text, {
+    ...createAttachedChannelResultAdapter({
+      channel: "mattermost",
+      sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) =>
+        await sendMessageMattermost(to, text, {
+          cfg,
+          accountId: accountId ?? undefined,
+          replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+        }),
+      sendMedia: async ({
         cfg,
-        accountId: accountId ?? undefined,
-        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
-      });
-      return { channel: "mattermost", ...result };
-    },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaLocalRoots,
-      accountId,
-      replyToId,
-      threadId,
-    }) => {
-      const result = await sendMessageMattermost(to, text, {
-        cfg,
-        accountId: accountId ?? undefined,
+        to,
+        text,
         mediaUrl,
         mediaLocalRoots,
-        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
-      });
-      return { channel: "mattermost", ...result };
-    },
+        accountId,
+        replyToId,
+        threadId,
+      }) =>
+        await sendMessageMattermost(to, text, {
+          cfg,
+          accountId: accountId ?? undefined,
+          mediaUrl,
+          mediaLocalRoots,
+          replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+        }),
+    }),
   },
   status: {
     defaultRuntime: {

@@ -6,8 +6,10 @@ import {
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createAttachedChannelResultAdapter,
   createChannelDirectoryAdapter,
   createPairingPrefixStripper,
+  createScopedAccountReplyToModeResolver,
   createRuntimeDirectoryLiveAdapter,
   createTextPairingAdapter,
   resolveOutboundSendDep,
@@ -374,8 +376,10 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     resolveToolPolicy: resolveSlackGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: ({ cfg, accountId, chatType }) =>
-      resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
+    resolveReplyToMode: createScopedAccountReplyToModeResolver({
+      resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
+      resolveReplyToMode: (account, chatType) => resolveSlackReplyToMode(account, chatType),
+    }),
     allowExplicitReplyTagsWhenOff: false,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
     resolveAutoThreadId: ({ cfg, accountId, to, toolContext, replyToId }) =>
@@ -479,50 +483,51 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     deliveryMode: "direct",
     chunker: null,
     textChunkLimit: 4000,
-    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
-      const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
-        cfg,
-        accountId: accountId ?? undefined,
-        deps,
-        replyToId,
-        threadId,
-      });
-      const result = await send(to, text, {
-        cfg,
-        threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
-        accountId: accountId ?? undefined,
-        ...(tokenOverride ? { token: tokenOverride } : {}),
-      });
-      return { channel: "slack", ...result };
-    },
-    sendMedia: async ({
-      to,
-      text,
-      mediaUrl,
-      mediaLocalRoots,
-      accountId,
-      deps,
-      replyToId,
-      threadId,
-      cfg,
-    }) => {
-      const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
-        cfg,
-        accountId: accountId ?? undefined,
-        deps,
-        replyToId,
-        threadId,
-      });
-      const result = await send(to, text, {
-        cfg,
+    ...createAttachedChannelResultAdapter({
+      channel: "slack",
+      sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
+        const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
+          cfg,
+          accountId: accountId ?? undefined,
+          deps,
+          replyToId,
+          threadId,
+        });
+        return await send(to, text, {
+          cfg,
+          threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
+          accountId: accountId ?? undefined,
+          ...(tokenOverride ? { token: tokenOverride } : {}),
+        });
+      },
+      sendMedia: async ({
+        to,
+        text,
         mediaUrl,
         mediaLocalRoots,
-        threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
-        accountId: accountId ?? undefined,
-        ...(tokenOverride ? { token: tokenOverride } : {}),
-      });
-      return { channel: "slack", ...result };
-    },
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        cfg,
+      }) => {
+        const { send, threadTsValue, tokenOverride } = resolveSlackSendContext({
+          cfg,
+          accountId: accountId ?? undefined,
+          deps,
+          replyToId,
+          threadId,
+        });
+        return await send(to, text, {
+          cfg,
+          mediaUrl,
+          mediaLocalRoots,
+          threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
+          accountId: accountId ?? undefined,
+          ...(tokenOverride ? { token: tokenOverride } : {}),
+        });
+      },
+    }),
   },
   status: {
     defaultRuntime: {
