@@ -37,8 +37,6 @@ import {
   resolveCommandArgMenu,
 } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
-import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -46,6 +44,7 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
+import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import {
   buildCappedTelegramMenuCommands,
@@ -77,19 +76,6 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
-const DEFAULT_BOT_NATIVE_COMMANDS_RUNTIME = {
-  dispatchReplyWithBufferedBlockDispatcher,
-  listSkillCommandsForAgents,
-};
-let botNativeCommandsRuntimeForTest:
-  | Partial<typeof DEFAULT_BOT_NATIVE_COMMANDS_RUNTIME>
-  | undefined;
-
-export function setBotNativeCommandsRuntimeForTest(
-  runtime?: Partial<typeof DEFAULT_BOT_NATIVE_COMMANDS_RUNTIME>,
-): void {
-  botNativeCommandsRuntimeForTest = runtime;
-}
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -114,6 +100,7 @@ export type RegisterTelegramHandlerParams = {
   telegramTransport?: TelegramTransport;
   runtime: RuntimeEnv;
   telegramCfg: TelegramAccountConfig;
+  telegramDeps?: TelegramBotDeps;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
@@ -155,6 +142,7 @@ export type RegisterTelegramNativeCommandsParams = {
     messageThreadId?: number,
   ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
+  telegramDeps?: TelegramBotDeps;
   opts: { token: string };
 };
 
@@ -377,12 +365,9 @@ export const registerTelegramNativeCommands = ({
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
+  telegramDeps = defaultTelegramBotDeps,
   opts,
 }: RegisterTelegramNativeCommandsParams) => {
-  const botNativeCommandsRuntime = {
-    ...DEFAULT_BOT_NATIVE_COMMANDS_RUNTIME,
-    ...botNativeCommandsRuntimeForTest,
-  };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const boundRoute =
     nativeEnabled && nativeSkillsEnabled
@@ -395,7 +380,7 @@ export const registerTelegramNativeCommands = ({
   }
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled && boundRoute
-      ? botNativeCommandsRuntime.listSkillCommandsForAgents({
+      ? telegramDeps.listSkillCommandsForAgents({
           cfg,
           agentIds: [boundRoute.agentId],
         })
@@ -776,7 +761,7 @@ export const registerTelegramNativeCommands = ({
             accountId: route.accountId,
           });
 
-          await botNativeCommandsRuntime.dispatchReplyWithBufferedBlockDispatcher({
+          await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
             cfg,
             dispatcherOptions: {
