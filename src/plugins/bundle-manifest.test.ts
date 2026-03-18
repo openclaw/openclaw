@@ -111,7 +111,7 @@ describe("bundle manifest parsing", () => {
       name: "Claude Sample",
       description: "Claude fixture",
       bundleFormat: "claude",
-      skills: ["skill-packs/starter", "commands-pack"],
+      skills: ["skill-packs/starter", "commands-pack", "agents-pack", "styles"],
       settingsFiles: ["settings.json"],
       hooks: ["hooks/hooks.json", "hooks-pack"],
       capabilities: expect.arrayContaining([
