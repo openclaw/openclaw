@@ -73,8 +73,6 @@ export { getTelegramSequentialKey };
 
 type TelegramFetchInput = Parameters<NonNullable<ApiClientOptions["fetch"]>>[0];
 type TelegramFetchInit = Parameters<NonNullable<ApiClientOptions["fetch"]>>[1];
-type GlobalFetchInput = Parameters<typeof globalThis.fetch>[0];
-type GlobalFetchInit = Parameters<typeof globalThis.fetch>[1];
 
 function readRequestUrl(input: TelegramFetchInput): string | null {
   if (typeof input === "string") {
@@ -102,6 +100,45 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   } catch {
     return null;
   }
+}
+
+function createPollingAbortMiddleware(shutdownSignal: AbortSignal) {
+  return <T>(
+    prev: (method: string, payload: unknown, signal?: AbortSignal) => Promise<T>,
+    method: string,
+    payload: unknown,
+    signal?: AbortSignal,
+  ) => {
+    if (method !== "getUpdates") {
+      return prev(method, payload, signal);
+    }
+
+    const controller = new AbortController();
+    const abortWith = (source: AbortSignal) => controller.abort(source.reason);
+    const onShutdown = () => abortWith(shutdownSignal);
+    let onRequestAbort: (() => void) | undefined;
+
+    if (shutdownSignal.aborted) {
+      abortWith(shutdownSignal);
+    } else {
+      shutdownSignal.addEventListener("abort", onShutdown, { once: true });
+    }
+    if (signal) {
+      if (signal.aborted) {
+        abortWith(signal);
+      } else {
+        onRequestAbort = () => abortWith(signal);
+        signal.addEventListener("abort", onRequestAbort, { once: true });
+      }
+    }
+
+    return prev(method, payload, controller.signal).finally(() => {
+      shutdownSignal.removeEventListener("abort", onShutdown);
+      if (signal && onRequestAbort) {
+        signal.removeEventListener("abort", onRequestAbort);
+      }
+    });
+  };
 }
 
 export function createTelegramBot(opts: TelegramBotOptions) {
@@ -146,50 +183,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     ApiClientOptions["fetch"]
   >;
 
-  // When a shutdown abort signal is provided, wrap fetch so every Telegram API request
-  // (especially long-polling getUpdates) aborts immediately on shutdown. Without this,
-  // the in-flight getUpdates hangs for up to 30s, and a new gateway instance starting
-  // its own poll triggers a 409 Conflict from Telegram.
+  // Keep Telegram transport tagging/proxy handling at the fetch layer. Polling abort is
+  // injected later via API middleware for getUpdates only so in-flight sendMessage and
+  // sendChatAction calls are not canceled when polling restarts after a stall.
   let finalFetch = shouldProvideFetch ? fetchForClient : undefined;
-  if (opts.fetchAbortSignal) {
-    const baseFetch =
-      finalFetch ?? (globalThis.fetch as unknown as NonNullable<ApiClientOptions["fetch"]>);
-    const shutdownSignal = opts.fetchAbortSignal;
-    // Cast baseFetch to global fetch to avoid node-fetch ↔ global-fetch type divergence;
-    // they are runtime-compatible (the codebase already casts at every fetch boundary).
-    const callFetch = baseFetch as unknown as typeof globalThis.fetch;
-    // Use manual event forwarding instead of AbortSignal.any() to avoid the cross-realm
-    // AbortSignal issue in Node.js (grammY's signal may come from a different module context,
-    // causing "signals[0] must be an instance of AbortSignal" errors).
-    finalFetch = ((input: TelegramFetchInput, init?: TelegramFetchInit) => {
-      const controller = new AbortController();
-      const abortWith = (signal: AbortSignal) => controller.abort(signal.reason);
-      const onShutdown = () => abortWith(shutdownSignal);
-      let onRequestAbort: (() => void) | undefined;
-      if (shutdownSignal.aborted) {
-        abortWith(shutdownSignal);
-      } else {
-        shutdownSignal.addEventListener("abort", onShutdown, { once: true });
-      }
-      if (init?.signal) {
-        if (init.signal.aborted) {
-          abortWith(init.signal as unknown as AbortSignal);
-        } else {
-          onRequestAbort = () => abortWith(init.signal as AbortSignal);
-          init.signal.addEventListener("abort", onRequestAbort);
-        }
-      }
-      return callFetch(input as GlobalFetchInput, {
-        ...(init as GlobalFetchInit),
-        signal: controller.signal,
-      }).finally(() => {
-        shutdownSignal.removeEventListener("abort", onShutdown);
-        if (init?.signal && onRequestAbort) {
-          init.signal.removeEventListener("abort", onRequestAbort);
-        }
-      });
-    }) as unknown as NonNullable<ApiClientOptions["fetch"]>;
-  }
   if (finalFetch) {
     const baseFetch = finalFetch;
     finalFetch = ((input: TelegramFetchInput, init?: TelegramFetchInit) => {
@@ -222,6 +219,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const bot = new Bot(opts.token, client ? { client } : undefined);
   bot.api.config.use(apiThrottler());
+  if (opts.fetchAbortSignal) {
+    bot.api.config.use(
+      createPollingAbortMiddleware(opts.fetchAbortSignal) as Parameters<
+        typeof bot.api.config.use
+      >[0],
+    );
+  }
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));

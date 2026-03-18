@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { botCtorSpy } from "./bot.create-telegram-bot.test-harness.js";
+import { botCtorSpy, useSpy } from "./bot.create-telegram-bot.test-harness.js";
 import { createTelegramBot } from "./bot.js";
 import { getTelegramNetworkErrorOrigin } from "./network-errors.js";
 
@@ -18,24 +18,68 @@ function createWrappedTelegramClientFetch(proxyFetch: typeof fetch) {
 }
 
 describe("createTelegramBot fetch abort", () => {
-  it("aborts wrapped client fetch when fetchAbortSignal aborts", async () => {
-    const fetchSpy = vi.fn(
-      (_input: RequestInfo | URL, init?: RequestInit) =>
+  it("aborts getUpdates when fetchAbortSignal aborts", async () => {
+    createWrappedTelegramClientFetch(vi.fn() as unknown as typeof fetch);
+    const shutdown = new AbortController();
+    useSpy.mockClear();
+    createTelegramBot({
+      token: "tok",
+      fetchAbortSignal: shutdown.signal,
+      proxyFetch: vi.fn() as unknown as typeof fetch,
+    });
+    const pollingAbortMiddleware = useSpy.mock.calls.at(-1)?.[0] as
+      | ((
+          prev: (method: string, payload: unknown, signal?: AbortSignal) => Promise<AbortSignal>,
+          method: string,
+          payload: unknown,
+          signal?: AbortSignal,
+        ) => Promise<AbortSignal>)
+      | undefined;
+    expect(typeof pollingAbortMiddleware).toBe("function");
+
+    const observedSignalPromise = pollingAbortMiddleware!(
+      (_method, _payload, signal) =>
         new Promise<AbortSignal>((resolve) => {
-          const signal = init?.signal as AbortSignal;
-          signal.addEventListener("abort", () => resolve(signal), { once: true });
+          signal?.addEventListener("abort", () => resolve(signal), { once: true });
         }),
-    );
-    const { clientFetch, shutdown } = createWrappedTelegramClientFetch(
-      fetchSpy as unknown as typeof fetch,
+      "getUpdates",
+      {},
     );
 
-    const observedSignalPromise = clientFetch("https://example.test");
     shutdown.abort(new Error("shutdown"));
-    const observedSignal = (await observedSignalPromise) as AbortSignal;
-
-    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    const observedSignal = await observedSignalPromise;
     expect(observedSignal.aborted).toBe(true);
+  });
+
+  it("does not abort non-polling requests when fetchAbortSignal aborts", async () => {
+    const shutdown = new AbortController();
+    useSpy.mockClear();
+    createTelegramBot({
+      token: "tok",
+      fetchAbortSignal: shutdown.signal,
+      proxyFetch: vi.fn() as unknown as typeof fetch,
+    });
+    const pollingAbortMiddleware = useSpy.mock.calls.at(-1)?.[0] as
+      | ((
+          prev: (method: string, payload: unknown, signal?: AbortSignal) => Promise<AbortSignal>,
+          method: string,
+          payload: unknown,
+          signal?: AbortSignal,
+        ) => Promise<AbortSignal>)
+      | undefined;
+    expect(typeof pollingAbortMiddleware).toBe("function");
+
+    const originalSignal = new AbortController().signal;
+    const observedSignal = await pollingAbortMiddleware!(
+      async (_method, _payload, signal) => signal ?? originalSignal,
+      "sendMessage",
+      {},
+      originalSignal,
+    );
+    shutdown.abort(new Error("shutdown"));
+
+    expect(observedSignal).toBe(originalSignal);
+    expect(observedSignal.aborted).toBe(false);
   });
 
   it("tags wrapped Telegram fetch failures with the Bot API method", async () => {
