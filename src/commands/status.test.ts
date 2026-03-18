@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -205,6 +206,7 @@ const mocks = vi.hoisted(() => ({
       },
     ],
   }),
+  buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
 }));
 
 vi.mock("../memory/manager.js", () => ({
@@ -385,6 +387,9 @@ vi.mock("../daemon/node-service.js", () => ({
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
 }));
+vi.mock("../plugins/status.js", () => ({
+  buildPluginCompatibilityNotices: mocks.buildPluginCompatibilityNotices,
+}));
 
 import { statusCommand } from "./status.js";
 
@@ -403,6 +408,15 @@ describe("statusCommand", () => {
   });
 
   it("prints JSON when requested", async () => {
+    mocks.buildPluginCompatibilityNotices.mockReturnValue([
+      {
+        pluginId: "legacy-plugin",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message:
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      },
+    ]);
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
     expect(payload.linkChannel).toBeUndefined();
@@ -424,6 +438,18 @@ describe("statusCommand", () => {
     expect(payload.securityAudit.summary.warn).toBe(1);
     expect(payload.gatewayService.label).toBe("LaunchAgent");
     expect(payload.nodeService.label).toBe("LaunchAgent");
+    expect(payload.pluginCompatibility).toEqual({
+      count: 1,
+      warnings: [
+        {
+          pluginId: "legacy-plugin",
+          code: "legacy-before-agent-start",
+          severity: "warn",
+          message:
+            "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+        },
+      ],
+    });
     expect(mocks.runSecurityAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         includeFilesystem: true,
@@ -452,6 +478,15 @@ describe("statusCommand", () => {
   });
 
   it("prints formatted lines otherwise", async () => {
+    mocks.buildPluginCompatibilityNotices.mockReturnValue([
+      {
+        pluginId: "legacy-plugin",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message:
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      },
+    ]);
     const logs = await runStatusAndGetLogs();
     for (const token of [
       "OpenClaw status",
@@ -462,6 +497,7 @@ describe("statusCommand", () => {
       "Dashboard",
       "macos 14.0 (arm64)",
       "Memory",
+      "Plugin compatibility",
       "Channels",
       "WhatsApp",
       "bootstrap files",
@@ -476,6 +512,9 @@ describe("statusCommand", () => {
     ]) {
       expect(logs.some((line) => line.includes(token))).toBe(true);
     }
+    expect(
+      logs.some((line) => line.includes("legacy-plugin still uses legacy before_agent_start")),
+    ).toBe(true);
     expect(
       logs.some(
         (line) =>
