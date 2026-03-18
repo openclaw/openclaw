@@ -47,39 +47,37 @@ function normalizeStructured(resultBody) {
   if (!result || typeof result !== "object") {
     return undefined;
   }
-  const details = result.details;
   if (
-    details &&
-    typeof details === "object" &&
-    details.structured &&
-    typeof details.structured === "object"
+    typeof result.summary === "string" &&
+    Array.isArray(result.key_points) &&
+    typeof result.suggested_next_action === "string"
   ) {
+    return {
+      summary: result.summary,
+      key_points: result.key_points.filter((v) => typeof v === "string"),
+      suggested_next_action: result.suggested_next_action,
+    };
+  }
+  const details = result.details;
+  if (details && typeof details === "object" && details.structured && typeof details.structured === "object") {
     const structured = details.structured;
     return {
       summary: typeof structured.summary === "string" ? structured.summary : "",
-      key_points: Array.isArray(structured.key_points)
-        ? structured.key_points.filter((v) => typeof v === "string")
-        : [],
+      key_points: Array.isArray(structured.key_points) ? structured.key_points.filter((v) => typeof v === "string") : [],
       suggested_next_action:
-        typeof structured.suggested_next_action === "string"
-          ? structured.suggested_next_action
-          : "",
+        typeof structured.suggested_next_action === "string" ? structured.suggested_next_action : "",
       worker_state: typeof details.worker_state === "string" ? details.worker_state : undefined,
-      structured_source:
-        typeof details.structured_source === "string" ? details.structured_source : undefined,
+      structured_source: typeof details.structured_source === "string" ? details.structured_source : undefined,
     };
   }
   if (result.mode === "long_text_review" && details && typeof details === "object") {
     return {
       summary: typeof details.review_summary === "string" ? details.review_summary : "",
-      key_points: Array.isArray(details.review_points)
-        ? details.review_points.filter((v) => typeof v === "string")
-        : [],
+      key_points: Array.isArray(details.review_points) ? details.review_points.filter((v) => typeof v === "string") : [],
       suggested_next_action:
         typeof details.recommended_next_step === "string" ? details.recommended_next_step : "",
       worker_state: typeof details.worker_state === "string" ? details.worker_state : undefined,
-      structured_source:
-        typeof details.structured_source === "string" ? details.structured_source : undefined,
+      structured_source: typeof details.structured_source === "string" ? details.structured_source : undefined,
     };
   }
   return undefined;
@@ -89,16 +87,17 @@ function normalizeJob(resultBody) {
   if (!resultBody || typeof resultBody !== "object") {
     return undefined;
   }
-  if (
-    typeof resultBody.status === "string" &&
-    resultBody.result &&
-    typeof resultBody.result === "object"
-  ) {
+  if (typeof resultBody.status === "string" && resultBody.result && typeof resultBody.result === "object") {
     const result = resultBody.result;
     if (typeof result.job_id === "string") {
       return {
         job_id: result.job_id,
-        status: typeof resultBody.status === "string" ? resultBody.status : undefined,
+        status:
+          typeof result.status === "string"
+            ? result.status
+            : typeof resultBody.status === "string"
+              ? resultBody.status
+              : undefined,
         stage: typeof result.stage === "string" ? result.stage : undefined,
         target: typeof result.target === "string" ? result.target : undefined,
         message: typeof result.message === "string" ? result.message : undefined,
@@ -119,12 +118,8 @@ async function requestJson({ method, url, token, body, timeoutMs }) {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const headers = { Accept: "application/json" };
-    if (token) {
-      headers["X-Sense-Worker-Token"] = token;
-    }
-    if (body) {
-      headers["Content-Type"] = "application/json";
-    }
+    if (token) headers["X-Sense-Worker-Token"] = token;
+    if (body) headers["Content-Type"] = "application/json";
     const init = {
       method,
       headers,
@@ -183,9 +178,7 @@ async function readInput(options) {
 }
 
 async function submitTask(command, options) {
-  const baseUrl = (
-    typeof options["base-url"] === "string" ? options["base-url"] : DEFAULT_BASE_URL
-  ).replace(/\/+$/, "");
+  const baseUrl = (typeof options["base-url"] === "string" ? options["base-url"] : DEFAULT_BASE_URL).replace(/\/+$/, "");
   const timeoutMs =
     typeof options.timeout === "string" && Number.isFinite(Number(options.timeout))
       ? Number(options.timeout)
@@ -222,9 +215,7 @@ async function jobStatus(options, poll = false) {
   if (!jobId) {
     throw new Error("job id required");
   }
-  const baseUrl = (
-    typeof options["base-url"] === "string" ? options["base-url"] : DEFAULT_BASE_URL
-  ).replace(/\/+$/, "");
+  const baseUrl = (typeof options["base-url"] === "string" ? options["base-url"] : DEFAULT_BASE_URL).replace(/\/+$/, "");
   const timeoutMs =
     typeof options.timeout === "string" && Number.isFinite(Number(options.timeout))
       ? Number(options.timeout)

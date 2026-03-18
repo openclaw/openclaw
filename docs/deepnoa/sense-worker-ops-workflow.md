@@ -59,6 +59,18 @@ pnpm sense:job-status -- --job-id <job_id>
 pnpm sense:job-poll -- --job-id <job_id>
 ```
 
+Run a separate NemoClaw-style worker loop:
+
+```bash
+export SENSE_WORKER_URL="http://192.168.11.11:8787"
+export SENSE_WORKER_TOKEN="replace-with-shared-token"
+export OLLAMA_HOST="http://192.168.11.11:11434"
+export OLLAMA_MODEL="gpt-oss:20b"
+pnpm sense:nemo-runner -- --once
+```
+
+For a long-running worker process, omit `--once`.
+
 You can also pass a file:
 
 ```bash
@@ -167,6 +179,64 @@ OpenClaw's `sense-task.js` also surfaces a top-level `job` helper object when po
 - `done`
 - `job_not_found`
 
+`GET /jobs/next` returns the next queued job and marks it `running`. The helper runner in
+[`/Volumes/deepnoa/openclaw/scripts/dev/nemoclaw_runner.py`](/Volumes/deepnoa/openclaw/scripts/dev/nemoclaw_runner.py)
+polls that endpoint, performs a minimal pseudo workload, and then calls
+`POST /jobs/{job_id}/complete`.
+
+The current runner stores a structured result:
+
+```json
+{
+  "summary": "...",
+  "key_points": ["...", "...", "..."],
+  "suggested_next_action": "...",
+  "raw_output": "...",
+  "runner": "nemoclaw_runner",
+  "exit_code": 0
+}
+```
+
+The runner now attempts a real Ollama call first:
+
+- endpoint: `POST $OLLAMA_HOST/api/generate`
+- default URL: `http://192.168.11.11:11434`
+- default model: `gpt-oss:20b`
+- `stream: false`
+
+Resolution order for the Ollama host is:
+
+1. `params.ollama_host`
+2. `OLLAMA_HOST`
+3. legacy `--ollama-url` / `OLLAMA_URL`
+4. default `http://192.168.11.11:11434`
+
+It instructs Ollama to return JSON only:
+
+```json
+{
+  "summary": "...",
+  "key_points": ["..."],
+  "suggested_next_action": "..."
+}
+```
+
+If Ollama returns invalid JSON, the runner applies a lightweight local parse fallback.
+If Ollama is unavailable or times out, the job still completes with `exit_code != 0` and an `error`
+field in the stored result so operators can see the failure without losing the job record.
+
+Quick connectivity check:
+
+```bash
+curl http://192.168.11.11:11434/api/tags
+```
+
+When a job result already matches the structured schema above, `sense-task.js` also surfaces:
+
+- `normalized.summary`
+- `normalized.key_points`
+- `normalized.suggested_next_action`
+
 ## Logging
 
 The workflow writes a short request log to stderr:
@@ -209,6 +279,7 @@ For operator workflows, a normalized top-level view is added when available:
   - `pnpm sense:heavy -- --input "..."`
   - `pnpm sense:heavy:nemo -- --input "..."`
   - `pnpm sense:job-status -- --job-id <job_id>`
+  - `pnpm sense:nemo-runner -- --once`
 - Fallback:
   - `pnpm sense:summarize -- --base-url http://192.168.11.11:9999 --input "..."`
   - `pnpm sense:draft -- --base-url http://192.168.11.11:9999 --input "..."`
