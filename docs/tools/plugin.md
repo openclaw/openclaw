@@ -1144,6 +1144,9 @@ Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
 authoring plugins:
 
 - `openclaw/plugin-sdk/core` for the smallest generic plugin-facing contract.
+  It also carries small assembly helpers such as
+  `definePluginEntry`, `defineChannelPluginEntry`, `defineSetupPluginEntry`,
+  and `createChannelPluginBase` for bundled or third-party plugin entry wiring.
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
