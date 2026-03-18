@@ -2,6 +2,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
@@ -64,7 +65,12 @@ export type PluginInspectReport = {
   cliCommands: string[];
   services: string[];
   gatewayMethods: string[];
+  mcpServers: Array<{
+    name: string;
+    hasStdioTransport: boolean;
+  }>;
   httpRouteCount: number;
+  bundleCapabilities: string[];
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
@@ -226,6 +232,26 @@ export function buildPluginInspectReport(params: {
     httpRouteCount: plugin.httpRoutes,
   });
 
+  // Populate MCP server info for bundle-format plugins with a known rootDir.
+  let mcpServers: PluginInspectReport["mcpServers"] = [];
+  if (plugin.format === "bundle" && plugin.bundleFormat && plugin.rootDir) {
+    const mcpSupport = inspectBundleMcpRuntimeSupport({
+      pluginId: plugin.id,
+      rootDir: plugin.rootDir,
+      bundleFormat: plugin.bundleFormat,
+    });
+    mcpServers = [
+      ...mcpSupport.supportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: true,
+      })),
+      ...mcpSupport.unsupportedServerNames.map((name) => ({
+        name,
+        hasStdioTransport: false,
+      })),
+    ];
+  }
+
   const usesLegacyBeforeAgentStart = typedHooks.some(
     (entry) => entry.name === "before_agent_start",
   );
@@ -248,7 +274,9 @@ export function buildPluginInspectReport(params: {
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
     gatewayMethods: [...plugin.gatewayMethods],
+    mcpServers,
     httpRouteCount: plugin.httpRoutes,
+    bundleCapabilities: plugin.bundleCapabilities ?? [],
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
