@@ -40,12 +40,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/binding: add `onConversationBindingResolved(...)` so plugins can react immediately after bind approvals or denies without blocking channel interaction acknowledgements. (#48678) Thanks @huntharo.
 - CLI/config: expand `config set` with SecretRef and provider builder modes, JSON/batch assignment support, and `--dry-run` validation with structured JSON output. (#49296) Thanks @joshavant.
 
-### Breaking
-
-- Browser/Chrome MCP: remove the legacy Chrome extension relay path, bundled extension assets, `driver: "extension"`, and `browser.relayBindHost`. Run `openclaw doctor --fix` to migrate host-local browser config to `existing-session` / `user`; Docker, headless, sandbox, and remote browser flows still use raw CDP. (#47893) Thanks @vincentkoc.
-- Plugins/runtime: remove the public `openclaw/extension-api` surface with no compatibility shim. Bundled plugins must use injected runtime for host-side operations (for example `api.runtime.agent.runEmbeddedPiAgent`) and any remaining direct imports must come from narrow `openclaw/plugin-sdk/*` subpaths instead of the monolithic SDK root.
-- Tools/image generation: standardize the stock image create/edit path on the core `image_generate` tool. The old `nano-banana-pro` docs/examples are gone; if you previously copied that sample-skill config, switch to `agents.defaults.imageGenerationModel` for built-in image generation or install a separate third-party skill explicitly.
-
 ### Fixes
 
 - Google auth/Node 25: patch `gaxios` to use native fetch without injecting `globalThis.window`, while translating proxy and mTLS transport settings so Google Vertex and Google Chat auth keep working on Node 25. (#47914) Thanks @pdd-cli.
@@ -128,9 +122,6 @@ Docs: https://docs.openclaw.ai
 - Telegram/network: preserve sticky IPv4 fallback state across polling restarts so hosts with unstable IPv6 to `api.telegram.org` stop re-triggering repeated Telegram timeouts after each restart. (#48282) Thanks @yassinebkr.
 - Plugins/subagents: forward per-run provider and model overrides through gateway plugin subagent dispatch so plugin-launched agent delegations honor explicit model selection again. (#48277) Thanks @jalehman.
 - Agents/compaction: write minimal boundary summaries for empty preparations while keeping split-turn prefixes on the normal path, so no-summarizable-message sessions stop retriggering the safeguard loop. (#42215) thanks @lml2468.
-
-### Fixes
-
 - Agents/bootstrap warnings: move bootstrap truncation warnings out of the system prompt and into the per-turn prompt body so prompt-cache reuse stays stable when truncation warnings appear or disappear. (#48753) Thanks @scoootscooob and @obviyus.
 - Telegram/DM topic session keys: route named-account DM topics through the same per-account base session key across inbound messages, native commands, and session-state lookups so `/status` and thread recovery stop creating phantom `agent:main:main:thread:...` sessions. (#48204) Thanks @vincentkoc.
 - macOS/node service startup: use `openclaw node start/stop --json` from the Mac app instead of the removed `openclaw service node ...` command shape, so current CLI installs expose the full node exec surface again. (#46843) Fixes #43171. Thanks @Br1an67.
@@ -140,6 +131,12 @@ Docs: https://docs.openclaw.ai
 - Mattermost/DM send: retry transient direct-channel creation failures for DM deliveries, with configurable backoff and per-request timeout. (#42398) Thanks @JonathanJing.
 - Telegram/network: unify API and media fetches under the same sticky IPv4 and pinned-IP fallback chain, and re-validate pinned override addresses against SSRF policy. (#49148) Thanks @obviyus.
 - Agents/prompt composition: append bootstrap truncation warnings to the current-turn prompt and add regression coverage for stable system-prompt cache invariants. (#49237) Thanks @scoootscooob.
+
+### Breaking
+
+- Browser/Chrome MCP: remove the legacy Chrome extension relay path, bundled extension assets, `driver: "extension"`, and `browser.relayBindHost`. Run `openclaw doctor --fix` to migrate host-local browser config to `existing-session` / `user`; Docker, headless, sandbox, and remote browser flows still use raw CDP. (#47893) Thanks @vincentkoc.
+- Plugins/runtime: remove the public `openclaw/extension-api` surface with no compatibility shim. Bundled plugins must use injected runtime for host-side operations (for example `api.runtime.agent.runEmbeddedPiAgent`) and any remaining direct imports must come from narrow `openclaw/plugin-sdk/*` subpaths instead of the monolithic SDK root.
+- Tools/image generation: standardize the stock image create/edit path on the core `image_generate` tool. The old `nano-banana-pro` docs/examples are gone; if you previously copied that sample-skill config, switch to `agents.defaults.imageGenerationModel` for built-in image generation or install a separate third-party skill explicitly.
 
 ## 2026.3.13
 
