@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **ContentClaw** — Generate AI-powered content pages at scale from any topic, analyze competitor sitemaps, and serve via REST API for any CMS. Registers 5 tools: generate, competitor analysis, list pages, get page, and serve dashboard. Supports OpenAI, Gemini, Anthropic, xAI, Qwen, and Ollama.
+  npm: `@contentclaw/openclaw-plugin`
+  repo: `https://github.com/metehan777/contentclaw`
+  install: `openclaw plugins install @contentclaw/openclaw-plugin`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
