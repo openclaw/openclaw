@@ -153,7 +153,6 @@ export function createSlackMessageToolBlocksSchema(): TSchema {
 
 export function createTelegramPollExtraToolSchemas(): Record<string, TSchema> {
   return {
-    pollDurationHours: Type.Optional(Type.Number()),
     pollDurationSeconds: Type.Optional(Type.Number()),
     pollAnonymous: Type.Optional(Type.Boolean()),
     pollPublic: Type.Optional(Type.Boolean()),
