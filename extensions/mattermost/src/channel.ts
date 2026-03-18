@@ -39,6 +39,7 @@ import {
   type ChannelPlugin,
 } from "./runtime-api.js";
 import { getMattermostRuntime } from "./runtime.js";
+import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 
@@ -348,6 +349,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeMattermostMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveMattermostOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeMattermostTargetId,
       hint: "<channelId|user:ID|channel:ID>",
