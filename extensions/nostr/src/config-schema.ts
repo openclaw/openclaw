@@ -1,6 +1,14 @@
 import { AllowFromListSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/core";
 import { z } from "zod";
-import { MarkdownConfigSchema, buildChannelConfigSchema } from "../api.js";
+
+const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
+const MarkdownConfigSchema = z
+  .object({
+    tables: MarkdownTableModeSchema.optional(),
+  })
+  .strict()
+  .optional();
 
 /**
  * Validates https:// URLs only (no javascript:, data:, file:, etc.)
