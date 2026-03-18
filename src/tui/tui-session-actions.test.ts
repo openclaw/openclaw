@@ -199,6 +199,215 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.updatedAt).toBe(200);
   });
 
+  it("preserves modelOverride when session entry has a different runtime model", async () => {
+    // Scenario: user sets model override to opus, then a heartbeat runs on flash-lite.
+    // The session entry now has model=flash-lite but modelOverride=opus.
+    // The TUI status bar should show opus, not flash-lite.
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [
+        {
+          key: "agent:main:main",
+          // Runtime model from last turn (heartbeat ran on flash-lite)
+          model: "gemini-2.5-flash-lite",
+          modelProvider: "google",
+          // User's explicit override (set via /status model=opus)
+          modelOverride: "claude-opus-4-6",
+          providerOverride: "anthropic",
+          updatedAt: 200,
+        },
+      ],
+    });
+
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {
+        model: "claude-opus-4-6",
+        modelProvider: "anthropic",
+        updatedAt: 100,
+      },
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "idle",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { refreshSessionInfo } = createSessionActions({
+      client: { listSessions } as unknown as GatewayChatClient,
+      chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus: vi.fn(),
+    });
+
+    await refreshSessionInfo();
+
+    // modelOverride should take priority over the runtime model
+    expect(state.sessionInfo.model).toBe("claude-opus-4-6");
+    expect(state.sessionInfo.modelProvider).toBe("anthropic");
+  });
+
+  it("falls back to entry.model when no modelOverride is set", async () => {
+    // When there's no user override, the runtime model should display normally
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [
+        {
+          key: "agent:main:main",
+          model: "claude-sonnet-4-6",
+          modelProvider: "anthropic",
+          // No modelOverride set
+          updatedAt: 200,
+        },
+      ],
+    });
+
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {
+        model: "claude-sonnet-4-6",
+        modelProvider: "anthropic",
+        updatedAt: 100,
+      },
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "idle",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { refreshSessionInfo } = createSessionActions({
+      client: { listSessions } as unknown as GatewayChatClient,
+      chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus: vi.fn(),
+    });
+
+    await refreshSessionInfo();
+
+    // Without an override, the runtime model should be used
+    expect(state.sessionInfo.model).toBe("claude-sonnet-4-6");
+    expect(state.sessionInfo.modelProvider).toBe("anthropic");
+  });
+
+  it("clears override when modelOverride is reset to empty string", async () => {
+    // When user resets override (e.g. /status model=default), modelOverride is ""
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [
+        {
+          key: "agent:main:main",
+          model: "claude-sonnet-4-6",
+          modelProvider: "anthropic",
+          modelOverride: "",
+          updatedAt: 200,
+        },
+      ],
+    });
+
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {
+        model: "claude-opus-4-6",
+        modelProvider: "anthropic",
+        updatedAt: 100,
+      },
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "idle",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { refreshSessionInfo } = createSessionActions({
+      client: { listSessions } as unknown as GatewayChatClient,
+      chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus: vi.fn(),
+    });
+
+    await refreshSessionInfo();
+
+    // Empty modelOverride should fall through to entry.model
+    expect(state.sessionInfo.model).toBe("claude-sonnet-4-6");
+    expect(state.sessionInfo.modelProvider).toBe("anthropic");
+  });
+
   it("accepts older session snapshots after switching session keys", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
