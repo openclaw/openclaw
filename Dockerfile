@@ -104,7 +104,7 @@ WORKDIR /app
 # On the full bookworm image these are already installed (apt-get is a no-op).
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git openssl ripgrep && \
+      procps hostname curl git openssl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
@@ -178,26 +178,6 @@ RUN if [ -n "$OPENCLAW_INSTALL_DOCKER_CLI" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         docker-ce-cli docker-compose-plugin && \
-      apt-get clean && \
-      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
-
-# Optionally install GitHub CLI (gh) for skills and agents that use git/GitHub.
-# Build with: docker build --build-arg OPENCLAW_INSTALL_GH_CLI=1 ...
-# Adds ~25MB. Installs the official gh CLI from https://cli.github.com.
-ARG OPENCLAW_INSTALL_GH_CLI=""
-RUN if [ -n "$OPENCLAW_INSTALL_GH_CLI" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg && \
-      install -m 0755 -d /etc/apt/keyrings && \
-      curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
-      chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
-      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
-        "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/github-cli.list && \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gh && \
       apt-get clean && \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi

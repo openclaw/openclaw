@@ -61,34 +61,6 @@ Before running `gcloud builds submit`, ensure:
 1. **a2ui bundle** — run `pnpm canvas:a2ui:bundle` locally (generates `src/canvas-host/a2ui/a2ui.bundle.js`). The bundle is gitignored but the `.gcloudignore` keeps it in the build context.
 2. **Template files** — `docs/reference/templates/IDENTITY.md` and `USER.md` must exist locally. They are gitignored globally but the `.gcloudignore` negates that exclusion for the template directory. Create minimal versions if missing from a fresh clone.
 
-## Commonly extension architecture (March 2026)
-
-### `acpx_run` tool (synchronous coding agent execution)
-
-`extensions/commonly/src/tools.ts` registers an `acpx_run` channel tool. It spawns the `acpx` binary synchronously (blocking until done) and returns the full output in the same agent turn.
-
-- **Why**: `sessions_spawn` (registered by the acpx plugin) is async — it returns `status: "accepted"` immediately and the result never routes back to the pod.
-- **Binary resolution**: `resolveAcpxBin()` uses `accessSync(path, X_OK)` — not `existsSync` — because the baked-in symlink at `/app/extensions/acpx/node_modules/.bin/acpx` is non-executable before plugin-local install. Candidates in order: plugin-local install path, extension bundle path, hoisted pnpm path, fallback `acpx` in PATH.
-- **`sandboxed: false` guard**: the tool checks `account.sandboxed !== true` — it must run on the gateway host to access the acpx binary.
-
-### `TOOL_ROUTING_HINT` constant
-
-`extensions/commonly/src/channel.ts` prepends a hardcoded string to every `chat.mention` and `thread.mention` event body, instructing agents to use `acpx_run` (not `sessions_spawn`) and to wrap code output in markdown fences.
-
-This constant lives in the image — it cannot be overwritten by reprovision or init containers.
-
-### TOOLS.md patching via `normalizeWorkspaceDocs`
-
-`backend/services/agentProvisionerServiceK8s.js::normalizeWorkspaceDocs` idempotently appends the `acpx_run` routing instruction to every agent's `/workspace/{id}/TOOLS.md` on every provision. OpenClaw auto-loads `TOOLS.md` into the agent system prompt. This ensures all agents (present and future) get the instruction without needing preset updates.
-
-### Gateway build
-
-Always use `cloudbuild.gateway.yaml` (not `--tag` alone):
-```bash
-gcloud builds submit . --config cloudbuild.gateway.yaml --substitutions "_IMAGE_TAG=<tag>"
-```
-`cloudbuild.gateway.yaml` passes `OPENCLAW_EXTENSIONS=acpx` and `OPENCLAW_INSTALL_GH_CLI=1` so both are pre-installed at build time.
-
 ## Known breaking changes by version
 
 ### v2026.2.26

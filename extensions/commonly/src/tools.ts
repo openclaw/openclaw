@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, readFileSync, writeFileSync } from "node:fs";
 
 import { Type } from "@sinclair/typebox";
 
@@ -28,7 +28,30 @@ function resolveAcpxBin(): string {
   return "acpx"; // fallback: hope it's in PATH
 }
 
-function runAcpx(
+// Paths for Codex auth.json — shared PVC so init container and main container can both access.
+const CODEX_AUTH_PATH = "/home/node/.codex/auth.json";
+const CODEX_AUTH2_PATH = "/state/.codex/auth-2.json";
+
+function isRateLimitError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("rate limit") ||
+    m.includes("rate_limit") ||
+    m.includes("ratelimit") ||
+    m.includes("too many requests") ||
+    m.includes("429") ||
+    m.includes("quota exceeded") ||
+    m.includes("requests per minute") ||
+    m.includes("requests per day")
+  );
+}
+
+interface AcpxError extends Error {
+  acpxOutput?: string;
+  acpxExitCode?: number | null;
+}
+
+function spawnAcpx(
   agentId: string,
   task: string,
   timeoutMs: number,
@@ -60,10 +83,61 @@ function runAcpx(
       if (code === 0 || stdout.trim()) {
         resolve(output);
       } else {
-        reject(new Error(stderr.trim() || `acpx exited with code ${code}`));
+        const err: AcpxError = new Error(stderr.trim() || `acpx exited with code ${code}`);
+        err.acpxOutput = output;
+        err.acpxExitCode = code;
+        reject(err);
       }
     });
   });
+}
+
+async function runAcpx(
+  agentId: string,
+  task: string,
+  timeoutMs: number,
+): Promise<string> {
+  try {
+    return await spawnAcpx(agentId, task, timeoutMs);
+  } catch (err: unknown) {
+    const acpxErr = err as AcpxError;
+    const errMsg = acpxErr.acpxOutput ?? acpxErr.message ?? "";
+    if (!isRateLimitError(errMsg)) {
+      throw err;
+    }
+
+    // Rate-limit on account-1 — try account-2 if available.
+    let account2Json: string | null = null;
+    try {
+      account2Json = readFileSync(CODEX_AUTH2_PATH, "utf8");
+    } catch {
+      // account-2 not configured
+    }
+    if (!account2Json) {
+      throw new Error(`Codex rate-limited (account-1) and no account-2 auth configured.\n${errMsg}`);
+    }
+
+    // Backup account-1, swap in account-2, retry.
+    let account1Backup: string | null = null;
+    try {
+      account1Backup = readFileSync(CODEX_AUTH_PATH, "utf8");
+    } catch { /* missing — no backup */ }
+
+    try {
+      writeFileSync(CODEX_AUTH_PATH, account2Json, "utf8");
+    } catch (writeErr: unknown) {
+      throw new Error(`Codex rate-limited; failed to swap to account-2: ${(writeErr as Error).message}`);
+    }
+
+    try {
+      return await spawnAcpx(agentId, task, timeoutMs);
+    } finally {
+      // Always restore account-1 so subsequent calls retry with the primary account.
+      if (account1Backup) {
+        try { writeFileSync(CODEX_AUTH_PATH, account1Backup, "utf8"); } catch { /* ignore */ }
+      }
+    }
+  }
 }
 
 // readStringArrayParam is not in plugin-sdk — inline a minimal version.

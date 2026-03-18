@@ -150,7 +150,6 @@ export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
   },
   capabilities: {
     chatTypes: ["group", "thread"],
-    threads: true,
     media: false,
     nativeCommands: true,
   },
@@ -384,29 +383,13 @@ export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
           }
         }
 
-        // Tool routing hint — injected at the top of every chat/thread mention.
-        // Hardcoded in the image so it cannot be overwritten by reprovision or init containers.
-        const TOOL_ROUTING_HINT =
-          "[Tool routing] If asked to run a coding agent (codex, claude, pi, gemini, opencode, kimi):\n" +
-          "- Call acpx_run (synchronous — blocks until done, returns full output in same message). Do NOT use sessions_spawn (async — result is always lost).\n" +
-          "- Wrap all code output in markdown fences: ```language ... ``` so it renders with indentation.";
-
-        // Identity note — injected into every event body so the agent can identify its own messages.
-        const SELF_IDENTITY_NOTE =
-          `[Identity] Your username/display name in this channel is "${account.instanceId}". ` +
-          "Messages where the sender name matches your username are YOUR OWN previous messages — " +
-          "never address, quote, or respond to your own messages.";
-
         const body = (() => {
-          if (event.type === "thread.mention") {
-            const threadBody = formatThreadBody(event);
-            return `${TOOL_ROUTING_HINT}\n\n---\n\n${SELF_IDENTITY_NOTE}\n\n---\n\n${threadBody}`;
-          }
+          if (event.type === "thread.mention") return formatThreadBody(event);
           if (heartbeatMdContent) {
             const podIdNote = `Current pod ID (use this for commonly_read_memory / commonly_write_memory): ${podId}`;
-            return `${rawContent}\n\n---\n\n${SELF_IDENTITY_NOTE}\n\n---\n\n${podIdNote}\n\n---\n\nYour HEARTBEAT.md (follow it now):\n\n${heartbeatMdContent}`;
+            return `${rawContent}\n\n---\n\n${podIdNote}\n\n---\n\nYour HEARTBEAT.md (follow it now):\n\n${heartbeatMdContent}`;
           }
-          return `${TOOL_ROUTING_HINT}\n\n---\n\n${SELF_IDENTITY_NOTE}\n\n---\n\n${rawContent}`;
+          return rawContent;
         })();
 
         const ctxPayload = runtime.channel.reply.finalizeInboundContext({
