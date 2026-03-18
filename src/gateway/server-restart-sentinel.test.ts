@@ -143,17 +143,60 @@ describe("scheduleRestartSentinelWake", () => {
           },
         },
       });
-    mocks.deliveryContextFromSession
-      .mockReturnValueOnce({ channel: "slack" })
-      .mockReturnValueOnce({
-        channel: "slack",
-        to: "channel:C0AL50GP89M",
-        accountId: "default",
-      });
-    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true as const, to: "channel:C0AL50GP89M" });
+    mocks.deliveryContextFromSession.mockReturnValueOnce({ channel: "slack" }).mockReturnValueOnce({
+      channel: "slack",
+      to: "channel:C0AL50GP89M",
+      accountId: "default",
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true as const,
+      to: "channel:C0AL50GP89M",
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:C0AL50GP89M",
+      }),
+    );
+  });
+
+  it("keeps a partially populated current route when no base session is available", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValueOnce({
+      payload: {
+        sessionKey: "agent:main:slack:channel:C0AL50GP89M:thread:1773827207.576549",
+        deliveryContext: {
+          channel: "slack",
+        },
+      },
+    });
+    mocks.parseSessionThreadInfo.mockReturnValueOnce({
+      baseSessionKey: null,
+      threadId: "1773827207.576549",
+    });
+    mocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      entry: {
+        deliveryContext: {
+          channel: "slack",
+          to: "channel:C0AL50GP89M",
+        },
+      },
+    });
+    mocks.deliveryContextFromSession.mockReturnValueOnce({
+      channel: "slack",
+      to: "channel:C0AL50GP89M",
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true as const,
+      to: "channel:C0AL50GP89M",
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.loadSessionEntry).toHaveBeenCalledTimes(1);
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "slack",

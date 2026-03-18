@@ -72,6 +72,8 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
 
   const parts = from.split(":").filter(Boolean);
   const normalizedParts = parts.map((part) => part.trim().toLowerCase());
+  // Agent-prefixed session keys are encoded as agent:<agentId>:<provider>:...
+  // This assumes agent IDs themselves do not contain ':'.
   const startIndex = normalizedParts[0] === "agent" && normalizedParts.length >= 3 ? 2 : 0;
   const head = normalizedParts[startIndex] ?? "";
   const headIsSurface = head ? getGroupSurfaces().has(head) : false;
