@@ -332,7 +332,7 @@ async function expectBoundStatusCommandDispatch(params: {
 
 describe("Discord native plugin command dispatch", () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
     clearPluginCommands();
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockReset();
     persistentBindingMocks.resolveConfiguredAcpBindingRecord.mockImplementation((params) => ({
