@@ -34,6 +34,11 @@ function buildPluginInspectJson(params: {
   report: PluginStatusReport;
 }): {
   inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>;
+  compatibilityWarnings: Array<{
+    code: string;
+    severity: string;
+    message: string;
+  }>;
   install: PluginInstallRecord | null;
 } | null {
   const inspect = buildPluginInspectReport({
@@ -60,6 +65,11 @@ function buildAllPluginInspectJson(params: {
   report: PluginStatusReport;
 }): Array<{
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number];
+  compatibilityWarnings: Array<{
+    code: string;
+    severity: string;
+    message: string;
+  }>;
   install: PluginInstallRecord | null;
 }> {
   return buildAllPluginInspectReports({

@@ -25,7 +25,6 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
-import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createInboundDebouncer,
@@ -48,6 +47,14 @@ import {
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
+import {
+  APPROVE_CALLBACK_DATA_RE,
+  hasInboundMedia,
+  hasReplyTargetMedia,
+  isMediaSizeLimitError,
+  isRecoverableMediaGroupError,
+  resolveInboundMediaFileId,
+} from "./bot-handlers.media.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
@@ -91,44 +98,6 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
-
-const APPROVE_CALLBACK_DATA_RE =
-  /^\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(allow-once|allow-always|deny)\b/i;
-
-function isMediaSizeLimitError(err: unknown): boolean {
-  const errMsg = String(err);
-  return errMsg.includes("exceeds") && errMsg.includes("MB limit");
-}
-
-function isRecoverableMediaGroupError(err: unknown): boolean {
-  return err instanceof MediaFetchError || isMediaSizeLimitError(err);
-}
-
-function hasInboundMedia(msg: Message): boolean {
-  return (
-    Boolean(msg.media_group_id) ||
-    (Array.isArray(msg.photo) && msg.photo.length > 0) ||
-    Boolean(msg.video ?? msg.video_note ?? msg.document ?? msg.audio ?? msg.voice ?? msg.sticker)
-  );
-}
-
-function hasReplyTargetMedia(msg: Message): boolean {
-  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
-  const replyTarget = msg.reply_to_message ?? externalReply;
-  return Boolean(replyTarget && hasInboundMedia(replyTarget));
-}
-
-function resolveInboundMediaFileId(msg: Message): string | undefined {
-  return (
-    msg.sticker?.file_id ??
-    msg.photo?.[msg.photo.length - 1]?.file_id ??
-    msg.video?.file_id ??
-    msg.video_note?.file_id ??
-    msg.document?.file_id ??
-    msg.audio?.file_id ??
-    msg.voice?.file_id
-  );
-}
 
 export const registerTelegramHandlers = ({
   cfg,
