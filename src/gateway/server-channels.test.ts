@@ -249,6 +249,63 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(false);
   });
 
+  it("keeps running true after auto-restart", async () => {
+    let attempts = 0;
+    const startAccount = vi.fn(async ({ setStatus, abortSignal }) => {
+      attempts += 1;
+      setStatus({ connected: true });
+      if (attempts === 1) {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", resolve, { once: true });
+      });
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(6000); // backoff from first failure + restart (5 sec initial)
+
+    expect(startAccount).toHaveBeenCalledTimes(2);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account?.connected).toBe(true);
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+  });
+
+  it("resets connected state when channel is stopped", async () => {
+    const startAccount = vi.fn(async ({ setStatus, abortSignal }) => {
+      setStatus({ connected: true });
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", resolve, { once: true });
+      });
+    });
+
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    let snapshot = manager.getRuntimeSnapshot();
+    let account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.connected).toBe(true);
+    expect(account?.running).toBe(true);
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    snapshot = manager.getRuntimeSnapshot();
+    account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.connected).toBe(false);
+    expect(account?.running).toBe(false);
+  });
+
   it("cancels a pending startup when the account is stopped mid-boot", async () => {
     const startupGate = createDeferred();
     const isConfigured = vi.fn(async () => {
