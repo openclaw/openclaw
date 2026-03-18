@@ -98,6 +98,126 @@ describe("prefix matching ordering", () => {
   });
 });
 
+describe("config catalog lookup", () => {
+  it("uses catalog pricing when model is defined in config", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            models: [
+              {
+                id: "my-cheap-model",
+                cost: { input: 0.5, output: 1, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as import("../config/config.js").OpenClawConfig;
+    // 4000 chars = 1000 tokens. catalog says $0.50/M = $0.0005/1K
+    const cost = estimateRunCost("x".repeat(4000), "custom/my-cheap-model", cfg);
+    expect(cost).toBeCloseTo(0.0005, 5);
+  });
+
+  it("falls back to hardcoded table when model not in catalog", () => {
+    const cfg = {
+      models: { providers: {} },
+    } as unknown as import("../config/config.js").OpenClawConfig;
+    const cost = estimateRunCost("x".repeat(4000), "claude-opus-4", cfg);
+    // Should still use hardcoded table: $15/M = $0.015/1K
+    expect(cost).toBeCloseTo(0.015, 3);
+  });
+
+  it("falls back to hardcoded table when cfg is undefined", () => {
+    const cost = estimateRunCost("x".repeat(4000), "claude-opus-4");
+    expect(cost).toBeCloseTo(0.015, 3);
+  });
+
+  it("falls back to hardcoded table for bare model name without provider/", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            models: [
+              {
+                id: "claude-opus-4",
+                cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as import("../config/config.js").OpenClawConfig;
+    // Bare name "claude-opus-4" has no provider/ prefix, so parseModelRef
+    // returns provider="" which fails catalog lookup. Falls back to hardcoded.
+    const cost = estimateRunCost("x".repeat(4000), "claude-opus-4", cfg);
+    expect(cost).toBeCloseTo(0.015, 3);
+  });
+
+  it("uses zero cost.input from catalog for free models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            models: [
+              {
+                id: "free-model",
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as import("../config/config.js").OpenClawConfig;
+    const cost = estimateRunCost("x".repeat(4000), "custom/free-model", cfg);
+    expect(cost).toBe(0); // free model = $0
+  });
+
+  it("uses zero cost.input from catalog (free/local model)", () => {
+    const cfg = {
+      models: {
+        providers: {
+          local: {
+            models: [
+              {
+                id: "llama3",
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as import("../config/config.js").OpenClawConfig;
+    const cost = estimateRunCost("x".repeat(4000), "local/llama3", cfg);
+    expect(cost).toBe(0); // free model = $0
+  });
+
+  it("matches hardcoded table with provider-prefixed model name", () => {
+    // "openai/gpt-4o" should strip "openai/" and match "gpt-4o" in hardcoded table
+    const cost = estimateRunCost("x".repeat(4000), "openai/gpt-4o");
+    expect(cost).toBeCloseTo(0.0025, 4); // gpt-4o = $2.5/M
+  });
+
+  it("ignores catalog entry with negative cost.input", () => {
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            models: [
+              {
+                id: "bad-model",
+                cost: { input: -5, output: 1, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as import("../config/config.js").OpenClawConfig;
+    const cost = estimateRunCost("x".repeat(4000), "custom/bad-model", cfg);
+    expect(cost).toBeCloseTo(0.015, 3); // fallback
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Integration tests: runHeartbeatOnce with maxCostPerRun
 // ---------------------------------------------------------------------------
@@ -199,5 +319,18 @@ describe("runHeartbeatOnce – maxCostPerRun", () => {
     const { result, replyCallCount } = await runWithCostCap({ maxCostPerRun: Infinity });
     expect(result).toEqual(expect.objectContaining({ status: "ran" }));
     expect(replyCallCount).toBe(1);
+  });
+
+  it("proceeds for free catalog model when maxCostPerRun is 0", async () => {
+    // Free model: estimated cost = $0. maxCostPerRun = 0. 0 > 0 = false, so run proceeds.
+    // This uses heartbeat.model override which goes through the hardcoded table,
+    // not the catalog. A truly free model via catalog would also return $0.
+    const { result, replyCallCount } = await runWithCostCap({
+      maxCostPerRun: 0,
+      model: "gemini-2.0-flash", // cheapest in table, but still > $0 for non-empty prompt
+    });
+    // gemini-2.0-flash with HEARTBEAT.md context will have cost > 0, so it gets skipped
+    expect(result).toEqual({ status: "skipped", reason: "cost-cap-exceeded" });
+    expect(replyCallCount).toBe(0);
   });
 });

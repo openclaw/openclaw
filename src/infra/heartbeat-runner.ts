@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { parseModelRef } from "../agents/model-selection.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -44,6 +45,7 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
+import { resolveModelCostConfig } from "../utils/usage-format.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
@@ -722,6 +724,7 @@ export async function runHeartbeatOnce(opts: {
       const estimatedCost = estimateRunCost(
         ctx.Body,
         heartbeatModelOverride ?? resolveDefaultModelId(cfg),
+        cfg,
       );
       if (estimatedCost > maxCostPerRun) {
         log.warn("heartbeat: skipping run, estimated cost exceeds maxCostPerRun", {
@@ -1242,11 +1245,27 @@ const SORTED_PRICING_ENTRIES = Object.entries(MODEL_INPUT_PRICING).sort(
 );
 
 /**
- * Match a model id against the pricing table. Tries longest-prefix-first
- * matching so "claude-opus-4-20260901" matches "claude-opus-4".
+ * Try the config model catalog first (exact match via resolveModelCostConfig),
+ * then fall back to prefix matching against the hardcoded table.
  */
-function resolveInputPricePerToken(modelId: string): number {
-  const lower = modelId.toLowerCase();
+function resolveInputPricePerToken(modelId: string, cfg?: OpenClawConfig): number {
+  if (cfg) {
+    const ref = parseModelRef(modelId, "");
+    if (ref) {
+      const costConfig = resolveModelCostConfig({
+        provider: ref.provider,
+        model: ref.model,
+        config: cfg,
+      });
+      if (costConfig && Number.isFinite(costConfig.input) && costConfig.input >= 0) {
+        return costConfig.input / 1_000_000;
+      }
+    }
+  }
+  // Strip provider prefix (e.g. "openai/gpt-4o" -> "gpt-4o") for hardcoded table match.
+  const slash = modelId.indexOf("/");
+  const bareModel = slash !== -1 ? modelId.slice(slash + 1) : modelId;
+  const lower = bareModel.toLowerCase();
   for (const [prefix, price] of SORTED_PRICING_ENTRIES) {
     if (lower.startsWith(prefix)) {
       return price;
@@ -1260,9 +1279,12 @@ function estimateTokenCount(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-/** Estimate input cost (USD) for a single run. */
-export function estimateRunCost(promptBody: string, modelId: string): number {
-  return estimateTokenCount(promptBody) * resolveInputPricePerToken(modelId);
+/**
+ * Estimate input cost (USD) for a single run. Checks the config model
+ * catalog first, falls back to the hardcoded pricing table.
+ */
+export function estimateRunCost(promptBody: string, modelId: string, cfg?: OpenClawConfig): number {
+  return estimateTokenCount(promptBody) * resolveInputPricePerToken(modelId, cfg);
 }
 
 /** Resolve the default model id from config. */
