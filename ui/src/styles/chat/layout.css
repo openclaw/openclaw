@@ -363,11 +363,17 @@
   box-sizing: border-box;
 }
 
+.agent-chat__input-wrap {
+  position: relative;
+  margin: 0 18px 14px;
+  flex-shrink: 0;
+}
+
 .agent-chat__input {
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 0 18px 14px;
+  margin: 0;
   padding: 0;
   background: var(--card);
   border: 1px solid var(--border);
