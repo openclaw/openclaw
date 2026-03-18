@@ -11,10 +11,16 @@ import type { ContextEngine } from "./types.js";
 describe("context-engine/registry", () => {
   afterEach(() => {
     // Clean up test engines to prevent state leakage
-    const testEngines = [...(globalThis.__openclawContextEngines?.keys() ?? [])].filter(
-      (id) => id.startsWith("test-") || id.startsWith("cross-module-"),
+    const testEngines = [
+      ...((
+        globalThis as unknown as { __openclawContextEngines?: Map<string, unknown> }
+      ).__openclawContextEngines?.keys() ?? []),
+    ].filter((id) => id.startsWith("test-") || id.startsWith("cross-module-"));
+    testEngines.forEach((id) =>
+      (
+        globalThis as unknown as { __openclawContextEngines?: Map<string, unknown> }
+      ).__openclawContextEngines?.delete(id),
     );
-    testEngines.forEach((id) => globalThis.__openclawContextEngines.delete(id));
   });
 
   describe("singleton pattern via globalThis", () => {
@@ -100,10 +106,16 @@ describe("context-engine/registry", () => {
       expect(registry2.getContextEngineFactory(testId)).toBe(mockFactory);
 
       // 5. Verify it's using the same Map instance
-      expect(globalThis.__openclawContextEngines.get(testId)).toBe(mockFactory);
+      expect(
+        (
+          globalThis as unknown as { __openclawContextEngines?: Map<string, unknown> }
+        ).__openclawContextEngines?.get(testId),
+      ).toBe(mockFactory);
 
       // Cleanup
-      globalThis.__openclawContextEngines.delete(testId);
+      (
+        globalThis as unknown as { __openclawContextEngines?: Map<string, unknown> }
+      ).__openclawContextEngines?.delete(testId);
     });
 
     it("new registrations after module reset are visible to both imports", async () => {
@@ -120,10 +132,16 @@ describe("context-engine/registry", () => {
 
       // Should be accessible
       expect(getContextEngineFactory(testId)).toBe(mockFactory);
-      expect(globalThis.__openclawContextEngines.get(testId)).toBe(mockFactory);
+      expect(
+        (
+          globalThis as unknown as { __openclawContextEngines?: Map<string, unknown> }
+        ).__openclawContextEngines?.get(testId),
+      ).toBe(mockFactory);
 
       // Cleanup
-      globalThis.__openclawContextEngines.delete(testId);
+      (
+        globalThis as unknown as { __openclawContextEngines?: Map<string, unknown> }
+      ).__openclawContextEngines?.delete(testId);
     });
   });
 
