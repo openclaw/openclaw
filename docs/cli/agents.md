@@ -49,7 +49,13 @@ If you omit `accountId` (`--bind <channel>`), OpenClaw resolves it from channel 
 
 ### Binding scope behavior
 
-- A binding without `accountId` matches the channel default account only.
+> [!WARNING]
+> A binding **without `accountId`** matches the channel **default account
+> only** — it does **not** match all accounts. If you configure multiple
+> accounts for a channel (e.g. Feishu `default` + `ai-bot`), use
+> `--bind <channel>:*` or add `accountId: "*"` in JSON to match all of
+> them, or specify each account explicitly.
+
 - `accountId: "*"` is the channel-wide fallback (all accounts) and is less specific than an explicit account binding.
 - If the same agent already has a matching channel binding without `accountId`, and you later bind with an explicit or resolved `accountId`, OpenClaw upgrades that existing binding in place instead of adding a duplicate.
 
