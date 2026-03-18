@@ -7,11 +7,11 @@ const sendReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const removeReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 
-vi.mock("../../../agents/tools/discord-actions.js", () => ({
+vi.mock("../../../../extensions/discord/src/actions/runtime.js", () => ({
   handleDiscordAction,
 }));
 
-vi.mock("../../../agents/tools/telegram-actions.js", () => ({
+vi.mock("../../../../extensions/telegram/src/action-runtime.js", () => ({
   handleTelegramAction,
 }));
 
@@ -20,7 +20,7 @@ vi.mock("../../../../extensions/signal/src/send-reactions.js", () => ({
   removeReactionSignal,
 }));
 
-vi.mock("../../../agents/tools/slack-actions.js", () => ({
+vi.mock("../../../../extensions/slack/runtime-api.js", () => ({
   handleSlackAction,
 }));
 
