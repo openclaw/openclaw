@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin } from "../types.js";
-import { providerContractPluginIds, uniqueProviderContractProviders } from "./registry.js";
 
 const resolvePluginProvidersMock = vi.fn();
 
@@ -9,9 +8,11 @@ vi.mock("../providers.js", () => ({
 }));
 
 let buildProviderPluginMethodChoice: typeof import("../provider-wizard.js").buildProviderPluginMethodChoice;
+let providerContractPluginIds: typeof import("./registry.js").providerContractPluginIds;
 let resolveProviderModelPickerEntries: typeof import("../provider-wizard.js").resolveProviderModelPickerEntries;
 let resolveProviderPluginChoice: typeof import("../provider-wizard.js").resolveProviderPluginChoice;
 let resolveProviderWizardOptions: typeof import("../provider-wizard.js").resolveProviderWizardOptions;
+let uniqueProviderContractProviders: typeof import("./registry.js").uniqueProviderContractProviders;
 
 function resolveExpectedWizardChoiceValues(providers: ProviderPlugin[]) {
   const values: string[] = [];
@@ -72,6 +73,8 @@ function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
 describe("provider wizard contract", () => {
   beforeEach(async () => {
     vi.resetModules();
+    ({ providerContractPluginIds, uniqueProviderContractProviders } =
+      await import("./registry.js"));
     ({
       buildProviderPluginMethodChoice,
       resolveProviderModelPickerEntries,
