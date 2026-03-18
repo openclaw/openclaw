@@ -1,5 +1,5 @@
-import { MarkdownConfigSchema } from "openclaw/plugin-sdk/twitch";
 import { z } from "zod";
+import { MarkdownConfigSchema } from "../api.js";
 
 /**
  * Twitch user roles that can be allowed to interact with the bot
