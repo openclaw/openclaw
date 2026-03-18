@@ -74,6 +74,14 @@ export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
   preferredProfile?: string;
 };
 
+type WebSearchProviderConfig = {
+  apiKey?: SecretInput;
+  model?: string;
+  baseUrl?: string;
+  mode?: string;
+  inlineCitations?: boolean;
+} & Record<string, unknown>;
+
 export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Enable media understanding when models are configured. */
   enabled?: boolean;
@@ -467,6 +475,8 @@ export type ToolsConfig = {
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
+      /** Shared API key slot used by providers that do not need nested config. */
+      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
@@ -487,7 +497,7 @@ export type ToolsConfig = {
       kimi?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
-    };
+    } & Record<string, unknown>;
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
