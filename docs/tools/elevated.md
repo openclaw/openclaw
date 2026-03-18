@@ -17,7 +17,7 @@ title: "Elevated Mode"
 - Directive forms: `/elevated on|off|ask|full`, `/elev on|off|ask|full`.
 - Only `on|off|ask|full` are accepted; anything else returns a hint and does not change state.
 
-## What it controls (and what it doesn’t)
+## What it controls (and what it does not)
 
 - **Availability gates**: `tools.elevated` is the global baseline. `agents.list[].tools.elevated` can further restrict elevated per agent (both must allow).
 - **Per-session state**: `/elevated on|off|ask|full` sets the elevated level for the current session key.

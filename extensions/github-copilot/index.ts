@@ -1,15 +1,12 @@
+import { ensureAuthProfileStore, listProfilesForProvider } from "openclaw/plugin-sdk/agent-runtime";
 import {
   definePluginEntry,
   type ProviderAuthContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import {
-  coerceSecretRef,
-  ensureAuthProfileStore,
-  githubCopilotLoginCommand,
-  listProfilesForProvider,
-} from "openclaw/plugin-sdk/provider-auth";
+import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth-login";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";

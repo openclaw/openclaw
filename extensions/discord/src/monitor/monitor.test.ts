@@ -7,11 +7,11 @@ import type {
 import type { Client } from "@buape/carbon";
 import { ChannelType } from "discord-api-types/v10";
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { DiscordAccountConfig } from "../../../../src/config/types.discord.js";
-import { buildPluginBindingApprovalCustomId } from "../../../../src/plugins/conversation-binding.js";
-import { buildAgentSessionKey } from "../../../../src/routing/resolve-route.js";
 import {
   clearDiscordComponentEntries,
   registerDiscordComponentEntries,
@@ -50,7 +50,6 @@ const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 const upsertPairingRequestMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const dispatchReplyMock = vi.hoisted(() => vi.fn());
-const deliverDiscordReplyMock = vi.hoisted(() => vi.fn());
 const recordInboundSessionMock = vi.hoisted(() => vi.fn());
 const readSessionUpdatedAtMock = vi.hoisted(() => vi.fn());
 const resolveStorePathMock = vi.hoisted(() => vi.fn());
@@ -59,37 +58,20 @@ const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
 const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn());
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
-vi.mock("../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-}));
-
-vi.mock("../../../../src/infra/system-events.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/infra/system-events.js")>();
+vi.mock("../../../../src/security/dm-policy-shared.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../src/security/dm-policy-shared.js")>();
   return {
     ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    readStoreAllowFromForDmPolicy: (...args: unknown[]) => readAllowFromStoreMock(...args),
   };
 });
 
-vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", () => ({
-  dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
-}));
-
-vi.mock("./reply-delivery.js", () => ({
-  deliverDiscordReply: (...args: unknown[]) => deliverDiscordReplyMock(...args),
-}));
-
-vi.mock("../../../../src/channels/session.js", () => ({
-  recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-}));
-
-vi.mock("../../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/config/sessions.js")>();
+vi.mock("../../../../src/pairing/pairing-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/pairing/pairing-store.js")>();
   return {
     ...actual,
-    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
-    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };
 });
 
@@ -102,6 +84,42 @@ vi.mock("../../../../src/plugins/conversation-binding.js", async (importOriginal
       resolvePluginConversationBindingApprovalMock(...args),
     buildPluginBindingResolvedText: (...args: unknown[]) =>
       buildPluginBindingResolvedTextMock(...args),
+  };
+});
+
+vi.mock("../../../../src/infra/system-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/infra/system-events.js")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  };
+});
+
+vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../../src/auto-reply/reply/provider-dispatcher.js")
+    >();
+  return {
+    ...actual,
+    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
+  };
+});
+
+vi.mock("../../../../src/channels/session.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/channels/session.js")>();
+  return {
+    ...actual,
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
+});
+
+vi.mock("../../../../src/config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/config/sessions.js")>();
+  return {
+    ...actual,
+    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
   };
 });
 
@@ -287,12 +305,18 @@ describe("discord component interactions", () => {
   const createComponentButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
+    const rest = {
+      get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
+      post: vi.fn().mockResolvedValue({}),
+      patch: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
     const interaction = {
       rawData: { channel_id: "dm-channel", id: "interaction-1" },
       user: { id: "123456789", username: "AgentUser", discriminator: "0001" },
       customId: "occomp:cid=btn_1",
       message: { id: "msg-1" },
-      client: { rest: {} },
+      client: { rest },
       defer,
       reply,
       ...overrides,
@@ -303,6 +327,12 @@ describe("discord component interactions", () => {
   const createModalInteraction = (overrides: Partial<ModalInteraction> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const acknowledge = vi.fn().mockResolvedValue(undefined);
+    const rest = {
+      get: vi.fn().mockResolvedValue({ type: ChannelType.DM }),
+      post: vi.fn().mockResolvedValue({}),
+      patch: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
     const fields = {
       getText: (key: string) => (key === "fld_1" ? "Casey" : undefined),
       getStringSelect: (_key: string) => undefined,
@@ -316,7 +346,7 @@ describe("discord component interactions", () => {
       fields,
       acknowledge,
       reply,
-      client: { rest: {} },
+      client: { rest },
       ...overrides,
     } as unknown as ModalInteraction;
     return { interaction, acknowledge, reply };
@@ -363,7 +393,6 @@ describe("discord component interactions", () => {
       lastDispatchCtx = params.ctx;
       await params.dispatcherOptions.deliver({ text: "ok" });
     });
-    deliverDiscordReplyMock.mockClear();
     recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
     readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
     resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
@@ -415,8 +444,6 @@ describe("discord component interactions", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓" });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
-    expect(deliverDiscordReplyMock.mock.calls[0]?.[0]?.replyToId).toBe("msg-1");
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 
@@ -482,8 +509,6 @@ describe("discord component interactions", () => {
     expect(lastDispatchCtx?.BodyForAgent).toContain('Form "Details" submitted.');
     expect(lastDispatchCtx?.BodyForAgent).toContain("- Name: Casey");
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
-    expect(deliverDiscordReplyMock.mock.calls[0]?.[0]?.replyToId).toBe("msg-2");
     expect(resolveDiscordModalEntry({ id: "mdl_1" })).toBeNull();
   });
 

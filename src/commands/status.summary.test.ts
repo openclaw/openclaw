@@ -77,14 +77,17 @@ vi.mock("./status.link-channel.js", () => ({
   resolveLinkChannelContext: vi.fn(async () => undefined),
 }));
 
+const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
+const { buildChannelSummary } = await import("../infra/channel-summary.js");
+const { resolveLinkChannelContext } = await import("./status.link-channel.js");
+const { getStatusSummary } = await import("./status.summary.js");
+
 describe("getStatusSummary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("includes runtimeVersion in the status payload", async () => {
-    const { getStatusSummary } = await import("./status.summary.js");
-
     const summary = await getStatusSummary();
 
     expect(summary.runtimeVersion).toBe("2026.3.8");
@@ -93,11 +96,7 @@ describe("getStatusSummary", () => {
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
     vi.mocked(hasPotentialConfiguredChannels).mockReturnValue(false);
-    const { buildChannelSummary } = await import("../infra/channel-summary.js");
-    const { resolveLinkChannelContext } = await import("./status.link-channel.js");
-    const { getStatusSummary } = await import("./status.summary.js");
 
     const summary = await getStatusSummary();
 
