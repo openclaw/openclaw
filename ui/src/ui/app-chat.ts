@@ -68,16 +68,17 @@ export function isChatStopCommand(text: string) {
   );
 }
 
+/** Only /reset clears the current session; /new spawns a new session and is handled locally. */
 function isChatResetCommand(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
     return false;
   }
   const normalized = trimmed.toLowerCase();
-  if (normalized === "/new" || normalized === "/reset") {
+  if (normalized === "/reset") {
     return true;
   }
-  return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
+  return normalized.startsWith("/reset ");
 }
 
 export async function handleAbortChat(host: ChatHost) {

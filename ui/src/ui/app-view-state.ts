@@ -369,4 +369,6 @@ export type AppViewState = {
     handleOpenSidebar: (content: string) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
+    /** Called when /new creates a new session so the UI switches to it; set at init, not in render. */
+    onSwitchToSession?: (sessionKey: string) => void;
   };
