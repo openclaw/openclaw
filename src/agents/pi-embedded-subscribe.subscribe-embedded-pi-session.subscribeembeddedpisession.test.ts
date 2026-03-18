@@ -293,6 +293,38 @@ describe("subscribeEmbeddedPiSession", () => {
     expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
   });
 
+  it("does not emit external replies for transcript-only openclaw assistant messages", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emitMessageStartAndEndForAssistantText({ emit, text: "Normal summary" });
+
+    const injectedAssistantMessage = {
+      role: "assistant",
+      provider: "openclaw",
+      model: "gateway-injected",
+      content: [{ type: "text", text: "[Stopped]\n\nInternal banner" }],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: injectedAssistantMessage });
+    emit({
+      type: "message_update",
+      message: injectedAssistantMessage,
+      assistantMessageEvent: { type: "text_delta", delta: "[Stopped]\n\nInternal banner" },
+    });
+    emit({ type: "message_end", message: injectedAssistantMessage });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Normal summary");
+  });
+
   it("does not emit duplicate agent events when message_end repeats", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
