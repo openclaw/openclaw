@@ -925,6 +925,12 @@ authoring plugins:
 
 - `openclaw/plugin-sdk/plugin-entry` for plugin registration primitives.
 - `openclaw/plugin-sdk/core` for the generic shared plugin-facing contract.
+- Stable channel primitives such as `openclaw/plugin-sdk/channel-setup`,
+  `openclaw/plugin-sdk/channel-pairing`,
+  `openclaw/plugin-sdk/channel-reply-pipeline`,
+  `openclaw/plugin-sdk/secret-input`, and
+  `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
+  wiring.
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/channel-config-schema`,
   `openclaw/plugin-sdk/channel-policy`,
@@ -961,6 +967,9 @@ authoring plugins:
 Compatibility note:
 
 - Avoid the root `openclaw/plugin-sdk` barrel for new code.
+- Prefer the narrow stable primitives first. The newer setup/pairing/reply/
+  secret-input/webhook subpaths are the intended contract for new bundled and
+  external plugin work.
 - Bundled extension-specific helper barrels are not stable by default. If a
   helper is only needed by a bundled extension, keep it behind the extension's
   local `api.js` or `runtime-api.js` seam instead of promoting it into

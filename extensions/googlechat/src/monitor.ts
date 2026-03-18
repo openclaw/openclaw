@@ -5,8 +5,8 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
+  createChannelReplyPipeline,
   createWebhookInFlightLimiter,
-  createReplyPrefixOptions,
   registerWebhookTargetWithPluginRoute,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
@@ -307,7 +307,7 @@ async function processMessageWithPipeline(params: {
     }
   }
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: config,
     agentId: route.agentId,
     channel: "googlechat",
@@ -318,7 +318,7 @@ async function processMessageWithPipeline(params: {
     ctx: ctxPayload,
     cfg: config,
     dispatcherOptions: {
-      ...prefixOptions,
+      ...replyPipeline,
       deliver: async (payload) => {
         await deliverGoogleChatReply({
           payload,

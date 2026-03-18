@@ -1,6 +1,9 @@
 import * as bluebubblesSdk from "openclaw/plugin-sdk/bluebubbles";
+import * as channelPairingSdk from "openclaw/plugin-sdk/channel-pairing";
+import * as channelReplyPipelineSdk from "openclaw/plugin-sdk/channel-reply-pipeline";
 import * as channelRuntimeSdk from "openclaw/plugin-sdk/channel-runtime";
 import * as channelSendResultSdk from "openclaw/plugin-sdk/channel-send-result";
+import * as channelSetupSdk from "openclaw/plugin-sdk/channel-setup";
 import * as coreSdk from "openclaw/plugin-sdk/core";
 import type {
   ChannelMessageActionContext as CoreChannelMessageActionContext,
@@ -18,11 +21,13 @@ import * as replyPayloadSdk from "openclaw/plugin-sdk/reply-payload";
 import * as routingSdk from "openclaw/plugin-sdk/routing";
 import * as runtimeSdk from "openclaw/plugin-sdk/runtime";
 import * as sandboxSdk from "openclaw/plugin-sdk/sandbox";
+import * as secretInputSdk from "openclaw/plugin-sdk/secret-input";
 import * as selfHostedProviderSetupSdk from "openclaw/plugin-sdk/self-hosted-provider-setup";
 import * as setupSdk from "openclaw/plugin-sdk/setup";
 import * as slackSdk from "openclaw/plugin-sdk/slack";
 import * as telegramSdk from "openclaw/plugin-sdk/telegram";
 import * as testingSdk from "openclaw/plugin-sdk/testing";
+import * as webhookIngressSdk from "openclaw/plugin-sdk/webhook-ingress";
 import * as whatsappSdk from "openclaw/plugin-sdk/whatsapp";
 import * as whatsappActionRuntimeSdk from "openclaw/plugin-sdk/whatsapp-action-runtime";
 import * as whatsappLoginQrSdk from "openclaw/plugin-sdk/whatsapp-login-qr";
@@ -111,6 +116,21 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof channelRuntimeSdk.sendPayloadMediaSequenceOrFallback).toBe("function");
   });
 
+  it("exports channel setup helpers from the dedicated subpath", () => {
+    expect(typeof channelSetupSdk.createOptionalChannelSetupSurface).toBe("function");
+    expect(typeof channelSetupSdk.createTopLevelChannelDmPolicy).toBe("function");
+  });
+
+  it("exports channel pairing helpers from the dedicated subpath", () => {
+    expect(typeof channelPairingSdk.createChannelPairingController).toBe("function");
+    expect(typeof channelPairingSdk.createScopedPairingAccess).toBe("function");
+  });
+
+  it("exports channel reply pipeline helpers from the dedicated subpath", () => {
+    expect(typeof channelReplyPipelineSdk.createChannelReplyPipeline).toBe("function");
+    expect(typeof channelReplyPipelineSdk.createTypingCallbacks).toBe("function");
+  });
+
   it("exports channel send-result helpers from the dedicated subpath", () => {
     expect(typeof channelSendResultSdk.attachChannelToResult).toBe("function");
     expect(typeof channelSendResultSdk.buildChannelSendResult).toBe("function");
@@ -160,6 +180,18 @@ describe("plugin-sdk subpath exports", () => {
   it("exports sandbox helpers from the dedicated subpath", () => {
     expect(typeof sandboxSdk.registerSandboxBackend).toBe("function");
     expect(typeof sandboxSdk.runPluginCommandWithTimeout).toBe("function");
+  });
+
+  it("exports secret input helpers from the dedicated subpath", () => {
+    expect(typeof secretInputSdk.buildSecretInputSchema).toBe("function");
+    expect(typeof secretInputSdk.buildOptionalSecretInputSchema).toBe("function");
+    expect(typeof secretInputSdk.normalizeSecretInputString).toBe("function");
+  });
+
+  it("exports webhook ingress helpers from the dedicated subpath", () => {
+    expect(typeof webhookIngressSdk.resolveWebhookPath).toBe("function");
+    expect(typeof webhookIngressSdk.readJsonWebhookBodyOrReject).toBe("function");
+    expect(typeof webhookIngressSdk.withResolvedWebhookRequestPipeline).toBe("function");
   });
 
   it("exports shared core types used by bundled channels", () => {

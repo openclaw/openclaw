@@ -18,6 +18,38 @@ function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined
   return Array.isArray(fallbacks) ? fallbacks.map((v) => String(v)) : undefined;
 }
 
+export type AgentModelAliasEntry =
+  | string
+  | {
+      modelRef: string;
+      alias?: string;
+    };
+
+function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
+  modelRef: string;
+  alias?: string;
+} {
+  if (typeof entry === "string") {
+    return { modelRef: entry };
+  }
+  return entry;
+}
+
+export function withAgentModelAliases(
+  existing: Record<string, AgentModelEntryConfig> | undefined,
+  aliases: readonly AgentModelAliasEntry[],
+): Record<string, AgentModelEntryConfig> {
+  const next = { ...existing };
+  for (const entry of aliases) {
+    const normalized = normalizeAgentModelAliasEntry(entry);
+    next[normalized.modelRef] = {
+      ...next[normalized.modelRef],
+      ...(normalized.alias ? { alias: next[normalized.modelRef]?.alias ?? normalized.alias } : {}),
+    };
+  }
+  return next;
+}
+
 export function applyOnboardAuthAgentModelsAndProviders(
   cfg: OpenClawConfig,
   params: {
@@ -117,6 +149,56 @@ export function applyProviderConfigWithDefaultModel(
   });
 }
 
+export function applyProviderConfigWithDefaultModelPreset(
+  cfg: OpenClawConfig,
+  params: {
+    providerId: string;
+    api: ModelApi;
+    baseUrl: string;
+    defaultModel: ModelDefinitionConfig;
+    defaultModelId?: string;
+    aliases?: readonly AgentModelAliasEntry[];
+    primaryModelRef?: string;
+  },
+): OpenClawConfig {
+  const next = applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, params.aliases ?? []),
+    providerId: params.providerId,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    defaultModel: params.defaultModel,
+    defaultModelId: params.defaultModelId,
+  });
+  return params.primaryModelRef
+    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
+    : next;
+}
+
+export function applyProviderConfigWithDefaultModelsPreset(
+  cfg: OpenClawConfig,
+  params: {
+    providerId: string;
+    api: ModelApi;
+    baseUrl: string;
+    defaultModels: ModelDefinitionConfig[];
+    defaultModelId?: string;
+    aliases?: readonly AgentModelAliasEntry[];
+    primaryModelRef?: string;
+  },
+): OpenClawConfig {
+  const next = applyProviderConfigWithDefaultModels(cfg, {
+    agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, params.aliases ?? []),
+    providerId: params.providerId,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    defaultModels: params.defaultModels,
+    defaultModelId: params.defaultModelId,
+  });
+  return params.primaryModelRef
+    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
+    : next;
+}
+
 export function applyProviderConfigWithModelCatalog(
   cfg: OpenClawConfig,
   params: {
@@ -147,6 +229,29 @@ export function applyProviderConfigWithModelCatalog(
     mergedModels,
     fallbackModels: catalogModels,
   });
+}
+
+export function applyProviderConfigWithModelCatalogPreset(
+  cfg: OpenClawConfig,
+  params: {
+    providerId: string;
+    api: ModelApi;
+    baseUrl: string;
+    catalogModels: ModelDefinitionConfig[];
+    aliases?: readonly AgentModelAliasEntry[];
+    primaryModelRef?: string;
+  },
+): OpenClawConfig {
+  const next = applyProviderConfigWithModelCatalog(cfg, {
+    agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, params.aliases ?? []),
+    providerId: params.providerId,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    catalogModels: params.catalogModels,
+  });
+  return params.primaryModelRef
+    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
+    : next;
 }
 
 type ProviderModelMergeState = {

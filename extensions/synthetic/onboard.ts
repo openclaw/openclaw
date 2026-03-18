@@ -5,32 +5,27 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "openclaw/plugin-sdk/provider-models";
 import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalog,
+  applyProviderConfigWithModelCatalogPreset,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
 export { SYNTHETIC_DEFAULT_MODEL_REF };
 
-export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[SYNTHETIC_DEFAULT_MODEL_REF] = {
-    ...models[SYNTHETIC_DEFAULT_MODEL_REF],
-    alias: models[SYNTHETIC_DEFAULT_MODEL_REF]?.alias ?? "MiniMax M2.5",
-  };
-
-  return applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: models,
+function applySyntheticPreset(cfg: OpenClawConfig, primaryModelRef?: string): OpenClawConfig {
+  return applyProviderConfigWithModelCatalogPreset(cfg, {
     providerId: "synthetic",
     api: "anthropic-messages",
     baseUrl: SYNTHETIC_BASE_URL,
     catalogModels: SYNTHETIC_MODEL_CATALOG.map(buildSyntheticModelDefinition),
+    aliases: [{ modelRef: SYNTHETIC_DEFAULT_MODEL_REF, alias: "MiniMax M2.5" }],
+    primaryModelRef,
   });
 }
 
+export function applySyntheticProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applySyntheticPreset(cfg);
+}
+
 export function applySyntheticConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(
-    applySyntheticProviderConfig(cfg),
-    SYNTHETIC_DEFAULT_MODEL_REF,
-  );
+  return applySyntheticPreset(cfg, SYNTHETIC_DEFAULT_MODEL_REF);
 }
