@@ -482,6 +482,17 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      // When all providers failed with soft failures (HTTP 200 but empty content),
+      // send an error message instead of staying completely silent.
+      // Skip for heartbeats — empty payloads are normal for those.
+      if (!isHeartbeat && fallbackAttempts.length > 0) {
+        const failedProviders = fallbackAttempts.map((a) => `${a.provider}/${a.model}`).join(", ");
+        const errorPayload: ReplyPayload = {
+          text: `⚠️ All model providers failed to generate a response. Attempted: ${failedProviders}. Please try again.`,
+          isError: true,
+        };
+        return finalizeWithFollowup(errorPayload, queueKey, runFollowupTurn);
+      }
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
