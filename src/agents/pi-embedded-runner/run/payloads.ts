@@ -61,10 +61,14 @@ function truncateErrorReason(error: string): string {
       .split("\n")
       .map((l) => l.trim())
       .find((l) => l.length > 0) ?? "";
-  if (firstLine.length <= FAILURE_REASON_MAX_LENGTH) {
-    return firstLine;
+  // Strip internal tool-context prefixes (e.g. "agent=… node=… gateway=… action=…: ")
+  // to avoid leaking implementation details into user-facing warnings (#46592).
+  const cleaned = firstLine.replace(/^(?:\w+=\S+\s+)*\w+=\S+:\s*/, "");
+  const line = cleaned || firstLine;
+  if (line.length <= FAILURE_REASON_MAX_LENGTH) {
+    return line;
   }
-  return firstLine.slice(0, FAILURE_REASON_MAX_LENGTH) + "…";
+  return line.slice(0, FAILURE_REASON_MAX_LENGTH) + "…";
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
