@@ -173,5 +173,5 @@ export function resolveHumanResetBoundaryMs(
     guessMs = candidateMs;
   }
 
-  return guessMs;
+  return undefined;
 }
