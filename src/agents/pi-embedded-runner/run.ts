@@ -127,6 +127,8 @@ type UsageAccumulator = {
   lastCacheRead: number;
   lastCacheWrite: number;
   lastInput: number;
+  /** Number of API calls made in this run. */
+  callCount: number;
 };
 
 const createUsageAccumulator = (): UsageAccumulator => ({
@@ -138,6 +140,7 @@ const createUsageAccumulator = (): UsageAccumulator => ({
   lastCacheRead: 0,
   lastCacheWrite: 0,
   lastInput: 0,
+  callCount: 0,
 });
 
 function createCompactionDiagId(): string {
@@ -168,6 +171,7 @@ const hasUsageValues = (
 const mergeUsageIntoAccumulator = (
   target: UsageAccumulator,
   usage: ReturnType<typeof normalizeUsage>,
+  callCount?: number,
 ) => {
   if (!hasUsageValues(usage)) {
     return;
@@ -185,6 +189,9 @@ const mergeUsageIntoAccumulator = (
   target.lastCacheRead = usage.cacheRead ?? 0;
   target.lastCacheWrite = usage.cacheWrite ?? 0;
   target.lastInput = usage.input ?? 0;
+  // callCount from attempt reflects actual LLM API calls including tool-call loops.
+  // Fall back to 1 if not provided (should not happen in practice).
+  target.callCount += callCount ?? 1;
 };
 
 const toNormalizedUsage = (usage: UsageAccumulator) => {
@@ -260,6 +267,9 @@ function buildErrorAgentMeta(params: {
     ...(usage ? { usage } : {}),
     ...(lastCallUsage ? { lastCallUsage } : {}),
     ...(promptTokens ? { promptTokens } : {}),
+    ...(params.usageAccumulator.callCount > 0
+      ? { callCount: params.usageAccumulator.callCount }
+      : {}),
   };
 }
 
@@ -1022,7 +1032,7 @@ export async function runEmbeddedPiAgent(
               : bootstrapPromptWarningSignaturesSeen);
           const lastAssistantUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const attemptUsage = attempt.attemptUsage ?? lastAssistantUsage;
-          mergeUsageIntoAccumulator(usageAccumulator, attemptUsage);
+          mergeUsageIntoAccumulator(usageAccumulator, attemptUsage, attempt.attemptCallCount);
           // Keep prompt size from the latest model call so session totalTokens
           // reflects current context usage, not accumulated tool-loop usage.
           lastRunPromptUsage = lastAssistantUsage ?? attemptUsage;
@@ -1600,6 +1610,7 @@ export async function runEmbeddedPiAgent(
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
+            callCount: usageAccumulator.callCount > 0 ? usageAccumulator.callCount : undefined,
           };
 
           const payloads = buildEmbeddedRunPayloads({

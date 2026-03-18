@@ -461,6 +461,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
   let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+  let apiCallCount = entry?.callCount ?? 0;
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
@@ -663,8 +664,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const usagePair = formatUsagePair(inputTokens, outputTokens);
   const cacheLine = formatCacheLine(inputTokens, cacheRead, cacheWrite);
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
-  const usageCostLine =
-    usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
+  const callsLine = apiCallCount > 0 ? `📞 Calls: ${apiCallCount}` : null;
+  const usageCostLine = [usagePair, costLine, callsLine].filter(Boolean).join(" · ");
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
 

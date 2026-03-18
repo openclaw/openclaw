@@ -50,6 +50,8 @@ export async function persistSessionUsageUpdate(params: {
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
   logLabel?: string;
+  /** Number of API calls made in this run. */
+  callCount?: number;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
   if (!storePath || !sessionKey) {
@@ -98,6 +100,9 @@ export async function persistSessionUsageUpdate(params: {
             const cacheUsage = params.lastCallUsage ?? params.usage;
             patch.cacheRead = cacheUsage?.cacheRead ?? 0;
             patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
+          }
+          if (typeof params.callCount === "number" && params.callCount > 0) {
+            patch.callCount = params.callCount;
           }
           // Missing a last-call snapshot (and promptTokens fallback) means
           // context utilization is stale/unknown.

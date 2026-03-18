@@ -476,6 +476,7 @@ export async function runReplyAgent(params: {
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
+      callCount: runResult.meta?.agentMeta?.callCount,
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
@@ -589,10 +590,13 @@ export async function runReplyAgent(params: {
             config: cfg,
           })
         : undefined;
+      // API call count for current turn (from runner)
+      const apiCallCount = runResult.meta?.agentMeta?.callCount;
       let formatted = formatResponseUsageLine({
         usage,
         showCost,
         costConfig,
+        apiCallCount,
       });
       if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session \`${sessionKey}\``;

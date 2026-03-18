@@ -28,6 +28,8 @@ export type EmbeddedPiAgentMeta = {
     cacheWrite?: number;
     total?: number;
   };
+  /** Number of API calls made in this run (current turn). */
+  callCount?: number;
 };
 
 export type EmbeddedPiRunMeta = {

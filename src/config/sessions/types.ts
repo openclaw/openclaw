@@ -140,6 +140,8 @@ export type SessionEntry = {
   totalTokensFresh?: boolean;
   cacheRead?: number;
   cacheWrite?: number;
+  /** Number of API calls made in the last run (current turn). */
+  callCount?: number;
   modelProvider?: string;
   model?: string;
   /**

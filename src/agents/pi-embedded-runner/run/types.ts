@@ -61,6 +61,8 @@ export type EmbeddedRunAttemptResult = {
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
+  /** Number of LLM API calls made during this attempt (including tool-call loops). */
+  attemptCallCount?: number;
   compactionCount?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
