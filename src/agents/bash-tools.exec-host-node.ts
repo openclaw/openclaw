@@ -260,6 +260,7 @@ export async function executeNodeHostCommand(
       const decision = await execHostShared.resolveApprovalDecisionOrUndefined({
         approvalId,
         preResolvedDecision,
+        timeoutMs: requestArgs.timeoutMs,
         onFailure: () =>
           void execHostShared.sendExecApprovalFollowupResult(
             followupTarget,

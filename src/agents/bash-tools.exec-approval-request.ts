@@ -1,9 +1,19 @@
-import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import {
+  normalizeExecApprovalTimeoutMs,
+  type ExecAsk,
+  type ExecSecurity,
+  type SystemRunApprovalPlan,
+} from "../infra/exec-approvals.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
+
+const APPROVAL_WAIT_TIMEOUT_BUFFER_MS = Math.max(
+  0,
+  DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS - DEFAULT_APPROVAL_TIMEOUT_MS,
+);
 
 export type RequestExecApprovalDecisionParams = {
   id: string;
@@ -34,10 +44,7 @@ type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
 function buildExecApprovalRequestToolParams(
   params: RequestExecApprovalDecisionParams,
 ): ExecApprovalRequestToolParams {
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? Math.max(1, Math.floor(params.timeoutMs))
-      : DEFAULT_APPROVAL_TIMEOUT_MS;
+  const timeoutMs = normalizeExecApprovalTimeoutMs(params.timeoutMs, DEFAULT_APPROVAL_TIMEOUT_MS);
   return {
     id: params.id,
     ...(params.command ? { command: params.command } : {}),
@@ -59,6 +66,14 @@ function buildExecApprovalRequestToolParams(
     timeoutMs,
     twoPhase: true,
   };
+}
+
+function resolveExecApprovalWaitTimeoutMs(timeoutMs: number | undefined): number {
+  const approvalTimeoutMs = normalizeExecApprovalTimeoutMs(timeoutMs, DEFAULT_APPROVAL_TIMEOUT_MS);
+  return Math.max(
+    DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
+    approvalTimeoutMs + APPROVAL_WAIT_TIMEOUT_BUFFER_MS,
+  );
 }
 
 type ParsedDecision = { present: boolean; value: string | null };
@@ -113,11 +128,14 @@ export async function registerExecApprovalRequest(
   return { id, expiresAtMs };
 }
 
-export async function waitForExecApprovalDecision(id: string): Promise<string | null> {
+export async function waitForExecApprovalDecision(
+  id: string,
+  timeoutMs?: number,
+): Promise<string | null> {
   try {
     const decisionResult = await callGatewayTool<{ decision: string }>(
       "exec.approval.waitDecision",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+      { timeoutMs: resolveExecApprovalWaitTimeoutMs(timeoutMs) },
       { id },
     );
     return parseDecision(decisionResult).value;
@@ -134,21 +152,23 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
 export async function resolveRegisteredExecApprovalDecision(params: {
   approvalId: string;
   preResolvedDecision: string | null | undefined;
+  timeoutMs?: number;
 }): Promise<string | null> {
   if (params.preResolvedDecision !== undefined) {
     return params.preResolvedDecision ?? null;
   }
-  return await waitForExecApprovalDecision(params.approvalId);
+  return await waitForExecApprovalDecision(params.approvalId, params.timeoutMs);
 }
 
 export async function requestExecApprovalDecision(
   params: RequestExecApprovalDecisionParams,
 ): Promise<string | null> {
+  const requestParams = buildExecApprovalRequestToolParams(params);
   const registration = await registerExecApprovalRequest(params);
   if (Object.hasOwn(registration, "finalDecision")) {
     return registration.finalDecision ?? null;
   }
-  return await waitForExecApprovalDecision(registration.id);
+  return await waitForExecApprovalDecision(registration.id, requestParams.timeoutMs);
 }
 
 type HostExecApprovalParams = {

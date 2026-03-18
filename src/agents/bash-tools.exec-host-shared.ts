@@ -196,12 +196,14 @@ export function resolveExecHostApprovalContext(params: {
 export async function resolveApprovalDecisionOrUndefined(params: {
   approvalId: string;
   preResolvedDecision: string | null | undefined;
+  timeoutMs?: number;
   onFailure: () => void;
 }): Promise<string | null | undefined> {
   try {
     return await resolveRegisteredExecApprovalDecision({
       approvalId: params.approvalId,
       preResolvedDecision: params.preResolvedDecision,
+      timeoutMs: params.timeoutMs,
     });
   } catch {
     params.onFailure();
@@ -289,7 +291,6 @@ export function buildDefaultExecApprovalRequestArgs(
   params: DefaultExecApprovalRequestArgs,
 ): DefaultExecApprovalRequestArgs {
   const timeoutMs = resolveExecApprovalTimeoutMs({
-    cfg: loadConfig(),
     channel: params.turnSourceChannel,
     accountId: params.turnSourceAccountId,
     defaultTimeoutMs: params.timeoutMs,

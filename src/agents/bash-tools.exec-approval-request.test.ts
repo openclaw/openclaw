@@ -224,4 +224,33 @@ describe("requestExecApprovalDecision", () => {
       vi.useRealTimers();
     }
   });
+
+  it("extends waitDecision timeout to match longer approval windows", async () => {
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({
+        status: "accepted",
+        id: "approval-id",
+        expiresAtMs: 600_000,
+      })
+      .mockResolvedValueOnce({ decision: "allow-once" });
+
+    await expect(
+      requestExecApprovalDecision({
+        id: "approval-id",
+        command: "echo hi",
+        cwd: "/tmp",
+        host: "gateway",
+        security: "allowlist",
+        ask: "always",
+        timeoutMs: 600_000,
+      }),
+    ).resolves.toBe("allow-once");
+
+    expect(callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "exec.approval.waitDecision",
+      { timeoutMs: 610_000 },
+      { id: "approval-id" },
+    );
+  });
 });

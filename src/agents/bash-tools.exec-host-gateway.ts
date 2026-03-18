@@ -197,6 +197,7 @@ export async function processGatewayAllowlist(
       const decision = await resolveApprovalDecisionOrUndefined({
         approvalId,
         preResolvedDecision,
+        timeoutMs: requestArgs.timeoutMs,
         onFailure: () =>
           void sendExecApprovalFollowupResult(
             followupTarget,

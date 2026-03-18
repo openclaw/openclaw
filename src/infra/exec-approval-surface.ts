@@ -1,7 +1,10 @@
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
-import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "./exec-approvals.js";
+import {
+  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  normalizeExecApprovalTimeoutMs,
+} from "./exec-approvals.js";
 
 export type ExecApprovalInitiatingSurfaceState =
   | { kind: "enabled"; channel: string | undefined; channelLabel: string }
@@ -21,13 +24,6 @@ function labelForChannel(channel?: string): string {
     default:
       return channel ? channel[0]?.toUpperCase() + channel.slice(1) : "this platform";
   }
-}
-
-function normalizeTimeoutMs(value: unknown, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(1, Math.floor(value));
 }
 
 export function resolveExecApprovalInitiatingSurfaceState(params: {
@@ -58,7 +54,7 @@ export function resolveExecApprovalTimeoutMs(params: {
   cfg?: OpenClawConfig;
   defaultTimeoutMs?: number;
 }): number {
-  const defaultTimeoutMs = normalizeTimeoutMs(
+  const defaultTimeoutMs = normalizeExecApprovalTimeoutMs(
     params.defaultTimeoutMs,
     DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   );
@@ -68,7 +64,7 @@ export function resolveExecApprovalTimeoutMs(params: {
   }
 
   const cfg = params.cfg ?? loadConfig();
-  return normalizeTimeoutMs(
+  return normalizeExecApprovalTimeoutMs(
     getChannelPlugin(channel)?.execApprovals?.resolveApprovalTimeoutMs?.({
       cfg,
       accountId: params.accountId,

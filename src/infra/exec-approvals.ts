@@ -146,6 +146,13 @@ export type ExecApprovalsResolved = {
 // Keep CLI + gateway defaults in sync.
 export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 120_000;
 
+export function normalizeExecApprovalTimeoutMs(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
 const DEFAULT_SECURITY: ExecSecurity = "deny";
 const DEFAULT_ASK: ExecAsk = "on-miss";
 const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
