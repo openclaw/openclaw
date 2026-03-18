@@ -111,11 +111,18 @@ function createLazy<T>(loader: () => Promise<T>): () => T | null {
       return s.mod;
     }
     if (!s.promise) {
-      s.promise = loader().then((m) => {
-        s.mod = m;
-        _pendingUpdate?.();
-        return m;
-      });
+      s.promise = loader()
+        .then((m) => {
+          s.mod = m;
+          _pendingUpdate?.();
+          return m;
+        })
+        .catch((err) => {
+          console.error("[openclaw] Failed to load lazy module:", err);
+          s.promise = null; // allow retry on next render
+          _pendingUpdate?.();
+          return null as unknown as T;
+        });
     }
     return null;
   };
