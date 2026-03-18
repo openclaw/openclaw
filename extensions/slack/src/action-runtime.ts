@@ -1,14 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import {
-  createActionGate,
-  imageResultFromFile,
-  jsonResult,
-  readNumberParam,
-  readReactionParams,
-  readStringParam,
-  type OpenClawConfig,
-  withNormalizedTimestamp,
-} from "openclaw/plugin-sdk/slack-core";
 import { resolveSlackAccount } from "./accounts.js";
 import {
   deleteSlackMessage,
@@ -27,6 +17,16 @@ import {
   unpinSlackMessage,
 } from "./actions.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import {
+  createActionGate,
+  imageResultFromFile,
+  jsonResult,
+  readNumberParam,
+  readReactionParams,
+  readStringParam,
+  type OpenClawConfig,
+  withNormalizedTimestamp,
+} from "./runtime-api.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
