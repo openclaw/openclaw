@@ -1,6 +1,6 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/telegram";
 import { expect, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createNativeCommandTestParams as createBaseNativeCommandTestParams,
