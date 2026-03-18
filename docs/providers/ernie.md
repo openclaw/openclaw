@@ -79,8 +79,8 @@ Add to your `~/.openclaw/config.json`:
             "name": "ERNIE 5.0",
             "reasoning": true,
             "input": ["text", "image"],
-            "contextWindow": 128000,
-            "maxTokens": 65536
+            "contextWindow": 119000,
+            "maxTokens": 64000
           }
         ]
       }
@@ -110,7 +110,7 @@ openclaw chat --model ernie/ernie-5.0-thinking-preview
 ### Send a Single Message
 
 ```bash
-openclaw message send "Hello, ERNIE!"
+openclaw agent --model ernie/ernie-5.0-thinking-preview --message "Hello, ERNIE!"
 ```
 
 ### Check Configuration Status
@@ -130,8 +130,8 @@ openclaw models status --probe
 | Provider          | `ernie`                            |
 | Model ID          | `ernie-5.0-thinking-preview`       |
 | Model Reference   | `ernie/ernie-5.0-thinking-preview` |
-| Context Window    | 128,000 tokens                     |
-| Max Output Tokens | 65,536 tokens                      |
+| Context Window    | 119,000 tokens                     |
+| Max Output Tokens | 64,000 tokens                      |
 | Reasoning         | Yes                                |
 | Input Types       | Text, Image                        |
 
