@@ -715,10 +715,10 @@
   line-height: 1.55;
 }
 
-.config-raw-toggle {
+.config-raw-field .config-raw-toggle {
   width: 32px;
   height: 32px;
-  padding: 6px !important;
+  padding: 6px;
   min-width: 32px;
 }
 
