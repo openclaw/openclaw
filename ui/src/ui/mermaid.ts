@@ -1,3 +1,5 @@
+import DOMPurify from "dompurify";
+
 type MermaidApi = {
   initialize: (config: Record<string, unknown>) => void;
   render: (id: string, definition: string) => Promise<{ svg: string }>;
@@ -9,14 +11,21 @@ let renderCounter = 0;
 
 async function loadMermaidApi(): Promise<MermaidApi> {
   if (!mermaidApiPromise) {
-    mermaidApiPromise = import("mermaid").then((mod) => {
-      const api = (mod.default ?? mod) as MermaidApi;
-      api.initialize({
-        startOnLoad: false,
-        securityLevel: "strict",
+    mermaidApiPromise = import("mermaid")
+      .then((mod) => {
+        const api = (mod.default ?? mod) as MermaidApi;
+        api.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+        });
+        return api;
+      })
+      .catch((err) => {
+        // If the dynamic import fails (e.g. chunk mismatch after deploy),
+        // allow subsequent render attempts to retry without a full reload.
+        mermaidApiPromise = null;
+        throw err;
       });
-      return api;
-    });
   }
   return mermaidApiPromise;
 }
@@ -42,7 +51,21 @@ async function renderMermaidBlocks(root: ParentNode): Promise<void> {
     return;
   }
 
-  const api = await loadMermaidApi();
+  let api: MermaidApi;
+  try {
+    api = await loadMermaidApi();
+  } catch (err) {
+    console.warn("[markdown] mermaid module load failed", err);
+    for (const block of blocks) {
+      const renderTarget = block.querySelector<HTMLElement>(".mermaid-block__render");
+      if (renderTarget) {
+        renderTarget.textContent =
+          "Mermaid render failed to load. Reload the page or expand source to inspect diagram text.";
+      }
+      block.dataset.mermaidStatus = "error";
+    }
+    return;
+  }
 
   for (const block of blocks) {
     const definition =
@@ -57,7 +80,9 @@ async function renderMermaidBlocks(root: ParentNode): Promise<void> {
     try {
       const id = `openclaw-mermaid-${++renderCounter}`;
       const { svg } = await api.render(id, definition);
-      renderTarget.innerHTML = svg;
+      renderTarget.innerHTML = DOMPurify.sanitize(svg, {
+        USE_PROFILES: { svg: true, svgFilters: true },
+      });
       block.dataset.mermaidStatus = "ready";
     } catch (err) {
       console.warn("[markdown] mermaid render failed", err);
