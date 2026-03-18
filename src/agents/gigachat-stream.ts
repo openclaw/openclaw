@@ -766,28 +766,32 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
           consumeSseLine(sseBuffer);
         }
 
-        if (functionCallBuffer && functionCallBuffer.name) {
+        const resolvedFunctionCall = functionCallBuffer as unknown as {
+          name: string;
+          arguments: string;
+        } | null;
+        if (resolvedFunctionCall && resolvedFunctionCall.name) {
           accumulatedContent = stripLeakedFunctionCallPrelude(accumulatedContent);
           let parsedArgs: Record<string, unknown> = {};
           try {
-            if (functionCallBuffer.arguments) {
-              parsedArgs = JSON.parse(functionCallBuffer.arguments) as Record<string, unknown>;
+            if (resolvedFunctionCall.arguments) {
+              parsedArgs = JSON.parse(resolvedFunctionCall.arguments) as Record<string, unknown>;
             }
           } catch (parseErr) {
             const errMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
             log.error(
-              `GigaChat: failed to parse function arguments for "${functionCallBuffer.name}": ${errMsg}. ` +
-                `Raw arguments: ${functionCallBuffer.arguments.slice(0, 500)}`,
+              `GigaChat: failed to parse function arguments for "${resolvedFunctionCall.name}": ${errMsg}. ` +
+                `Raw arguments: ${resolvedFunctionCall.arguments.slice(0, 500)}`,
             );
             // Return error instead of continuing with empty args
             throw new Error(
-              `Failed to parse function call arguments for "${functionCallBuffer.name}": ${errMsg}`,
+              `Failed to parse function call arguments for "${resolvedFunctionCall.name}": ${errMsg}`,
               { cause: parseErr },
             );
           }
           const clientName =
-            gigaToToolName.get(functionCallBuffer.name) ??
-            mapToolNameFromGigaChat(functionCallBuffer.name);
+            gigaToToolName.get(resolvedFunctionCall.name) ??
+            mapToolNameFromGigaChat(resolvedFunctionCall.name);
           accumulatedToolCalls.push({
             type: "toolCall",
             id: randomUUID(),
