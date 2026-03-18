@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/slack";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import { slackOutbound } from "./outbound-adapter.js";
 
 const handleSlackActionMock = vi.fn();
@@ -261,7 +262,7 @@ describe("slackPlugin directory", () => {
             },
           },
         },
-        runtime: undefined,
+        runtime: createRuntimeEnv(),
       }),
     ).resolves.toEqual([{ id: "user:u123", kind: "user" }]);
   });
