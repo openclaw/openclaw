@@ -65,28 +65,36 @@ const replyPipelineMocks = vi.hoisted(() => {
 export const dispatchReplyWithBufferedBlockDispatcher =
   replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher;
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
-}));
-vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
-  dispatchReplyWithBufferedBlockDispatcher:
-    replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
-}));
-vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
-  createReplyPrefixOptions: replyPipelineMocks.createReplyPrefixOptions,
-}));
-vi.mock("openclaw/plugin-sdk/channel-runtime", () => ({
-  recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
-}));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    finalizeInboundContext: replyPipelineMocks.finalizeInboundContext,
+    dispatchReplyWithBufferedBlockDispatcher:
+      replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+  };
+});
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
+  return {
+    ...actual,
+    createReplyPrefixOptions: replyPipelineMocks.createReplyPrefixOptions,
+    recordInboundSessionMetaSafe: replyPipelineMocks.recordInboundSessionMetaSafe,
+  };
+});
 
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => {}),
 }));
 export const deliverReplies = deliveryMocks.deliverReplies;
 vi.mock("./bot/delivery.js", () => ({ deliverReplies: deliveryMocks.deliverReplies }));
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
-  readChannelAllowFromStore: vi.fn(async () => []),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    readChannelAllowFromStore: vi.fn(async () => []),
+  };
+});
 export { createNativeCommandTestParams };
 
 export function createNativeCommandsHarness(params?: {
@@ -104,6 +112,16 @@ export function createNativeCommandsHarness(params?: {
   const sendMessage: AnyAsyncMock = vi.fn(async () => undefined);
   const setMyCommands: AnyAsyncMock = vi.fn(async () => undefined);
   const log: AnyMock = vi.fn();
+  const telegramDeps = {
+    loadConfig: vi.fn(() => params?.cfg ?? ({} as OpenClawConfig)),
+    resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/sessions.json"),
+    readChannelAllowFromStore: vi.fn(async () => []),
+    enqueueSystemEvent: vi.fn(),
+    dispatchReplyWithBufferedBlockDispatcher:
+      replyPipelineMocks.dispatchReplyWithBufferedBlockDispatcher,
+    listSkillCommandsForAgents: vi.fn(() => []),
+    wasSentByBot: vi.fn(() => false),
+  };
   const bot = {
     api: {
       setMyCommands,
@@ -128,6 +146,7 @@ export function createNativeCommandsHarness(params?: {
     nativeEnabled: params?.nativeEnabled ?? true,
     nativeSkillsEnabled: false,
     nativeDisabledExplicit: false,
+    telegramDeps,
     resolveGroupPolicy:
       params?.resolveGroupPolicy ??
       (() =>
