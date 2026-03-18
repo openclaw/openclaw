@@ -51,9 +51,8 @@ import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 90_000;
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
-const GATEWAY_TIMEOUT_PATTERN = /gateway timeout/i;
 let subagentRegistryRuntimePromise: Promise<
   typeof import("./subagent-registry-runtime.js")
 > | null = null;
@@ -108,7 +107,7 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /no active .* listener/i,
   /gateway not connected/i,
   /gateway closed \(1006/i,
-  GATEWAY_TIMEOUT_PATTERN,
+  /gateway timeout/i,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
@@ -132,11 +131,6 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
     return false;
   }
   return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
-}
-
-function isGatewayTimeoutError(error: unknown): boolean {
-  const message = summarizeDeliveryError(error);
-  return Boolean(message) && GATEWAY_TIMEOUT_PATTERN.test(message);
 }
 
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -166,7 +160,6 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
 
 async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
-  noRetryOnGatewayTimeout?: boolean;
   signal?: AbortSignal;
   run: () => Promise<T>;
 }): Promise<T> {
@@ -178,9 +171,6 @@ async function runAnnounceDeliveryWithRetry<T>(params: {
     try {
       return await params.run();
     } catch (err) {
-      if (params.noRetryOnGatewayTimeout && isGatewayTimeoutError(err)) {
-        throw err;
-      }
       const delayMs = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS[retryIndex];
       if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
@@ -310,6 +300,103 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
     }
   }
   return undefined;
+}
+
+/**
+ * Collect partial progress from a timed-out subagent session.
+ *
+ * Unlike `readLatestSubagentOutput` which returns only the last message,
+ * this function scans the full history to build a progress summary from
+ * all assistant messages. This is critical for timeout scenarios where
+ * the subagent may have produced intermediate results across multiple
+ * tool-call rounds but no final summary.
+ *
+ * @see https://github.com/openclaw/openclaw/issues/33827
+ */
+async function readSubagentPartialProgress(sessionKey: string): Promise<string | undefined> {
+  let history: { messages?: Array<unknown> } | undefined;
+  try {
+    history = await callGateway<{ messages?: Array<unknown> }>({
+      method: "chat.history",
+      params: { sessionKey, limit: 100 },
+    });
+  } catch {
+    return undefined;
+  }
+  const messages = Array.isArray(history?.messages) ? history.messages : [];
+  if (messages.length === 0) {
+    return undefined;
+  }
+
+  // Collect all assistant text fragments (partial results from each turn).
+  const assistantFragments: string[] = [];
+  let toolCallCount = 0;
+  let silentAssistantOverrideText: string | undefined;
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = (msg as { role?: unknown }).role;
+    if (role === "assistant") {
+      const text = extractSubagentOutputText(msg);
+      if (text?.trim()) {
+        const trimmedText = text.trim();
+        if (isAnnounceSkip(trimmedText) || isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN)) {
+          // Preserve explicit silence semantics across timeout fallback synthesis.
+          // If any assistant turn asked to stay silent, do not turn earlier
+          // partial progress into a user-visible completion.
+          silentAssistantOverrideText = trimmedText;
+        } else {
+          assistantFragments.push(trimmedText);
+        }
+      }
+      // Count tool calls to report progress depth.
+      const content = (msg as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (
+            block &&
+            typeof block === "object" &&
+            ((block as { type?: string }).type === "toolCall" ||
+              (block as { type?: string }).type === "tool_use" ||
+              (block as { type?: string }).type === "toolUse" ||
+              (block as { type?: string }).type === "functionCall" ||
+              (block as { type?: string }).type === "function_call")
+          ) {
+            toolCallCount += 1;
+          }
+        }
+      }
+    }
+  }
+
+  if (silentAssistantOverrideText) {
+    return silentAssistantOverrideText;
+  }
+
+  if (assistantFragments.length === 0 && toolCallCount === 0) {
+    return undefined;
+  }
+
+  const parts: string[] = [];
+  if (toolCallCount > 0) {
+    parts.push(`[Partial progress: ${toolCallCount} tool call(s) executed before timeout]`);
+  }
+  if (assistantFragments.length > 0) {
+    // Return the last (most recent) assistant fragment as the primary result,
+    // but include earlier fragments if the last one is short.
+    const lastFragment = assistantFragments[assistantFragments.length - 1];
+    if (assistantFragments.length > 1 && lastFragment.length < 200) {
+      // Include up to 3 most recent fragments for context.
+      const recentFragments = assistantFragments.slice(-3);
+      parts.push(recentFragments.join("\n\n---\n\n"));
+    } else {
+      parts.push(lastFragment);
+    }
+  }
+
+  return parts.join("\n\n") || undefined;
 }
 
 async function readLatestSubagentOutputWithRetry(params: {
@@ -799,7 +886,6 @@ async function sendSubagentAnnounceDirectly(params: {
       operation: params.expectsCompletionMessage
         ? "completion direct announce agent call"
         : "direct announce agent call",
-      noRetryOnGatewayTimeout: params.expectsCompletionMessage && shouldDeliverExternally,
       signal: params.signal,
       run: async () =>
         await callGateway({
@@ -1317,6 +1403,30 @@ export async function runSubagentAnnounceFlow(params: {
           sessionKey: params.childSessionKey,
           maxWaitMs: params.timeoutMs,
         });
+      }
+
+      // For timed-out runs, attempt to collect partial progress from the full
+      // session history.  The subagent may have produced useful intermediate
+      // results across multiple tool-call rounds even though no final assistant
+      // reply was generated before the timeout.  Use the richer partial progress
+      // when it contains more context than the simple last-message extraction.
+      if (outcome.status === "timeout") {
+        const partialProgress = await readSubagentPartialProgress(params.childSessionKey);
+        // Do not overwrite recognized silent/skip tokens with partial progress —
+        // that would cause the parent to announce when it should stay silent.
+        const replyIsSilent =
+          reply?.trim() && (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN));
+        const partialProgressIsSilent =
+          partialProgress?.trim() &&
+          (isAnnounceSkip(partialProgress) ||
+            isSilentReplyText(partialProgress, SILENT_REPLY_TOKEN));
+        if (
+          !replyIsSilent &&
+          partialProgress?.trim() &&
+          (partialProgressIsSilent || !reply?.trim() || partialProgress.length > reply.length)
+        ) {
+          reply = partialProgress;
+        }
       }
 
       if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
