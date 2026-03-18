@@ -101,7 +101,10 @@ RUN CI=true pnpm prune --prod && \
     if [ -n "$OPENCLAW_EXTENSIONS" ]; then \
       for ext in $OPENCLAW_EXTENSIONS; do \
         if [ -f "extensions/$ext/package.json" ]; then \
-          npm install --prefix "extensions/$ext" --omit=dev --silent; \
+          npm install --prefix "extensions/$ext" --omit=dev --silent || { \
+            echo "Failed to install production dependencies for extension '$ext'" >&2; \
+            exit 1; \
+          }; \
         fi; \
       done; \
     fi && \
