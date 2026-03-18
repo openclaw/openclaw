@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 export const XAI_TOOL_SCHEMA_PROFILE = "xai";
 export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
@@ -87,7 +88,8 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
 }
 
 function shouldKeepStreamingUsageOptInDisabled(model: Model<"openai-completions">): boolean {
-  return model.provider === "moonshot" || model.provider === "modelstudio";
+  const provider = normalizeProviderId(model.provider);
+  return provider === "moonshot" || provider === "modelstudio";
 }
 
 /**

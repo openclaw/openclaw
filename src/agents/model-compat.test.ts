@@ -320,6 +320,26 @@ describe("normalizeModelCompat", () => {
     expect(supportsUsageInStreaming(normalized)).toBe(false);
   });
 
+  it("keeps supportsUsageInStreaming off for case-variant bundled proxy provider ids", () => {
+    const moonshotModel = {
+      ...baseModel(),
+      provider: "Moonshot",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (moonshotModel as { compat?: unknown }).compat;
+    const normalizedMoonshot = normalizeModelCompat(moonshotModel as Model<Api>);
+    expect(supportsUsageInStreaming(normalizedMoonshot)).toBe(false);
+
+    const modelStudioModel = {
+      ...baseModel(),
+      provider: "ModelStudio",
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    delete (modelStudioModel as { compat?: unknown }).compat;
+    const normalizedModelStudio = normalizeModelCompat(modelStudioModel as Model<Api>);
+    expect(supportsUsageInStreaming(normalizedModelStudio)).toBe(false);
+  });
+
   it("forces supportsStrictMode off for z.ai models", () => {
     expectSupportsStrictModeForcedOff();
   });
