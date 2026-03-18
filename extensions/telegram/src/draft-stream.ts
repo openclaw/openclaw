@@ -1,4 +1,5 @@
 import type { Bot } from "grammy";
+import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/text-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
@@ -7,6 +8,13 @@ import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-err
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
 const TELEGRAM_DRAFT_ID_MAX = 2_147_483_647;
+const TELEGRAM_PREVIEW_RETRY_POLICY = {
+  initialMs: 1000,
+  maxMs: 10_000,
+  factor: 2,
+  jitter: 0.2,
+};
+const TELEGRAM_PREVIEW_MAX_ATTEMPTS = 4;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const DRAFT_METHOD_UNAVAILABLE_RE =
   /(unknown method|method .*not (found|available|supported)|unsupported)/i;
@@ -190,30 +198,55 @@ export function createTelegramDraftStream(params: {
       };
     }
   };
+  const retryPreviewPreConnect = async <T>(
+    operation: "draft send" | "message edit" | "message send",
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await fn();
+      } catch (err) {
+        attempt += 1;
+        if (!isSafeToRetrySendError(err) || attempt >= TELEGRAM_PREVIEW_MAX_ATTEMPTS) {
+          throw err;
+        }
+        const delayMs = computeBackoff(TELEGRAM_PREVIEW_RETRY_POLICY, attempt);
+        params.warn?.(
+          `telegram stream preview ${operation} failed before reaching Telegram; retrying in ${delayMs}ms (${String(err)})`,
+        );
+        await sleepWithAbort(delayMs);
+      }
+    }
+  };
   const sendMessageTransportPreview = async ({
     renderedText,
     renderedParseMode,
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
     if (typeof streamMessageId === "number") {
-      if (renderedParseMode) {
-        await params.api.editMessageText(chatId, streamMessageId, renderedText, {
-          parse_mode: renderedParseMode,
-        });
-      } else {
+      await retryPreviewPreConnect("message edit", async () => {
+        if (renderedParseMode) {
+          await params.api.editMessageText(chatId, streamMessageId, renderedText, {
+            parse_mode: renderedParseMode,
+          });
+          return;
+        }
         await params.api.editMessageText(chatId, streamMessageId, renderedText);
-      }
+      });
       return true;
     }
     messageSendAttempted = true;
     let sent: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>["sent"];
     try {
-      ({ sent } = await sendRenderedMessageWithThreadFallback({
-        renderedText,
-        renderedParseMode,
-        fallbackWarnMessage:
-          "telegram stream preview send failed with message_thread_id, retrying without thread",
-      }));
+      ({ sent } = await retryPreviewPreConnect("message send", async () =>
+        sendRenderedMessageWithThreadFallback({
+          renderedText,
+          renderedParseMode,
+          fallbackWarnMessage:
+            "telegram stream preview send failed with message_thread_id, retrying without thread",
+        }),
+      ));
     } catch (err) {
       // Pre-connect failures (DNS, refused) and explicit Telegram rejections (4xx)
       // guarantee the message was never delivered — clear the flag so
@@ -253,11 +286,13 @@ export function createTelegramDraftStream(params: {
         : {}),
       ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
     };
-    await resolvedDraftApi!(
-      chatId,
-      draftId,
-      renderedText,
-      Object.keys(draftParams).length > 0 ? draftParams : undefined,
+    await retryPreviewPreConnect("draft send", async () =>
+      resolvedDraftApi!(
+        chatId,
+        draftId,
+        renderedText,
+        Object.keys(draftParams).length > 0 ? draftParams : undefined,
+      ),
     );
     return true;
   };

@@ -1,4 +1,5 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
@@ -8,6 +9,13 @@ import {
   isTelegramClientRejection,
 } from "./network-errors.js";
 
+const TELEGRAM_PREVIEW_EDIT_RETRY_POLICY = {
+  initialMs: 1000,
+  maxMs: 10_000,
+  factor: 2,
+  jitter: 0.2,
+};
+const TELEGRAM_PREVIEW_EDIT_MAX_ATTEMPTS = 4;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const MESSAGE_NOT_FOUND_RE =
@@ -198,6 +206,34 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     );
   };
 
+  const retryRecoverablePreviewEdit = async (args: {
+    laneName: LaneName;
+    context: "final" | "update";
+    run: () => Promise<void>;
+  }) => {
+    let attempt = 0;
+    while (true) {
+      try {
+        await args.run();
+        return;
+      } catch (err) {
+        attempt += 1;
+        if (
+          isTelegramClientRejection(err) ||
+          !isRecoverableTelegramNetworkError(err, { allowMessageMatch: true }) ||
+          attempt >= TELEGRAM_PREVIEW_EDIT_MAX_ATTEMPTS
+        ) {
+          throw err;
+        }
+        const delayMs = computeBackoff(TELEGRAM_PREVIEW_EDIT_RETRY_POLICY, attempt);
+        params.log(
+          `telegram: ${args.laneName} preview ${args.context} edit hit recoverable network error; retrying in ${delayMs}ms (${String(err)})`,
+        );
+        await sleepWithAbort(delayMs);
+      }
+    }
+  };
+
   const tryMaterializeDraftPreviewForFinal = async (args: {
     lane: DraftLaneState;
     laneName: LaneName;
@@ -234,12 +270,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     retainAlternatePreviewOnMissingTarget: boolean;
   }): Promise<PreviewEditResult> => {
     try {
-      await params.editPreview({
+      await retryRecoverablePreviewEdit({
         laneName: args.laneName,
-        messageId: args.messageId,
-        text: args.text,
-        previewButtons: args.previewButtons,
         context: args.context,
+        run: () =>
+          params.editPreview({
+            laneName: args.laneName,
+            messageId: args.messageId,
+            text: args.text,
+            previewButtons: args.previewButtons,
+            context: args.context,
+          }),
       });
       if (args.updateLaneSnapshot) {
         args.lane.lastPartialText = args.text;

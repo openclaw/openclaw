@@ -8,6 +8,20 @@ import {
   type LaneName,
 } from "./lane-delivery.js";
 
+const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
+  computeBackoff: vi.fn(() => 0),
+  sleepWithAbort: vi.fn(async () => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    computeBackoff,
+    sleepWithAbort,
+  };
+});
+
 const HELLO_FINAL = "Hello final";
 
 function createHarness(params?: {
@@ -150,6 +164,25 @@ function expectPreviewFinalized(
 }
 
 describe("createLaneTextDeliverer", () => {
+  it("retries final preview edits on recoverable network errors before retaining/fallback", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.editPreview
+      .mockRejectedValueOnce(new Error("timeout after Telegram accepted send"))
+      .mockRejectedValueOnce(new Error("timeout after Telegram accepted send"))
+      .mockResolvedValueOnce(undefined);
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(result).toBe("preview-finalized");
+    expect(harness.editPreview).toHaveBeenCalledTimes(3);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(computeBackoff).toHaveBeenCalledTimes(2);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(2);
+    expect(harness.log).toHaveBeenCalledWith(
+      expect.stringContaining("preview final edit hit recoverable network error; retrying"),
+    );
+  });
+
   it("finalizes text-only replies by editing an existing preview message", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 

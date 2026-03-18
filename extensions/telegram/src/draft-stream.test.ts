@@ -3,6 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import { __testing, createTelegramDraftStream } from "./draft-stream.js";
 
+const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
+  computeBackoff: vi.fn(() => 0),
+  sleepWithAbort: vi.fn(async () => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    computeBackoff,
+    sleepWithAbort,
+  };
+});
+
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
 function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number }>) {
@@ -82,6 +96,11 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
 }
 
 describe("createTelegramDraftStream", () => {
+  beforeEach(() => {
+    computeBackoff.mockClear();
+    sleepWithAbort.mockClear();
+  });
+
   afterEach(() => {
     __testing.resetTelegramDraftStreamForTests();
   });
@@ -216,6 +235,85 @@ describe("createTelegramDraftStream", () => {
     expect(warn).toHaveBeenCalledWith(
       "telegram stream preview send failed with message_thread_id, retrying without thread",
     );
+  });
+
+  it("retries message preview send on safe pre-connect errors", async () => {
+    const api = createMockDraftApi();
+    const preConnectErr = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    api.sendMessage
+      .mockRejectedValueOnce(preConnectErr)
+      .mockRejectedValueOnce(preConnectErr)
+      .mockResolvedValueOnce({ message_id: 17 });
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "message",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(3);
+    expect(computeBackoff).toHaveBeenCalledTimes(2);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(2);
+    expect(stream.messageId()).toBe(17);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "telegram stream preview message send failed before reaching Telegram; retrying",
+      ),
+    );
+  });
+
+  it("retries preview edits on safe pre-connect errors", async () => {
+    const api = createMockDraftApi();
+    const preConnectErr = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    const stream = createDraftStream(api, { previewTransport: "message" });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    api.editMessageText
+      .mockRejectedValueOnce(preConnectErr)
+      .mockRejectedValueOnce(preConnectErr)
+      .mockResolvedValueOnce(true);
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledTimes(3);
+    expect(computeBackoff).toHaveBeenCalledTimes(2);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(2);
+    expect(stream.lastDeliveredText?.()).toBe("Hello again");
+  });
+
+  it("retries draft transport preview sends on safe pre-connect errors", async () => {
+    const api = createMockDraftApi();
+    const preConnectErr = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    api.sendMessageDraft
+      .mockRejectedValueOnce(preConnectErr)
+      .mockRejectedValueOnce(preConnectErr)
+      .mockResolvedValueOnce(true);
+
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(3);
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(computeBackoff).toHaveBeenCalledTimes(2);
+    expect(sleepWithAbort).toHaveBeenCalledTimes(2);
+    expect(stream.previewMode?.()).toBe("draft");
   });
 
   it("materializes draft previews using rendered HTML text", async () => {
