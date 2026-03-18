@@ -323,6 +323,16 @@ function isSystemdUserScopeUnavailable(detail: string): boolean {
   );
 }
 
+function isSystemdUnitMissing(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("not found") ||
+    normalized.includes("not loaded") ||
+    normalized.includes("no such unit") ||
+    normalized.includes("could not be found")
+  );
+}
+
 function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
   if (!detail) {
     return false;
@@ -577,10 +587,7 @@ async function runSystemdServiceAction(params: {
   // Only fall back to system scope when the user unit is missing/not-loaded.
   // Operational errors (permission denied, bus failures) should surface immediately.
   const userDetail = readSystemctlDetail(res);
-  const isUnitMissing =
-    userDetail.toLowerCase().includes("not found") ||
-    userDetail.toLowerCase().includes("not loaded") ||
-    userDetail.toLowerCase().includes("no such unit");
+  const isUnitMissing = isSystemdUnitMissing(userDetail);
   if (isUnitMissing) {
     const systemRes = await execSystemctlSystem([params.action, unitName]);
     if (systemRes.code === 0) {
@@ -681,7 +688,7 @@ export async function readSystemdServiceRuntime(
     return buildRuntimeFromShow(res.stdout);
   }
   const detail = (res.stderr || res.stdout).trim();
-  const missing = detail.toLowerCase().includes("not found");
+  const missing = isSystemdUnitMissing(detail);
   // Only fall back to system scope when user unit is missing.
   if (missing) {
     const systemRes = await execSystemctlSystem(showArgs);
