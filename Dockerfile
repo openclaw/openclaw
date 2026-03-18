@@ -96,18 +96,7 @@ RUN pnpm ui:build
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
 FROM build AS runtime-assets
-ARG OPENCLAW_EXTENSIONS
 RUN CI=true pnpm prune --prod && \
-    if [ -n "$OPENCLAW_EXTENSIONS" ]; then \
-      for ext in $OPENCLAW_EXTENSIONS; do \
-        if [ -f "extensions/$ext/package.json" ]; then \
-          npm install --prefix "extensions/$ext" --omit=dev --silent || { \
-            echo "Failed to install production dependencies for extension '$ext'" >&2; \
-            exit 1; \
-          }; \
-        fi; \
-      done; \
-    fi && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
 # ── Runtime base images ─────────────────────────────────────────

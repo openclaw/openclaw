@@ -40,9 +40,8 @@ describe("Dockerfile", () => {
   it("prunes runtime dependencies after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("FROM build AS runtime-assets");
-    expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
     expect(dockerfile).toContain("CI=true pnpm prune --prod");
-    expect(dockerfile).toContain('npm install --prefix "extensions/$ext" --omit=dev --silent');
+    expect(dockerfile).not.toContain('npm install --prefix "extensions/$ext" --omit=dev --silent');
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );
