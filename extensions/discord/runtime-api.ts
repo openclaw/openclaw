@@ -1,4 +1,7 @@
 export * from "./src/audit.js";
+export * from "./src/actions/runtime.js";
+export * from "./src/actions/runtime.moderation-shared.js";
+export * from "./src/actions/runtime.shared.js";
 export * from "./src/channel-actions.js";
 export * from "./src/directory-live.js";
 export * from "./src/monitor.js";

@@ -591,34 +591,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "poll";
   const to = readStringParam(params, "to", { required: true });
-  const question = readStringParam(params, "pollQuestion", {
-    required: true,
-  });
-  const options = readStringArrayParam(params, "pollOption", { required: true });
-  if (options.length < 2) {
-    throw new Error("pollOption requires at least two values");
-  }
   const silent = readBooleanParam(params, "silent");
-  const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
-  const pollAnonymous = readBooleanParam(params, "pollAnonymous");
-  const pollPublic = readBooleanParam(params, "pollPublic");
-  const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
-  const durationHours = readNumberParam(params, "pollDurationHours", {
-    integer: true,
-    strict: true,
-  });
-  const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
-    integer: true,
-    strict: true,
-  });
-  const maxSelections = resolvePollMaxSelections(options.length, allowMultiselect);
-
-  if (durationSeconds !== undefined && channel !== "telegram") {
-    throw new Error("pollDurationSeconds is only supported for Telegram polls");
-  }
-  if (isAnonymous !== undefined && channel !== "telegram") {
-    throw new Error("pollAnonymous/pollPublic are only supported for Telegram polls");
-  }
 
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
@@ -652,14 +625,45 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
       silent: silent ?? undefined,
     },
-    to,
-    question,
-    options,
-    maxSelections,
-    durationSeconds: durationSeconds ?? undefined,
-    durationHours: durationHours ?? undefined,
-    threadId: resolvedThreadId ?? undefined,
-    isAnonymous,
+    resolveCorePoll: () => {
+      const question = readStringParam(params, "pollQuestion", {
+        required: true,
+      });
+      const options = readStringArrayParam(params, "pollOption", { required: true });
+      if (options.length < 2) {
+        throw new Error("pollOption requires at least two values");
+      }
+      const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
+      const pollAnonymous = readBooleanParam(params, "pollAnonymous");
+      const pollPublic = readBooleanParam(params, "pollPublic");
+      const isAnonymous = resolveTelegramPollVisibility({ pollAnonymous, pollPublic });
+      const durationHours = readNumberParam(params, "pollDurationHours", {
+        integer: true,
+        strict: true,
+      });
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
+        integer: true,
+        strict: true,
+      });
+
+      if (durationSeconds !== undefined && channel !== "telegram") {
+        throw new Error("pollDurationSeconds is only supported for Telegram polls");
+      }
+      if (isAnonymous !== undefined && channel !== "telegram") {
+        throw new Error("pollAnonymous/pollPublic are only supported for Telegram polls");
+      }
+
+      return {
+        to,
+        question,
+        options,
+        maxSelections: resolvePollMaxSelections(options.length, allowMultiselect),
+        durationSeconds: durationSeconds ?? undefined,
+        durationHours: durationHours ?? undefined,
+        threadId: resolvedThreadId ?? undefined,
+        isAnonymous,
+      };
+    },
   });
 
   return {
