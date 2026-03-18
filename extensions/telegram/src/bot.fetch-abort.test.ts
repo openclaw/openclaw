@@ -6,7 +6,9 @@ const { botCtorSpy, telegramBotDepsForTest } =
 const { telegramBotRuntimeForTest } = await import("./bot.create-telegram-bot.test-harness.js");
 const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
   await import("./bot.js");
-setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
+setTelegramBotRuntimeForTest(
+  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+);
 const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
   createTelegramBotBase({
     ...opts,

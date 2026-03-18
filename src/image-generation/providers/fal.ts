@@ -94,14 +94,22 @@ function aspectRatioToEnum(aspectRatio: string | undefined): string | undefined 
   return undefined;
 }
 
-function aspectRatioToDimensions(aspectRatio: string, edge: number): { width: number; height: number } {
+function aspectRatioToDimensions(
+  aspectRatio: string,
+  edge: number,
+): { width: number; height: number } {
   const match = /^(\d+):(\d+)$/u.exec(aspectRatio.trim());
   if (!match) {
     throw new Error(`Invalid fal aspect ratio: ${aspectRatio}`);
   }
   const widthRatio = Number.parseInt(match[1] ?? "", 10);
   const heightRatio = Number.parseInt(match[2] ?? "", 10);
-  if (!Number.isFinite(widthRatio) || !Number.isFinite(heightRatio) || widthRatio <= 0 || heightRatio <= 0) {
+  if (
+    !Number.isFinite(widthRatio) ||
+    !Number.isFinite(heightRatio) ||
+    widthRatio <= 0 ||
+    heightRatio <= 0
+  ) {
     throw new Error(`Invalid fal aspect ratio: ${aspectRatio}`);
   }
   if (widthRatio >= heightRatio) {
@@ -140,7 +148,10 @@ function resolveFalImageSize(params: {
     return { width: edge, height: edge };
   }
   if (normalizedAspectRatio) {
-    return aspectRatioToEnum(normalizedAspectRatio) ?? aspectRatioToDimensions(normalizedAspectRatio, 1024);
+    return (
+      aspectRatioToEnum(normalizedAspectRatio) ??
+      aspectRatioToDimensions(normalizedAspectRatio, 1024)
+    );
   }
   return undefined;
 }

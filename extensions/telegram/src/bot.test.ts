@@ -35,7 +35,9 @@ const { normalizeTelegramCommandName } =
   await import("../../../src/config/telegram-custom-commands.js");
 const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
   await import("./bot.js");
-setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
+setTelegramBotRuntimeForTest(
+  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+);
 const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
   createTelegramBotBase({
     ...opts,

@@ -3,7 +3,7 @@ import {
   resolveWebSearchProviderCredential,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../../src/test-utils/env.js";
+import { withEnv } from "../../test/helpers/extensions/env.js";
 import { __testing } from "./web-search.js";
 
 const { extractXaiWebSearchContent, resolveXaiInlineCitations, resolveXaiWebSearchModel } =

@@ -392,10 +392,11 @@ describe("createImageGenerateTool", () => {
       throw new Error("expected image_generate tool");
     }
 
-    await expect(tool.execute("call-bad-aspect", { prompt: "portrait", aspectRatio: "7:5" }))
-      .rejects.toThrow(
-        "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
-      );
+    await expect(
+      tool.execute("call-bad-aspect", { prompt: "portrait", aspectRatio: "7:5" }),
+    ).rejects.toThrow(
+      "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+    );
   });
 
   it("lists registered provider and model options", async () => {

@@ -44,6 +44,7 @@ export type {
   ProviderThinkingPolicyContext,
   ProviderWrapStreamFnContext,
   OpenClawPluginService,
+  OpenClawPluginServiceContext,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
   ProviderAuthMethodNonInteractiveContext,
@@ -51,6 +52,7 @@ export type {
   ProviderAuthResult,
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
+  PluginLogger,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";

@@ -1,20 +1,18 @@
 import {
   applyDirectoryQueryAndLimit,
   collectNormalizedDirectoryIds,
-  inspectReadOnlyChannelAccount,
   listDirectoryGroupEntriesFromMapKeys,
   toDirectoryEntries,
   type DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
-import type { InspectedSlackAccount } from "../api.js";
+import { inspectSlackAccount, type InspectedSlackAccount } from "../api.js";
 import { parseSlackTarget } from "./targets.js";
 
 export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = (await inspectReadOnlyChannelAccount({
-    channelId: "slack",
+  const account = inspectSlackAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  })) as InspectedSlackAccount | null;
+  }) as InspectedSlackAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }
@@ -40,11 +38,10 @@ export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigP
 }
 
 export async function listSlackDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = (await inspectReadOnlyChannelAccount({
-    channelId: "slack",
+  const account = inspectSlackAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  })) as InspectedSlackAccount | null;
+  }) as InspectedSlackAccount | null;
   if (!account || !("config" in account)) {
     return [];
   }

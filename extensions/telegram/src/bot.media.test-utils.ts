@@ -107,7 +107,11 @@ beforeAll(async () => {
   onSpyRef = harness.onSpy;
   sendChatActionSpyRef = harness.sendChatActionSpy;
   const botModule = await import("./bot.js");
-  botModule.setTelegramBotRuntimeForTest(harness.telegramBotRuntimeForTest);
+  botModule.setTelegramBotRuntimeForTest(
+    harness.telegramBotRuntimeForTest as unknown as Parameters<
+      typeof botModule.setTelegramBotRuntimeForTest
+    >[0],
+  );
   createTelegramBotRef = (opts) =>
     botModule.createTelegramBot({
       ...opts,

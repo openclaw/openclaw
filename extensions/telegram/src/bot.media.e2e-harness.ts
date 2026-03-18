@@ -1,5 +1,12 @@
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi, type Mock } from "vitest";
+import type { TelegramBotDeps } from "./bot-deps.js";
+
+const EMPTY_REPLY_COUNTS = {
+  block: 0,
+  final: 0,
+  tool: 0,
+} as const;
 
 export const useSpy: Mock = vi.fn();
 export const middlewareUseSpy: Mock = vi.fn();
@@ -56,7 +63,11 @@ const apiStub: ApiStub = {
   setMyCommands: vi.fn(async () => undefined),
 };
 
-export const telegramBotRuntimeForTest = {
+export const telegramBotRuntimeForTest: {
+  Bot: new (token: string) => unknown;
+  sequentialize: () => unknown;
+  apiThrottler: () => unknown;
+} = {
   Bot: class {
     api = apiStub;
     use = middlewareUseSpy;
@@ -84,12 +95,12 @@ const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
     for (const payload of payloads) {
       await params.dispatcherOptions?.deliver?.(payload, { kind: "final" });
     }
-    return { queuedFinal: false, counts: {} };
+    return { queuedFinal: false, counts: EMPTY_REPLY_COUNTS };
   }),
 );
-export const telegramBotDepsForTest = {
+export const telegramBotDepsForTest: TelegramBotDeps = {
   loadConfig: () => ({
-    channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    channels: { telegram: { dmPolicy: "open" as const, allowFrom: ["*"] } },
   }),
   resolveStorePath: vi.fn((storePath?: string) => storePath ?? "/tmp/telegram-media-sessions.json"),
   readChannelAllowFromStore: vi.fn(async () => [] as string[]),

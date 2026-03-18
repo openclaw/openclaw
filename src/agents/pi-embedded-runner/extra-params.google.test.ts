@@ -18,7 +18,7 @@ describe("extra-params: Google thinking payload compatibility", () => {
         api: "google-generative-ai",
         provider: "google",
         id: "gemini-3.1-pro-preview",
-      } as Model<"openai-completions">,
+      } as unknown as Model<"openai-completions">,
       thinkingLevel: "high",
       payload: {
         contents: [],

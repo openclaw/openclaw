@@ -39,7 +39,9 @@ const {
   getTelegramSequentialKey,
   setTelegramBotRuntimeForTest,
 } = await import("./bot.js");
-setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
+setTelegramBotRuntimeForTest(
+  telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
+);
 const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
   createTelegramBotBase({
     ...opts,

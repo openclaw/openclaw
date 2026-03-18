@@ -1,5 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ResolvedZaloAccount } from "./accounts.js";
+import type { ZaloFetch, ZaloUpdate } from "./api.js";
+import type { ZaloRuntimeEnv } from "./monitor.js";
 import {
   createDedupeCache,
   createFixedWindowRateLimiter,
@@ -17,9 +20,6 @@ import {
   resolveClientIp,
   type OpenClawConfig,
 } from "./runtime-api.js";
-import type { ResolvedZaloAccount } from "./accounts.js";
-import type { ZaloFetch, ZaloUpdate } from "./api.js";
-import type { ZaloRuntimeEnv } from "./monitor.js";
 
 const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
 

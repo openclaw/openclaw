@@ -444,6 +444,14 @@ export type MemorySearchConfig = {
   };
 };
 
+type WebSearchLegacyProviderConfig = {
+  apiKey?: SecretInput;
+  baseUrl?: string;
+  model?: string;
+  mode?: string;
+  inlineCitations?: boolean;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -465,6 +473,20 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
+      /** @deprecated Legacy Brave credential path. */
+      apiKey?: SecretInput;
+      /** @deprecated Legacy Brave scoped config. */
+      brave?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Firecrawl scoped config. */
+      firecrawl?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Gemini scoped config. */
+      gemini?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Grok scoped config. */
+      grok?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Kimi scoped config. */
+      kimi?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Perplexity scoped config. */
+      perplexity?: WebSearchLegacyProviderConfig;
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */

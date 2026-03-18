@@ -474,6 +474,11 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   };
 
   const normalizeLegacyNanoBananaSkill = () => {
+    type ModelProviderEntry = Partial<
+      NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
+    >;
+    type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
+
     const rawSkills = next.skills;
     if (!isRecord(rawSkills)) {
       return;
@@ -544,14 +549,20 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
           ? structuredClone(rawLegacyEntry.apiKey)
           : undefined);
 
-    const rawModels = isRecord(next.models) ? structuredClone(next.models) : {};
-    const rawProviders = isRecord(rawModels.providers) ? { ...rawModels.providers } : {};
-    const rawGoogle = isRecord(rawProviders.google) ? { ...rawProviders.google } : {};
+    const rawModels = (
+      isRecord(next.models) ? structuredClone(next.models) : {}
+    ) as ModelsConfigPatch;
+    const rawProviders = (
+      isRecord(rawModels.providers) ? { ...rawModels.providers } : {}
+    ) as Record<string, ModelProviderEntry>;
+    const rawGoogle = (
+      isRecord(rawProviders.google) ? { ...rawProviders.google } : {}
+    ) as ModelProviderEntry;
     const hasGoogleApiKey = rawGoogle.apiKey !== undefined;
     if (!hasGoogleApiKey && legacyApiKey) {
       rawGoogle.apiKey = legacyApiKey;
       rawProviders.google = rawGoogle;
-      rawModels.providers = rawProviders;
+      rawModels.providers = rawProviders as NonNullable<OpenClawConfig["models"]>["providers"];
       next = {
         ...next,
         models: rawModels as OpenClawConfig["models"],

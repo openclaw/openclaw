@@ -457,7 +457,7 @@ describe("createOpenClawCodingTools", () => {
   it("applies xai model compat for direct Grok tool cleanup", () => {
     const xaiTools = createOpenClawCodingTools({
       modelProvider: "xai",
-      modelCompat: applyXaiModelCompat({}).compat,
+      modelCompat: applyXaiModelCompat({ compat: {} }).compat,
       senderIsOwner: true,
     });
 

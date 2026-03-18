@@ -1,22 +1,30 @@
 export {
+  buildChannelConfigSchema,
   createActionGate,
-  createWhatsAppOutboundBase,
   DEFAULT_ACCOUNT_ID,
   formatWhatsAppConfigAllowFromEntries,
-  isWhatsAppGroupJid,
+  getChatChannelMeta,
   jsonResult,
-  normalizeWhatsAppTarget,
+  normalizeE164,
   readReactionParams,
   readStringParam,
-  resolveWhatsAppHeartbeatRecipients,
-  resolveWhatsAppMentionStripRegexes,
+  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppOutboundTarget,
   ToolAuthorizationError,
+  WhatsAppConfigSchema,
   type ChannelPlugin,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/whatsapp-core";
+
+export {
+  createWhatsAppOutboundBase,
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+  resolveWhatsAppHeartbeatRecipients,
+  resolveWhatsAppMentionStripRegexes,
   type ChannelMessageActionName,
   type DmPolicy,
   type GroupPolicy,
-  type OpenClawConfig,
   type WhatsAppAccountConfig,
 } from "openclaw/plugin-sdk/whatsapp";
 

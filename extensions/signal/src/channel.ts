@@ -4,6 +4,16 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
+import { markdownToSignalTextChunks } from "./format.js";
+import {
+  looksLikeUuid,
+  resolveSignalPeerId,
+  resolveSignalRecipient,
+  resolveSignalSender,
+} from "./identity.js";
+import { signalMessageActions } from "./message-actions.js";
+import type { SignalProbe } from "./probe.js";
 import {
   buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
@@ -17,16 +27,6 @@ import {
   resolveChannelMediaMaxBytes,
   type ChannelPlugin,
 } from "./runtime-api.js";
-import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
-import { markdownToSignalTextChunks } from "./format.js";
-import {
-  looksLikeUuid,
-  resolveSignalPeerId,
-  resolveSignalRecipient,
-  resolveSignalSender,
-} from "./identity.js";
-import { signalMessageActions } from "./message-actions.js";
-import type { SignalProbe } from "./probe.js";
 import { getSignalRuntime } from "./runtime.js";
 import { signalSetupAdapter } from "./setup-core.js";
 import {

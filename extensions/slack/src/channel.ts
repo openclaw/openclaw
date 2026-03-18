@@ -29,6 +29,8 @@ import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import {
   buildComputedAccountStatusSnapshot,
   DEFAULT_ACCOUNT_ID,
+  listSlackDirectoryGroupsFromConfig,
+  listSlackDirectoryPeersFromConfig,
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
   PAIRING_APPROVED_MESSAGE,

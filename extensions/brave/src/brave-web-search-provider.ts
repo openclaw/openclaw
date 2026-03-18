@@ -132,8 +132,8 @@ function resolveBraveConfig(
     : ({ apiKey: (searchConfig as Record<string, unknown> | undefined)?.apiKey } as BraveConfig);
 }
 
-function resolveBraveMode(brave: BraveConfig): "web" | "llm-context" {
-  return brave.mode === "llm-context" ? "llm-context" : "web";
+function resolveBraveMode(brave?: BraveConfig): "web" | "llm-context" {
+  return brave?.mode === "llm-context" ? "llm-context" : "web";
 }
 
 function resolveBraveApiKey(

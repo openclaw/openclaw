@@ -1,23 +1,19 @@
-export type { IMessageAccountConfig } from "../../src/config/types.imessage.js";
-export type { ChannelPlugin } from "../../src/channels/plugins/types.plugin.js";
 export {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
   buildChannelConfigSchema,
-  getChatChannelMeta,
-} from "../../src/plugin-sdk/channel-plugin-common.js";
-export {
+  collectStatusIssuesFromLastError,
   formatTrimmedAllowFromEntries,
-  resolveIMessageConfigAllowFrom,
-  resolveIMessageConfigDefaultTo,
-} from "../../src/plugin-sdk/channel-config-helpers.js";
-export { collectStatusIssuesFromLastError } from "../../src/plugin-sdk/status-helpers.js";
-export { resolveChannelMediaMaxBytes } from "../../src/channels/plugins/media-limits.js";
-export {
+  getChatChannelMeta,
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
-} from "../../src/channels/plugins/normalize/imessage.js";
-export { IMessageConfigSchema } from "../../src/config/zod-schema.providers-core.js";
+  resolveChannelMediaMaxBytes,
+  resolveIMessageConfigAllowFrom,
+  resolveIMessageConfigDefaultTo,
+  IMessageConfigSchema,
+  type ChannelPlugin,
+  type IMessageAccountConfig,
+} from "openclaw/plugin-sdk/imessage";
 export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
