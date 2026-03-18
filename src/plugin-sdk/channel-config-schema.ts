@@ -5,4 +5,8 @@ export {
   buildCatchallMultiAccountChannelSchema,
   buildNestedDmConfigSchema,
 } from "../channels/plugins/config-schema.js";
-export { DmPolicySchema, GroupPolicySchema, MarkdownConfigSchema } from "../config/zod-schema.core.js";
+export {
+  DmPolicySchema,
+  GroupPolicySchema,
+  MarkdownConfigSchema,
+} from "../config/zod-schema.core.js";
