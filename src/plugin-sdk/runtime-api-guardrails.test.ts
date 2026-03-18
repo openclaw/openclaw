@@ -99,7 +99,8 @@ function readExportStatements(path: string): string[] {
 
   return sourceFile.statements.flatMap((statement) => {
     if (!ts.isExportDeclaration(statement)) {
-      if (!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+      const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
+      if (!modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
         return [];
       }
       return [statement.getText(sourceFile).replaceAll(/\s+/g, " ").trim()];
