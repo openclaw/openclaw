@@ -40,6 +40,7 @@ export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-runtime";
+export type { DiscordConfig } from "openclaw/plugin-sdk/discord";
 export {
   assertMediaNotDataUrl,
   parseAvailableTags,

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { TwitchAccountConfig } from "./types.js";
 
 /**
