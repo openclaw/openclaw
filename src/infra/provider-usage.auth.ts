@@ -229,17 +229,19 @@ export async function resolveProviderAuths(params: {
   providers: UsageProviderId[];
   auth?: ProviderAuth[];
   agentDir?: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): Promise<ProviderAuth[]> {
   if (params.auth) {
     return params.auth;
   }
 
   const state: UsageAuthState = {
-    cfg: loadConfig(),
+    cfg: params.config ?? loadConfig(),
     store: ensureAuthProfileStore(params.agentDir, {
       allowKeychainPrompt: false,
     }),
-    env: process.env,
+    env: params.env ?? process.env,
     agentDir: params.agentDir,
   };
   const auths: ProviderAuth[] = [];

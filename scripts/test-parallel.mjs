@@ -236,11 +236,16 @@ const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
-const allKnownUnitFiles = allKnownTestFiles.filter((file) => inferTarget(file).owner === "unit");
+const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
+  if (file.endsWith(".live.test.ts") || file.endsWith(".e2e.test.ts")) {
+    return false;
+  }
+  return inferTarget(file).owner !== "gateway";
+});
 const defaultHeavyUnitFileLimit =
-  testProfile === "serial" ? 0 : testProfile === "low" ? 8 : highMemLocalHost ? 24 : 16;
+  testProfile === "serial" ? 0 : testProfile === "low" ? 20 : highMemLocalHost ? 80 : 60;
 const defaultHeavyUnitLaneCount =
-  testProfile === "serial" ? 0 : testProfile === "low" ? 1 : highMemLocalHost ? 3 : 2;
+  testProfile === "serial" ? 0 : testProfile === "low" ? 2 : highMemLocalHost ? 5 : 4;
 const heavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_HEAVY_UNIT_FILE_LIMIT",
   defaultHeavyUnitFileLimit,
@@ -582,8 +587,10 @@ const defaultWorkerBudget =
           }
         : highMemLocalHost
           ? {
-              // High-memory local hosts can prioritize wall-clock speed.
-              unit: Math.max(4, Math.min(14, Math.floor((localWorkers * 7) / 8))),
+              // After peeling measured hotspots into dedicated lanes, the shared
+              // unit-fast lane shuts down more reliably with a slightly smaller
+              // worker fan-out than the old "max it out" local default.
+              unit: Math.max(4, Math.min(10, Math.floor((localWorkers * 5) / 8))),
               unitIsolated: Math.max(1, Math.min(2, Math.floor(localWorkers / 6) || 1)),
               extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
               gateway: Math.max(2, Math.min(6, Math.floor(localWorkers / 2))),
