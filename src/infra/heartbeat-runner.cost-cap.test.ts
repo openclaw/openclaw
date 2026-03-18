@@ -198,6 +198,12 @@ describe("config catalog lookup", () => {
     expect(cost).toBeCloseTo(0.0025, 4); // gpt-4o = $2.5/M
   });
 
+  it("matches hardcoded table with nested provider prefix", () => {
+    // "openrouter/anthropic/claude-opus-4" should strip to "claude-opus-4"
+    const cost = estimateRunCost("x".repeat(4000), "openrouter/anthropic/claude-opus-4");
+    expect(cost).toBeCloseTo(0.015, 3); // claude-opus-4 = $15/M
+  });
+
   it("ignores catalog entry with negative cost.input", () => {
     const cfg = {
       models: {

@@ -1262,8 +1262,9 @@ function resolveInputPricePerToken(modelId: string, cfg?: OpenClawConfig): numbe
       }
     }
   }
-  // Strip provider prefix (e.g. "openai/gpt-4o" -> "gpt-4o") for hardcoded table match.
-  const slash = modelId.indexOf("/");
+  // Strip provider prefix (e.g. "openai/gpt-4o" or "openrouter/anthropic/claude-opus-4"
+  // -> "gpt-4o" / "claude-opus-4") for hardcoded table match.
+  const slash = modelId.lastIndexOf("/");
   const bareModel = slash !== -1 ? modelId.slice(slash + 1) : modelId;
   const lower = bareModel.toLowerCase();
   for (const [prefix, price] of SORTED_PRICING_ENTRIES) {
