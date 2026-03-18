@@ -351,8 +351,8 @@ export async function sendWebhookMessageDiscord(
   text: string,
   opts: DiscordWebhookSendOpts,
 ): Promise<DiscordSendResult> {
-  const webhookId = opts.webhookId.trim();
-  const webhookToken = opts.webhookToken.trim();
+  const webhookId = opts.webhookId?.trim() ?? "";
+  const webhookToken = opts.webhookToken?.trim() ?? "";
   if (!webhookId || !webhookToken) {
     throw new Error("Discord webhook id/token are required");
   }
