@@ -13,18 +13,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 安装 pnpm
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
-      # 设置 Node.js 22
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'pnpm'
 
-      # 选择 Xcode 26.3.0
       - name: Select Xcode version
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -39,31 +36,39 @@ jobs:
       # 导入证书和描述文件
       - name: Setup certificate and provisioning profile
         run: |
-          # 创建专用钥匙串
           security create-keychain -p "temp123" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "temp123" build.keychain
-
-          # 导入证书
           echo -n "${{ secrets.BUILD_CERTIFICATE_BASE64 }}" | base64 --decode > certificate.p12
           security import certificate.p12 -k build.keychain -P "${{ secrets.P12_PASSWORD }}" -T /usr/bin/codesign
-
-          # 允许 codesign 访问钥匙串
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "temp123" build.keychain
-
-          # 安装描述文件
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles/
           echo -n "${{ secrets.PROVISIONING_PROFILE_BASE64 }}" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
 
+      # 关键步骤：创建 LocalSigning.xcconfig 以固定 bundle ID
+      - name: Set fixed bundle ID
+        run: |
+          # 进入 apps/ios 目录（如果该文件通常放在那里）
+          cd apps/ios
+          # 创建 LocalSigning.xcconfig，写入你描述文件对应的 bundle ID
+          # 请将下面的 YOUR_BUNDLE_ID 替换为你的实际 bundle ID
+          echo "PRODUCT_BUNDLE_IDENTIFIER = YOUR_BUNDLE_ID" > LocalSigning.xcconfig
+          # 如果项目期望从 LocalSigning.xcconfig.example 复制，可能需要额外处理
+          # 但直接创建应该也能被 xcodegen 读取
+
+      # 准备 iOS 项目（注意：ios-configure-signing.sh 可能会覆盖我们刚设置的文件，所以我们需要在它之后执行？）
       - name: Prepare iOS project
         run: |
           chmod +x ./scripts/ios-configure-signing.sh
           pnpm install
+          # 运行配置脚本，它可能生成 LocalSigning.xcconfig，所以我们先备份或之后再覆盖
           ./scripts/ios-configure-signing.sh
+          # 再次覆盖 bundle ID（确保脚本没有覆盖我们的设置）
           cd apps/ios
+          echo "PRODUCT_BUNDLE_IDENTIFIER = com.lijinrui.app" > LocalSigning.xcconfig
           xcodegen generate
 
-      # 动态生成最简单的 ExportOptions.plist（只指定 method）
+      # 创建 ExportOptions.plist（只指定 method）
       - name: Create ExportOptions.plist
         run: |
           cat <<EOF > ExportOptions.plist
@@ -77,7 +82,6 @@ jobs:
           </plist>
           EOF
 
-      # 编译归档（允许自动更新签名）
       - name: Build archive
         run: |
           cd apps/ios
@@ -89,7 +93,6 @@ jobs:
             -destination 'generic/platform=iOS' \
             -allowProvisioningUpdates
 
-      # 导出已签名的 IPA
       - name: Export IPA
         run: |
           cd apps/ios
@@ -99,7 +102,6 @@ jobs:
             -exportOptionsPlist $PWD/../ExportOptions.plist \
             -allowProvisioningUpdates
 
-      # 上传 IPA
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
