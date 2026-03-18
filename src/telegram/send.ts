@@ -381,11 +381,17 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
   if (!CHAT_NOT_FOUND_RE.test(formatErrorMessage(err))) {
     return err;
   }
+  const safeInputPreview = (() => {
+    const input = params.input;
+    const MAX = 128;
+    const truncated = input.length > MAX ? input.slice(0, MAX) + "…" : input;
+    return redactSensitiveText(JSON.stringify(truncated));
+  })();
   return new Error(
     [
       `Telegram send failed: chat not found (chat_id=${params.chatId}).`,
       "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
-      `Input was: ${JSON.stringify(params.input)}.`,
+      `Input was: ${safeInputPreview}.`,
     ].join(" "),
   );
 }

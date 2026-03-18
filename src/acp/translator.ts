@@ -42,6 +42,9 @@ import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 200;
+const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
 
 type PendingPrompt = {
   sessionId: string;
@@ -206,7 +209,8 @@ export class AcpGatewayAgent implements Agent {
   }
 
   async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
-    const limit = readNumber(params._meta, ["limit"]) ?? 100;
+    const rawLimit = readNumber(params._meta, ["limit"]);
+    const limit = Math.min(MAX_LIMIT, Math.max(1, Math.floor(rawLimit ?? DEFAULT_LIMIT)));
     const result = await this.gateway.request<SessionsListResult>("sessions.list", { limit });
     const cwd = params.cwd ?? process.cwd();
     return {
