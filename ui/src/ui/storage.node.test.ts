@@ -25,13 +25,10 @@ function createStorageMock(): Storage {
 }
 
 function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
-  if (typeof window !== "undefined" && window.history?.replaceState) {
-    window.history.replaceState({}, "", params.pathname);
-    return;
-  }
   vi.stubGlobal("location", {
     protocol: params.protocol,
     host: params.host,
+    hostname: params.host.replace(/:\d+$/, ""),
     pathname: params.pathname,
   } as Location);
 }
