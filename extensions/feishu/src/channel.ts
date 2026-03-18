@@ -1,10 +1,7 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
-import {
-  createLegacyMessageToolDiscoveryMethods,
-  createMessageToolCardSchema,
-} from "openclaw/plugin-sdk/channel-runtime";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
@@ -453,7 +450,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   },
   actions: {
     describeMessageTool: describeFeishuMessageTool,
-    ...createLegacyMessageToolDiscoveryMethods(describeFeishuMessageTool),
     handleAction: async (ctx) => {
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId ?? undefined });
       if (

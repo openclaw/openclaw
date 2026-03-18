@@ -10,7 +10,6 @@ import {
   resolveSlackChannelId,
   handleSlackMessageAction,
 } from "../../plugin-sdk/slack.js";
-import { createLegacyMessageToolDiscoveryMethods } from "./message-tool-legacy.js";
 import { createSlackMessageToolBlocksSchema } from "./message-tool-schema.js";
 import type { ChannelMessageActionAdapter, ChannelMessageToolDiscovery } from "./types.js";
 
@@ -52,7 +51,6 @@ export function createSlackActions(
 
   return {
     describeMessageTool,
-    ...createLegacyMessageToolDiscoveryMethods(describeMessageTool),
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({

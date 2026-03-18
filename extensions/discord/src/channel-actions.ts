@@ -1,5 +1,4 @@
 import {
-  createLegacyMessageToolDiscoveryMethods,
   createDiscordMessageToolComponentsSchema,
   createUnionActionGate,
   listTokenSourcedAccounts,
@@ -133,7 +132,6 @@ function describeDiscordMessageTool({
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeDiscordMessageTool,
-  ...createLegacyMessageToolDiscoveryMethods(describeDiscordMessageTool),
   extractToolSend: ({ args }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action === "sendMessage") {
