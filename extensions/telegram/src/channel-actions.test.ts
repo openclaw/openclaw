@@ -42,8 +42,14 @@ describe("telegramMessageActions", () => {
       expect.objectContaining({
         action: "sendMessage",
         to: "123456",
-        content: "",
-        buttons: [[{ text: "Approve", callback_data: "approve", style: "success" }]],
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve", style: "success" }],
+            },
+          ],
+        },
         accountId: "default",
       }),
       expect.anything(),
