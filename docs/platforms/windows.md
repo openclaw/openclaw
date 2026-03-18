@@ -16,6 +16,10 @@ to install: `wsl --install`.
 
 Native Windows companion apps are planned.
 
+If you must run OpenClaw on native Windows without WSL2 or Docker, see
+[Windows hardening without Docker/WSL](/gateway/windows-no-docker-hardening).
+This is a host hardening fallback, not a sandbox equivalent.
+
 ## Install (WSL2)
 
 - [Getting Started](/start/getting-started) (use inside WSL)
