@@ -339,6 +339,23 @@ describe("runMessageAction context isolation", () => {
     expect(result.kind).toBe("send");
   });
 
+  it("allows send when poll fields are empty defaults", async () => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        target: "#C12345678",
+        message: "hi",
+        pollQuestion: "",
+        pollOption: [],
+        pollDurationHours: 0,
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
   it.each([
     {
       name: "structured poll params",
