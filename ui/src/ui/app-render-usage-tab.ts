@@ -225,7 +225,7 @@ export function renderUsageTab(state: AppViewState) {
 
       // Load timeseries/logs only if exactly one session selected
       if (state.usageSelectedSessions.length === 1) {
-        refreshSelectedSessionUsage(state, true);
+        refreshSelectedSessionUsage(state, false);
       }
     },
     onSelectDay: (day, shiftKey) => {

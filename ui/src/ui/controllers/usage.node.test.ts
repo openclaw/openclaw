@@ -251,6 +251,18 @@ describe("usage detail loading", () => {
     expect(state.usageSessionLogs).toBeNull();
     expect(state.usageSessionLogsLoading).toBe(false);
   });
+
+  it("reinitializes request versions when state-like objects start uninitialized", () => {
+    const state = createState(vi.fn(async () => ({})), {
+      usageTimeSeriesRequestVersion: Number.NaN,
+      usageSessionLogsRequestVersion: Number.NaN,
+    });
+
+    resetSessionUsageDetails(state);
+
+    expect(state.usageTimeSeriesRequestVersion).toBe(1);
+    expect(state.usageSessionLogsRequestVersion).toBe(1);
+  });
 });
 
 function createStorageMock() {

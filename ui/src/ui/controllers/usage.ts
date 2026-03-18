@@ -263,9 +263,13 @@ export const __test = {
   },
 };
 
+function bumpRequestVersion(value: number | undefined): number {
+  return Number.isFinite(value) ? value + 1 : 1;
+}
+
 export function resetSessionUsageDetails(state: UsageState) {
-  state.usageTimeSeriesRequestVersion += 1;
-  state.usageSessionLogsRequestVersion += 1;
+  state.usageTimeSeriesRequestVersion = bumpRequestVersion(state.usageTimeSeriesRequestVersion);
+  state.usageSessionLogsRequestVersion = bumpRequestVersion(state.usageSessionLogsRequestVersion);
   state.usageTimeSeriesLoading = false;
   state.usageSessionLogsLoading = false;
   state.usageTimeSeries = null;
@@ -277,7 +281,7 @@ export async function loadSessionTimeSeries(state: UsageState, sessionKey: strin
   if (!client || !state.connected) {
     return;
   }
-  const requestVersion = state.usageTimeSeriesRequestVersion + 1;
+  const requestVersion = bumpRequestVersion(state.usageTimeSeriesRequestVersion);
   state.usageTimeSeriesRequestVersion = requestVersion;
   state.usageTimeSeriesLoading = true;
   state.usageTimeSeries = null;
@@ -306,7 +310,7 @@ export async function loadSessionLogs(state: UsageState, sessionKey: string) {
   if (!client || !state.connected) {
     return;
   }
-  const requestVersion = state.usageSessionLogsRequestVersion + 1;
+  const requestVersion = bumpRequestVersion(state.usageSessionLogsRequestVersion);
   state.usageSessionLogsRequestVersion = requestVersion;
   state.usageSessionLogsLoading = true;
   state.usageSessionLogs = null;

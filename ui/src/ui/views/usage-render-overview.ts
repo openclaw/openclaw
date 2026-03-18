@@ -404,7 +404,7 @@ function renderUsageInsights(
   const cacheHint = "Cache hit rate = cache read / (input + cache read). Higher is better.";
   const errorHint = "Error rate = errors / total messages. Lower is better.";
   const throughputHint =
-    "Throughput shows tokens per minute over active time inside the current date/hour filters.";
+    "Throughput shows tokens per minute over the Active Time estimate for sessions matching the current filters.";
   const tokensHint = "Average tokens per message in this range.";
   const durationHint =
     "Active time sums the portions of each session span that fall inside the current date/hour filters.";
