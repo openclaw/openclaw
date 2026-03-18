@@ -18,9 +18,20 @@ import {
 } from "./program-args.js";
 
 const originalArgv = [...process.argv];
+const originalExecPath = process.execPath;
+const originalBun = (globalThis as { Bun?: unknown }).Bun;
 
 afterEach(() => {
   process.argv = [...originalArgv];
+  Object.defineProperty(process, "execPath", {
+    value: originalExecPath,
+    configurable: true,
+  });
+  if (originalBun === undefined) {
+    delete (globalThis as { Bun?: unknown }).Bun;
+  } else {
+    (globalThis as { Bun?: unknown }).Bun = originalBun;
+  }
   vi.resetAllMocks();
 });
 
@@ -113,6 +124,43 @@ describe("resolveCurrentCliProgramArguments", () => {
       "--non-interactive",
     ]);
     expect(fsMocks.access).not.toHaveBeenCalled();
+  });
+
+  it("uses Bun.main when the current runtime argv omits the CLI entrypoint", async () => {
+    const bunEntrypoint = path.resolve("/workspaces/openclaw/dist/index.js");
+    Object.defineProperty(process, "execPath", {
+      value: "/usr/local/bin/bun",
+      configurable: true,
+    });
+    (globalThis as { Bun?: { main?: string } }).Bun = {
+      main: `file://${bunEntrypoint}`,
+    };
+    process.argv = ["/usr/local/bin/bun", "gateway"];
+    fsMocks.realpath.mockResolvedValue(bunEntrypoint);
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === bunEntrypoint) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveCurrentCliProgramArguments([
+      "--profile",
+      "work",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
+
+    expect(result).toEqual([
+      "/usr/local/bin/bun",
+      bunEntrypoint,
+      "--profile",
+      "work",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
   });
 
   it("keeps a source entrypoint when no built dist entry exists", async () => {

@@ -150,9 +150,16 @@ function resolveTaskUser(env: GatewayServiceEnv): string | null {
   return username;
 }
 
-async function resolveRegisteredTaskScriptPath(env: GatewayServiceEnv): Promise<string | null> {
+async function resolveRegisteredTaskScriptPath(
+  env: GatewayServiceEnv,
+  signal?: AbortSignal,
+): Promise<string | null> {
   const taskName = resolveTaskName(env);
-  const query = await execSchtasks(["/Query", "/TN", taskName, "/XML"]).catch(() => null);
+  const query = await (
+    signal
+      ? execSchtasks(["/Query", "/TN", taskName, "/XML"], { signal })
+      : execSchtasks(["/Query", "/TN", taskName, "/XML"])
+  ).catch(() => null);
   if (query?.code !== 0) {
     return null;
   }
@@ -161,6 +168,7 @@ async function resolveRegisteredTaskScriptPath(env: GatewayServiceEnv): Promise<
 
 export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
+  options?: { signal?: AbortSignal },
 ): Promise<GatewayServiceCommandConfig | null> {
   const derivedScriptPath = resolveTaskScriptPath(env);
   const hasExplicitScriptPath =
@@ -169,7 +177,7 @@ export async function readScheduledTaskCommand(
     Boolean(env.OPENCLAW_TASK_SCRIPT_NAME?.trim());
   const registeredScriptPath = hasExplicitScriptPath
     ? null
-    : await resolveRegisteredTaskScriptPath(env).catch(() => null);
+    : await resolveRegisteredTaskScriptPath(env, options?.signal).catch(() => null);
   const candidatePaths = [
     ...(registeredScriptPath && registeredScriptPath !== derivedScriptPath
       ? [registeredScriptPath]
@@ -428,8 +436,11 @@ function parsePortFromProgramArguments(programArguments?: string[]): number | nu
   return null;
 }
 
-async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
-  const command = await readScheduledTaskCommand(env).catch(() => null);
+async function resolveScheduledTaskPort(
+  env: GatewayServiceEnv,
+  signal?: AbortSignal,
+): Promise<number | null> {
+  const command = await readScheduledTaskCommand(env, { signal }).catch(() => null);
   return (
     parsePortFromProgramArguments(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
@@ -480,7 +491,7 @@ async function terminateScheduledTaskGatewayListeners(
   signal?: AbortSignal,
 ): Promise<number[]> {
   throwIfAborted(signal);
-  const port = await resolveScheduledTaskPort(env);
+  const port = await resolveScheduledTaskPort(env, signal);
   if (!port) {
     return [];
   }
@@ -813,7 +824,7 @@ export async function restartScheduledTask({
   const sig = signal ? { signal } : undefined;
   await execSchtasks(["/End", "/TN", taskName], sig);
   throwIfAborted(signal);
-  const restartPort = await resolveScheduledTaskPort(effectiveEnv);
+  const restartPort = await resolveScheduledTaskPort(effectiveEnv, signal);
   throwIfAborted(signal);
   await terminateScheduledTaskGatewayListeners(effectiveEnv, signal);
   throwIfAborted(signal);

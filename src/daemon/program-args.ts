@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 
 type GatewayProgramArgs = {
@@ -88,6 +89,30 @@ async function resolveExistingCurrentEntrypointPath(): Promise<string> {
   }
 
   throw new Error(`Current CLI entrypoint does not exist: ${normalized}`);
+}
+
+async function resolveCurrentRuntimeEntrypointPath(): Promise<string | null> {
+  if (!isBunRuntime(process.execPath)) {
+    return null;
+  }
+
+  const bunMain = (globalThis as { Bun?: { main?: string } }).Bun?.main;
+  if (typeof bunMain !== "string" || bunMain.trim().length === 0) {
+    return null;
+  }
+
+  const normalized = bunMain.startsWith("file://") ? fileURLToPath(bunMain) : path.resolve(bunMain);
+  const resolvedPath = await resolveRealpathSafe(normalized);
+  for (const candidate of [normalized, resolvedPath]) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next runtime entrypoint candidate.
+    }
+  }
+
+  return null;
 }
 
 async function resolveRealpathSafe(inputPath: string): Promise<string> {
@@ -272,6 +297,10 @@ async function resolveCliProgramArguments(params: {
 export async function resolveCurrentCliProgramArguments(args: string[]): Promise<string[]> {
   const currentArgv1 = process.argv[1];
   if (!looksLikeCliEntrypointPath(currentArgv1)) {
+    const runtimeEntrypoint = await resolveCurrentRuntimeEntrypointPath();
+    if (runtimeEntrypoint) {
+      return [process.execPath, runtimeEntrypoint, ...args];
+    }
     return [process.execPath, ...args];
   }
 

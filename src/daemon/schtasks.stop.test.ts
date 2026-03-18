@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
@@ -196,6 +198,51 @@ describe("Scheduled Task stop/restart cleanup", () => {
       expect(
         schtasksCallOptions[schtasksCalls.findIndex((argv) => argv[0] === "/End")]?.signal,
       ).toBe(controller.signal);
+    });
+  });
+
+  it("passes the abort signal into scheduled-task XML lookup during restart", async () => {
+    await withWindowsEnv("openclaw-win-stop-", async ({ env, tmpDir }) => {
+      const controller = new AbortController();
+      const queriedScriptPath = `${tmpDir}\\custom-state\\gateway.cmd`;
+      await fs.mkdir(path.dirname(queriedScriptPath), { recursive: true });
+      await fs.writeFile(
+        queriedScriptPath,
+        [
+          "@echo off",
+          `set "OPENCLAW_GATEWAY_PORT=${GATEWAY_PORT}"`,
+          `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port ${GATEWAY_PORT}`,
+          "",
+        ].join("\r\n"),
+        "utf8",
+      );
+      pushSuccessfulSchtasksResponses(3);
+      schtasksResponses.splice(2, 0, {
+        code: 0,
+        stdout: [
+          '<?xml version="1.0" encoding="UTF-16"?>',
+          "<Task>",
+          "  <Actions>",
+          `    <Exec><Command>${queriedScriptPath}</Command></Exec>`,
+          "  </Actions>",
+          "</Task>",
+        ].join("\r\n"),
+        stderr: "",
+      });
+
+      await expect(
+        restartScheduledTask({
+          env,
+          stdout: new PassThrough(),
+          signal: controller.signal,
+        }),
+      ).resolves.toEqual({ outcome: "completed" });
+
+      const xmlQueryIndex = schtasksCalls.findIndex(
+        (argv) => argv[0] === "/Query" && argv.includes("/XML"),
+      );
+      expect(xmlQueryIndex).toBeGreaterThanOrEqual(0);
+      expect(schtasksCallOptions[xmlQueryIndex]?.signal).toBe(controller.signal);
     });
   });
 });
