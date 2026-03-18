@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import registerPhoneControl from "./index.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
-} from "openclaw/plugin-sdk/phone-control";
-import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
-import registerPhoneControl from "./index.js";
+} from "./runtime-api.js";
 
 function createApi(params: {
   stateDir: string;
