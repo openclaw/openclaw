@@ -1,11 +1,12 @@
+import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRouteAllowlistWarnings,
-  createAccountStatusSink,
-  formatAllowFromLowercase,
-  mapAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-policy";
+import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
 import {
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
@@ -16,8 +17,7 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/nextcloud-talk";
-import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
+} from "../runtime-api.js";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,

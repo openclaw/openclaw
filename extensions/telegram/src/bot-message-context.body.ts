@@ -2,29 +2,26 @@ import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
-} from "../../../src/agents/model-catalog.js";
-import { resolveDefaultModelForAgent } from "../../../src/agents/model-selection.js";
-import { hasControlCommand } from "../../../src/auto-reply/command-detection.js";
-import {
-  recordPendingHistoryEntryIfEnabled,
-  type HistoryEntry,
-} from "../../../src/auto-reply/reply/history.js";
-import {
-  buildMentionRegexes,
-  matchesMentionWithExplicit,
-} from "../../../src/auto-reply/reply/mentions.js";
-import type { MsgContext } from "../../../src/auto-reply/templating.js";
-import { resolveControlCommandGate } from "../../../src/channels/command-gating.js";
-import { formatLocationText, type NormalizedLocation } from "../../../src/channels/location.js";
-import { logInboundDrop } from "../../../src/channels/logging.js";
-import { resolveMentionGatingWithBypass } from "../../../src/channels/mention-gating.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
+import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-runtime";
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "../../../src/config/types.js";
-import { logVerbose } from "../../../src/globals.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  recordPendingHistoryEntryIfEnabled,
+  type HistoryEntry,
+} from "openclaw/plugin-sdk/reply-runtime";
+import { buildMentionRegexes, matchesMentionWithExplicit } from "openclaw/plugin-sdk/reply-runtime";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import { isSenderAllowed } from "./bot-access.js";
 import type {
@@ -182,8 +179,7 @@ export async function resolveTelegramInboundBody(params: {
 
   if (needsPreflightTranscription) {
     try {
-      const { transcribeFirstAudio } =
-        await import("../../../src/media-understanding/audio-preflight.js");
+      const { transcribeFirstAudio } = await import("./media-understanding.runtime.js");
       const tempCtx: MsgContext = {
         MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
         MediaTypes:

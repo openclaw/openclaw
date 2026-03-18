@@ -5,21 +5,21 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
-import { loadConfig } from "../../../src/config/config.js";
-import { resolveMarkdownTableMode } from "../../../src/config/markdown-tables.js";
-import { logVerbose } from "../../../src/globals.js";
-import { recordChannelActivity } from "../../../src/infra/channel-activity.js";
-import { isDiagnosticFlagEnabled } from "../../../src/infra/diagnostic-flags.js";
-import { formatErrorMessage, formatUncaughtError } from "../../../src/infra/errors.js";
-import { createTelegramRetryRunner } from "../../../src/infra/retry-policy.js";
-import type { RetryConfig } from "../../../src/infra/retry.js";
-import { redactSensitiveText } from "../../../src/logging/redact.js";
-import { createSubsystemLogger } from "../../../src/logging/subsystem.js";
-import type { MediaKind } from "../../../src/media/constants.js";
-import { buildOutboundMediaLoadOptions } from "../../../src/media/load-options.js";
-import { isGifMedia, kindFromMime } from "../../../src/media/mime.js";
-import { normalizePollInput, type PollInput } from "../../../src/polls.js";
-import { loadWebMedia } from "../../whatsapp/src/media.js";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/infra-runtime";
+import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/infra-runtime";
+import { createTelegramRetryRunner } from "openclaw/plugin-sdk/infra-runtime";
+import type { RetryConfig } from "openclaw/plugin-sdk/infra-runtime";
+import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
@@ -1128,25 +1128,46 @@ export async function unpinMessageTelegram(
   };
 }
 
-export async function renameForumTopicTelegram(
+type TelegramEditForumTopicOpts = TelegramDeleteOpts & {
+  name?: string;
+  iconCustomEmojiId?: string;
+};
+
+export async function editForumTopicTelegram(
   chatIdInput: string | number,
   messageThreadIdInput: string | number,
-  name: string,
-  opts: TelegramDeleteOpts = {},
-): Promise<{ ok: true; chatId: string; messageThreadId: number; name: string }> {
-  const trimmedName = name.trim();
-  if (!trimmedName) {
+  opts: TelegramEditForumTopicOpts = {},
+): Promise<{
+  ok: true;
+  chatId: string;
+  messageThreadId: number;
+  name?: string;
+  iconCustomEmojiId?: string;
+}> {
+  const nameProvided = opts.name !== undefined;
+  const trimmedName = opts.name?.trim();
+  if (nameProvided && !trimmedName) {
     throw new Error("Telegram forum topic name is required");
   }
-  if (trimmedName.length > 128) {
+  if (trimmedName && trimmedName.length > 128) {
     throw new Error("Telegram forum topic name must be 128 characters or fewer");
   }
+  const iconProvided = opts.iconCustomEmojiId !== undefined;
+  const trimmedIconCustomEmojiId = opts.iconCustomEmojiId?.trim();
+  if (iconProvided && !trimmedIconCustomEmojiId) {
+    throw new Error("Telegram forum topic icon custom emoji ID is required");
+  }
+  if (!trimmedName && !trimmedIconCustomEmojiId) {
+    throw new Error("Telegram forum topic update requires a name or iconCustomEmojiId");
+  }
+
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
+  const target = parseTelegramTarget(rawTarget);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
-    lookupTarget: rawTarget,
+    lookupTarget: target.chatId,
     persistTarget: rawTarget,
     verbose: opts.verbose,
   });
@@ -1157,16 +1178,39 @@ export async function renameForumTopicTelegram(
     retry: opts.retry,
     verbose: opts.verbose,
   });
+  const payload = {
+    ...(trimmedName ? { name: trimmedName } : {}),
+    ...(trimmedIconCustomEmojiId ? { icon_custom_emoji_id: trimmedIconCustomEmojiId } : {}),
+  };
   await requestWithDiag(
-    () => api.editForumTopic(chatId, messageThreadId, { name: trimmedName }),
+    () => api.editForumTopic(chatId, messageThreadId, payload),
     "editForumTopic",
   );
-  logVerbose(`[telegram] Renamed forum topic ${messageThreadId} in chat ${chatId}`);
+  logVerbose(`[telegram] Edited forum topic ${messageThreadId} in chat ${chatId}`);
   return {
     ok: true,
     chatId,
     messageThreadId,
-    name: trimmedName,
+    ...(trimmedName ? { name: trimmedName } : {}),
+    ...(trimmedIconCustomEmojiId ? { iconCustomEmojiId: trimmedIconCustomEmojiId } : {}),
+  };
+}
+
+export async function renameForumTopicTelegram(
+  chatIdInput: string | number,
+  messageThreadIdInput: string | number,
+  name: string,
+  opts: TelegramDeleteOpts = {},
+): Promise<{ ok: true; chatId: string; messageThreadId: number; name: string }> {
+  const result = await editForumTopicTelegram(chatIdInput, messageThreadIdInput, {
+    ...opts,
+    name,
+  });
+  return {
+    ok: true,
+    chatId: result.chatId,
+    messageThreadId: result.messageThreadId,
+    name: result.name ?? name.trim(),
   };
 }
 

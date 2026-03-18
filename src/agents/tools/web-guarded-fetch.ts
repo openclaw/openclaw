@@ -9,7 +9,7 @@ import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
 const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   dangerouslyAllowPrivateNetwork: true,
-  allowCidrs: ["198.18.0.0/15"],
+  allowRfc2544BenchmarkRange: true,
 };
 
 type WebToolGuardedFetchOptions = Omit<

@@ -1,13 +1,13 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import {
-  setOnboardingChannelEnabled,
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  resolveLineAccount,
+  setSetupChannelEnabled,
   setTopLevelChannelDmPolicyWithAllowFrom,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { resolveLineAccount } from "../../../src/line/accounts.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  splitSetupEntries,
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/line-core";
 import {
   isLineConfigured,
   listLineAccountIds,
@@ -35,7 +35,7 @@ const LINE_ALLOW_FROM_HELP_LINES = [
   `Docs: ${formatDocsLink("/channels/line", "channels/line")}`,
 ];
 
-const lineDmPolicy: ChannelOnboardingDmPolicy = {
+const lineDmPolicy: ChannelSetupDmPolicy = {
   label: "LINE",
   channel,
   policyKey: "channels.line.dmPolicy",
@@ -169,7 +169,7 @@ export const lineSetupWizard: ChannelSetupWizard = {
     placeholder: "U1234567890abcdef1234567890abcdef",
     invalidWithoutCredentialNote:
       "LINE allowFrom requires raw user ids like U1234567890abcdef1234567890abcdef.",
-    parseInputs: splitOnboardingEntries,
+    parseInputs: splitSetupEntries,
     parseId: parseLineAllowFromId,
     resolveEntries: async ({ entries }) =>
       entries.map((entry) => {
@@ -198,5 +198,5 @@ export const lineSetupWizard: ChannelSetupWizard = {
       `Docs: ${formatDocsLink("/channels/line", "channels/line")}`,
     ],
   },
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

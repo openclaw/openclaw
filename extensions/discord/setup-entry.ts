@@ -1,3 +1,6 @@
-import { discordPlugin } from "./src/channel.js";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { discordSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: discordPlugin };
+export { discordSetupPlugin } from "./src/channel.setup.js";
+
+export default defineSetupPluginEntry(discordSetupPlugin);

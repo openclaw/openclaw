@@ -1,13 +1,11 @@
+import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
+import { resolveSignalAccount } from "../../../plugin-sdk/account-resolution.js";
 import {
   listEnabledSignalAccounts,
-  resolveSignalAccount,
-} from "../../../../extensions/signal/src/accounts.js";
-import { resolveSignalReactionLevel } from "../../../../extensions/signal/src/reaction-level.js";
-import {
-  sendReactionSignal,
   removeReactionSignal,
-} from "../../../../extensions/signal/src/send-reactions.js";
-import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
+  resolveSignalReactionLevel,
+  sendReactionSignal,
+} from "../../../plugin-sdk/signal.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { resolveReactionMessageId } from "./reaction-message-id.js";
 
@@ -76,14 +74,14 @@ async function mutateSignalReaction(params: {
 }
 
 export const signalMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
+  describeMessageTool: ({ cfg }) => {
     const accounts = listEnabledSignalAccounts(cfg);
     if (accounts.length === 0) {
-      return [];
+      return null;
     }
     const configuredAccounts = accounts.filter((account) => account.configured);
     if (configuredAccounts.length === 0) {
-      return [];
+      return null;
     }
 
     const actions = new Set<ChannelMessageActionName>(["send"]);
@@ -95,7 +93,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       actions.add("react");
     }
 
-    return Array.from(actions);
+    return { actions: Array.from(actions) };
   },
   supportsAction: ({ action }) => action !== "send",
 

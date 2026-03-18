@@ -1,39 +1,42 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
+import {
+  resolveChannelPluginIds,
+  resolveConfiguredChannelPluginIds,
+} from "../plugins/channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginLogger } from "../plugins/types.js";
 
 const log = createSubsystemLogger("plugins");
-let pluginRegistryLoaded: "none" | "channels" | "all" = "none";
+let pluginRegistryLoaded: "none" | "configured-channels" | "channels" | "all" = "none";
 
-export type PluginRegistryScope = "channels" | "all";
+export type PluginRegistryScope = "configured-channels" | "channels" | "all";
 
-function resolveChannelPluginIds(params: {
-  config: ReturnType<typeof loadConfig>;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-}): string[] {
-  return loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })
-    .plugins.filter((plugin) => plugin.channels.length > 0)
-    .map((plugin) => plugin.id);
+function scopeRank(scope: typeof pluginRegistryLoaded): number {
+  switch (scope) {
+    case "none":
+      return 0;
+    case "configured-channels":
+      return 1;
+    case "channels":
+      return 2;
+    case "all":
+      return 3;
+  }
 }
 
 export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistryScope }): void {
   const scope = options?.scope ?? "all";
-  if (pluginRegistryLoaded === "all" || pluginRegistryLoaded === scope) {
+  if (scopeRank(pluginRegistryLoaded) >= scopeRank(scope)) {
     return;
   }
   const active = getActivePluginRegistry();
   // Tests (and callers) can pre-seed a registry (e.g. `test/setup.ts`); avoid
   // doing an expensive load when we already have plugins/channels/tools.
   if (
+    pluginRegistryLoaded === "none" &&
     active &&
     (active.plugins.length > 0 || active.channels.length > 0 || active.tools.length > 0)
   ) {
@@ -52,15 +55,23 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
     config,
     workspaceDir,
     logger,
-    ...(scope === "channels"
+    ...(scope === "configured-channels"
       ? {
-          onlyPluginIds: resolveChannelPluginIds({
+          onlyPluginIds: resolveConfiguredChannelPluginIds({
             config,
             workspaceDir,
             env: process.env,
           }),
         }
-      : {}),
+      : scope === "channels"
+        ? {
+            onlyPluginIds: resolveChannelPluginIds({
+              config,
+              workspaceDir,
+              env: process.env,
+            }),
+          }
+        : {}),
   });
   pluginRegistryLoaded = scope;
 }

@@ -4,16 +4,17 @@
  * Implements the ChannelPlugin interface following the LINE pattern.
  */
 
+import { z } from "zod";
 import {
   DEFAULT_ACCOUNT_ID,
   setAccountEnabledInConfigSection,
   registerPluginHttpRoute,
   buildChannelConfigSchema,
-} from "openclaw/plugin-sdk/synology-chat";
-import { z } from "zod";
+} from "../api.js";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { sendMessage, sendFileUrl } from "./client.js";
 import { getSynologyRuntime } from "./runtime.js";
+import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import { createWebhookHandler } from "./webhook-handler.js";
 
@@ -68,6 +69,8 @@ export function createSynologyChatPlugin() {
     reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
 
     configSchema: SynologyChatConfigSchema,
+    setup: synologyChatSetupAdapter,
+    setupWizard: synologyChatSetupWizard,
 
     config: {
       listAccountIds: (cfg: any) => listAccountIds(cfg),
@@ -377,3 +380,5 @@ export function createSynologyChatPlugin() {
     },
   };
 }
+
+export const synologyChatPlugin = createSynologyChatPlugin();

@@ -1,22 +1,46 @@
 import path from "node:path";
-import { loginWeb } from "../../../src/channel-web.js";
 import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
   normalizeAllowFromEntries,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
-import { setOnboardingChannelEnabled } from "../../../src/channels/plugins/onboarding/helpers.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { mergeWhatsAppConfig } from "../../../src/config/merge-config.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
-import { normalizeE164, pathExists } from "../../../src/utils.js";
+  normalizeE164,
+  pathExists,
+  splitSetupEntries,
+  setSetupChannelEnabled,
+  type DmPolicy,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
+import { loginWeb } from "./login.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 
 const channel = "whatsapp" as const;
+
+function mergeWhatsAppConfig(
+  cfg: OpenClawConfig,
+  patch: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>>,
+  options?: { unsetOnUndefined?: string[] },
+): OpenClawConfig {
+  const base = { ...(cfg.channels?.whatsapp ?? {}) } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) {
+      if (options?.unsetOnUndefined?.includes(key)) {
+        delete base[key];
+      }
+      continue;
+    }
+    base[key] = value;
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      whatsapp: base,
+    },
+  };
+}
 
 function setWhatsAppDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
   return mergeWhatsAppConfig(cfg, { dmPolicy });
@@ -96,7 +120,7 @@ async function applyWhatsAppOwnerAllowlist(params: {
 }
 
 function parseWhatsAppAllowFromEntries(raw: string): { entries: string[]; invalidEntry?: string } {
-  const parts = splitOnboardingEntries(raw);
+  const parts = splitSetupEntries(raw);
   if (parts.length === 0) {
     return { entries: [] };
   }
@@ -330,7 +354,7 @@ export const whatsappSetupWizard: ChannelSetupWizard = {
     });
     return { cfg: next };
   },
-  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
   onAccountRecorded: (accountId, options) => {
     options?.onWhatsAppAccountId?.(accountId);
   },

@@ -38,8 +38,8 @@ export {
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
   setTopLevelChannelGroupPolicy,
-  splitOnboardingEntries,
-} from "../channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
   BaseProbeResult,
@@ -96,7 +96,7 @@ export {
 } from "./group-access.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { sleep } from "../utils.js";
-export { loadWebMedia } from "../../extensions/whatsapp/src/media.js";
+export { loadWebMedia } from "./web-media.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { keepHttpServerTaskAlive } from "./channel-lifecycle.js";
 export { withFileLock } from "./file-lock.js";
@@ -117,7 +117,5 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { normalizeStringEntries } from "../shared/string-normalization.js";
-export {
-  msteamsSetupAdapter,
-  msteamsSetupWizard,
-} from "../../extensions/msteams/src/setup-surface.js";
+export { msteamsSetupWizard } from "../../extensions/msteams/api.js";
+export { msteamsSetupAdapter } from "../../extensions/msteams/api.js";

@@ -1,6 +1,6 @@
-import { formatAllowlistMatchMeta } from "../../../../src/channels/allowlist-match.js";
-import { issuePairingChallenge } from "../../../../src/pairing/pairing-challenge.js";
-import { upsertChannelPairingRequest } from "../../../../src/pairing/pairing-store.js";
+import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/channel-runtime";
+import { issuePairingChallenge } from "openclaw/plugin-sdk/conversation-runtime";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveSlackAllowListMatch } from "./allow-list.js";
 import type { SlackMonitorContext } from "./context.js";
 

@@ -7,19 +7,19 @@ import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
 const CHANNEL_ENV_PREFIXES = [
-  "BLUEBUBBLES_",
-  "DISCORD_",
-  "GOOGLECHAT_",
-  "IRC_",
-  "LINE_",
-  "MATRIX_",
-  "MSTEAMS_",
-  "SIGNAL_",
-  "SLACK_",
-  "TELEGRAM_",
-  "WHATSAPP_",
-  "ZALOUSER_",
-  "ZALO_",
+  ["BLUEBUBBLES_", "bluebubbles"],
+  ["DISCORD_", "discord"],
+  ["GOOGLECHAT_", "googlechat"],
+  ["IRC_", "irc"],
+  ["LINE_", "line"],
+  ["MATRIX_", "matrix"],
+  ["MSTEAMS_", "msteams"],
+  ["SIGNAL_", "signal"],
+  ["SLACK_", "slack"],
+  ["TELEGRAM_", "telegram"],
+  ["WHATSAPP_", "whatsapp"],
+  ["ZALOUSER_", "zalouser"],
+  ["ZALO_", "zalo"],
 ] as const;
 
 function hasNonEmptyString(value: unknown): boolean {
@@ -30,8 +30,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function recordHasKeys(value: unknown): boolean {
-  return isRecord(value) && Object.keys(value).length > 0;
+export function hasMeaningfulChannelConfig(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.keys(value).some((key) => key !== "enabled");
 }
 
 function hasWhatsAppAuthState(env: NodeJS.ProcessEnv): boolean {
@@ -60,13 +63,49 @@ function hasWhatsAppAuthState(env: NodeJS.ProcessEnv): boolean {
   }
 }
 
+export function listPotentialConfiguredChannelIds(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const configuredChannelIds = new Set<string>();
+  const channels = isRecord(cfg.channels) ? cfg.channels : null;
+  if (channels) {
+    for (const [key, value] of Object.entries(channels)) {
+      if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
+        continue;
+      }
+      if (hasMeaningfulChannelConfig(value)) {
+        configuredChannelIds.add(key);
+      }
+    }
+  }
+
+  for (const [key, value] of Object.entries(env)) {
+    if (!hasNonEmptyString(value)) {
+      continue;
+    }
+    for (const [prefix, channelId] of CHANNEL_ENV_PREFIXES) {
+      if (key.startsWith(prefix)) {
+        configuredChannelIds.add(channelId);
+      }
+    }
+    if (key === "TELEGRAM_BOT_TOKEN") {
+      configuredChannelIds.add("telegram");
+    }
+  }
+  if (hasWhatsAppAuthState(env)) {
+    configuredChannelIds.add("whatsapp");
+  }
+  return [...configuredChannelIds];
+}
+
 function hasEnvConfiguredChannel(env: NodeJS.ProcessEnv): boolean {
   for (const [key, value] of Object.entries(env)) {
     if (!hasNonEmptyString(value)) {
       continue;
     }
     if (
-      CHANNEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)) ||
+      CHANNEL_ENV_PREFIXES.some(([prefix]) => key.startsWith(prefix)) ||
       key === "TELEGRAM_BOT_TOKEN"
     ) {
       return true;
@@ -85,7 +124,7 @@ export function hasPotentialConfiguredChannels(
       if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
         continue;
       }
-      if (recordHasKeys(value)) {
+      if (hasMeaningfulChannelConfig(value)) {
         return true;
       }
     }

@@ -1,12 +1,11 @@
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
+  DEFAULT_ACCOUNT_ID,
   listLineAccountIds,
   normalizeAccountId,
   resolveLineAccount,
-} from "../../../src/line/accounts.js";
-import type { LineConfig } from "../../../src/line/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+  type LineConfig,
+} from "openclaw/plugin-sdk/line-core";
+import type { ChannelSetupAdapter, OpenClawConfig } from "openclaw/plugin-sdk/setup";
 
 const channel = "line" as const;
 

@@ -1,22 +1,11 @@
+import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
+import { createScopedAccountConfigAccessors } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
-  createScopedAccountConfigAccessors,
-  formatNormalizedAllowFromEntries,
-} from "openclaw/plugin-sdk/compat";
-import {
-  buildComputedAccountStatusSnapshot,
-  buildChannelConfigSchema,
-  createAccountStatusSink,
-  DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  setAccountEnabledInConfigSection,
-  type ChannelMessageActionAdapter,
-  type ChannelMessageActionName,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/mattermost";
+} from "openclaw/plugin-sdk/channel-policy";
+import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelMessageToolDiscovery } from "openclaw/plugin-sdk/channel-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
@@ -37,45 +26,67 @@ import { addMattermostReaction, removeMattermostReaction } from "./mattermost/re
 import { sendMessageMattermost } from "./mattermost/send.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
+import {
+  buildComputedAccountStatusSnapshot,
+  buildChannelConfigSchema,
+  createAccountStatusSink,
+  DEFAULT_ACCOUNT_ID,
+  deleteAccountFromConfigSection,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  setAccountEnabledInConfigSection,
+  type ChannelMessageActionAdapter,
+  type ChannelMessageActionName,
+  type ChannelPlugin,
+} from "./runtime-api.js";
 import { getMattermostRuntime } from "./runtime.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 
+function describeMattermostMessageTool({
+  cfg,
+}: Parameters<
+  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
+>[0]): ChannelMessageToolDiscovery {
+  const enabledAccounts = listMattermostAccountIds(cfg)
+    .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
+    .filter((account) => account.enabled)
+    .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
+
+  const actions: ChannelMessageActionName[] = [];
+
+  if (enabledAccounts.length > 0) {
+    actions.push("send");
+  }
+
+  const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
+  const baseReactions = actionsConfig?.reactions;
+  const hasReactionCapableAccount = enabledAccounts.some((account) => {
+    const accountActions = account.config.actions as { reactions?: boolean } | undefined;
+    return (accountActions?.reactions ?? baseReactions ?? true) !== false;
+  });
+  if (hasReactionCapableAccount) {
+    actions.push("react");
+  }
+
+  return {
+    actions,
+    capabilities: enabledAccounts.length > 0 ? ["buttons"] : [],
+    schema:
+      enabledAccounts.length > 0
+        ? {
+            properties: {
+              buttons: createMessageToolButtonsSchema(),
+            },
+          }
+        : null,
+  };
+}
+
 const mattermostMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
-    const enabledAccounts = listMattermostAccountIds(cfg)
-      .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
-      .filter((account) => account.enabled)
-      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
-
-    const actions: ChannelMessageActionName[] = [];
-
-    // Send (buttons) is available whenever there's at least one enabled account
-    if (enabledAccounts.length > 0) {
-      actions.push("send");
-    }
-
-    // React requires per-account reactions config check
-    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
-    const baseReactions = actionsConfig?.reactions;
-    const hasReactionCapableAccount = enabledAccounts.some((account) => {
-      const accountActions = account.config.actions as { reactions?: boolean } | undefined;
-      return (accountActions?.reactions ?? baseReactions ?? true) !== false;
-    });
-    if (hasReactionCapableAccount) {
-      actions.push("react");
-    }
-
-    return actions;
-  },
+  describeMessageTool: describeMattermostMessageTool,
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
-  },
-  supportsButtons: ({ cfg }) => {
-    const accounts = listMattermostAccountIds(cfg)
-      .map((id) => resolveMattermostAccount({ cfg, accountId: id }))
-      .filter((a) => a.enabled && a.botToken?.trim() && a.baseUrl?.trim());
-    return accounts.length > 0;
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {

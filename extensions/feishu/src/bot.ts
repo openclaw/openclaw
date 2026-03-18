@@ -1,4 +1,11 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
+import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
   buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
@@ -13,14 +20,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/feishu";
-import {
-  ensureConfiguredAcpRouteReady,
-  resolveConfiguredAcpRoute,
-} from "../../../src/acp/persistent-bindings.route.js";
-import { getSessionBindingService } from "../../../src/infra/outbound/session-binding-service.js";
-import { deriveLastRoutePolicy } from "../../../src/routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
+} from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
@@ -551,17 +551,17 @@ function parseMediaKeys(
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
     switch (messageType) {
       case "image":
-        return { imageKey };
+        return { imageKey, fileName: parsed.file_name };
       case "file":
         return { fileKey, fileName: parsed.file_name };
       case "audio":
-        return { fileKey };
+        return { fileKey, fileName: parsed.file_name };
       case "video":
       case "media":
         // Video/media has both file_key (video) and image_key (thumbnail)
-        return { fileKey, imageKey };
+        return { fileKey, imageKey, fileName: parsed.file_name };
       case "sticker":
-        return { fileKey };
+        return { fileKey, fileName: parsed.file_name };
       default:
         return {};
     }
@@ -1251,15 +1251,17 @@ export async function handleFeishuMessage(params: {
     const parentConversationId = isGroup ? (parentPeer?.id ?? ctx.chatId) : undefined;
     let configuredBinding = null;
     if (feishuAcpConversationSupported) {
-      const configuredRoute = resolveConfiguredAcpRoute({
+      const configuredRoute = resolveConfiguredBindingRoute({
         cfg: effectiveCfg,
         route,
-        channel: "feishu",
-        accountId: account.accountId,
-        conversationId: currentConversationId,
-        parentConversationId,
+        conversation: {
+          channel: "feishu",
+          accountId: account.accountId,
+          conversationId: currentConversationId,
+          parentConversationId,
+        },
       });
-      configuredBinding = configuredRoute.configuredBinding;
+      configuredBinding = configuredRoute.bindingResolution;
       route = configuredRoute.route;
 
       // Bound Feishu conversations intentionally require an exact live conversation-id match.
@@ -1292,9 +1294,9 @@ export async function handleFeishuMessage(params: {
     }
 
     if (configuredBinding) {
-      const ensured = await ensureConfiguredAcpRouteReady({
+      const ensured = await ensureConfiguredBindingRouteReady({
         cfg: effectiveCfg,
-        configuredBinding,
+        bindingResolution: configuredBinding,
       });
       if (!ensured.ok) {
         const replyTargetMessageId =

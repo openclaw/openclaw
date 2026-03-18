@@ -1,3 +1,6 @@
-import { telegramPlugin } from "./src/channel.js";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { telegramSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: telegramPlugin };
+export { telegramSetupPlugin } from "./src/channel.setup.js";
+
+export default defineSetupPluginEntry(telegramSetupPlugin);

@@ -1,3 +1,6 @@
-import { slackPlugin } from "./src/channel.js";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { slackSetupPlugin } from "./src/channel.setup.js";
 
-export default { plugin: slackPlugin };
+export { slackSetupPlugin } from "./src/channel.setup.js";
+
+export default defineSetupPluginEntry(slackSetupPlugin);

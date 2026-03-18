@@ -3,9 +3,9 @@ import {
   buildNestedDmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
-} from "openclaw/plugin-sdk/compat";
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/matrix";
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
+import { MarkdownConfigSchema, ToolPolicySchema } from "../runtime-api.js";
 import { buildSecretInputSchema } from "./secret-input.js";
 
 const matrixActionSchema = z

@@ -87,7 +87,11 @@ describe("memory search async sync", () => {
     });
 
     manager = await createMemoryManagerOrThrow(cfg);
+    (manager as unknown as { dirty: boolean }).dirty = true;
     await manager.search("hello");
+    await vi.waitFor(() => {
+      expect((manager as unknown as { syncing: Promise<void> | null }).syncing).toBeTruthy();
+    });
 
     let closed = false;
     const closePromise = manager.close().then(() => {

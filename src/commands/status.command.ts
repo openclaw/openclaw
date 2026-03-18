@@ -14,7 +14,6 @@ import {
   type Tone,
 } from "../memory/status-format.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { runSecurityAudit } from "../security/audit.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
@@ -37,10 +36,16 @@ import {
 } from "./status.update.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
+let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
   return providerUsagePromise;
+}
+
+function loadSecurityAuditModule() {
+  securityAuditModulePromise ??= import("../security/audit.runtime.js");
+  return securityAuditModulePromise;
 }
 
 function resolvePairingRecoveryContext(params: {
@@ -90,28 +95,25 @@ export async function statusCommand(
     { json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all },
     runtime,
   );
-  const securityAudit = opts.json
-    ? await runSecurityAudit({
+  const runSecurityAudit = async () =>
+    await loadSecurityAuditModule().then(({ runSecurityAudit }) =>
+      runSecurityAudit({
         config: scan.cfg,
         sourceConfig: scan.sourceConfig,
         deep: false,
         includeFilesystem: true,
         includeChannelSecurity: true,
-      })
+      }),
+    );
+  const securityAudit = opts.json
+    ? await runSecurityAudit()
     : await withProgress(
         {
           label: "Running security audit…",
           indeterminate: true,
           enabled: true,
         },
-        async () =>
-          await runSecurityAudit({
-            config: scan.cfg,
-            sourceConfig: scan.sourceConfig,
-            deep: false,
-            includeFilesystem: true,
-            includeChannelSecurity: true,
-          }),
+        async () => await runSecurityAudit(),
       );
   const {
     cfg,
@@ -135,6 +137,7 @@ export async function statusCommand(
     secretDiagnostics,
     memory,
     memoryPlugin,
+    pluginCompatibility,
   } = scan;
 
   const usage = opts.usage
@@ -215,6 +218,10 @@ export async function statusCommand(
           agents: agentStatus,
           securityAudit,
           secretDiagnostics,
+          pluginCompatibility: {
+            count: pluginCompatibility.length,
+            warnings: pluginCompatibility,
+          },
           ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
         },
         null,
@@ -414,6 +421,12 @@ export async function statusCommand(
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
   const channelLabel = channelInfo.label;
   const gitLabel = formatGitInstallLabel(update);
+  const pluginCompatibilityValue =
+    pluginCompatibility.length === 0
+      ? ok("none")
+      : warn(
+          `${pluginCompatibility.length} notice${pluginCompatibility.length === 1 ? "" : "s"} · ${new Set(pluginCompatibility.map((entry) => entry.pluginId)).size} plugin${new Set(pluginCompatibility.map((entry) => entry.pluginId)).size === 1 ? "" : "s"}`,
+        );
 
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
@@ -441,6 +454,7 @@ export async function statusCommand(
     { Item: "Node service", Value: nodeDaemonValue },
     { Item: "Agents", Value: agentsValue },
     { Item: "Memory", Value: memoryValue },
+    { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Heartbeat", Value: heartbeatValue },
@@ -464,6 +478,18 @@ export async function statusCommand(
       rows: overviewRows,
     }).trimEnd(),
   );
+
+  if (pluginCompatibility.length > 0) {
+    runtime.log("");
+    runtime.log(theme.heading("Plugin compatibility"));
+    for (const notice of pluginCompatibility.slice(0, 8)) {
+      const label = notice.severity === "warn" ? theme.warn("WARN") : theme.muted("INFO");
+      runtime.log(`  ${label} ${notice.pluginId} ${notice.message}`);
+    }
+    if (pluginCompatibility.length > 8) {
+      runtime.log(theme.muted(`  … +${pluginCompatibility.length - 8} more`));
+    }
+  }
 
   if (pairingRecovery) {
     runtime.log("");

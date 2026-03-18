@@ -1,10 +1,14 @@
 import {
-  buildOpenGroupPolicyWarning,
-  collectAllowlistProviderGroupPolicyWarnings,
   createScopedAccountConfigAccessors,
   createScopedChannelConfigBase,
   createScopedDmSecurityResolver,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-config-helpers";
+import {
+  buildOpenGroupPolicyWarning,
+  collectAllowlistProviderGroupPolicyWarnings,
+} from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
@@ -12,8 +16,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/matrix";
-import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
+} from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
@@ -29,15 +32,17 @@ import {
 } from "./matrix/accounts.js";
 import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import { getMatrixRuntime } from "./runtime.js";
-import { matrixSetupAdapter, matrixSetupWizard } from "./setup-surface.js";
+import { matrixSetupAdapter } from "./setup-core.js";
+import { matrixSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
-async function loadMatrixChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
+const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
+  () => import("./channel.runtime.js"),
+  "matrixChannelRuntime",
+);
 
 const meta = {
   id: "matrix",
@@ -287,10 +292,27 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText!(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    sendText: async (params) => (await loadMatrixChannelRuntime()).matrixOutbound.sendText!(params),
-    sendMedia: async (params) =>
-      (await loadMatrixChannelRuntime()).matrixOutbound.sendMedia!(params),
-    sendPoll: async (params) => (await loadMatrixChannelRuntime()).matrixOutbound.sendPoll!(params),
+    sendText: async (params) => {
+      const outbound = (await loadMatrixChannelRuntime()).matrixOutbound;
+      if (!outbound.sendText) {
+        throw new Error("Matrix outbound text delivery is unavailable");
+      }
+      return await outbound.sendText(params);
+    },
+    sendMedia: async (params) => {
+      const outbound = (await loadMatrixChannelRuntime()).matrixOutbound;
+      if (!outbound.sendMedia) {
+        throw new Error("Matrix outbound media delivery is unavailable");
+      }
+      return await outbound.sendMedia(params);
+    },
+    sendPoll: async (params) => {
+      const outbound = (await loadMatrixChannelRuntime()).matrixOutbound;
+      if (!outbound.sendPoll) {
+        throw new Error("Matrix outbound poll delivery is unavailable");
+      }
+      return await outbound.sendPoll(params);
+    },
   },
   status: {
     defaultRuntime: {
