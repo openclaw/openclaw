@@ -24,6 +24,7 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   OLLAMA_LOCAL_AUTH_MARKER,
+  VERTEX_ADC_AUTH_MARKER,
 } from "./model-auth-markers.js";
 import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
 
@@ -425,6 +426,14 @@ export function resolveEnvApiKey(
     const envKey = getEnvApiKey(normalized);
     if (!envKey) {
       return null;
+    }
+    // getEnvApiKey returns "<authenticated>" when ADC credentials are detected
+    // (gcloud ADC file + GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION).
+    // Use the VERTEX_ADC_AUTH_MARKER so downstream consumers (pi-ai) recognize
+    // this as a non-secret marker and fall through to ADC-based auth (OAuth2
+    // access token) instead of sending the sentinel as a literal API key.
+    if (envKey === "<authenticated>") {
+      return { apiKey: VERTEX_ADC_AUTH_MARKER, source: "gcloud adc" };
     }
     return { apiKey: envKey, source: "gcloud adc" };
   }
