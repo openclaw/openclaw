@@ -323,6 +323,25 @@ function isSystemdUserScopeUnavailable(detail: string): boolean {
   );
 }
 
+function isSystemdUnavailable(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    isSystemctlMissing(normalized) ||
+    normalized.includes("not been booted") ||
+    normalized.includes("not supported")
+  );
+}
+
+function isDegradedSystemdStatus(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  return detail.toLowerCase().includes("degraded");
+}
+
 function isSystemdUnitMissing(detail: string): boolean {
   const normalized = detail.toLowerCase();
   return (
@@ -456,25 +475,25 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
     return;
   }
   const detail = readSystemctlDetail(res);
-  if (isSystemctlMissing(detail)) {
-    // User-scope systemctl missing — check if system-scope works.
-    const systemRes = await execSystemctlSystem(["status"]);
-    const systemDetail = readSystemctlDetail(systemRes);
-    if (systemRes.code === 0) {
-      return;
-    }
-    // System scope also unusable — report appropriately.
-    if (isSystemctlMissing(systemDetail)) {
-      throw new Error("systemctl not available; systemd services are required on Linux.");
-    }
-    // systemctl exists but systemd itself is not running (e.g. "System has not been booted with systemd").
-    throw new Error(`systemctl unavailable: ${systemDetail || "unknown error"}`.trim());
-  }
   if (!detail) {
     throw new Error("systemctl --user unavailable: unknown error");
   }
   if (!isSystemdUserScopeUnavailable(detail)) {
     return;
+  }
+
+  // User scope is unavailable; probe system scope before failing. This keeps
+  // system-scope installs operable in non-login/root sessions.
+  const systemRes = await execSystemctlSystem(["status"]);
+  const systemDetail = readSystemctlDetail(systemRes);
+  if (systemRes.code === 0 || isDegradedSystemdStatus(systemDetail)) {
+    return;
+  }
+  if (isSystemctlMissing(systemDetail)) {
+    throw new Error("systemctl not available; systemd services are required on Linux.");
+  }
+  if (isSystemdUnavailable(systemDetail)) {
+    throw new Error(`systemctl unavailable: ${systemDetail || "unknown error"}`.trim());
   }
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
@@ -594,8 +613,10 @@ async function runSystemdServiceAction(params: {
       params.stdout.write(`${formatLine(params.label, unitName)}\n`);
       return { scope: "system" };
     }
+    const systemDetail = readSystemctlDetail(systemRes);
+    throw new Error(`systemctl ${params.action} failed: ${systemDetail || "unknown error"}`.trim());
   }
-  throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
+  throw new Error(`systemctl ${params.action} failed: ${userDetail || "unknown error"}`.trim());
 }
 
 export async function stopSystemdService({
@@ -625,19 +646,49 @@ export async function restartSystemdService({
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const env = args.env ?? process.env;
+  const serviceName = resolveSystemdServiceName(env);
+  const unitName = `${serviceName}.service`;
   try {
     await fs.access(resolveSystemdUnitPath(env));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      // User unit file missing — keep returning false to avoid routing
-      // callers (e.g. uninstall) into paths that only handle user scope.
-      return false;
+      // User unit file missing; detect system-scope installs so lifecycle
+      // commands can operate on gateways installed under /etc/systemd/system.
+      const systemEnabled = await execSystemctlSystem(["is-enabled", unitName]);
+      if (systemEnabled.code === 0) {
+        return true;
+      }
+      const systemEnabledDetail = readSystemctlDetail(systemEnabled);
+      if (
+        !isSystemctlMissing(systemEnabledDetail) &&
+        !isSystemdUnitNotEnabled(systemEnabledDetail)
+      ) {
+        throw new Error(
+          `systemctl is-enabled unavailable: ${systemEnabledDetail || "unknown error"}`.trim(),
+          { cause: error },
+        );
+      }
+
+      const systemActive = await execSystemctlSystem(["is-active", unitName]);
+      if (systemActive.code === 0) {
+        return true;
+      }
+      const systemActiveDetail = readSystemctlDetail(systemActive);
+      if (isSystemctlMissing(systemActiveDetail) || isSystemdUnitMissing(systemActiveDetail)) {
+        return false;
+      }
+      const activeState = systemActive.stdout.trim().toLowerCase();
+      if (activeState && activeState !== "active") {
+        return false;
+      }
+      throw new Error(
+        `systemctl is-active unavailable: ${systemActiveDetail || "unknown error"}`.trim(),
+        { cause: error },
+      );
     }
     throw error;
   }
 
-  const serviceName = resolveSystemdServiceName(env);
-  const unitName = `${serviceName}.service`;
   const res = await execSystemctlUser(env, ["is-enabled", unitName]);
   if (res.code === 0) {
     return true;
@@ -695,6 +746,19 @@ export async function readSystemdServiceRuntime(
     if (systemRes.code === 0) {
       return { ...buildRuntimeFromShow(systemRes.stdout), detail: "system scope" };
     }
+    const systemDetail = readSystemctlDetail(systemRes);
+    const systemMissing = isSystemdUnitMissing(systemDetail);
+    if (!systemMissing) {
+      return {
+        status: "unknown",
+        detail: systemDetail || undefined,
+      };
+    }
+    return {
+      status: "stopped",
+      detail: systemDetail || detail || undefined,
+      missingUnit: true,
+    };
   }
   return {
     status: missing ? "stopped" : "unknown",
