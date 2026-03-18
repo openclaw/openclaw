@@ -1,16 +1,15 @@
 import { ChannelType, type RequestClient } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { shouldAckReaction as shouldAckReactionGate } from "openclaw/plugin-sdk/channel-runtime";
 import { logTypingFailure, logAckFailure } from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
   type StatusReactionAdapter,
 } from "openclaw/plugin-sdk/channel-runtime";
-import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { resolveDiscordPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
@@ -420,11 +419,24 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "discord",
     accountId: route.accountId,
+    typing: {
+      start: () => sendTyping({ client, channelId: typingChannelId }),
+      onStartError: (err) => {
+        logTypingFailure({
+          log: logVerbose,
+          channel: "discord",
+          target: typingChannelId,
+          error: err,
+        });
+      },
+      // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
+      maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
+    },
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -437,20 +449,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     accountId,
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountId);
-
-  const typingCallbacks = createTypingCallbacks({
-    start: () => sendTyping({ client, channelId: typingChannelId }),
-    onStartError: (err) => {
-      logTypingFailure({
-        log: logVerbose,
-        channel: "discord",
-        target: typingChannelId,
-        error: err,
-      });
-    },
-    // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
-    maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
-  });
 
   // --- Discord draft stream (edit-based preview streaming) ---
   const discordStreamMode = resolveDiscordPreviewStreamMode(discordConfig);
@@ -597,9 +595,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
-      ...prefixOptions,
+      ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-      typingCallbacks,
       deliver: async (payload: ReplyPayload, info) => {
         if (isProcessAborted(abortSignal)) {
           return;
@@ -715,7 +712,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         if (isProcessAborted(abortSignal)) {
           return;
         }
-        await typingCallbacks.onReplyStart();
+        await replyPipeline.typingCallbacks?.onReplyStart();
         await statusReactions.setThinking();
       },
     });
