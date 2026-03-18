@@ -56,7 +56,14 @@ openclaw onboard --auth-choice openai-codex
 
 # Or run OAuth directly
 openclaw models auth login --provider openai-codex
+
+# Give the login a stable custom profile id (useful for multiple ChatGPT accounts)
+openclaw models auth login --provider openai-codex --profile-id openai-codex:ritsuko
+openclaw models auth login --provider openai-codex --profile-id openai-codex:lain
 ```
+
+Use `--profile-id` when you want multiple `openai-codex` logins in the same
+agent and later want to control them via auth ordering or `/model ...@<profileId>`.
 
 ### Config snippet (Codex subscription)
 
