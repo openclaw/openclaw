@@ -341,7 +341,7 @@ describe("channel import guardrails", () => {
     for (const file of collectExtensionSourceFiles()) {
       const text = readFileSync(file, "utf8");
       expect(text, `${file} should not import another extension's src`).not.toMatch(
-        /["'][^"']*\.\.\/(?:\.\.\/)?(?!src\/)[^/"']+\/src\//,
+        /["'][^"']*(?:\.\.\/)+(?!src\/)[A-Za-z0-9][^/"']*\/src\//,
       );
     }
   });
