@@ -36,6 +36,6 @@ export function resolveXaiForwardCompatModel(params: {
       cost: definition.cost,
       contextWindow: definition.contextWindow,
       maxTokens: definition.maxTokens,
-    } as ProviderRuntimeModel),
-  );
+    } as ProviderRuntimeModel & { compat?: Record<string, unknown> }),
+  ) as ProviderRuntimeModel;
 }

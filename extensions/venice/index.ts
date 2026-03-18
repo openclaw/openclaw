@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry, type ProviderRuntimeModel } from "openclaw/plugin-sdk/core";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog";
 import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-models";
@@ -59,7 +59,11 @@ export default definePluginEntry({
           }),
       },
       normalizeResolvedModel: ({ modelId, model }) =>
-        isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
+        isXaiBackedVeniceModel(modelId)
+          ? (applyXaiModelCompat(
+              model as ProviderRuntimeModel & { compat?: Record<string, unknown> },
+            ) as ProviderRuntimeModel)
+          : undefined,
     });
   },
 });

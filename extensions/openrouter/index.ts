@@ -134,7 +134,11 @@ export default definePluginEntry({
         geminiThoughtSignatureModelHints: ["gemini"],
       },
       normalizeResolvedModel: ({ modelId, model }) =>
-        isXaiOpenRouterModel(modelId) ? applyXaiModelCompat(model) : undefined,
+        isXaiOpenRouterModel(modelId)
+          ? (applyXaiModelCompat(
+              model as ProviderRuntimeModel & { compat?: Record<string, unknown> },
+            ) as ProviderRuntimeModel)
+          : undefined,
       isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;
