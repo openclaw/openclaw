@@ -1,13 +1,13 @@
 import {
   listSlackDirectoryGroupsLive as listSlackDirectoryGroupsLiveImpl,
   listSlackDirectoryPeersLive as listSlackDirectoryPeersLiveImpl,
-} from "../../../extensions/slack/runtime-api.js";
-import { monitorSlackProvider as monitorSlackProviderImpl } from "../../../extensions/slack/runtime-api.js";
-import { probeSlack as probeSlackImpl } from "../../../extensions/slack/runtime-api.js";
-import { resolveSlackChannelAllowlist as resolveSlackChannelAllowlistImpl } from "../../../extensions/slack/runtime-api.js";
-import { resolveSlackUserAllowlist as resolveSlackUserAllowlistImpl } from "../../../extensions/slack/runtime-api.js";
-import { sendMessageSlack as sendMessageSlackImpl } from "../../../extensions/slack/runtime-api.js";
-import { handleSlackAction as handleSlackActionImpl } from "../../../extensions/slack/runtime-api.js";
+} from "openclaw/plugin-sdk/slack";
+import { monitorSlackProvider as monitorSlackProviderImpl } from "openclaw/plugin-sdk/slack";
+import { probeSlack as probeSlackImpl } from "openclaw/plugin-sdk/slack";
+import { resolveSlackChannelAllowlist as resolveSlackChannelAllowlistImpl } from "openclaw/plugin-sdk/slack";
+import { resolveSlackUserAllowlist as resolveSlackUserAllowlistImpl } from "openclaw/plugin-sdk/slack";
+import { sendMessageSlack as sendMessageSlackImpl } from "openclaw/plugin-sdk/slack";
+import { handleSlackAction as handleSlackActionImpl } from "openclaw/plugin-sdk/slack";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 type RuntimeSlackOps = Pick<
