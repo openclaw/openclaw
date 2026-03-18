@@ -39,9 +39,19 @@ export type PluginReleasePlan = {
   skippedPublished: PluginReleasePlanItem[];
 };
 
+export type PluginReleaseSelectionMode = "selected" | "all-publishable";
+
 export type GitRangeSelection = {
   baseRef: string;
   headRef: string;
+};
+
+export type ParsedPluginReleaseArgs = {
+  selection: string[];
+  selectionMode?: PluginReleaseSelectionMode;
+  pluginsFlagProvided: boolean;
+  baseRef?: string;
+  headRef?: string;
 };
 
 type PublishablePluginPackageCandidate = {
@@ -67,6 +77,76 @@ export function parsePluginReleaseSelection(value: string | undefined): string[]
         .filter(Boolean),
     ),
   ].toSorted();
+}
+
+export function parsePluginReleaseSelectionMode(
+  value: string | undefined,
+): PluginReleaseSelectionMode {
+  if (value === "selected" || value === "all-publishable") {
+    return value;
+  }
+
+  throw new Error(
+    `Unknown selection mode: ${value ?? "<missing>"}. Expected "selected" or "all-publishable".`,
+  );
+}
+
+export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs {
+  let selection: string[] = [];
+  let selectionMode: PluginReleaseSelectionMode | undefined;
+  let pluginsFlagProvided = false;
+  let baseRef: string | undefined;
+  let headRef: string | undefined;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      continue;
+    }
+    if (arg === "--plugins") {
+      selection = parsePluginReleaseSelection(argv[index + 1]);
+      pluginsFlagProvided = true;
+      index += 1;
+      continue;
+    }
+    if (arg === "--selection-mode") {
+      selectionMode = parsePluginReleaseSelectionMode(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg === "--base-ref") {
+      baseRef = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (arg === "--head-ref") {
+      headRef = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  if (pluginsFlagProvided && selection.length === 0) {
+    throw new Error("`--plugins` must include at least one package name.");
+  }
+  if (selectionMode === "selected" && !pluginsFlagProvided) {
+    throw new Error("`--selection-mode selected` requires `--plugins`.");
+  }
+  if (selectionMode === "all-publishable" && pluginsFlagProvided) {
+    throw new Error("`--selection-mode all-publishable` must not be combined with `--plugins`.");
+  }
+  if (selection.length > 0 && (baseRef || headRef)) {
+    throw new Error("Use either --plugins or --base-ref/--head-ref, not both.");
+  }
+  if (selectionMode && (baseRef || headRef)) {
+    throw new Error("Use either --selection-mode or --base-ref/--head-ref, not both.");
+  }
+  if ((baseRef && !headRef) || (!baseRef && headRef)) {
+    throw new Error("Both --base-ref and --head-ref are required together.");
+  }
+
+  return { selection, selectionMode, pluginsFlagProvided, baseRef, headRef };
 }
 
 export function collectPublishablePluginPackageErrors(
@@ -279,24 +359,27 @@ export function isPluginVersionPublished(packageName: string, version: string): 
 export function collectPluginReleasePlan(params?: {
   rootDir?: string;
   selection?: string[];
+  selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
 }): PluginReleasePlan {
   const allPublishable = collectPublishablePluginPackages(params?.rootDir);
   const selectedPublishable =
-    params?.selection && params.selection.length > 0
-      ? resolveSelectedPublishablePluginPackages({
-          plugins: allPublishable,
-          selection: params.selection,
-        })
-      : params?.gitRange
-        ? resolveChangedPublishablePluginPackages({
+    params?.selectionMode === "all-publishable"
+      ? allPublishable
+      : params?.selection && params.selection.length > 0
+        ? resolveSelectedPublishablePluginPackages({
             plugins: allPublishable,
-            changedExtensionIds: collectChangedExtensionIdsFromGitRange({
-              rootDir: params.rootDir,
-              gitRange: params.gitRange,
-            }),
+            selection: params.selection,
           })
-        : allPublishable;
+        : params?.gitRange
+          ? resolveChangedPublishablePluginPackages({
+              plugins: allPublishable,
+              changedExtensionIds: collectChangedExtensionIdsFromGitRange({
+                rootDir: params.rootDir,
+                gitRange: params.gitRange,
+              }),
+            })
+          : allPublishable;
 
   const all = selectedPublishable.map((plugin) => ({
     ...plugin,

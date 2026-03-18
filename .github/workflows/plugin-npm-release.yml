@@ -14,13 +14,21 @@ on:
       - "scripts/plugin-npm-release-plan.ts"
   workflow_dispatch:
     inputs:
+      publish_scope:
+        description: Publish the selected plugins or all publishable plugins from the ref
+        required: true
+        default: selected
+        type: choice
+        options:
+          - selected
+          - all-publishable
       ref:
         description: Commit SHA on main to publish from (copy from the preview run)
         required: true
         type: string
       plugins:
-        description: Comma-separated plugin package names to publish (for example @openclaw/feishu,@openclaw/zalo)
-        required: true
+        description: Comma-separated plugin package names to publish when publish_scope=selected
+        required: false
         type: string
 
 concurrency:
@@ -69,13 +77,18 @@ jobs:
 
       - name: Validate publishable plugin metadata
         env:
+          PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
           HEAD_REF: ${{ steps.ref.outputs.sha }}
         run: |
           set -euo pipefail
-          if [[ -n "${RELEASE_PLUGINS}" ]]; then
-            pnpm release:plugins:npm:check -- --plugins "${RELEASE_PLUGINS}"
+          if [[ -n "${PUBLISH_SCOPE}" ]]; then
+            release_args=(--selection-mode "${PUBLISH_SCOPE}")
+            if [[ -n "${RELEASE_PLUGINS}" ]]; then
+              release_args+=(--plugins "${RELEASE_PLUGINS}")
+            fi
+            pnpm release:plugins:npm:check -- "${release_args[@]}"
           elif [[ -n "${BASE_REF}" ]]; then
             pnpm release:plugins:npm:check -- --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}"
           else
@@ -85,14 +98,19 @@ jobs:
       - name: Resolve plugin release plan
         id: plan
         env:
+          PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
           HEAD_REF: ${{ steps.ref.outputs.sha }}
         run: |
           set -euo pipefail
           mkdir -p .local
-          if [[ -n "${RELEASE_PLUGINS}" ]]; then
-            node --import tsx scripts/plugin-npm-release-plan.ts --plugins "${RELEASE_PLUGINS}" > .local/plugin-npm-release-plan.json
+          if [[ -n "${PUBLISH_SCOPE}" ]]; then
+            plan_args=(--selection-mode "${PUBLISH_SCOPE}")
+            if [[ -n "${RELEASE_PLUGINS}" ]]; then
+              plan_args+=(--plugins "${RELEASE_PLUGINS}")
+            fi
+            node --import tsx scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > .local/plugin-npm-release-plan.json
           elif [[ -n "${BASE_REF}" ]]; then
             node --import tsx scripts/plugin-npm-release-plan.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}" > .local/plugin-npm-release-plan.json
           else

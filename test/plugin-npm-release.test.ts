@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
+  parsePluginReleaseArgs,
   parsePluginReleaseSelection,
+  parsePluginReleaseSelectionMode,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
@@ -19,6 +21,52 @@ describe("parsePluginReleaseSelection", () => {
     expect(
       parsePluginReleaseSelection(" @openclaw/zalo, @openclaw/feishu  @openclaw/zalo "),
     ).toEqual(["@openclaw/feishu", "@openclaw/zalo"]);
+  });
+});
+
+describe("parsePluginReleaseSelectionMode", () => {
+  it("accepts the supported explicit selection modes", () => {
+    expect(parsePluginReleaseSelectionMode("selected")).toBe("selected");
+    expect(parsePluginReleaseSelectionMode("all-publishable")).toBe("all-publishable");
+  });
+
+  it("rejects unsupported selection modes", () => {
+    expect(() => parsePluginReleaseSelectionMode("all")).toThrowError(
+      'Unknown selection mode: all. Expected "selected" or "all-publishable".',
+    );
+  });
+});
+
+describe("parsePluginReleaseArgs", () => {
+  it("rejects blank explicit plugin selections", () => {
+    expect(() => parsePluginReleaseArgs(["--plugins", "   "])).toThrowError(
+      "`--plugins` must include at least one package name.",
+    );
+  });
+
+  it("requires plugin names for selected explicit publish mode", () => {
+    expect(() => parsePluginReleaseArgs(["--selection-mode", "selected"])).toThrowError(
+      "`--selection-mode selected` requires `--plugins`.",
+    );
+  });
+
+  it("rejects plugin names when all-publishable mode is selected", () => {
+    expect(() =>
+      parsePluginReleaseArgs([
+        "--selection-mode",
+        "all-publishable",
+        "--plugins",
+        "@openclaw/zalo",
+      ]),
+    ).toThrowError("`--selection-mode all-publishable` must not be combined with `--plugins`.");
+  });
+
+  it("parses explicit all-publishable mode", () => {
+    expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toMatchObject({
+      selectionMode: "all-publishable",
+      selection: [],
+      pluginsFlagProvided: false,
+    });
   });
 });
 
