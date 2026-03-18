@@ -622,11 +622,26 @@ export const dispatchTelegramMessage = async ({
               splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
             }
           : undefined,
-        onToolStart: statusReactionController
-          ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
+        onToolStart: async (payload) => {
+          if (statusReactionController) {
+            await statusReactionController.setTool(payload.name);
+          }
+          // When tool execution starts, the preceding text was intermediate
+          // reasoning ("Let me fetch..."), not a user-facing answer. Delete
+          // the draft preview immediately so the user doesn't see it (TES-642).
+          if (answerLane.hasStreamedMessage) {
+            const previewMessageId = answerLane.stream?.messageId();
+            if (typeof previewMessageId === "number" && !finalizedPreviewByLane.answer) {
+              try {
+                await bot.api.deleteMessage(chatId, previewMessageId);
+              } catch {
+                // Preview may already have been cleaned up.
+              }
             }
-          : undefined,
+            answerLane.stream?.forceNewMessage();
+            resetDraftLaneState(answerLane);
+          }
+        },
         onModelSelected,
       },
     }));
