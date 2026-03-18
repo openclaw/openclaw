@@ -180,13 +180,13 @@ General rule: a session at depth *N* can spawn children when `maxSpawnDepth > N`
 
 ### Announce chain
 
-Results flow back up the chain:
+Results flow back up the chain. For example, with `maxSpawnDepth: 2`:
 
 1. Depth-2 worker finishes → announces to its parent (depth-1 orchestrator)
 2. Depth-1 orchestrator receives the announce, synthesizes results, finishes → announces to main
 3. Main agent receives the announce and delivers to the user
 
-Each level only sees announces from its direct children.
+The same pattern generalises to deeper chains: a depth-N agent announces to its depth-(N-1) parent, and so on up to the main agent. Each level only sees announces from its direct children.
 
 ### Tool policy by depth
 
@@ -248,14 +248,15 @@ Announce payloads include a stats line at the end (even when wrapped):
 
 ## Tool Policy (sub-agent tools)
 
-By default, sub-agents get **all tools except** these four session tools:
+By default, sub-agents get **all tools except** these five session/orchestration tools:
 
 - `sessions_list`
 - `sessions_history`
 - `sessions_send`
 - `sessions_spawn`
+- `subagents`
 
-When `maxSpawnDepth >= 2`, orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their children. `sessions_send` stays denied at all depths.
+When `maxSpawnDepth > N` (i.e. the sub-agent is an orchestrator, not a leaf), it additionally receives `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so it can manage its children. `sessions_send` stays denied at all depths.
 
 Override via config:
 
