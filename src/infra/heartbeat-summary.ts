@@ -28,9 +28,23 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   return list.some((entry) => Boolean(entry?.heartbeat));
 }
 
+function hasDefaultsHeartbeat(cfg: OpenClawConfig) {
+  return Boolean(cfg.agents?.defaults?.heartbeat);
+}
+
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const list = cfg.agents?.list ?? [];
+
+  // When agents.defaults.heartbeat is configured, every known agent inherits
+  // heartbeat enablement (there is no per-agent opt-out field today).
+  if (hasDefaultsHeartbeat(cfg)) {
+    if (list.length > 0) {
+      return list.some((entry) => normalizeAgentId(entry?.id) === resolvedAgentId);
+    }
+    return resolvedAgentId === resolveDefaultAgentId(cfg);
+  }
+
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
     return list.some(
