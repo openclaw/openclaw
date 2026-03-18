@@ -35,13 +35,16 @@ export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-runtime";
-export { withNormalizedTimestamp } from "../../../src/agents/date-time.js";
-export { assertMediaNotDataUrl } from "../../../src/agents/sandbox-paths.js";
-export { parseAvailableTags, readReactionParams } from "openclaw/plugin-sdk/discord-core";
-export { resolvePollMaxSelections } from "../../../src/polls.js";
-export type { DiscordAccountConfig, DiscordActionConfig } from "../../../src/config/types.js";
+export {
+  assertMediaNotDataUrl,
+  parseAvailableTags,
+  readReactionParams,
+  resolvePollMaxSelections,
+  withNormalizedTimestamp,
+} from "openclaw/plugin-sdk/discord-core";
+export type { DiscordAccountConfig, DiscordActionConfig } from "openclaw/plugin-sdk/discord";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "../../../src/config/types.secrets.js";
+} from "openclaw/plugin-sdk/config-runtime";
