@@ -27,11 +27,21 @@ OpenClaw 使用 Brave Search 作为 `web_search` 的默认提供商。
 
 ```json5
 {
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: {
+            apiKey: "BRAVE_API_KEY_HERE",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         provider: "brave",
-        apiKey: "BRAVE_API_KEY_HERE",
         maxResults: 5,
         timeoutSeconds: 30,
       },
@@ -39,6 +49,8 @@ OpenClaw 使用 Brave Search 作为 `web_search` 的默认提供商。
   },
 }
 ```
+
+Brave 的提供商专属搜索配置现在位于 `plugins.entries.brave.config.webSearch.*`。旧的 `tools.web.search.apiKey` 仅作为兼容层暂时保留。
 
 ## 注意事项
 
