@@ -32,29 +32,32 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
 }
 
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
-  let seq = 0;
+  // Per-client seq counter. Only incremented when an event is actually sent to
+  // that client, so scope filtering and slow-consumer drops never cause gaps.
+  const clientSeqs = new WeakMap<GatewayWsClient, number>();
 
   const broadcastInternal = (
-    event: string,
-    payload: unknown,
-    opts?: {
-      dropIfSlow?: boolean;
-      stateVersion?: { presence?: number; health?: number };
-    },
-    targetConnIds?: ReadonlySet<string>,
+      event: string,
+      payload: unknown,
+      opts?: {
+        dropIfSlow?: boolean;
+        stateVersion?: { presence?: number; health?: number };
+      },
+      targetConnIds?: ReadonlySet<string>,
   ) => {
+    if (params.clients.size === 0) {
+      return;
+    }
     const isTargeted = Boolean(targetConnIds);
-    const eventSeq = isTargeted ? undefined : ++seq;
-    const frame = JSON.stringify({
-      type: "event",
+    const baseFrame = {
+      type: "event" as const,
       event,
       payload,
-      seq: eventSeq,
       stateVersion: opts?.stateVersion,
-    });
+    };
     const logMeta: Record<string, unknown> = {
       event,
-      seq: eventSeq ?? "targeted",
+      seq: isTargeted ? "targeted" : "per-client",
       clients: params.clients.size,
       targets: targetConnIds ? targetConnIds.size : undefined,
       dropIfSlow: opts?.dropIfSlow,
@@ -84,8 +87,11 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         }
         continue;
       }
+      // Assign per-client seq only for non-targeted (broadcast) events.
+      const seq = !isTargeted ? (clientSeqs.get(c) ?? 0) + 1 : undefined;
+      if (!isTargeted) clientSeqs.set(c, seq!);
       try {
-        c.socket.send(frame);
+        c.socket.send(JSON.stringify({ ...baseFrame, seq }));
       } catch {
         /* ignore */
       }
