@@ -1,4 +1,5 @@
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 
 const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
