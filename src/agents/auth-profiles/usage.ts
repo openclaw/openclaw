@@ -74,11 +74,14 @@ export function isProfileInCooldown(
   }
   // Model-aware bypass: if the cooldown was caused by a rate_limit on a
   // specific model and the caller is requesting a *different* model, allow it.
+  // We still honour any active billing/auth disable (`disabledUntil`) — those
+  // are profile-wide and must not be short-circuited by model scoping.
   if (
     forModel &&
     stats.cooldownReason === "rate_limit" &&
     stats.cooldownModel &&
-    stats.cooldownModel !== forModel
+    stats.cooldownModel !== forModel &&
+    !isActiveUnusableWindow(stats.disabledUntil, now ?? Date.now())
   ) {
     return false;
   }
@@ -495,8 +498,7 @@ function computeNextProfileUsageStats(params: {
       updatedStats.cooldownModel = params.existing.cooldownModel;
     } else {
       updatedStats.cooldownReason = params.reason;
-      updatedStats.cooldownModel =
-        params.reason === "rate_limit" ? params.modelId : undefined;
+      updatedStats.cooldownModel = params.reason === "rate_limit" ? params.modelId : undefined;
     }
   }
 
@@ -602,8 +604,8 @@ export async function markAuthProfileFailure(params: {
 }
 
 /**
- * Mark a profile as transiently failed. Applies exponential backoff cooldown.
- * Cooldown times: 1min, 5min, 25min, max 1 hour.
+ * Mark a profile as transiently failed. Applies stepped backoff cooldown.
+ * Cooldown times: 30s, 1min, 5min (capped).
  * Uses store lock to avoid overwriting concurrent usage updates.
  */
 export async function markAuthProfileCooldown(params: {
