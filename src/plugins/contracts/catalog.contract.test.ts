@@ -27,14 +27,6 @@ const resolveNonBundledProviderPluginIdsMock = vi.hoisted(() =>
   vi.fn<ResolveNonBundledProviderPluginIds>((_) => [] as string[]),
 );
 
-vi.mock("../providers.js", () => ({
-  resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
-  resolveOwningPluginIdsForProvider: (params: unknown) =>
-    resolveOwningPluginIdsForProviderMock(params as never),
-  resolveNonBundledProviderPluginIds: (params: unknown) =>
-    resolveNonBundledProviderPluginIdsMock(params as never),
-}));
-
 let augmentModelCatalogWithProviderPlugins: typeof import("../provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("../provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
 let resetProviderRuntimeHookCacheForTest: typeof import("../provider-runtime.js").resetProviderRuntimeHookCacheForTest;
@@ -43,18 +35,12 @@ let resolveProviderBuiltInModelSuppression: typeof import("../provider-runtime.j
 describe("provider catalog contract", () => {
   beforeEach(async () => {
     vi.resetModules();
+    vi.doUnmock("../providers.js");
     ({
       resolveProviderContractPluginIdsForProvider,
       resolveProviderContractProvidersForPluginIds,
       uniqueProviderContractProviders,
     } = await import("./registry.js"));
-    ({
-      augmentModelCatalogWithProviderPlugins,
-      buildProviderMissingAuthMessageWithPlugin,
-      resetProviderRuntimeHookCacheForTest,
-      resolveProviderBuiltInModelSuppression,
-    } = await import("../provider-runtime.js"));
-    resetProviderRuntimeHookCacheForTest();
 
     resolveOwningPluginIdsForProviderMock.mockReset();
     resolveOwningPluginIdsForProviderMock.mockImplementation((params) =>
@@ -72,6 +58,22 @@ describe("provider catalog contract", () => {
       }
       return resolveProviderContractProvidersForPluginIds(onlyPluginIds);
     });
+
+    vi.doMock("../providers.js", () => ({
+      resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
+      resolveOwningPluginIdsForProvider: (params: unknown) =>
+        resolveOwningPluginIdsForProviderMock(params as never),
+      resolveNonBundledProviderPluginIds: (params: unknown) =>
+        resolveNonBundledProviderPluginIdsMock(params as never),
+    }));
+
+    ({
+      augmentModelCatalogWithProviderPlugins,
+      buildProviderMissingAuthMessageWithPlugin,
+      resetProviderRuntimeHookCacheForTest,
+      resolveProviderBuiltInModelSuppression,
+    } = await import("../provider-runtime.js"));
+    resetProviderRuntimeHookCacheForTest();
   });
 
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {
