@@ -13,7 +13,8 @@ function relativeSymlinkTarget(sourcePath, targetPath) {
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
-  fs.symlinkSync(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  const target = type === "junction" ? sourcePath : relativeSymlinkTarget(sourcePath, targetPath);
+  fs.symlinkSync(target, targetPath, type);
 }
 
 function isSymlinkPermissionError(error) {
