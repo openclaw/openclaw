@@ -315,7 +315,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof tlonSdk.tlonSetupAdapter).toBe("object");
   });
 
-  it("exports acpx helpers", async () => {
+  it("exports ACPX runtime backend helpers", async () => {
     expect(typeof acpxSdk.listKnownProviderAuthEnvVarNames).toBe("function");
     expect(typeof acpxSdk.omitEnvKeysCaseInsensitive).toBe("function");
   });
