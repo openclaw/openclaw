@@ -2,6 +2,7 @@ import type { WebhookRequestBody } from "@line/bot-sdk";
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createConnectedChannelStatusPatch } from "../gateway/channel-status-patches.js";
 import { danger, logVerbose } from "../globals.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { createChannelReplyPipeline } from "../plugin-sdk/channel-reply-pipeline.js";
@@ -36,6 +37,8 @@ export interface MonitorLineProviderOptions {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
+  getStatus?: () => Record<string, unknown>;
+  setStatus?: (next: Record<string, unknown>) => void;
   webhookUrl?: string;
   webhookPath?: string;
 }
@@ -83,6 +86,13 @@ function recordChannelRuntimeState(params: {
 
 export function getLineRuntimeState(accountId: string) {
   return runtimeState.get(`line:${accountId}`);
+}
+
+function publishLineStatus(
+  opts: Pick<MonitorLineProviderOptions, "setStatus">,
+  patch: Record<string, unknown>,
+) {
+  opts.setStatus?.(patch);
 }
 
 function startLineLoadingKeepalive(params: {
@@ -149,6 +159,12 @@ export async function monitorLineProvider(
       lastStartAt: Date.now(),
     },
   });
+  publishLineStatus(opts, {
+    ...createConnectedChannelStatusPatch(Date.now()),
+    running: true,
+    lastError: null,
+    mode: "webhook",
+  });
 
   // Create the bot
   const bot = createLineBot({
@@ -171,6 +187,11 @@ export async function monitorLineProvider(
         state: {
           lastInboundAt: Date.now(),
         },
+      });
+      publishLineStatus(opts, {
+        lastEventAt: Date.now(),
+        lastInboundAt: Date.now(),
+        lastError: null,
       });
 
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
@@ -250,9 +271,15 @@ export async function monitorLineProvider(
                   lastOutboundAt: Date.now(),
                 },
               });
+              publishLineStatus(opts, {
+                lastOutboundAt: Date.now(),
+              });
             },
             onError: (err, info) => {
               runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
+              publishLineStatus(opts, {
+                lastError: String(err),
+              });
             },
           },
           replyOptions: {
@@ -265,6 +292,9 @@ export async function monitorLineProvider(
         }
       } catch (err) {
         runtime.error?.(danger(`line: auto-reply failed: ${String(err)}`));
+        publishLineStatus(opts, {
+          lastError: String(err),
+        });
 
         // Send error message to user
         if (replyToken) {
@@ -314,6 +344,15 @@ export async function monitorLineProvider(
         running: false,
         lastStopAt: Date.now(),
       },
+    });
+    const at = Date.now();
+    publishLineStatus(opts, {
+      running: false,
+      connected: false,
+      lastStopAt: at,
+      lastEventAt: at,
+      lastDisconnect: { at },
+      mode: "webhook",
     });
   };
 

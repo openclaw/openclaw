@@ -588,6 +588,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expect(onToolResult).toHaveBeenCalledWith({
           text: testCase.toolText,
           mediaUrls: [],
+          audioAsVoice: undefined,
         });
       } else {
         expect(onToolResult).not.toHaveBeenCalled();
@@ -626,6 +627,30 @@ describe("runReplyAgent typing (heartbeat)", () => {
           allowedDecisions: ["allow-once", "allow-always", "deny"],
         },
       },
+    });
+  });
+
+  it("preserves audioAsVoice on tool result delivery", async () => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onToolResult?.({
+        text: "",
+        mediaUrls: ["file:///tmp/voice.ogg"],
+        audioAsVoice: true,
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      typingMode: "message",
+      opts: { onToolResult },
+    });
+    await run();
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "",
+      mediaUrls: ["file:///tmp/voice.ogg"],
+      audioAsVoice: true,
     });
   });
 

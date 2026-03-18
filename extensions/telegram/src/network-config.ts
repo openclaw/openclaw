@@ -32,6 +32,7 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
   network?: TelegramNetworkConfig;
   env?: NodeJS.ProcessEnv;
   nodeMajor?: number;
+  runtimeDefault?: TelegramAutoSelectFamilyDecision;
 }): TelegramAutoSelectFamilyDecision {
   const env = params?.env ?? process.env;
   const nodeMajor =
@@ -47,6 +48,9 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
   }
   if (typeof params?.network?.autoSelectFamily === "boolean") {
     return { value: params.network.autoSelectFamily, source: "config" };
+  }
+  if (typeof params?.runtimeDefault?.value === "boolean") {
+    return params.runtimeDefault;
   }
   // WSL2 has unstable IPv6 connectivity; disable autoSelectFamily to use IPv4 directly
   if (isWSL2SyncCached()) {
@@ -72,6 +76,7 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
   env?: NodeJS.ProcessEnv;
   nodeMajor?: number;
+  runtimeDefault?: TelegramDnsResultOrderDecision;
 }): TelegramDnsResultOrderDecision {
   const env = params?.env ?? process.env;
   const nodeMajor =
@@ -91,6 +96,9 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
     .toLowerCase();
   if (configValue === "ipv4first" || configValue === "verbatim") {
     return { value: configValue, source: "config" };
+  }
+  if (typeof params?.runtimeDefault?.value === "string") {
+    return params.runtimeDefault;
   }
 
   // Default to ipv4first on Node 22+ to avoid IPv6 issues

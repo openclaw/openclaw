@@ -39,6 +39,45 @@ Current intended behavior:
 - Localize OAG user-visible notes and heartbeat prompts to the recent reply language of the target session when possible.
 - Publish enough channel monitor lifecycle state that health policy can distinguish a healthy quiet channel from a dead socket or stalled polling loop.
 
+## Development requirements
+
+The current branch is trying to satisfy these concrete requirements:
+
+- Expose OAG runtime state through operator-facing CLI surfaces instead of leaving it buried in sentinel state files.
+- Make channel recovery actionable by replaying queued outbound deliveries after the affected channel/account becomes healthy again.
+- Deliver OAG recovery notes to the correct user session exactly once when the recovery action is user-visible.
+- Keep OAG notes and heartbeat user-facing text aligned with the session’s recent reply language when detection is possible.
+- Feed channel health policy with enough lifecycle data from each monitor to reduce false restart decisions.
+
+## Current progress
+
+Approximate status for this branch:
+
+- Done:
+  OAG summaries are wired into `status`, `health`, and `doctor`.
+- Done:
+  Channel recovery hooks can replay pending outbound deliveries for a recovered channel/account.
+- Done:
+  OAG one-shot notes can be injected into session updates and localized using recent session language.
+- Done:
+  Review brief and runtime docs now exist for external reviewers.
+- In progress:
+  Sentinel schema compatibility and runtime behavior are still being validated against real producer output.
+- In progress:
+  The implementation is spread across several uncommitted branch changes outside the narrow OAG parsing/docs fix.
+
+## Task checklist
+
+- [x] Add OAG channel/session/task summaries to operator-facing status surfaces.
+- [x] Add user-visible OAG recovery notes for matching sessions.
+- [x] Add localized fallback behavior for OAG notes and heartbeat output.
+- [x] Add channel recovery replay for pending outbound deliveries.
+- [x] Add external review brief and runtime documentation.
+- [ ] Document the sentinel producer schema in one place.
+- [ ] Document the Argus session metadata lifecycle and recovery state transitions.
+- [ ] Define acceptance criteria for monitor lifecycle signals across all supported channels.
+- [ ] Consolidate the remaining OAG branch work into a cleaner set of commits.
+
 ## Review instructions
 
 Please review OAG with emphasis on correctness and operational safety rather than style.

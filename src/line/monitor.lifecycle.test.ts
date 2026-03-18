@@ -84,6 +84,7 @@ describe("monitorLineProvider lifecycle", () => {
   it("waits for abort before resolving", async () => {
     const { monitorLineProvider } = await import("./monitor.js");
     const abort = new AbortController();
+    const setStatus = vi.fn();
     let resolved = false;
 
     const task = monitorLineProvider({
@@ -92,6 +93,7 @@ describe("monitorLineProvider lifecycle", () => {
       config: {} as OpenClawConfig,
       runtime: {} as RuntimeEnv,
       abortSignal: abort.signal,
+      setStatus,
     }).then((monitor) => {
       resolved = true;
       return monitor;
@@ -106,6 +108,12 @@ describe("monitorLineProvider lifecycle", () => {
     abort.abort();
     await task;
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ connected: true, mode: "webhook" }),
+    );
+    expect(setStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ connected: false, running: false, mode: "webhook" }),
+    );
   });
 
   it("stops immediately when signal is already aborted", async () => {

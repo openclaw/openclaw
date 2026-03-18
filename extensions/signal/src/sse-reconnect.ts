@@ -17,6 +17,8 @@ type RunSignalSseLoopParams = {
   abortSignal?: AbortSignal;
   runtime: RuntimeEnv;
   onEvent: (event: SignalSseEvent) => void;
+  onOpen?: () => void;
+  onDisconnect?: (params: { error?: unknown; reconnectAttempts: number }) => void;
   policy?: Partial<BackoffPolicy>;
 };
 
@@ -26,6 +28,8 @@ export async function runSignalSseLoop({
   abortSignal,
   runtime,
   onEvent,
+  onOpen,
+  onDisconnect,
   policy,
 }: RunSignalSseLoopParams) {
   const reconnectPolicy = {
@@ -47,6 +51,7 @@ export async function runSignalSseLoop({
         baseUrl,
         account,
         abortSignal,
+        onOpen,
         onEvent: (event) => {
           reconnectAttempts = 0;
           onEvent(event);
@@ -56,6 +61,7 @@ export async function runSignalSseLoop({
         return;
       }
       reconnectAttempts += 1;
+      onDisconnect?.({ reconnectAttempts });
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       logReconnectVerbose(`Signal SSE stream ended, reconnecting in ${delayMs / 1000}s...`);
       await sleepWithAbort(delayMs, abortSignal);
@@ -65,6 +71,7 @@ export async function runSignalSseLoop({
       }
       runtime.error?.(`Signal SSE stream error: ${String(err)}`);
       reconnectAttempts += 1;
+      onDisconnect?.({ error: err, reconnectAttempts });
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       runtime.log?.(`Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`);
       try {

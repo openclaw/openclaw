@@ -315,4 +315,30 @@ describe("deliverAgentCommandResult", () => {
     expect(line).toContain("channel=webchat");
     expect(line).toContain("ANNOUNCE_SKIP");
   });
+
+  it("does not log no-reply when media was already sent via messaging tool", async () => {
+    const cfg = {} as OpenClawConfig;
+    const deps = {} as CliDeps;
+    const runtime = createRuntime();
+    const result = {
+      payloads: undefined,
+      meta: { durationMs: 1 },
+      didSendViaMessagingTool: true,
+      messagingToolSentMediaUrls: ["/tmp/voice.ogg"],
+    };
+
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: { message: "hello" } as never,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      result,
+      payloads: result.payloads,
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith("Reply delivered via messaging tool.");
+    expect(runtime.log).not.toHaveBeenCalledWith("No reply from agent.");
+  });
 });

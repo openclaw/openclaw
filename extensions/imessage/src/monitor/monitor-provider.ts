@@ -18,6 +18,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/channel-status-patches";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/infra-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -55,6 +56,42 @@ import { parseIMessageNotification } from "./parse-notification.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
+
+function publishIMessageConnectedStatus(opts: Pick<MonitorIMessageOpts, "setStatus">) {
+  opts.setStatus?.({
+    ...createConnectedChannelStatusPatch(Date.now()),
+    lastError: null,
+    mode: "rpc-watch",
+  });
+}
+
+function publishIMessageDisconnectedStatus(
+  opts: Pick<MonitorIMessageOpts, "setStatus">,
+  error?: unknown,
+) {
+  const at = Date.now();
+  const errorText =
+    error == null ? undefined : error instanceof Error ? error.message : JSON.stringify(error);
+  opts.setStatus?.({
+    connected: false,
+    lastEventAt: at,
+    lastDisconnect: {
+      at,
+      ...(errorText ? { error: errorText } : {}),
+    },
+    ...(errorText ? { lastError: errorText } : {}),
+    mode: "rpc-watch",
+  });
+}
+
+function publishIMessageInboundActivity(opts: Pick<MonitorIMessageOpts, "setStatus">) {
+  const at = Date.now();
+  opts.setStatus?.({
+    lastEventAt: at,
+    lastInboundAt: at,
+    lastError: null,
+  });
+}
 
 /**
  * Try to detect remote host from an SSH wrapper script like:
@@ -464,6 +501,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose("imessage: dropping malformed RPC message payload");
       return;
     }
+    publishIMessageInboundActivity(opts);
     await inboundDebouncer.enqueue({ message });
   };
 
@@ -499,9 +537,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (msg.method === "message") {
         void handleMessage(msg.params).catch((err) => {
           runtime.error?.(`imessage: handler failed: ${String(err)}`);
+          opts.setStatus?.({ lastError: String(err) });
         });
       } else if (msg.method === "error") {
         runtime.error?.(`imessage: watch error ${JSON.stringify(msg.params)}`);
+        opts.setStatus?.({
+          lastEventAt: Date.now(),
+          lastError: JSON.stringify(msg.params),
+        });
       }
     },
   });
@@ -519,16 +562,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       attachments: includeAttachments,
     });
     subscriptionId = result?.subscription ?? null;
+    publishIMessageConnectedStatus(opts);
     await client.waitForClose();
   } catch (err) {
     if (abort?.aborted) {
       return;
     }
     runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
+    publishIMessageDisconnectedStatus(opts, err);
     throw err;
   } finally {
     detachAbortHandler();
     await client.stop();
+    publishIMessageDisconnectedStatus(opts);
   }
 }
 

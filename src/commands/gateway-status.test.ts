@@ -111,6 +111,15 @@ const probeGateway = vi.fn(async (opts: { url: string }): Promise<GatewayProbeRe
     },
   };
 });
+const readOagChannelHealthSummary = vi.fn(async () => ({
+  congested: false,
+  backloggedAfterRecovery: true,
+  affectedChannels: ["telegram"],
+  pendingDeliveries: 4,
+  recentFailureCount: 0,
+  backlogAgeMinutes: 12,
+  escalationRecommended: false,
+}));
 
 vi.mock("../config/config.js", () => ({
   readBestEffortConfig,
@@ -139,6 +148,28 @@ vi.mock("../infra/ssh-config.js", () => ({
 
 vi.mock("../gateway/probe.js", () => ({
   probeGateway,
+}));
+
+vi.mock("./oag-channel-health.js", () => ({
+  readOagChannelHealthSummary,
+  formatOagChannelHealthLine: vi.fn(
+    (summary?: { pendingDeliveries?: number; backloggedAfterRecovery?: boolean }) =>
+      summary?.backloggedAfterRecovery
+        ? `recovering backlog · ${summary.pendingDeliveries ?? 0} pending`
+        : "clear · 0 pending",
+  ),
+  formatOagSessionWatchLine: vi.fn(
+    (summary?: { sessionWatch?: { active?: boolean; affectedSessions?: Array<unknown> } }) =>
+      summary?.sessionWatch?.active
+        ? `watching ${summary.sessionWatch.affectedSessions?.length ?? 0} sessions`
+        : "clear",
+  ),
+  formatOagTaskWatchLine: vi.fn(
+    (summary?: { taskWatch?: { active?: boolean; affectedTasks?: Array<unknown> } }) =>
+      summary?.taskWatch?.active
+        ? `watching ${summary.taskWatch.affectedTasks?.length ?? 0} tasks`
+        : "clear",
+  ),
 }));
 
 function createRuntimeCapture() {
@@ -201,6 +232,9 @@ describe("gateway-status command", () => {
 
     expect(runtimeErrors).toHaveLength(0);
     expect(runtimeLogs.join("\n")).toContain("Gateway Status");
+    expect(runtimeLogs.join("\n")).toContain("OAG channels");
+    expect(runtimeLogs.join("\n")).toContain("OAG sessions");
+    expect(runtimeLogs.join("\n")).toContain("recovering backlog");
     expect(runtimeLogs.join("\n")).toContain("Discovery (this machine)");
     expect(runtimeLogs.join("\n")).toContain("Targets");
   });
@@ -213,6 +247,10 @@ describe("gateway-status command", () => {
     expect(runtimeErrors).toHaveLength(0);
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     expect(parsed.ok).toBe(true);
+    expect(parsed.oagChannelHealth).toMatchObject({
+      backloggedAfterRecovery: true,
+      pendingDeliveries: 4,
+    });
     expect(parsed.targets).toBeTruthy();
     const targets = parsed.targets as Array<Record<string, unknown>>;
     expect(targets.length).toBeGreaterThanOrEqual(2);

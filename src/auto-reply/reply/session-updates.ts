@@ -10,6 +10,7 @@ import {
   formatUtcTimestamp,
   formatZonedTimestamp,
 } from "../../infra/format-time/format-datetime.ts";
+import { consumePendingOagSystemNotes } from "../../infra/oag-system-events.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
@@ -85,6 +86,12 @@ export async function drainFormattedSystemEvents(params: {
   };
 
   const systemLines: string[] = [];
+  const oagNotes = await consumePendingOagSystemNotes(params.sessionKey);
+  systemLines.push(
+    ...oagNotes
+      .map((event) => `[${formatSystemEventTimestamp(event.ts, params.cfg)}] ${event.text}`)
+      .filter((line) => line.trim().length > 0),
+  );
   const queued = drainSystemEventEntries(params.sessionKey);
   systemLines.push(
     ...queued

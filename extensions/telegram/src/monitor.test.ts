@@ -536,6 +536,48 @@ describe("monitorTelegramProvider (grammY)", () => {
     }
   });
 
+  it("reports connected status on startup and shutdown for polling mode", async () => {
+    const abort = new AbortController();
+    const setStatus = vi.fn();
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({
+      token: "tok",
+      abortSignal: abort.signal,
+      setStatus,
+    });
+
+    const connectedTrue = setStatus.mock.calls.find((call) => call[0]?.connected === true);
+    const connectedFalse = setStatus.mock.calls.find((call) => call[0]?.connected === false);
+
+    expect(connectedTrue).toBeDefined();
+    expect(connectedFalse).toBeDefined();
+  });
+
+  it("records inbound activity when polling receives updates", async () => {
+    const abort = new AbortController();
+    const setStatus = vi.fn();
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({
+      token: "tok",
+      abortSignal: abort.signal,
+      setStatus,
+    });
+
+    const onUpdateId = (
+      createTelegramBotCalls[0] as {
+        updateOffset?: { onUpdateId?: (updateId: number) => Promise<void> };
+      }
+    )?.updateOffset?.onUpdateId;
+    expect(onUpdateId).toBeTypeOf("function");
+    await onUpdateId?.(42);
+
+    const inboundActivity = setStatus.mock.calls.find((call) => call[0]?.lastInboundAt);
+    expect(inboundActivity).toBeDefined();
+    expect(inboundActivity?.[0]?.lastEventAt).toEqual(inboundActivity?.[0]?.lastInboundAt);
+  });
+
   it("surfaces non-recoverable errors", async () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     runSpy.mockImplementationOnce(() =>
@@ -668,12 +710,14 @@ describe("monitorTelegramProvider (grammY)", () => {
     const { monitorTelegramProvider } = await import("./monitor.js");
     const abort = new AbortController();
     const settled = vi.fn();
+    const setStatus = vi.fn();
     const monitor = monitorTelegramProvider({
       token: "tok",
       useWebhook: true,
       webhookUrl: "https://example.test/telegram",
       webhookSecret: "secret",
       abortSignal: abort.signal,
+      setStatus,
     }).then(settled);
 
     await Promise.resolve();
@@ -682,6 +726,8 @@ describe("monitorTelegramProvider (grammY)", () => {
     abort.abort();
     await monitor;
     expect(settled).toHaveBeenCalledTimes(1);
+    expect(setStatus.mock.calls.some((call) => call[0]?.connected === true)).toBe(true);
+    expect(setStatus.mock.calls.some((call) => call[0]?.connected === false)).toBe(true);
   });
 
   it("force-restarts polling when getUpdates stalls (watchdog)", async () => {

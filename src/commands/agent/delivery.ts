@@ -30,6 +30,14 @@ type RunResult = Awaited<
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
 
+function didDeliverViaMessagingTool(result: RunResult): boolean {
+  return Boolean(
+    result.didSendViaMessagingTool ||
+    (result.messagingToolSentTexts?.length ?? 0) > 0 ||
+    (result.messagingToolSentMediaUrls?.length ?? 0) > 0,
+  );
+}
+
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
   const session = sessionKey ?? opts.sessionKey ?? opts.sessionId;
@@ -203,7 +211,11 @@ export async function deliverAgentCommandResult(params: {
   }
 
   if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
+    runtime.log(
+      didDeliverViaMessagingTool(result)
+        ? "Reply delivered via messaging tool."
+        : "No reply from agent.",
+    );
     return { payloads: [], meta: result.meta };
   }
 

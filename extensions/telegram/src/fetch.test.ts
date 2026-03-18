@@ -1,4 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveFetch } from "../../../src/infra/fetch.js";
+import {
+  resetTelegramFetchStateForTests,
+  resolveTelegramFetch,
+  resolveTelegramTransport,
+} from "./fetch.js";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
@@ -53,15 +59,6 @@ vi.mock("undici", () => ({
   fetch: undiciFetch,
   setGlobalDispatcher,
 }));
-
-let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
-let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
-let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
-
-beforeEach(async () => {
-  ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
-  ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
-});
 
 function resolveTelegramFetchOrThrow(
   proxyFetch?: typeof fetch,
@@ -208,6 +205,7 @@ async function expectNoStickyRetryWithSameDispatcher(params: {
 }
 
 afterEach(() => {
+  resetTelegramFetchStateForTests();
   undiciFetch.mockReset();
   setGlobalDispatcher.mockReset();
   AgentCtor.mockClear();
@@ -584,6 +582,38 @@ describe("resolveTelegramFetch", () => {
     expect(secondDispatcher).not.toBe(thirdDispatcher);
     expect(thirdDispatcher).toBe(fourthDispatcher);
     expectPinnedFallbackIpDispatcher(3);
+  });
+
+  it("keeps ipv4 fallback sticky across later resolver recreation", async () => {
+    primeStickyFallbackRetry("ETIMEDOUT", 3);
+
+    const firstResolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+    await firstResolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
+
+    const recreatedResolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+    await recreatedResolved("https://api.telegram.org/file/botx/photos/file_2.jpg");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(3);
+    expect(AgentCtor).toHaveBeenCalledTimes(4);
+
+    const firstDispatcher = getDispatcherFromUndiciCall(1);
+    const retryDispatcher = getDispatcherFromUndiciCall(2);
+    const recreatedDispatcher = getDispatcherFromUndiciCall(3);
+
+    expectStickyAutoSelectDispatcher(firstDispatcher);
+    expect(retryDispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
+    expect(recreatedDispatcher?.options?.connect).toEqual(
+      expect.objectContaining({
+        family: 4,
+        autoSelectFamily: false,
+      }),
+    );
+    expect(recreatedDispatcher).not.toBe(firstDispatcher);
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {

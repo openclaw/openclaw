@@ -135,6 +135,7 @@ export async function streamSignalEvents(params: {
   baseUrl: string;
   account?: string;
   abortSignal?: AbortSignal;
+  onOpen?: () => void;
   onEvent: (event: SignalSseEvent) => void;
 }): Promise<void> {
   const baseUrl = normalizeBaseUrl(params.baseUrl);
@@ -155,6 +156,7 @@ export async function streamSignalEvents(params: {
   if (!res.ok || !res.body) {
     throw new Error(`Signal SSE failed (${res.status} ${res.statusText || "error"})`);
   }
+  params.onOpen?.();
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

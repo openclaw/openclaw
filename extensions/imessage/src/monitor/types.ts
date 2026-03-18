@@ -28,6 +28,8 @@ export type IMessagePayload = {
 export type MonitorIMessageOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
+  getStatus?: () => Record<string, unknown>;
+  setStatus?: (next: Record<string, unknown>) => void;
   cliPath?: string;
   dbPath?: string;
   accountId?: string;

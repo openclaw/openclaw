@@ -14,6 +14,7 @@ import {
 } from "./network-config.js";
 import { getProxyUrlFromFetch } from "./proxy.js";
 
+let stickyIpv4Fallback = false;
 const log = createSubsystemLogger("telegram/network");
 
 const TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
@@ -588,4 +589,8 @@ export function resolveTelegramFetch(
   options?: { network?: TelegramNetworkConfig },
 ): typeof fetch {
   return resolveTelegramTransport(proxyFetch, options).fetch;
+}
+
+export function resetTelegramFetchStateForTests(): void {
+  stickyIpv4Fallback = false;
 }
