@@ -9,6 +9,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 export async function requireValidConfigSnapshot(
   runtime: RuntimeEnv,
+  opts?: { includeCompatibilityAdvisory?: boolean },
 ): Promise<OpenClawConfig | null> {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
@@ -20,6 +21,9 @@ export async function requireValidConfigSnapshot(
     runtime.error(`Fix the config or run ${formatCliCommand("openclaw doctor")}.`);
     runtime.exit(1);
     return null;
+  }
+  if (opts?.includeCompatibilityAdvisory !== true) {
+    return snapshot.config;
   }
   const compatibility = buildPluginCompatibilityNotices({ config: snapshot.config });
   if (compatibility.length > 0) {
