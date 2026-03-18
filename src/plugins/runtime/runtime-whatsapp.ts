@@ -68,7 +68,7 @@ let webLoginQrPromise: Promise<
 > | null = null;
 let webChannelPromise: Promise<typeof import("../../channels/web/index.js")> | null = null;
 let whatsappActionsPromise: Promise<
-  typeof import("../../agents/tools/whatsapp-actions.js")
+  typeof import("../../../extensions/whatsapp/runtime-api.js")
 > | null = null;
 
 function loadWebLoginQr() {
@@ -82,7 +82,7 @@ function loadWebChannel() {
 }
 
 function loadWhatsAppActions() {
-  whatsappActionsPromise ??= import("../../agents/tools/whatsapp-actions.js");
+  whatsappActionsPromise ??= import("../../../extensions/whatsapp/runtime-api.js");
   return whatsappActionsPromise;
 }
 
