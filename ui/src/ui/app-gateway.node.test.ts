@@ -3,6 +3,8 @@ import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 
+const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
+
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
@@ -70,6 +72,14 @@ vi.mock("./gateway.ts", () => {
   return { GatewayBrowserClient, resolveGatewayErrorDetailCode };
 });
 
+vi.mock("./controllers/chat.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/chat.ts")>();
+  return {
+    ...actual,
+    loadChatHistory: loadChatHistoryMock,
+  };
+});
+
 function createHost() {
   return {
     settings: {
@@ -106,7 +116,15 @@ function createHost() {
     assistantAgentId: null,
     serverVersion: null,
     sessionKey: "main",
+    chatMessages: [],
+    chatToolMessages: [],
+    chatStreamSegments: [],
+    chatStream: null,
+    chatStreamStartedAt: null,
     chatRunId: null,
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
@@ -117,6 +135,7 @@ function createHost() {
 describe("connectGateway", () => {
   beforeEach(() => {
     gatewayClientInstances.length = 0;
+    loadChatHistoryMock.mockClear();
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {
@@ -252,6 +271,48 @@ describe("connectGateway", () => {
     expect(host.lastError).toContain("too many failed authentication attempts");
   });
 
+  it("maps generic fetch failures to actionable device identity guidance", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED);
+    expect(host.lastError).toContain("device identity required");
+  });
+
+  it("maps generic fetch failures to actionable origin guidance", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Fetch failed",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
+      },
+    });
+
+    expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED);
+    expect(host.lastError).toContain("origin not allowed");
+  });
+
   it("preserves specific close errors even when auth detail codes are present", () => {
     const host = createHost();
 
@@ -293,6 +354,73 @@ describe("connectGateway", () => {
 
     expect(host.lastError).toContain("gateway token mismatch");
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
+  });
+
+  it("does not reload chat history for each live tool result event", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "engine-run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 1,
+        sessionKey: "main",
+        data: {
+          toolCallId: "tool-1",
+          name: "fetch",
+          phase: "result",
+          result: { text: "ok" },
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads chat history once after the final chat event when tool output was used", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "engine-run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 1,
+        sessionKey: "main",
+        data: {
+          toolCallId: "tool-1",
+          name: "fetch",
+          phase: "result",
+          result: { text: "ok" },
+        },
+      },
+    });
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "engine-run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
   });
 });
 

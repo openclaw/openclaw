@@ -113,6 +113,12 @@ function getLatestWebSocket(): MockWebSocket {
   return ws;
 }
 
+function stubInsecureCrypto() {
+  vi.stubGlobal("crypto", {
+    randomUUID: () => "req-insecure",
+  });
+}
+
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
     const storage = createStorageMock();
@@ -174,6 +180,72 @@ describe("GatewayBrowserClient", () => {
     const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
     expect(signedPayload).toContain("|shared-auth-token|nonce-1");
     expect(signedPayload).not.toContain("stored-device-token");
+  });
+
+  it("sends explicit shared token on insecure first connect without cached device fallback", async () => {
+    stubInsecureCrypto();
+    const client = new GatewayBrowserClient({
+      url: "ws://gateway.example:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-1" },
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
+      id?: string;
+      method?: string;
+      params?: { auth?: { token?: string; password?: string; deviceToken?: string } };
+    };
+    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.auth).toEqual({
+      token: "shared-auth-token",
+      password: undefined,
+      deviceToken: undefined,
+    });
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+    expect(signDevicePayloadMock).not.toHaveBeenCalled();
+  });
+
+  it("sends explicit shared password on insecure first connect without cached device fallback", async () => {
+    stubInsecureCrypto();
+    const client = new GatewayBrowserClient({
+      url: "ws://gateway.example:18789",
+      password: "shared-password", // pragma: allowlist secret
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-1" },
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+
+    const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
+      id?: string;
+      method?: string;
+      params?: { auth?: { token?: string; password?: string; deviceToken?: string } };
+    };
+    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.auth).toEqual({
+      token: undefined,
+      password: "shared-password", // pragma: allowlist secret
+      deviceToken: undefined,
+    });
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+    expect(signDevicePayloadMock).not.toHaveBeenCalled();
   });
 
   it("uses cached device tokens only when no explicit shared auth is provided", async () => {

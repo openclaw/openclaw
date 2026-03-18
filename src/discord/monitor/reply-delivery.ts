@@ -336,6 +336,18 @@ export async function deliverDiscordReply(params: {
     if (!firstMedia) {
       continue;
     }
+    const sendRemainingMedia = () =>
+      sendAdditionalDiscordMedia({
+        cfg: params.cfg,
+        target: params.target,
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        mediaUrls: mediaList.slice(1),
+        mediaLocalRoots: params.mediaLocalRoots,
+        resolveReplyTo,
+        retryConfig,
+      });
 
     // Voice message path: audioAsVoice flag routes through sendVoiceMessageDiscord.
     if (payload.audioAsVoice) {
@@ -367,17 +379,7 @@ export async function deliverDiscordReply(params: {
         retryConfig,
       });
       // Additional media items are sent as regular attachments (voice is single-file only).
-      await sendAdditionalDiscordMedia({
-        cfg: params.cfg,
-        target: params.target,
-        token: params.token,
-        rest: params.rest,
-        accountId: params.accountId,
-        mediaUrls: mediaList.slice(1),
-        mediaLocalRoots: params.mediaLocalRoots,
-        resolveReplyTo,
-        retryConfig,
-      });
+      await sendRemainingMedia();
       continue;
     }
 
@@ -392,17 +394,7 @@ export async function deliverDiscordReply(params: {
       replyTo,
     });
     deliveredAny = true;
-    await sendAdditionalDiscordMedia({
-      cfg: params.cfg,
-      target: params.target,
-      token: params.token,
-      rest: params.rest,
-      accountId: params.accountId,
-      mediaUrls: mediaList.slice(1),
-      mediaLocalRoots: params.mediaLocalRoots,
-      resolveReplyTo,
-      retryConfig,
-    });
+    await sendRemainingMedia();
   }
 
   if (binding && deliveredAny) {

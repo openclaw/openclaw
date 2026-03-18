@@ -59,6 +59,55 @@ function makeModelsResponse(id: string): Response {
   );
 }
 
+type ModelSpecOverride = {
+  id: string;
+  availableContextTokens?: number;
+  maxCompletionTokens?: number;
+  capabilities?: {
+    supportsReasoning?: boolean;
+    supportsVision?: boolean;
+    supportsFunctionCalling?: boolean;
+  };
+  includeModelSpec?: boolean;
+};
+
+function makeModelRow(params: ModelSpecOverride) {
+  if (params.includeModelSpec === false) {
+    return { id: params.id };
+  }
+  return {
+    id: params.id,
+    model_spec: {
+      name: params.id,
+      privacy: "private",
+      ...(params.availableContextTokens === undefined
+        ? {}
+        : { availableContextTokens: params.availableContextTokens }),
+      ...(params.maxCompletionTokens === undefined
+        ? {}
+        : { maxCompletionTokens: params.maxCompletionTokens }),
+      ...(params.capabilities === undefined ? {} : { capabilities: params.capabilities }),
+    },
+  };
+}
+
+function stubVeniceModelsFetch(rows: ModelSpecOverride[]) {
+  const fetchMock = vi.fn(
+    async () =>
+      new Response(
+        JSON.stringify({
+          data: rows.map((row) => makeModelRow(row)),
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+  );
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  return fetchMock;
+}
+
 describe("venice-models", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -96,34 +145,18 @@ describe("venice-models", () => {
   });
 
   it("uses API maxCompletionTokens for catalog models when present", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            data: [
-              {
-                id: "llama-3.3-70b",
-                model_spec: {
-                  name: "llama-3.3-70b",
-                  privacy: "private",
-                  availableContextTokens: 131072,
-                  maxCompletionTokens: 2048,
-                  capabilities: {
-                    supportsReasoning: false,
-                    supportsVision: false,
-                    supportsFunctionCalling: true,
-                  },
-                },
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubVeniceModelsFetch([
+      {
+        id: "llama-3.3-70b",
+        availableContextTokens: 131072,
+        maxCompletionTokens: 2048,
+        capabilities: {
+          supportsReasoning: false,
+          supportsVision: false,
+          supportsFunctionCalling: true,
+        },
+      },
+    ]);
 
     const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const llama = models.find((m) => m.id === "llama-3.3-70b");
@@ -131,33 +164,17 @@ describe("venice-models", () => {
   });
 
   it("retains catalog maxTokens when the API omits maxCompletionTokens", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            data: [
-              {
-                id: "qwen3-235b-a22b-instruct-2507",
-                model_spec: {
-                  name: "qwen3-235b-a22b-instruct-2507",
-                  privacy: "private",
-                  availableContextTokens: 131072,
-                  capabilities: {
-                    supportsReasoning: false,
-                    supportsVision: false,
-                    supportsFunctionCalling: true,
-                  },
-                },
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubVeniceModelsFetch([
+      {
+        id: "qwen3-235b-a22b-instruct-2507",
+        availableContextTokens: 131072,
+        capabilities: {
+          supportsReasoning: false,
+          supportsVision: false,
+          supportsFunctionCalling: true,
+        },
+      },
+    ]);
 
     const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const qwen = models.find((m) => m.id === "qwen3-235b-a22b-instruct-2507");
@@ -172,34 +189,18 @@ describe("venice-models", () => {
   });
 
   it("uses a conservative bounded maxTokens value for new models", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            data: [
-              {
-                id: "new-model-2026",
-                model_spec: {
-                  name: "new-model-2026",
-                  privacy: "private",
-                  availableContextTokens: 50_000,
-                  maxCompletionTokens: 200_000,
-                  capabilities: {
-                    supportsReasoning: false,
-                    supportsVision: false,
-                    supportsFunctionCalling: false,
-                  },
-                },
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubVeniceModelsFetch([
+      {
+        id: "new-model-2026",
+        availableContextTokens: 50_000,
+        maxCompletionTokens: 200_000,
+        capabilities: {
+          supportsReasoning: false,
+          supportsVision: false,
+          supportsFunctionCalling: false,
+        },
+      },
+    ]);
 
     const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const newModel = models.find((m) => m.id === "new-model-2026");
@@ -209,33 +210,17 @@ describe("venice-models", () => {
   });
 
   it("caps new-model maxTokens to the fallback context window when API context is missing", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            data: [
-              {
-                id: "new-model-without-context",
-                model_spec: {
-                  name: "new-model-without-context",
-                  privacy: "private",
-                  maxCompletionTokens: 200_000,
-                  capabilities: {
-                    supportsReasoning: false,
-                    supportsVision: false,
-                    supportsFunctionCalling: true,
-                  },
-                },
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubVeniceModelsFetch([
+      {
+        id: "new-model-without-context",
+        maxCompletionTokens: 200_000,
+        capabilities: {
+          supportsReasoning: false,
+          supportsVision: false,
+          supportsFunctionCalling: true,
+        },
+      },
+    ]);
 
     const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const newModel = models.find((m) => m.id === "new-model-without-context");
@@ -244,37 +229,17 @@ describe("venice-models", () => {
   });
 
   it("ignores missing capabilities on partial metadata instead of aborting discovery", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            data: [
-              {
-                id: "llama-3.3-70b",
-                model_spec: {
-                  name: "llama-3.3-70b",
-                  privacy: "private",
-                  availableContextTokens: 131072,
-                  maxCompletionTokens: 2048,
-                },
-              },
-              {
-                id: "new-model-partial",
-                model_spec: {
-                  name: "new-model-partial",
-                  privacy: "private",
-                  maxCompletionTokens: 2048,
-                },
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubVeniceModelsFetch([
+      {
+        id: "llama-3.3-70b",
+        availableContextTokens: 131072,
+        maxCompletionTokens: 2048,
+      },
+      {
+        id: "new-model-partial",
+        maxCompletionTokens: 2048,
+      },
+    ]);
 
     const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const knownModel = models.find((m) => m.id === "llama-3.3-70b");
@@ -287,37 +252,19 @@ describe("venice-models", () => {
   });
 
   it("keeps known models discoverable when a row omits model_spec", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            data: [
-              {
-                id: "llama-3.3-70b",
-              },
-              {
-                id: "new-model-valid",
-                model_spec: {
-                  name: "new-model-valid",
-                  privacy: "private",
-                  availableContextTokens: 32_000,
-                  maxCompletionTokens: 2_048,
-                  capabilities: {
-                    supportsReasoning: false,
-                    supportsVision: false,
-                    supportsFunctionCalling: true,
-                  },
-                },
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
-    );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    stubVeniceModelsFetch([
+      { id: "llama-3.3-70b", includeModelSpec: false },
+      {
+        id: "new-model-valid",
+        availableContextTokens: 32_000,
+        maxCompletionTokens: 2_048,
+        capabilities: {
+          supportsReasoning: false,
+          supportsVision: false,
+          supportsFunctionCalling: true,
+        },
+      },
+    ]);
 
     const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
     const knownModel = models.find((m) => m.id === "llama-3.3-70b");
