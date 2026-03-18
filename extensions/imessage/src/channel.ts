@@ -7,7 +7,7 @@ import {
   formatTrimmedAllowFromEntries,
   normalizeIMessageMessagingTarget,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/imessage";
+} from "../runtime-api.js";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";

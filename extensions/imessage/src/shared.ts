@@ -10,7 +10,7 @@ import {
   getChatChannelMeta,
   IMessageConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/imessage-core";
+} from "../runtime-api.js";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
