@@ -5,9 +5,10 @@ import {
   type MarkdownTableMode,
   type MSTeamsReplyStyle,
   type ReplyPayload,
+  resolveOutboundMediaUrls,
   SILENT_REPLY_TOKEN,
   sleep,
-} from "openclaw/plugin-sdk/msteams";
+} from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
@@ -216,7 +217,7 @@ export function renderReplyPayloadsToMessages(
     });
 
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList = resolveOutboundMediaUrls(payload);
     const text = getMSTeamsRuntime().channel.text.convertMarkdownTables(
       payload.text ?? "",
       tableMode,

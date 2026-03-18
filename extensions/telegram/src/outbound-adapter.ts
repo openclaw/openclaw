@@ -1,10 +1,14 @@
 import {
   resolvePayloadMediaUrls,
-  sendPayloadMediaSequence,
+  sendPayloadMediaSequenceOrFallback,
 } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveInteractiveTextFallback } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
+import { resolveInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
@@ -75,17 +79,16 @@ export async function sendTelegramPayloadMessages(params: {
     quoteText,
   };
 
-  if (mediaUrls.length === 0) {
-    return await params.send(params.to, text, {
-      ...payloadOpts,
-      buttons,
-    });
-  }
-
   // Telegram allows reply_markup on media; attach buttons only to the first send.
-  const finalResult = await sendPayloadMediaSequence({
+  return await sendPayloadMediaSequenceOrFallback({
     text,
     mediaUrls,
+    fallbackResult: { messageId: "unknown", chatId: params.to },
+    sendNoMedia: async () =>
+      await params.send(params.to, text, {
+        ...payloadOpts,
+        buttons,
+      }),
     send: async ({ text, mediaUrl, isFirst }) =>
       await params.send(params.to, text, {
         ...payloadOpts,
@@ -93,7 +96,6 @@ export async function sendTelegramPayloadMessages(params: {
         ...(isFirst ? { buttons } : {}),
       }),
   });
-  return finalResult ?? { messageId: "unknown", chatId: params.to };
 }
 
 export const telegramOutbound: ChannelOutboundAdapter = {
@@ -104,46 +106,47 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
   resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
     typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
-  sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId }) => {
-    const { send, baseOpts } = resolveTelegramSendContext({
+  ...createAttachedChannelResultAdapter({
+    channel: "telegram",
+    sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId }) => {
+      const { send, baseOpts } = resolveTelegramSendContext({
+        cfg,
+        deps,
+        accountId,
+        replyToId,
+        threadId,
+      });
+      return await send(to, text, {
+        ...baseOpts,
+      });
+    },
+    sendMedia: async ({
       cfg,
-      deps,
-      accountId,
-      replyToId,
-      threadId,
-    });
-    const result = await send(to, text, {
-      ...baseOpts,
-    });
-    return { channel: "telegram", ...result };
-  },
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    mediaLocalRoots,
-    accountId,
-    deps,
-    replyToId,
-    threadId,
-    forceDocument,
-  }) => {
-    const { send, baseOpts } = resolveTelegramSendContext({
-      cfg,
-      deps,
-      accountId,
-      replyToId,
-      threadId,
-    });
-    const result = await send(to, text, {
-      ...baseOpts,
+      to,
+      text,
       mediaUrl,
       mediaLocalRoots,
-      forceDocument: forceDocument ?? false,
-    });
-    return { channel: "telegram", ...result };
-  },
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      forceDocument,
+    }) => {
+      const { send, baseOpts } = resolveTelegramSendContext({
+        cfg,
+        deps,
+        accountId,
+        replyToId,
+        threadId,
+      });
+      return await send(to, text, {
+        ...baseOpts,
+        mediaUrl,
+        mediaLocalRoots,
+        forceDocument: forceDocument ?? false,
+      });
+    },
+  }),
   sendPayload: async ({
     cfg,
     to,
@@ -172,6 +175,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
         forceDocument: forceDocument ?? false,
       },
     });
-    return { channel: "telegram", ...result };
+    return attachChannelToResult("telegram", result);
   },
 };

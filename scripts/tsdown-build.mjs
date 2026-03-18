@@ -5,6 +5,24 @@ import { spawnSync } from "node:child_process";
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const extraArgs = process.argv.slice(2);
 const INEFFECTIVE_DYNAMIC_IMPORT_RE = /\[INEFFECTIVE_DYNAMIC_IMPORT\]/;
+const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
+const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
+
+function findFatalUnresolvedImport(lines) {
+  for (const line of lines) {
+    if (!UNRESOLVED_IMPORT_RE.test(line)) {
+      continue;
+    }
+
+    const normalizedLine = line.replace(ANSI_ESCAPE_RE, "");
+    if (!normalizedLine.includes("extensions/")) {
+      return normalizedLine;
+    }
+  }
+
+  return null;
+}
+
 const result = spawnSync(
   "pnpm",
   ["exec", "tsdown", "--config-loader", "unrun", "--logLevel", logLevel, ...extraArgs],
@@ -28,6 +46,14 @@ if (result.status === 0 && INEFFECTIVE_DYNAMIC_IMPORT_RE.test(`${stdout}\n${stde
   console.error(
     "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
   );
+  process.exit(1);
+}
+
+const fatalUnresolvedImport =
+  result.status === 0 ? findFatalUnresolvedImport(`${stdout}\n${stderr}`.split("\n")) : null;
+
+if (fatalUnresolvedImport) {
+  console.error(`Build emitted [UNRESOLVED_IMPORT] outside extensions: ${fatalUnresolvedImport}`);
   process.exit(1);
 }
 

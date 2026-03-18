@@ -9,8 +9,8 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "openclaw/plugin-sdk/whatsapp";
 import { hasWebCredsSync } from "./auth-store.js";
+import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "./runtime-api.js";
 
 export type ResolvedWhatsAppAccount = {
   accountId: string;
@@ -18,6 +18,7 @@ export type ResolvedWhatsAppAccount = {
   enabled: boolean;
   sendReadReceipts: boolean;
   messagePrefix?: string;
+  defaultTo?: string;
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
@@ -135,6 +136,7 @@ export function resolveWhatsAppAccount(params: {
     sendReadReceipts: accountCfg?.sendReadReceipts ?? rootCfg?.sendReadReceipts ?? true,
     messagePrefix:
       accountCfg?.messagePrefix ?? rootCfg?.messagePrefix ?? params.cfg.messages?.messagePrefix,
+    defaultTo: accountCfg?.defaultTo ?? rootCfg?.defaultTo,
     authDir,
     isLegacyAuthDir: isLegacy,
     selfChatMode: accountCfg?.selfChatMode ?? rootCfg?.selfChatMode,
