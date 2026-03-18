@@ -7,7 +7,10 @@ import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeMedia(): PluginRuntime["media"] {
   return {
-    loadWebMedia,
+    loadWebMedia: async (...args) => {
+      const { loadWebMedia } = await import("./runtime-media-loader.runtime.js");
+      return await loadWebMedia(...args);
+    },
     detectMime,
     mediaKindFromMime,
     isVoiceCompatibleAudio,
