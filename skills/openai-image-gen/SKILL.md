@@ -14,6 +14,7 @@ metadata:
             {
               "id": "python-brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "python",
               "bins": ["python3"],
               "label": "Install Python (brew)",

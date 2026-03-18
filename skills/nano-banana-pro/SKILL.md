@@ -14,6 +14,7 @@ metadata:
             {
               "id": "uv-brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "uv",
               "bins": ["uv"],
               "label": "Install uv (brew)",

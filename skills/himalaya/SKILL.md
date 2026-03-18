@@ -13,6 +13,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "himalaya",
               "bins": ["himalaya"],
               "label": "Install Himalaya (brew)",

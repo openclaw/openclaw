@@ -13,6 +13,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "1password-cli",
               "bins": ["op"],
               "label": "Install 1Password CLI (brew)",

@@ -13,6 +13,7 @@ metadata:
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin", "linux"],
               "formula": "steipete/tap/gifgrep",
               "bins": ["gifgrep"],
               "label": "Install gifgrep (brew)",
