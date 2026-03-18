@@ -4,7 +4,6 @@ import {
   createThreadBindingManager as createDiscordThreadBindingManager,
 } from "../../../../extensions/discord/runtime-api.js";
 import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
-import { setMatrixRuntime } from "../../../../extensions/matrix/index.js";
 import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -205,12 +204,6 @@ bundledChannelRuntimeSetters.setLineRuntime({
       resolveLineAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
         resolveLineAccount({ cfg, accountId }),
     },
-  },
-} as never);
-
-setMatrixRuntime({
-  state: {
-    resolveStateDir: (_env: unknown, homeDir?: () => string) => (homeDir ?? (() => "/tmp"))(),
   },
 } as never);
 
@@ -583,25 +576,6 @@ export const threadingContractRegistry: ThreadingContractEntry[] = surfaceContra
   }));
 
 const directoryPresenceOnlyIds = new Set(["whatsapp", "zalouser"]);
-const matrixDirectoryCfg = {
-  channels: {
-    matrix: {
-      enabled: true,
-      homeserver: "https://matrix.example.com",
-      userId: "@lobster:example.com",
-      accessToken: "matrix-access-token",
-      dm: {
-        allowFrom: ["matrix:@alice:example.com"],
-      },
-      groupAllowFrom: ["matrix:@team:example.com"],
-      groups: {
-        "!room:example.com": {
-          users: ["matrix:@alice:example.com"],
-        },
-      },
-    },
-  },
-} as OpenClawConfig;
 
 export const directoryContractRegistry: DirectoryContractEntry[] = surfaceContractRegistry
   .filter((entry) => entry.surfaces.includes("directory"))
@@ -609,7 +583,6 @@ export const directoryContractRegistry: DirectoryContractEntry[] = surfaceContra
     id: entry.id,
     plugin: entry.plugin,
     coverage: directoryPresenceOnlyIds.has(entry.id) ? "presence" : "lookups",
-    ...(entry.id === "matrix" ? { cfg: matrixDirectoryCfg } : {}),
   }));
 
 const baseSessionBindingCfg = {
