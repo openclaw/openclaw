@@ -1,24 +1,12 @@
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
-import type { ChannelAccountSnapshot, ChannelPlugin } from "openclaw/plugin-sdk/bluebubbles";
 import {
-  buildChannelConfigSchema,
-  buildComputedAccountStatusSnapshot,
-  buildProbeChannelStatusSummary,
-  collectBlueBubblesStatusIssues,
-  DEFAULT_ACCOUNT_ID,
-  deleteAccountFromConfigSection,
-  PAIRING_APPROVED_MESSAGE,
-  resolveBlueBubblesGroupRequireMention,
-  resolveBlueBubblesGroupToolPolicy,
-  setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk/bluebubbles";
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+  createScopedAccountConfigAccessors,
+  createScopedChannelConfigBase,
+  createScopedDmSecurityResolver,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
-import {
-  buildAccountScopedDmSecurityPolicy,
-  collectOpenGroupPolicyRestrictSendersWarnings,
-} from "openclaw/plugin-sdk/channel-policy";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
+import { collectOpenGroupPolicyRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
@@ -28,6 +16,17 @@ import {
 import { bluebubblesMessageActions } from "./actions.js";
 import type { BlueBubblesProbe } from "./channel.runtime.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "./runtime-api.js";
+import {
+  buildChannelConfigSchema,
+  buildComputedAccountStatusSnapshot,
+  buildProbeChannelStatusSummary,
+  collectBlueBubblesStatusIssues,
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+  resolveBlueBubblesGroupRequireMention,
+  resolveBlueBubblesGroupToolPolicy,
+} from "./runtime-api.js";
 import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
 import {
@@ -38,12 +37,36 @@ import {
   parseBlueBubblesTarget,
 } from "./targets.js";
 
-type BlueBubblesChannelRuntime = typeof import("./channel.runtime.js").blueBubblesChannelRuntime;
-
-const loadBlueBubblesChannelRuntime = createLazyRuntimeSurface(
+const loadBlueBubblesChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
-  ({ blueBubblesChannelRuntime }) => blueBubblesChannelRuntime,
+  "blueBubblesChannelRuntime",
 );
+
+const bluebubblesConfigAccessors = createScopedAccountConfigAccessors({
+  resolveAccount: ({ cfg, accountId }) => resolveBlueBubblesAccount({ cfg, accountId }),
+  resolveAllowFrom: (account: ResolvedBlueBubblesAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) =>
+    formatNormalizedAllowFromEntries({
+      allowFrom,
+      normalizeEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
+    }),
+});
+
+const bluebubblesConfigBase = createScopedChannelConfigBase<ResolvedBlueBubblesAccount>({
+  sectionKey: "bluebubbles",
+  listAccountIds: listBlueBubblesAccountIds,
+  resolveAccount: (cfg, accountId) => resolveBlueBubblesAccount({ cfg, accountId }),
+  defaultAccountId: resolveDefaultBlueBubblesAccountId,
+  clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
+});
+
+const resolveBlueBubblesDmPolicy = createScopedDmSecurityResolver<ResolvedBlueBubblesAccount>({
+  channelKey: "bluebubbles",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  normalizeEntry: (raw) => normalizeBlueBubblesHandle(raw.replace(/^bluebubbles:/i, "")),
+});
 
 const meta = {
   id: "bluebubbles",
@@ -87,24 +110,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
   setupWizard: blueBubblesSetupWizard,
   config: {
-    listAccountIds: (cfg) => listBlueBubblesAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveBlueBubblesAccount({ cfg: cfg, accountId }),
-    defaultAccountId: (cfg) => resolveDefaultBlueBubblesAccountId(cfg),
-    setAccountEnabled: ({ cfg, accountId, enabled }) =>
-      setAccountEnabledInConfigSection({
-        cfg: cfg,
-        sectionKey: "bluebubbles",
-        accountId,
-        enabled,
-        allowTopLevel: true,
-      }),
-    deleteAccount: ({ cfg, accountId }) =>
-      deleteAccountFromConfigSection({
-        cfg: cfg,
-        sectionKey: "bluebubbles",
-        accountId,
-        clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
-      }),
+    ...bluebubblesConfigBase,
     isConfigured: (account) => account.configured,
     describeAccount: (account): ChannelAccountSnapshot => ({
       accountId: account.accountId,
@@ -113,28 +119,11 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       configured: account.configured,
       baseUrl: account.baseUrl,
     }),
-    resolveAllowFrom: ({ cfg, accountId }) =>
-      mapAllowFromEntries(resolveBlueBubblesAccount({ cfg: cfg, accountId }).config.allowFrom),
-    formatAllowFrom: ({ allowFrom }) =>
-      formatNormalizedAllowFromEntries({
-        allowFrom,
-        normalizeEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
-      }),
+    ...bluebubblesConfigAccessors,
   },
   actions: bluebubblesMessageActions,
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "bluebubbles",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dmPolicy,
-        allowFrom: account.config.allowFrom ?? [],
-        policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) => normalizeBlueBubblesHandle(raw.replace(/^bluebubbles:/i, "")),
-      });
-    },
+    resolveDmPolicy: resolveBlueBubblesDmPolicy,
     collectWarnings: ({ account }) => {
       const groupPolicy = account.config.groupPolicy ?? "allowlist";
       return collectOpenGroupPolicyRestrictSendersWarnings({
