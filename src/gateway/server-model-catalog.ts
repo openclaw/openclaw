@@ -21,5 +21,7 @@ export async function loadGatewayModelCatalog(): Promise<GatewayModelChoice[]> {
 export async function refreshGatewayModelCatalog(
   config: OpenClawConfig,
 ): Promise<GatewayModelChoice[]> {
+  // `useCache: false` clears the previous module-scoped promise before rebuilding it,
+  // so the refreshed result becomes the new warm cache for subsequent gateway reads.
   return await loadModelCatalog({ config, useCache: false });
 }

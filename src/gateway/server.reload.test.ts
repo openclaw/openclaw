@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
+import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
@@ -240,6 +242,7 @@ describe("gateway hot reload", () => {
       models: {
         providers: {
           openai: {
+            api: "openai-responses",
             baseUrl: "https://api.openai.com/v1",
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             models: modelIds.map((id) => ({
@@ -698,11 +701,11 @@ describe("gateway hot reload", () => {
         "gpt-hot-b",
       );
 
-      await writeOpenAiModelsConfig(["gpt-hot-a", "gpt-hot-b"]);
       const nextConfig = {
         models: {
           providers: {
             openai: {
+              api: "openai-responses",
               baseUrl: "https://api.openai.com/v1",
               apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
               models: [
@@ -732,6 +735,16 @@ describe("gateway hot reload", () => {
         },
         nextConfig,
       );
+
+      expect(loadConfig().models?.providers?.openai?.models?.map((model) => model.id)).toContain(
+        "gpt-hot-b",
+      );
+      const directCatalog = await loadModelCatalog({ config: loadConfig(), useCache: false });
+      expect(directCatalog.map((model) => model.id)).toContain("gpt-hot-b");
+
+      const listReloaded = await rpcReq<{ models: Array<{ id: string }> }>(ws, "models.list");
+      expect(listReloaded.ok).toBe(true);
+      expect(listReloaded.payload?.models.map((model) => model.id)).toContain("gpt-hot-b");
 
       const reloadedModelsJson = JSON.parse(await fs.readFile(modelsPath, "utf8")) as {
         providers?: {

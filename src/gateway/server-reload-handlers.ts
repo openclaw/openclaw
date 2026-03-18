@@ -84,7 +84,11 @@ export function createGatewayReloadHandlers(params: {
     resetDirectoryCache();
 
     if (shouldRefreshGatewayModelCatalog(plan)) {
-      await refreshGatewayModelCatalog(nextConfig);
+      try {
+        await refreshGatewayModelCatalog(nextConfig);
+      } catch (err) {
+        params.logReload.warn(`model catalog refresh failed during hot reload: ${String(err)}`);
+      }
     }
 
     if (plan.restartCron) {
