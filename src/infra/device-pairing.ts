@@ -470,7 +470,7 @@ export async function updatePairedDeviceMetadata(
     }
     const roles = mergeRoles(existing.roles, existing.role, patch.role);
     const scopes = mergeScopes(existing.scopes, patch.scopes);
-    state.pairedByDeviceId[deviceId] = {
+    state.pairedByDeviceId[existing.deviceId] = {
       ...existing,
       ...patch,
       deviceId: existing.deviceId,
