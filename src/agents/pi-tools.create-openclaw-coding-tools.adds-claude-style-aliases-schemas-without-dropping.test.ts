@@ -453,6 +453,42 @@ describe("createOpenClawCodingTools", () => {
       expect(violations).toEqual([]);
     }
   });
+  it("compacts tool schemas for Kimi-compatible OpenAI models", () => {
+    const openAiTools = createOpenClawCodingTools({
+      modelProvider: "openai",
+      modelId: "gpt-5",
+      senderIsOwner: true,
+    });
+    const kimiTools = createOpenClawCodingTools({
+      modelProvider: "nvidia-nim",
+      modelId: "moonshotai/kimi-k2.5",
+      senderIsOwner: true,
+    });
+
+    const totalSchemaSize = (tools: Array<{ parameters: unknown }>) =>
+      tools.reduce((sum, tool) => sum + JSON.stringify(tool.parameters ?? {}).length, 0);
+
+    expect(totalSchemaSize(kimiTools)).toBeLessThan(totalSchemaSize(openAiTools));
+
+    const openAiSessionsSpawn = openAiTools.find((tool) => tool.name === "sessions_spawn");
+    const kimiSessionsSpawn = kimiTools.find((tool) => tool.name === "sessions_spawn");
+    expect(openAiSessionsSpawn).toBeDefined();
+    expect(kimiSessionsSpawn).toBeDefined();
+
+    const openAiParameters = openAiSessionsSpawn?.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const kimiParameters = kimiSessionsSpawn?.parameters as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(openAiParameters.properties?.resumeSessionId).toBeDefined();
+    expect(openAiParameters.properties?.attachments).toBeDefined();
+    expect(openAiParameters.properties?.attachAs).toBeDefined();
+    expect(kimiParameters.properties?.resumeSessionId).toBeUndefined();
+    expect(kimiParameters.properties?.attachments).toBeUndefined();
+    expect(kimiParameters.properties?.attachAs).toBeUndefined();
+  });
   it("applies sandbox path guards to file_path alias", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-"));
     const outsidePath = path.join(os.tmpdir(), "openclaw-outside.txt");

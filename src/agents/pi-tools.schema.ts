@@ -1,5 +1,6 @@
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
+import { compactToolSchemaForKimi, isKimiSchemaCompactionTarget } from "./schema/clean-for-kimi.js";
 import { isXaiProvider, stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
@@ -89,15 +90,20 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
   const isXai = isXaiProvider(options?.modelProvider, options?.modelId);
+  const isKimiSchemaTarget = isKimiSchemaCompactionTarget(options?.modelProvider, options?.modelId);
 
   function applyProviderCleaning(s: unknown): unknown {
+    let cleaned = s;
     if (isGeminiProvider && !isAnthropicProvider) {
-      return cleanSchemaForGemini(s);
+      cleaned = cleanSchemaForGemini(cleaned);
     }
     if (isXai) {
-      return stripXaiUnsupportedKeywords(s);
+      cleaned = stripXaiUnsupportedKeywords(cleaned);
     }
-    return s;
+    if (isKimiSchemaTarget) {
+      cleaned = compactToolSchemaForKimi(cleaned, { toolName: tool.name });
+    }
+    return cleaned;
   }
 
   // If schema already has type + properties (no top-level anyOf to merge),
