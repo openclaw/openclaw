@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = path.join(repoRoot, "src");
@@ -76,6 +77,18 @@ function resolveRelativeSpecifier(specifier, importerFile) {
 function normalizePluginSdkFamily(resolvedPath) {
   const relative = resolvedPath.replace(/^src\/plugin-sdk\//, "");
   return relative.replace(/\.(m|c)?[jt]sx?$/, "");
+}
+
+function resolveOptionalClusterFromPath(resolvedPath) {
+  if (resolvedPath.startsWith("extensions/")) {
+    const cluster = resolvedPath.split("/")[1];
+    return optionalBundledClusterSet.has(cluster) ? cluster : null;
+  }
+  if (resolvedPath.startsWith("src/plugin-sdk/")) {
+    const cluster = normalizePluginSdkFamily(resolvedPath).split("/")[0];
+    return optionalBundledClusterSet.has(cluster) ? cluster : null;
+  }
+  return null;
 }
 
 function compareImports(left, right) {
@@ -152,6 +165,79 @@ async function collectCorePluginSdkImports() {
   return inventory.toSorted(compareImports);
 }
 
+function collectOptionalClusterStaticImports(filePath, sourceFile) {
+  const entries = [];
+
+  function push(kind, specifierNode, specifier) {
+    if (!specifier.startsWith(".")) {
+      return;
+    }
+    const resolvedPath = resolveRelativeSpecifier(specifier, filePath);
+    if (!resolvedPath) {
+      return;
+    }
+    const cluster = resolveOptionalClusterFromPath(resolvedPath);
+    if (!cluster) {
+      return;
+    }
+    entries.push({
+      cluster,
+      file: normalizePath(filePath),
+      kind,
+      line: toLine(sourceFile, specifierNode),
+      resolvedPath,
+      specifier,
+    });
+  }
+
+  function visit(node) {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      push("import", node.moduleSpecifier, node.moduleSpecifier.text);
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      push("export", node.moduleSpecifier, node.moduleSpecifier.text);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return entries;
+}
+
+async function collectOptionalClusterStaticLeaks() {
+  const files = await walkCodeFiles(srcRoot);
+  const inventory = [];
+  for (const filePath of files) {
+    const relativePath = normalizePath(filePath);
+    if (relativePath.startsWith("src/plugin-sdk/")) {
+      continue;
+    }
+    const source = await fs.readFile(filePath, "utf8");
+    const scriptKind =
+      filePath.endsWith(".tsx") || filePath.endsWith(".jsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+    const sourceFile = ts.createSourceFile(
+      filePath,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      scriptKind,
+    );
+    inventory.push(...collectOptionalClusterStaticImports(filePath, sourceFile));
+  }
+  return inventory.toSorted((left, right) => {
+    return (
+      left.cluster.localeCompare(right.cluster) ||
+      left.file.localeCompare(right.file) ||
+      left.line - right.line ||
+      left.kind.localeCompare(right.kind) ||
+      left.specifier.localeCompare(right.specifier)
+    );
+  });
+}
+
 function buildDuplicatedSeamFamilies(inventory) {
   const grouped = new Map();
   for (const entry of inventory) {
@@ -207,6 +293,30 @@ function buildOverlapFiles(inventory) {
     });
 }
 
+function buildOptionalClusterStaticLeaks(inventory) {
+  const grouped = new Map();
+  for (const entry of inventory) {
+    const bucket = grouped.get(entry.cluster) ?? [];
+    bucket.push(entry);
+    grouped.set(entry.cluster, bucket);
+  }
+
+  return Object.fromEntries(
+    [...grouped.entries()]
+      .map(([cluster, entries]) => [
+        cluster,
+        {
+          count: entries.length,
+          files: [...new Set(entries.map((entry) => entry.file))].toSorted(compareStrings),
+          imports: entries,
+        },
+      ])
+      .toSorted((left, right) => {
+        return right[1].count - left[1].count || left[0].localeCompare(right[0]);
+      }),
+  );
+}
+
 function packageClusterMeta(relativePackagePath) {
   if (relativePackagePath === "ui/package.json") {
     return {
@@ -224,6 +334,35 @@ function packageClusterMeta(relativePackagePath) {
     reachability: relativePackagePath.startsWith("extensions/")
       ? "extension-workspace"
       : "workspace",
+  };
+}
+
+function classifyMissingPackageCluster(params) {
+  if (optionalBundledClusterSet.has(params.cluster)) {
+    if (params.cluster === "ui") {
+      return {
+        decision: "optional",
+        reason:
+          "Private UI workspace. Repo-wide CLI/plugin CI should not require UI-only packages.",
+      };
+    }
+    if (params.pluginSdkEntries.length > 0) {
+      return {
+        decision: "optional",
+        reason:
+          "Public plugin-sdk entry exists, but repo-wide default check/build should isolate this optional cluster from the static graph.",
+      };
+    }
+    return {
+      decision: "optional",
+      reason:
+        "Workspace package is intentionally not mirrored into the root dependency set by default CI policy.",
+    };
+  }
+  return {
+    decision: "required",
+    reason:
+      "Cluster is statically visible to repo-wide check/build and has not been classified optional.",
   };
 }
 
@@ -264,15 +403,27 @@ async function buildMissingPackages() {
       continue;
     }
     const meta = packageClusterMeta(relativePackagePath);
+    const rootDependencyMirrorAllowlist = (
+      pkg.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist ?? []
+    ).toSorted(compareStrings);
     const pluginSdkEntries = [...(pluginSdkReachability.get(meta.cluster) ?? new Set())].toSorted(
       compareStrings,
     );
+    const classification = classifyMissingPackageCluster({
+      cluster: meta.cluster,
+      pluginSdkEntries,
+    });
     output.push({
       cluster: meta.cluster,
+      decision: classification.decision,
+      decisionReason: classification.reason,
       packageName: pkg.name ?? meta.packageName,
       packagePath: relativePackagePath,
       npmSpec: pkg.openclaw?.install?.npmSpec ?? null,
       private: pkg.private === true,
+      rootDependencyMirrorAllowlist,
+      mirrorAllowlistMatchesMissing:
+        missing.join("\n") === rootDependencyMirrorAllowlist.join("\n"),
       pluginSdkReachability:
         pluginSdkEntries.length > 0 ? { staticEntryPoints: pluginSdkEntries } : undefined,
       missing,
@@ -286,9 +437,11 @@ async function buildMissingPackages() {
 
 await collectWorkspacePackagePaths();
 const inventory = await collectCorePluginSdkImports();
+const optionalClusterStaticLeaks = await collectOptionalClusterStaticLeaks();
 const result = {
   duplicatedSeamFamilies: buildDuplicatedSeamFamilies(inventory),
   overlapFiles: buildOverlapFiles(inventory),
+  optionalClusterStaticLeaks: buildOptionalClusterStaticLeaks(optionalClusterStaticLeaks),
   missingPackages: await buildMissingPackages(),
 };
 
