@@ -5,13 +5,13 @@ read_when:
 title: "Credits"
 ---
 
-# Credits
+# Credits and Acknowledgments
 
 ## The name
 
 OpenClaw = CLAW + TARDIS, because every space lobster needs a time and space machine.
 
-## Creators
+## Credits
 
 - **Peter Steinberger** ([@steipete](https://x.com/steipete)) - Creator, lobster whisperer
 - **Mario Zechner** ([@badlogicc](https://x.com/badlogicgames)) - Pi creator, security pen tester
