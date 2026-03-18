@@ -59,9 +59,11 @@ import {
   readTerminalSnapshotFromGatewayDedupe,
   setGatewayDedupeEntry,
   type AgentWaitTerminalSnapshot,
+  type AgentWaitUsageMeta,
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
@@ -99,6 +101,72 @@ async function runSessionResetFromAgent(params: {
   };
 }
 
+function buildUsageMetaFromRunResult(result: {
+  meta?: {
+    agentMeta?: {
+      provider?: string;
+      model?: string;
+      usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+      lastCallUsage?: { input?: number; output?: number };
+    };
+  };
+}): AgentWaitUsageMeta | undefined {
+  const agentMeta = result.meta?.agentMeta;
+  if (!agentMeta) {
+    return undefined;
+  }
+
+  const meta: AgentWaitUsageMeta = {};
+  let hasAnyField = false;
+
+  if (agentMeta.usage) {
+    const input = agentMeta.usage.input ?? 0;
+    const output = agentMeta.usage.output ?? 0;
+    if (input > 0 || output > 0) {
+      meta.usage = {
+        input,
+        output,
+        cacheRead: agentMeta.usage.cacheRead,
+        cacheWrite: agentMeta.usage.cacheWrite,
+      };
+      hasAnyField = true;
+    }
+  }
+
+  if (agentMeta.lastCallUsage) {
+    const input = agentMeta.lastCallUsage.input ?? 0;
+    const output = agentMeta.lastCallUsage.output ?? 0;
+    if (input > 0 || output > 0) {
+      meta.lastCallUsage = { input, output };
+      hasAnyField = true;
+    }
+  }
+
+  if (agentMeta.provider) {
+    meta.provider = agentMeta.provider;
+    hasAnyField = true;
+  }
+  if (agentMeta.model) {
+    meta.model = agentMeta.model;
+    hasAnyField = true;
+  }
+
+  // Estimate cost from accumulated usage when provider/model cost config is available.
+  if (meta.usage && agentMeta.provider && agentMeta.model) {
+    const costConfig = resolveModelCostConfig({
+      provider: agentMeta.provider,
+      model: agentMeta.model,
+      config: loadConfig(),
+    });
+    const costUsd = estimateUsageCost({ usage: meta.usage, cost: costConfig });
+    if (costUsd !== undefined) {
+      meta.costUsd = costUsd;
+    }
+  }
+
+  return hasAnyField ? meta : undefined;
+}
+
 function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
@@ -108,11 +176,13 @@ function dispatchAgentRunFromGateway(params: {
 }) {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
+      const meta = buildUsageMetaFromRunResult(result);
       const payload = {
         runId: params.runId,
         status: "ok" as const,
         summary: "completed",
         result,
+        meta,
       };
       setGatewayDedupeEntry({
         dedupe: params.context.dedupe,
@@ -738,6 +808,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         startedAt: cachedGatewaySnapshot.startedAt,
         endedAt: cachedGatewaySnapshot.endedAt,
         error: cachedGatewaySnapshot.error,
+        meta: cachedGatewaySnapshot.meta,
       });
       return;
     }
@@ -792,6 +863,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       startedAt: snapshot.startedAt,
       endedAt: snapshot.endedAt,
       error: snapshot.error,
+      meta: "meta" in snapshot ? (snapshot as AgentWaitTerminalSnapshot).meta : undefined,
     });
   },
 };
