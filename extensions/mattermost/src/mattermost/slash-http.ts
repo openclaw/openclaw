@@ -6,6 +6,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import {
   buildModelsProviderData,
   createReplyPrefixOptions,
@@ -17,7 +18,6 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
-import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
