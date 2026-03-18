@@ -1949,16 +1949,6 @@
                   "zh-CN/experiments/research/memory",
                   "zh-CN/experiments/proposals/model-config"
                 ]
-              },
-              {
-                "group": "重构方案",
-                "pages": [
-                  "zh-CN/refactor/clawnet",
-                  "zh-CN/refactor/exec-host",
-                  "zh-CN/refactor/outbound-session-mirroring",
-                  "zh-CN/refactor/plugin-sdk",
-                  "zh-CN/refactor/strict-config"
-                ]
               }
             ]
           },
