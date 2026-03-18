@@ -15,9 +15,7 @@ function splitCommandLine(value) {
       escaping = false;
       continue;
     }
-    if (ch === "\\" && quote === null) {
-      // Only treat backslash as an escape when completely unquoted.
-      // Inside double-quoted strings backslashes are literal (Windows paths).
+    if (ch === "\\" && quote !== "'") {
       escaping = true;
       continue;
     }
@@ -74,14 +72,19 @@ function decodePayload(argv) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Invalid MCP proxy payload");
   }
+  const mcpServers = Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [];
+  // Prefer pre-split parts to avoid re-parsing platform-specific command strings.
+  if (
+    parsed.targetCommandParts &&
+    typeof parsed.targetCommandParts.command === "string" &&
+    Array.isArray(parsed.targetCommandParts.args)
+  ) {
+    return { targetCommandParts: parsed.targetCommandParts, mcpServers };
+  }
   if (typeof parsed.targetCommand !== "string" || parsed.targetCommand.trim() === "") {
     throw new Error("MCP proxy payload missing targetCommand");
   }
-  const mcpServers = Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [];
-  return {
-    targetCommand: parsed.targetCommand,
-    mcpServers,
-  };
+  return { targetCommand: parsed.targetCommand, mcpServers };
 }
 
 function shouldInject(method) {
@@ -118,8 +121,9 @@ function rewriteLine(line, mcpServers) {
   }
 }
 
-const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
-const target = splitCommandLine(targetCommand);
+const { targetCommand, targetCommandParts, mcpServers } = decodePayload(process.argv.slice(2));
+// Use pre-split parts when available (avoids re-parsing platform-specific paths).
+const target = targetCommandParts ?? splitCommandLine(targetCommand);
 const child = spawn(target.command, target.args, {
   stdio: ["pipe", "pipe", "inherit"],
   env: process.env,

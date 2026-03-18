@@ -106,13 +106,64 @@ export async function resolveAcpxAgentCommand(params: {
   return overrides[normalizedAgent] ?? ACPX_BUILTIN_AGENT_COMMANDS[normalizedAgent] ?? params.agent;
 }
 
+/** Split a shell-style command string into command + args (POSIX quoting rules). */
+function splitCommandLineParts(value: string): { command: string; args: string[] } {
+  const parts: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+  let escaping = false;
+
+  for (const ch of value) {
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaping = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) {
+    parts.push(current);
+  }
+  if (parts.length === 0) {
+    throw new Error("Invalid agent command: empty command");
+  }
+  return { command: parts[0], args: parts.slice(1) };
+}
+
 export function buildMcpProxyAgentCommand(params: {
   targetCommand: string;
   mcpServers: AcpMcpServer[];
 }): string {
+  // Pre-split so mcp-proxy.mjs can spawn without re-parsing the command string.
+  // This avoids platform-specific quoting issues (e.g. Windows paths) in the proxy.
+  const targetCommandParts = splitCommandLineParts(params.targetCommand);
   const payload = Buffer.from(
     JSON.stringify({
       targetCommand: params.targetCommand,
+      targetCommandParts,
       mcpServers: params.mcpServers,
     }),
     "utf8",
