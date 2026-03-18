@@ -14,26 +14,25 @@ export const MODEL_APIS = [
 
 export type ModelApi = (typeof MODEL_APIS)[number];
 
-type SupportedOpenAICompatFields = Omit<
-  Pick<
-    OpenAICompletionsCompat,
-    | "supportsStore"
-    | "supportsDeveloperRole"
-    | "supportsReasoningEffort"
-    | "supportsUsageInStreaming"
-    | "supportsStrictMode"
-    | "maxTokensField"
-    | "thinkingFormat"
-    | "requiresToolResultName"
-    | "requiresAssistantAfterToolResult"
-    | "requiresThinkingAsText"
-  >,
-  "thinkingFormat"
-> & {
-  thinkingFormat?: "openai" | "zai" | "qwen" | "qwen-chat-template";
-};
+type SupportedOpenAICompatFields = Pick<
+  OpenAICompletionsCompat,
+  | "supportsStore"
+  | "supportsDeveloperRole"
+  | "supportsReasoningEffort"
+  | "supportsUsageInStreaming"
+  | "supportsStrictMode"
+  | "maxTokensField"
+  | "requiresToolResultName"
+  | "requiresAssistantAfterToolResult"
+  | "requiresThinkingAsText"
+>;
+
+type SupportedThinkingFormat =
+  | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
+  | "qwen-chat-template";
 
 export type ModelCompatConfig = SupportedOpenAICompatFields & {
+  thinkingFormat?: SupportedThinkingFormat;
   supportsTools?: boolean;
   toolSchemaProfile?: "xai";
   nativeWebSearchTool?: boolean;
