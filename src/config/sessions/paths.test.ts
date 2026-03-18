@@ -492,18 +492,56 @@ describe("isManagedSessionsDir", () => {
     }
   });
 
-  it("treats structurally managed custom per-agent roots as managed", async () => {
+  it("does not treat lookalike per-agent roots outside the configured template as managed", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-lookalike-root-"));
+    try {
+      const stateDir = path.join(tempDir, "state");
+      const lookalikeSessionsDir = path.join(tempDir, "archive", "agents", "main", "sessions");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(lookalikeSessionsDir, { recursive: true });
+
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      } as NodeJS.ProcessEnv;
+
+      const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =
+        await import("./paths.js");
+
+      expect(isManagedSessionsDir(lookalikeSessionsDir, env)).toBe(false);
+      expect(isManagedSessionStorePath(path.join(lookalikeSessionsDir, "sessions.json"), env)).toBe(
+        false,
+      );
+      expect(
+        isManagedSessionTranscriptPath(path.join(lookalikeSessionsDir, "sess-1.jsonl"), env),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats configured custom per-agent roots as managed", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-custom-root-"));
     try {
       const stateDir = path.join(tempDir, "state");
       const customRoot = path.join(tempDir, "custom-root");
       const customSessionsDir = path.join(customRoot, "agents", "main", "sessions");
+      const configPath = path.join(tempDir, "openclaw.json");
       fs.mkdirSync(stateDir, { recursive: true });
       fs.mkdirSync(customSessionsDir, { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          session: {
+            store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+        }),
+      );
 
       const env = {
         ...process.env,
         OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
       } as NodeJS.ProcessEnv;
 
       const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =
@@ -521,7 +559,46 @@ describe("isManagedSessionsDir", () => {
     }
   });
 
-  it("does not treat case-variant custom per-agent roots as managed", async () => {
+  it("treats configured session.store templates with {agentId} outside agents/<id>/sessions as managed", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-store-template-"));
+    try {
+      const stateDir = path.join(tempDir, "state");
+      const customRoot = path.join(tempDir, "custom-root");
+      const customSessionsDir = path.join(customRoot, "sessions", "main");
+      const configPath = path.join(tempDir, "openclaw.json");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(customSessionsDir, { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          session: {
+            store: path.join(customRoot, "sessions", "{agentId}", "sessions.json"),
+          },
+        }),
+      );
+
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+      } as NodeJS.ProcessEnv;
+
+      const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =
+        await import("./paths.js");
+
+      expect(isManagedSessionsDir(customSessionsDir, env)).toBe(true);
+      expect(isManagedSessionStorePath(path.join(customSessionsDir, "sessions.json"), env)).toBe(
+        true,
+      );
+      expect(
+        isManagedSessionTranscriptPath(path.join(customSessionsDir, "sess-1.jsonl"), env),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat case-variant custom per-agent roots as managed on case-sensitive filesystems", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -532,8 +609,20 @@ describe("isManagedSessionsDir", () => {
       const customRoot = path.join(tempDir, "custom-root");
       const canonicalCustomSessionsDir = path.join(customRoot, "agents", "ops", "sessions");
       const caseVariantCustomSessionsDir = path.join(customRoot, "agents", "Ops", "sessions");
+      const configPath = path.join(tempDir, "openclaw.json");
       fs.mkdirSync(stateDir, { recursive: true });
       fs.mkdirSync(canonicalCustomSessionsDir, { recursive: true });
+      if (fs.existsSync(path.join(customRoot, "AGENTS"))) {
+        return;
+      }
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          session: {
+            store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+        }),
+      );
 
       const realLstatSync = fs.lstatSync.bind(fs);
       vi.spyOn(fs, "lstatSync").mockImplementation((candidatePath) => {
@@ -547,6 +636,7 @@ describe("isManagedSessionsDir", () => {
       const env = {
         ...process.env,
         OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
       } as NodeJS.ProcessEnv;
 
       const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =

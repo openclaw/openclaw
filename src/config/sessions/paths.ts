@@ -5,6 +5,7 @@ import path from "node:path";
 import { sameFileIdentity } from "../../infra/file-identity.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { createConfigIO } from "../io.js";
 import { resolveStateDir } from "../paths.js";
 
 const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fs.constants;
@@ -24,6 +25,13 @@ type PinnedStateRootIdentity = {
   strictDirectoryIdentity: boolean;
   targetPath?: string;
   targetStat?: fs.Stats;
+};
+
+const QUIET_CONFIG_IO_LOGGER = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
 };
 
 function resolveAgentSessionsDir(
@@ -327,48 +335,27 @@ export function isManagedSessionsDir(
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): boolean {
   const resolvedSessionsDir = path.resolve(sessionsDir);
-  const agentDir = path.dirname(resolvedSessionsDir);
-  const agentId = path.basename(agentDir);
-  if (!agentId) {
-    return false;
-  }
-
-  const expectedSessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
-  const compareCaseInsensitively = shouldCompareManagedPathsCaseInsensitively(expectedSessionsDir);
-
+  const defaultManagedSessionsDir = resolveDefaultManagedSessionsDirCandidate(
+    resolvedSessionsDir,
+    env,
+    homedir,
+  );
   if (
-    !managedPathSegmentMatches(
-      path.basename(resolvedSessionsDir),
-      "sessions",
-      compareCaseInsensitively,
-    )
-  ) {
-    return false;
-  }
-
-  const agentsDir = path.dirname(agentDir);
-  if (!managedPathSegmentMatches(path.basename(agentsDir), "agents", compareCaseInsensitively)) {
-    return false;
-  }
-
-  if (
-    normalizeManagedPathForComparison(
-      resolveComparableManagedPath(resolvedSessionsDir),
-      compareCaseInsensitively,
-    ) ===
-    normalizeManagedPathForComparison(
-      resolveComparableManagedPath(expectedSessionsDir),
-      compareCaseInsensitively,
-    )
+    defaultManagedSessionsDir &&
+    matchesManagedSessionsDirCandidate(resolvedSessionsDir, defaultManagedSessionsDir)
   ) {
     return true;
   }
 
-  const normalizedAgentId = normalizeAgentId(agentId);
-  // Structured custom roots such as /srv/custom/agents/{agentId}/sessions
-  // are still per-agent managed stores even when they live outside OPENCLAW_STATE_DIR,
-  // but only when they keep the canonical normalized agent directory name.
-  return normalizedAgentId === agentId;
+  const configuredManagedSessionsDir = resolveConfiguredManagedSessionsDirCandidate(
+    resolvedSessionsDir,
+    env,
+    homedir,
+  );
+  return (
+    !!configuredManagedSessionsDir &&
+    matchesManagedSessionsDirCandidate(resolvedSessionsDir, configuredManagedSessionsDir)
+  );
 }
 
 export function isManagedSessionStorePath(
@@ -643,6 +630,159 @@ function normalizeManagedPathForComparison(
   compareCaseInsensitively: boolean,
 ): string {
   return compareCaseInsensitively ? filePath.toLowerCase() : filePath;
+}
+
+function matchesManagedSessionsDirCandidate(
+  sessionsDir: string,
+  expectedSessionsDir: string,
+): boolean {
+  const compareCaseInsensitively = shouldCompareManagedPathsCaseInsensitively(expectedSessionsDir);
+  return (
+    normalizeManagedPathForComparison(
+      resolveComparableManagedPath(sessionsDir),
+      compareCaseInsensitively,
+    ) ===
+    normalizeManagedPathForComparison(
+      resolveComparableManagedPath(expectedSessionsDir),
+      compareCaseInsensitively,
+    )
+  );
+}
+
+function resolveDefaultManagedSessionsDirCandidate(
+  sessionsDir: string,
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string | undefined {
+  const resolvedSessionsDir = path.resolve(sessionsDir);
+  const agentDir = path.dirname(resolvedSessionsDir);
+  const agentId = path.basename(agentDir);
+  if (!agentId) {
+    return undefined;
+  }
+
+  const expectedSessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
+  const compareCaseInsensitively = shouldCompareManagedPathsCaseInsensitively(expectedSessionsDir);
+  if (
+    !managedPathSegmentMatches(
+      path.basename(resolvedSessionsDir),
+      "sessions",
+      compareCaseInsensitively,
+    )
+  ) {
+    return undefined;
+  }
+
+  const agentsDir = path.dirname(agentDir);
+  if (!managedPathSegmentMatches(path.basename(agentsDir), "agents", compareCaseInsensitively)) {
+    return undefined;
+  }
+  return expectedSessionsDir;
+}
+
+function resolveConfiguredManagedSessionsDirCandidate(
+  sessionsDir: string,
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string | undefined {
+  const storeTemplate = loadManagedSessionStoreTemplate(env, homedir);
+  if (!storeTemplate) {
+    return undefined;
+  }
+
+  const configuredSessionsDirTemplate = path.dirname(storeTemplate);
+  const extractedAgentId = extractAgentIdFromConfiguredSessionsTemplate(
+    path.resolve(sessionsDir),
+    configuredSessionsDirTemplate,
+  );
+  if (!extractedAgentId) {
+    return undefined;
+  }
+
+  return path.dirname(
+    resolveStorePath(storeTemplate, {
+      agentId: normalizeAgentId(extractedAgentId),
+      env,
+    }),
+  );
+}
+
+function loadManagedSessionStoreTemplate(
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string | undefined {
+  let configuredStore: string | undefined;
+  try {
+    configuredStore = createConfigIO({
+      env,
+      homedir,
+      logger: QUIET_CONFIG_IO_LOGGER,
+    }).loadConfig().session?.store;
+  } catch {
+    return undefined;
+  }
+
+  const trimmedStore = configuredStore?.trim();
+  if (!trimmedStore || !trimmedStore.includes("{agentId}")) {
+    return undefined;
+  }
+
+  if (trimmedStore.startsWith("~")) {
+    return path.resolve(
+      expandHomePrefix(trimmedStore, {
+        home: resolveRequiredHomeDir(env, homedir),
+        env,
+        homedir,
+      }),
+    );
+  }
+  return path.resolve(trimmedStore);
+}
+
+function extractAgentIdFromConfiguredSessionsTemplate(
+  candidateSessionsDir: string,
+  configuredSessionsDirTemplate: string,
+): string | undefined {
+  const templateParts = configuredSessionsDirTemplate.split("{agentId}");
+  if (templateParts.length < 2) {
+    return undefined;
+  }
+
+  let cursor = 0;
+  let extractedAgentId: string | undefined;
+  for (let index = 0; index < templateParts.length; index++) {
+    const part = templateParts[index];
+    if (!candidateSessionsDir.startsWith(part, cursor)) {
+      return undefined;
+    }
+    cursor += part.length;
+
+    if (index === templateParts.length - 1) {
+      return cursor === candidateSessionsDir.length ? extractedAgentId : undefined;
+    }
+
+    const nextPart = templateParts[index + 1];
+    const nextPartIndex =
+      nextPart.length === 0
+        ? candidateSessionsDir.length
+        : candidateSessionsDir.indexOf(nextPart, cursor);
+    if (nextPartIndex < 0) {
+      return undefined;
+    }
+
+    const currentCapture = candidateSessionsDir.slice(cursor, nextPartIndex);
+    if (!currentCapture) {
+      return undefined;
+    }
+    if (extractedAgentId === undefined) {
+      extractedAgentId = currentCapture;
+    } else if (currentCapture !== extractedAgentId) {
+      return undefined;
+    }
+    cursor = nextPartIndex;
+  }
+
+  return undefined;
 }
 
 function resolvePathWithinSessionsDir(
