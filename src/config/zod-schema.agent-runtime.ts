@@ -277,6 +277,12 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    exa: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+      })
+      .strict()
+      .optional(),
     firecrawl: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),

@@ -17,6 +17,7 @@ describe("resolvePluginWebSearchProviders", () => {
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
       "google:gemini",
+      "exa:exa",
       "xai:grok",
       "moonshot:kimi",
       "perplexity:perplexity",
@@ -25,6 +26,7 @@ describe("resolvePluginWebSearchProviders", () => {
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
       "plugins.entries.brave.config.webSearch.apiKey",
       "plugins.entries.google.config.webSearch.apiKey",
+      "plugins.entries.exa.config.webSearch.apiKey",
       "plugins.entries.xai.config.webSearch.apiKey",
       "plugins.entries.moonshot.config.webSearch.apiKey",
       "plugins.entries.perplexity.config.webSearch.apiKey",
@@ -51,6 +53,7 @@ describe("resolvePluginWebSearchProviders", () => {
     expect(providers.map((provider) => provider.pluginId)).toEqual([
       "brave",
       "google",
+      "exa",
       "xai",
       "moonshot",
       "perplexity",

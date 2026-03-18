@@ -3,6 +3,7 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = [
   "brave",
+  "exa",
   "firecrawl",
   "google",
   "moonshot",

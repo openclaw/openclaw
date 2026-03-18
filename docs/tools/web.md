@@ -1,5 +1,5 @@
 ---
-summary: "Web search + fetch tools (Brave, Firecrawl, Gemini, Grok, Kimi, and Perplexity providers)"
+summary: "Web search + fetch tools (Brave, Exa, Firecrawl, Gemini, Grok, Kimi, and Perplexity providers)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need provider API key setup
@@ -11,7 +11,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web using Brave Search API, Firecrawl Search, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
+- `web_search` — Search the web using Brave Search API, Exa, Firecrawl Search, Gemini with Google Search grounding, Grok, Kimi, or Perplexity Search API.
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -33,6 +33,7 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 | Provider                  | Result shape                       | Provider-specific filters                                    | Notes                                                                          | API key                                     |
 | ------------------------- | ---------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------ | ------------------------------------------- |
 | **Brave Search API**      | Structured results with snippets   | `country`, `language`, `ui_lang`, time                       | Supports Brave `llm-context` mode                                              | `BRAVE_API_KEY`                             |
+| **Exa**                   | Structured results with snippets   | `type` (neural/keyword/auto), `contents`, time               | Neural search, highlights, text extraction                                     | `EXA_API_KEY`                               |
 | **Firecrawl Search**      | Structured results with snippets   | Use `firecrawl_search` for Firecrawl-specific search options | Best for pairing search with Firecrawl scraping/extraction                     | `FIRECRAWL_API_KEY`                         |
 | **Gemini**                | AI-synthesized answers + citations | —                                                            | Uses Google Search grounding                                                   | `GEMINI_API_KEY`                            |
 | **Grok**                  | AI-synthesized answers + citations | —                                                            | Uses xAI web-grounded responses                                                | `XAI_API_KEY`                               |
@@ -44,11 +45,12 @@ See [Brave Search setup](/brave-search) and [Perplexity Search setup](/perplexit
 The table above is alphabetical. If no `provider` is explicitly set, runtime auto-detection checks providers in this order:
 
 1. **Brave** — `BRAVE_API_KEY` env var or `plugins.entries.brave.config.webSearch.apiKey`
-2. **Gemini** — `GEMINI_API_KEY` env var or `plugins.entries.google.config.webSearch.apiKey`
-3. **Grok** — `XAI_API_KEY` env var or `plugins.entries.xai.config.webSearch.apiKey`
-4. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `plugins.entries.moonshot.config.webSearch.apiKey`
-5. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
-6. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `plugins.entries.firecrawl.config.webSearch.apiKey`
+2. **Exa** — `EXA_API_KEY` env var or `plugins.entries.exa.config.webSearch.apiKey`
+3. **Gemini** — `GEMINI_API_KEY` env var or `plugins.entries.google.config.webSearch.apiKey`
+4. **Grok** — `XAI_API_KEY` env var or `plugins.entries.xai.config.webSearch.apiKey`
+5. **Kimi** — `KIMI_API_KEY` / `MOONSHOT_API_KEY` env var or `plugins.entries.moonshot.config.webSearch.apiKey`
+6. **Perplexity** — `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or `plugins.entries.perplexity.config.webSearch.apiKey`
+7. **Firecrawl** — `FIRECRAWL_API_KEY` env var or `plugins.entries.firecrawl.config.webSearch.apiKey`
 
 If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
 
@@ -92,6 +94,7 @@ See [Perplexity Search API Docs](https://docs.perplexity.ai/guides/search-quicks
 **Via config:** run `openclaw configure --section web`. It stores the key under the provider-specific config path:
 
 - Brave: `plugins.entries.brave.config.webSearch.apiKey`
+- Exa: `plugins.entries.exa.config.webSearch.apiKey`
 - Firecrawl: `plugins.entries.firecrawl.config.webSearch.apiKey`
 - Gemini: `plugins.entries.google.config.webSearch.apiKey`
 - Grok: `plugins.entries.xai.config.webSearch.apiKey`
@@ -103,6 +106,7 @@ All of these fields also support SecretRef objects.
 **Via environment:** set provider env vars in the Gateway process environment:
 
 - Brave: `BRAVE_API_KEY`
+- Exa: `EXA_API_KEY`
 - Firecrawl: `FIRECRAWL_API_KEY`
 - Gemini: `GEMINI_API_KEY`
 - Grok: `XAI_API_KEY`
@@ -138,6 +142,34 @@ For a gateway install, put these in `~/.openclaw/.env` (or your service environm
   },
 }
 ```
+
+**Exa Search:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      exa: {
+        config: {
+          webSearch: {
+            apiKey: "YOUR_EXA_API_KEY", // optional if EXA_API_KEY is set // pragma: allowlist secret
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        provider: "exa",
+      },
+    },
+  },
+}
+```
+
+Exa supports neural, keyword, and auto search types. Use `contents.highlights` and `contents.text` for content extraction. See [Exa API docs](https://docs.exa.ai/) for details.
 
 **Firecrawl Search:**
 
@@ -321,6 +353,7 @@ Search the web using your configured provider.
 - `tools.web.search.enabled` must not be `false` (default: enabled)
 - API key for your chosen provider:
   - **Brave**: `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
+  - **Exa**: `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
   - **Firecrawl**: `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
   - **Gemini**: `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
   - **Grok**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`

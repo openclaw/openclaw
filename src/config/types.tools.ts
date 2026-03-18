@@ -485,6 +485,8 @@ export type ToolsConfig = {
       grok?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Kimi scoped config. */
       kimi?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Exa scoped config. */
+      exa?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
     };

@@ -163,7 +163,7 @@ export function normalizeToIsoDate(value: string): string | undefined {
 
 export function normalizeFreshness(
   value: string | undefined,
-  provider: "brave" | "perplexity",
+  provider: "brave" | "exa" | "perplexity",
 ): string | undefined {
   if (!value) {
     return undefined;
@@ -178,7 +178,7 @@ export function normalizeFreshness(
     return provider === "brave" ? lower : FRESHNESS_TO_RECENCY[lower];
   }
   if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
-    return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
+    return provider === "perplexity" || provider === "exa" ? lower : RECENCY_TO_FRESHNESS[lower];
   }
   if (provider === "brave") {
     const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
