@@ -39,6 +39,7 @@ Example config:
         isolatedSession: true, // optional: fresh session each run (no conversation history)
         // activeHours: { start: "08:00", end: "24:00" },
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
+        // preHook: { command: "curl -sf http://localhost:8080/healthz", timeoutSeconds: 10 },
       },
     },
   },
@@ -381,6 +382,34 @@ When enabled, heartbeats will also deliver a separate message prefixed
 is managing multiple sessions/codexes and you want to see why it decided to ping
 you — but it can also leak more internal detail than you want. Prefer keeping it
 off in group chats.
+
+## Pre-run hooks (optional)
+
+Gate heartbeat execution on a shell command that runs before each heartbeat turn.
+The command runs via `/bin/sh -c` with a configurable timeout (default: 30s).
+
+```json5
+{
+  agents: {
+    defaults: {
+      heartbeat: {
+        preHook: {
+          command: "curl -sf http://localhost:8080/healthz",
+          timeoutSeconds: 10,
+        },
+      },
+    },
+  },
+}
+```
+
+Exit code contract:
+
+- `0` — proceed with heartbeat
+- `10` — skip (not counted as a failure)
+- Any other — fail (logged as a warning)
+
+See [Pre-run hooks](/automation/cron-jobs#pre-run-hooks) for full details.
 
 ## Cost awareness
 

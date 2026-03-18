@@ -500,3 +500,64 @@ describe("normalizeCronJobPatch", () => {
     expect(schedule.staggerMs).toBe(30_000);
   });
 });
+
+describe("preHook normalization", () => {
+  const base = {
+    name: "hook test",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "hi" },
+  } as const;
+
+  it("passes through valid preHook", () => {
+    const normalized = normalizeCronJobCreate({
+      ...base,
+      preHook: { command: "echo ok", timeoutSeconds: 15 },
+    }) as unknown as Record<string, unknown>;
+    expect(normalized.preHook).toEqual({ command: "echo ok", timeoutSeconds: 15 });
+  });
+
+  it("clamps timeoutSeconds to positive integer", () => {
+    const normalized = normalizeCronJobCreate({
+      ...base,
+      preHook: { command: "check", timeoutSeconds: 0.5 },
+    }) as unknown as Record<string, unknown>;
+    const hook = normalized.preHook as Record<string, unknown>;
+    expect(hook.command).toBe("check");
+    expect(hook.timeoutSeconds).toBe(1);
+  });
+
+  it("null clears preHook via patch", () => {
+    const normalized = normalizeCronJobPatch({
+      preHook: null,
+    }) as unknown as Record<string, unknown>;
+    expect(normalized.preHook).toBeNull();
+  });
+
+  it("empty command clears preHook", () => {
+    const normalized = normalizeCronJobCreate({
+      ...base,
+      preHook: { command: "  " },
+    }) as unknown as Record<string, unknown>;
+    expect(normalized.preHook).toBeUndefined();
+  });
+
+  it("empty command in patch sets preHook to null", () => {
+    const normalized = normalizeCronJobPatch({
+      preHook: { command: "  " },
+    }) as unknown as Record<string, unknown>;
+    expect(normalized.preHook).toBeNull();
+  });
+
+  it("omits timeoutSeconds when not a number", () => {
+    const normalized = normalizeCronJobCreate({
+      ...base,
+      preHook: { command: "check", timeoutSeconds: "bad" },
+    }) as unknown as Record<string, unknown>;
+    const hook = normalized.preHook as Record<string, unknown>;
+    expect(hook.command).toBe("check");
+    expect(hook.timeoutSeconds).toBeUndefined();
+  });
+});

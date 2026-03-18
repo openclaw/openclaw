@@ -152,8 +152,12 @@ export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" |
   state?: Partial<CronJobState>;
 };
 
-export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">> & {
+export type CronJobPatch = Partial<
+  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload" | "preHook">
+> & {
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;
+  /** Set to null to clear an existing preHook. */
+  preHook?: { command: string; timeoutSeconds?: number } | null;
 };

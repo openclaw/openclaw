@@ -1,4 +1,4 @@
-{"generatedBy":"scripts/generate-config-doc-baseline.ts","recordType":"meta","totalPaths":5566}
+{"generatedBy":"scripts/generate-config-doc-baseline.ts","recordType":"meta","totalPaths":5572}
 {"recordType":"path","path":"acp","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"ACP","help":"ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.","hasChildren":true}
 {"recordType":"path","path":"acp.allowedAgents","kind":"core","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":["access"],"label":"ACP Allowed Agents","help":"Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.","hasChildren":true}
 {"recordType":"path","path":"acp.allowedAgents.*","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -141,6 +141,9 @@
 {"recordType":"path","path":"agents.defaults.heartbeat.isolatedSession","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.heartbeat.lightContext","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.heartbeat.model","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.defaults.heartbeat.preHook","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"agents.defaults.heartbeat.preHook.command","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.defaults.heartbeat.preHook.timeoutSeconds","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.heartbeat.prompt","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.heartbeat.session","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.heartbeat.suppressToolErrorWarnings","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["automation"],"label":"Heartbeat Suppress Tool Error Warnings","help":"Suppress tool error warning payloads during heartbeat runs.","hasChildren":false}
@@ -372,6 +375,9 @@
 {"recordType":"path","path":"agents.list.*.heartbeat.isolatedSession","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.heartbeat.lightContext","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.heartbeat.model","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.list.*.heartbeat.preHook","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"agents.list.*.heartbeat.preHook.command","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.list.*.heartbeat.preHook.timeoutSeconds","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.heartbeat.prompt","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.heartbeat.session","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.heartbeat.suppressToolErrorWarnings","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["automation"],"label":"Agent Heartbeat Suppress Tool Error Warnings","help":"Suppress tool error warning payloads during heartbeat runs.","hasChildren":false}

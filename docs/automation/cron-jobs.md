@@ -289,6 +289,33 @@ Prefixed targets like `telegram:...` / `telegram:group:...` are also accepted:
 
 - `telegram:group:-1001234567890:topic:123`
 
+### Pre-run hooks
+
+A pre-run hook lets you gate job execution on a shell command. The command runs
+via `/bin/sh -c` before the agent turn starts. Use it to check resource
+availability, network reachability, or any other precondition.
+
+```json5
+{
+  preHook: {
+    command: "curl -sf http://localhost:8080/healthz",
+    timeoutSeconds: 10, // default: 30
+  },
+}
+```
+
+**Exit code contract:**
+
+| Exit code | Behavior                                                                              |
+| --------- | ------------------------------------------------------------------------------------- |
+| `0`       | Proceed with agent execution                                                          |
+| `10`      | Skip this run (not counted as a failure; `consecutiveErrors` stays at 0)              |
+| Any other | Error (counted as a failure; increments `consecutiveErrors`, triggers backoff/alerts) |
+
+stdout and stderr are captured (capped at 64 KB) and logged for debugging.
+
+Set `preHook` to `null` in a patch to remove it from an existing job.
+
 ## JSON schema for tool calls
 
 Use these shapes when calling Gateway `cron.*` tools directly (agent tool calls or RPC).

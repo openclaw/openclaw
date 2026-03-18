@@ -406,6 +406,40 @@ export function normalizeCronJobInput(
     next.delivery = coerceDelivery(base.delivery);
   }
 
+  // Pre-hook normalization
+  if ("preHook" in base) {
+    if (isRecord(base.preHook)) {
+      const command = typeof base.preHook.command === "string" ? base.preHook.command.trim() : "";
+      if (command) {
+        const normalized: UnknownRecord = { command };
+        if (
+          typeof base.preHook.timeoutSeconds === "number" &&
+          Number.isFinite(base.preHook.timeoutSeconds)
+        ) {
+          normalized.timeoutSeconds = Math.min(
+            300,
+            Math.max(1, Math.floor(base.preHook.timeoutSeconds)),
+          );
+        }
+        next.preHook = normalized;
+      } else {
+        // Empty command clears the hook.
+        // For create (applyDefaults=true): use delete — cron.add schema only accepts object, not null.
+        // For patch (applyDefaults=false): use null so applyJobPatch sees the key and clears the existing hook.
+        if (options.applyDefaults) {
+          delete next.preHook;
+        } else {
+          next.preHook = null;
+        }
+      }
+    } else if (base.preHook === null) {
+      // Explicit null from a patch clears the hook.
+      next.preHook = null;
+    } else if (base.preHook === undefined) {
+      delete next.preHook;
+    }
+  }
+
   if ("isolation" in next) {
     delete next.isolation;
   }

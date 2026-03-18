@@ -261,6 +261,15 @@ export const CronJobSchema = Type.Object(
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+    preHook: Type.Optional(
+      Type.Object(
+        {
+          command: NonEmptyString,
+          timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     state: CronJobStateSchema,
   },
   { additionalProperties: false },
@@ -291,6 +300,15 @@ export const CronAddParamsSchema = Type.Object(
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+    preHook: Type.Optional(
+      Type.Object(
+        {
+          command: NonEmptyString,
+          timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -305,6 +323,18 @@ export const CronJobPatchSchema = Type.Object(
     payload: Type.Optional(CronPayloadPatchSchema),
     delivery: Type.Optional(CronDeliveryPatchSchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+    preHook: Type.Optional(
+      Type.Union([
+        Type.Object(
+          {
+            command: NonEmptyString,
+            timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Null(),
+      ]),
+    ),
     state: Type.Optional(Type.Partial(CronJobStateSchema)),
   },
   { additionalProperties: false },

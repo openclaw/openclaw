@@ -1646,6 +1646,36 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.heartbeat.preHook",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.heartbeat.preHook.command",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.defaults.heartbeat.preHook.timeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.heartbeat.prompt",
       "kind": "core",
       "type": "string",
@@ -4295,6 +4325,36 @@
       "path": "agents.list.*.heartbeat.model",
       "kind": "core",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.heartbeat.preHook",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.heartbeat.preHook.command",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.heartbeat.preHook.timeoutSeconds",
+      "kind": "core",
+      "type": "integer",
       "required": false,
       "deprecated": false,
       "sensitive": false,

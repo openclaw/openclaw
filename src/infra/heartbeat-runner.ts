@@ -527,6 +527,8 @@ export async function runHeartbeatOnce(opts: {
   heartbeat?: HeartbeatConfig;
   reason?: string;
   deps?: HeartbeatDeps;
+  /** Abort signal forwarded from cron job timeout to cancel pre-hook processes. */
+  abortSignal?: AbortSignal;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
   const explicitAgentId = typeof opts.agentId === "string" ? opts.agentId.trim() : "";
@@ -554,6 +556,24 @@ export async function runHeartbeatOnce(opts: {
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
   if (queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
+  }
+
+  // Pre-hook gate: run optional shell command before the heartbeat.
+  // Fall back to the resolved agent default preHook when the override omits it
+  // (e.g. cron wake-now passes partial heartbeat: { target: "last" }).
+  const resolvedHb = resolveHeartbeatConfig(cfg, agentId);
+  const preHookConfig = heartbeat?.preHook ?? resolvedHb?.preHook;
+  if (preHookConfig?.command) {
+    const { runPreHook } = await import("../cron/pre-hook.js");
+    const hookResult = await runPreHook(preHookConfig, opts.abortSignal);
+    if (hookResult.outcome === "skip") {
+      log.info("heartbeat: pre-hook returned skip");
+      return { status: "skipped", reason: "pre-hook-skip" };
+    }
+    if (hookResult.outcome === "error") {
+      log.warn(`heartbeat: pre-hook failed: ${hookResult.message}`);
+      return { status: "failed", reason: `pre-hook: ${hookResult.message}` };
+    }
   }
 
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
