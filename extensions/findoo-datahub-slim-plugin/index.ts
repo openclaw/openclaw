@@ -32,20 +32,15 @@ const findooDatahubSlimPlugin = {
   register(api: OpenClawPluginApi) {
     const config = resolveConfig(api);
 
-    if (!config.datahubApiKey) {
+    if (!config.apiKey) {
       api.log?.(
         "error",
         "findoo-datahub-slim: API key is required. Set DATAHUB_API_KEY env var or configure in Control UI → Plugins.",
       );
     }
 
-    const client = config.datahubApiKey
-      ? new DataHubClient(
-          config.datahubApiUrl,
-          config.datahubUsername,
-          config.datahubApiKey,
-          config.requestTimeoutMs,
-        )
+    const client = config.apiKey
+      ? new DataHubClient(config.gatewayUrl, config.apiKey, config.requestTimeoutMs)
       : null;
 
     const NO_KEY =

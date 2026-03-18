@@ -1,22 +1,23 @@
 import type { OHLCV, Ticker } from "./types.js";
 
 /**
- * Slim DataHub REST client — only price/ticker/crypto endpoints.
+ * Slim DataHub REST client via Gateway proxy.
+ * Uses Bearer token authentication (fch_<64-char-hex>).
+ * Gateway validates API key in Redis, then forwards to DataHub with Basic Auth.
  */
 export class DataHubClient {
   private authHeader: string;
 
   constructor(
-    private baseUrl: string,
-    username: string,
-    password: string,
+    private gatewayUrl: string,
+    apiKey: string,
     private timeoutMs: number,
   ) {
-    this.authHeader = `Basic ${btoa(`${username}:${password}`)}`;
+    this.authHeader = `Bearer ${apiKey}`;
   }
 
   async query(path: string, params?: Record<string, string>): Promise<unknown[]> {
-    const url = new URL(`${this.baseUrl}/api/v1/${path}`);
+    const url = new URL(`${this.gatewayUrl}/api/v1/${path}`);
     if (params) {
       for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     }
@@ -28,15 +29,15 @@ export class DataHubClient {
 
     if (resp.status === 204) return [];
     const text = await resp.text();
-    if (!resp.ok) throw new Error(`DataHub error (${resp.status}): ${text.slice(0, 300)}`);
+    if (!resp.ok) throw new Error(`Gateway error (${resp.status}): ${text.slice(0, 300)}`);
 
     let payload: { results?: unknown[]; detail?: string };
     try {
       payload = JSON.parse(text);
     } catch {
-      throw new Error(`DataHub returned non-JSON (${resp.status}): ${text.slice(0, 200)}`);
+      throw new Error(`Gateway returned non-JSON (${resp.status}): ${text.slice(0, 200)}`);
     }
-    if (payload.detail) throw new Error(`DataHub: ${payload.detail}`);
+    if (payload.detail) throw new Error(`Gateway: ${payload.detail}`);
     return payload.results ?? [];
   }
 
