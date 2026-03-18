@@ -10,6 +10,7 @@ import {
   resolveTimeoutSeconds,
   resolveWebSearchProviderCredential,
   setScopedCredentialValue,
+  type WebSearchProviderPlugin,
   withTrustedWebToolsEndpoint,
   wrapWebContent,
   writeCache,
@@ -200,7 +201,7 @@ async function runXaiWebSearch(params: {
   return payload;
 }
 
-export function createXaiWebSearchProvider() {
+export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "grok",
     label: "Grok (xAI)",
@@ -210,6 +211,8 @@ export function createXaiWebSearchProvider() {
     signupUrl: "https://console.x.ai/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 30,
+    credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+    inactiveSecretPaths: ["plugins.entries.xai.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig?: Record<string, unknown>) =>
       getScopedCredentialValue(searchConfig, "grok"),
     setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) =>
@@ -238,7 +241,7 @@ export function createXaiWebSearchProvider() {
           return {
             error: "missing_xai_api_key",
             message:
-              "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.search.grok.apiKey.",
+              "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
             docs: "https://docs.openclaw.ai/tools/web",
           };
         }

@@ -1,5 +1,5 @@
-import type { ChannelAccountSnapshot, ChannelStatusIssue } from "openclaw/plugin-sdk/zalouser";
 import { coerceStatusIssueAccountId, readStatusIssueFields } from "../../shared/status-issues.js";
+import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../runtime-api.js";
 
 const ZALOUSER_STATUS_FIELDS = [
   "accountId",

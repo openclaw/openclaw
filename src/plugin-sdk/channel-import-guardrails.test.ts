@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ALLOWED_EXTENSION_PUBLIC_SEAMS = new Set([
+const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set([
   "action-runtime.runtime.js",
   "api.js",
   "index.js",
@@ -118,23 +118,40 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
 ];
 
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [
+  "acpx",
   "bluebubbles",
   "device-pair",
   "diagnostics-otel",
+  "discord",
   "diffs",
   "feishu",
+  "google",
+  "irc",
   "llm-task",
   "line",
+  "lobster",
   "matrix",
   "mattermost",
   "memory-lancedb",
   "msteams",
   "nextcloud-talk",
+  "nostr",
+  "open-prose",
+  "phone-control",
+  "copilot-proxy",
+  "zai",
+  "qwen-portal-auth",
+  "signal",
   "synology-chat",
   "talk-voice",
+  "telegram",
   "thread-ownership",
   "tlon",
   "voice-call",
+  "whatsapp",
+  "twitch",
+  "zalo",
+  "zalouser",
 ] as const;
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
@@ -235,7 +252,10 @@ function collectCoreSourceFiles(): string[] {
         fullPath.includes(".test.") ||
         fullPath.includes(".spec.") ||
         fullPath.includes(".fixture.") ||
-        fullPath.includes(".snap")
+        fullPath.includes(".snap") ||
+        // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
+        // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
+        fullPath.includes(`${resolve(ROOT_DIR, "plugin-sdk")}/`)
       ) {
         continue;
       }
@@ -300,8 +320,8 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
     }
     const basename = normalized.split("/").at(-1) ?? "";
     expect(
-      ALLOWED_EXTENSION_PUBLIC_SEAMS.has(basename),
-      `${file} should only import approved extension seams, got ${specifier}`,
+      ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basename),
+      `${file} should only import approved extension surfaces, got ${specifier}`,
     ).toBe(true);
   }
 }
@@ -366,19 +386,19 @@ describe("channel import guardrails", () => {
     }
   });
 
-  it("keeps core extension imports limited to approved public seams", () => {
+  it("keeps core extension imports limited to approved public surfaces", () => {
     for (const file of collectCoreSourceFiles()) {
       expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readFileSync(file, "utf8")));
     }
   });
 
-  it("keeps extension-to-extension imports limited to approved public seams", () => {
+  it("keeps extension-to-extension imports limited to approved public surfaces", () => {
     for (const file of collectExtensionSourceFiles()) {
       expectOnlyApprovedExtensionSeams(file, collectExtensionImports(readFileSync(file, "utf8")));
     }
   });
 
-  it("keeps internalized extension helper seams behind local api barrels", () => {
+  it("keeps internalized extension helper surfaces behind local api barrels", () => {
     for (const extensionId of LOCAL_EXTENSION_API_BARREL_GUARDS) {
       for (const file of collectExtensionFiles(extensionId)) {
         const normalized = file.replaceAll("\\", "/");

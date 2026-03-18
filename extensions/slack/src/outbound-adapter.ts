@@ -5,11 +5,11 @@ import {
 } from "openclaw/plugin-sdk/channel-runtime";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import type { OutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
 import {
   resolveInteractiveTextFallback,
   type InteractiveReply,
-} from "openclaw/plugin-sdk/channel-runtime";
-import type { OutboundIdentity } from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
