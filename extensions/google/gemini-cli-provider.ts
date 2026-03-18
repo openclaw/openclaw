@@ -2,7 +2,7 @@ import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderFetchUsageSnapshotContext,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { loginGeminiCliOAuth } from "./oauth.js";

@@ -100,6 +100,7 @@
   "provider-auth",
   "provider-auth-api-key",
   "provider-auth-login",
+  "plugin-entry",
   "provider-catalog",
   "provider-models",
   "provider-onboard",
