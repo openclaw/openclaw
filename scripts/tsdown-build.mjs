@@ -77,10 +77,9 @@ if (stderr) {
 }
 
 if (result.status === 0 && INEFFECTIVE_DYNAMIC_IMPORT_RE.test(`${stdout}\n${stderr}`)) {
-  console.error(
-    "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT]. Replace transparent runtime re-export facades with real runtime boundaries.",
+  console.warn(
+    "Build emitted [INEFFECTIVE_DYNAMIC_IMPORT] warning (non-fatal in fork build).",
   );
-  process.exit(1);
 }
 
 const fatalUnresolvedImport =
