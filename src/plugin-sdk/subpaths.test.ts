@@ -185,7 +185,7 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
   });
 
-  it("exports the public testing seam", () => {
+  it("exports the public testing surface", () => {
     expect(typeof testingSdk.removeAckReactionAfterReply).toBe("function");
     expect(typeof testingSdk.shouldAckReaction).toBe("function");
   });
@@ -284,7 +284,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof googlechatSdk.resolveGoogleChatGroupRequireMention).toBe("function");
   });
 
-  it("keeps the Google Chat runtime seam aligned with the public SDK subpath", async () => {
+  it("keeps the Google Chat runtime surface aligned with the public SDK subpath", async () => {
     const googlechatRuntimeApi = await import("../../extensions/googlechat/runtime-api.js");
 
     expect(typeof googlechatRuntimeApi.buildChannelConfigSchema).toBe("function");
@@ -338,7 +338,7 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
-  it("does not advertise trimmed legacy extension helper seams", () => {
+  it("does not advertise trimmed legacy extension helper surfaces", () => {
     for (const id of trimmedLegacyExtensionSubpaths) {
       expect(pluginSdkSubpaths).not.toContain(id);
     }
