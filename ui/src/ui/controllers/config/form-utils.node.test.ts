@@ -506,4 +506,18 @@ describe("coerceFormValues", () => {
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     expect(coerced.flag).toBe(true);
   });
+
+  it("preserves string values in boolean-or-string union", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        flag: {
+          anyOf: [{ type: "boolean" }, { type: "string" }],
+        },
+      },
+    };
+    const form = { flag: "true" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    expect(coerced.flag).toBe("true");
+  });
 });
