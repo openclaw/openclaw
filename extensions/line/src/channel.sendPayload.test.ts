@@ -258,12 +258,17 @@ describe("linePlugin outbound.sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:3", "", {
-      verbose: false,
-      mediaUrl: "https://example.com/img.jpg",
-      accountId: "default",
-      cfg,
-    });
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith(
+      "line:user:3",
+      "",
+      expect.objectContaining({
+        verbose: false,
+        mediaUrl: "https://example.com/img.jpg",
+        mediaKind: "image",
+        accountId: "default",
+        cfg,
+      }),
+    );
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
       "line:user:3",
       "Hello",
