@@ -54,7 +54,7 @@ describe("GigaChat leaked function-call prelude cleanup", () => {
 
     const event = await stream.result();
 
-    expect(updateToken).toHaveBeenCalled();
+    expect(updateToken).not.toHaveBeenCalled();
     expect(event.stopReason).toBe("toolUse");
     expect(event.content).toEqual([
       expect.objectContaining({

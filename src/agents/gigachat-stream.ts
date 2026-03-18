@@ -440,6 +440,80 @@ async function withRetry<T>(
   throw lastError;
 }
 
+type GigachatAccessToken = {
+  access_token?: string;
+};
+
+type GigachatTransportResponse = {
+  status: number;
+  data: AsyncIterable<string | Uint8Array> | string | { pipe?: unknown };
+};
+
+type GigachatRuntimeClient = GigaChat & {
+  _client: {
+    request: (config: {
+      method: "POST";
+      url: string;
+      data: Chat & { stream: true };
+      responseType: "stream";
+      headers: Record<string, string>;
+      signal?: AbortSignal;
+    }) => Promise<GigachatTransportResponse>;
+  };
+  _accessToken?: GigachatAccessToken;
+  updateToken: () => Promise<void>;
+  resetToken?: () => void;
+};
+
+function getGigachatAccessToken(client: GigachatRuntimeClient): string | undefined {
+  return client._accessToken?.access_token?.trim() || undefined;
+}
+
+async function ensureGigachatAccessToken(client: GigachatRuntimeClient): Promise<string> {
+  const accessToken = getGigachatAccessToken(client);
+  if (accessToken) {
+    return accessToken;
+  }
+
+  await withRetry(() => client.updateToken(), "token refresh");
+
+  const refreshedToken = getGigachatAccessToken(client);
+  if (!refreshedToken) {
+    throw new Error("GigaChat: failed to obtain access token after retries");
+  }
+  return refreshedToken;
+}
+
+function resetGigachatAccessToken(client: GigachatRuntimeClient): void {
+  if (typeof client.resetToken === "function") {
+    client.resetToken();
+    return;
+  }
+  delete client._accessToken;
+}
+
+async function readGigachatErrorText(
+  responseData: GigachatTransportResponse["data"],
+  status: number,
+): Promise<string> {
+  try {
+    if (typeof responseData === "string") {
+      return responseData;
+    }
+    if (responseData && typeof responseData === "object" && "pipe" in responseData) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of responseData as AsyncIterable<string | Uint8Array>) {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
+      }
+      return Buffer.concat(chunks).toString();
+    }
+  } catch {
+    return `status ${status}`;
+  }
+
+  return "unknown error";
+}
+
 // ── Stream function ─────────────────────────────────────────────────────────
 
 export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
@@ -459,6 +533,45 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         "Only use this in controlled environments with trusted networks.",
     );
   }
+
+  let cachedClient: GigachatRuntimeClient | null = null;
+  let cachedApiKey: string | null = null;
+
+  const buildClientConfig = (apiKey: string): GigaChatClientConfig => {
+    const clientConfig: GigaChatClientConfig = {
+      baseUrl: effectiveBaseUrl,
+      // Explicitly set to undefined to prevent the library from adding profanity_check
+      profanityCheck: undefined,
+      timeout: 120,
+    };
+
+    if (insecureTls) {
+      clientConfig.httpsAgent = new https.Agent({ rejectUnauthorized: false });
+    }
+
+    if (opts.authMode === "basic") {
+      const { user, password } = parseGigachatBasicCredentials(apiKey);
+      clientConfig.user = user;
+      clientConfig.password = password;
+      log.debug(`GigaChat auth: basic mode`);
+    } else {
+      clientConfig.credentials = apiKey;
+      clientConfig.scope = opts.scope ?? "GIGACHAT_API_PERS";
+      log.debug(`GigaChat auth: oauth scope=${clientConfig.scope}`);
+    }
+
+    return clientConfig;
+  };
+
+  const getClientForApiKey = (apiKey: string): GigachatRuntimeClient => {
+    if (cachedClient && cachedApiKey === apiKey) {
+      return cachedClient;
+    }
+
+    cachedClient = new GigaChat(buildClientConfig(apiKey)) as GigachatRuntimeClient;
+    cachedApiKey = apiKey;
+    return cachedClient;
+  };
 
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();
@@ -596,32 +709,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
 
         // Build auth config
         const apiKey = options?.apiKey ?? "";
-
-        const clientConfig: GigaChatClientConfig = {
-          baseUrl: effectiveBaseUrl,
-          // Explicitly set to undefined to prevent the library from adding profanity_check
-          profanityCheck: undefined,
-          timeout: 120,
-        };
-
-        // Configure TLS
-        if (insecureTls) {
-          clientConfig.httpsAgent = new https.Agent({ rejectUnauthorized: false });
-        }
-
-        // Set credentials based on auth mode
-        if (opts.authMode === "basic") {
-          const { user, password } = parseGigachatBasicCredentials(apiKey);
-          clientConfig.user = user;
-          clientConfig.password = password;
-          log.debug(`GigaChat auth: basic mode`);
-        } else {
-          clientConfig.credentials = apiKey;
-          clientConfig.scope = opts.scope ?? "GIGACHAT_API_PERS";
-          log.debug(`GigaChat auth: oauth scope=${clientConfig.scope}`);
-        }
-
-        const client = new GigaChat(clientConfig);
+        const client = getClientForApiKey(apiKey);
 
         // Build chat request - explicitly omit profanity_check
         const chatRequest: Chat = {
@@ -644,56 +732,41 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
 
         log.debug(`GigaChat request: ${messages.length} messages, ${functions.length} functions`);
 
-        // Use the library for auth, but our own SSE parsing (library's parseChunk is buggy)
-        // Wrap token refresh in retry logic for transient failures
-        await withRetry(() => client.updateToken(), "token refresh");
-
-        const axiosClient = client._client;
-        // Access the token (protected property, so we cast)
-        const accessToken = (client as unknown as { _accessToken?: { access_token: string } })
-          ._accessToken?.access_token;
-
-        if (!accessToken) {
-          throw new Error("GigaChat: failed to obtain access token after retries");
-        }
-
         const requestId = randomUUID();
         log.debug(`GigaChat request ${requestId}: starting`);
 
-        const headers: Record<string, string> = {
-          ...resolveGigachatModelHeaders(model),
-          ...options?.headers,
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "text/event-stream",
-          "Cache-Control": "no-store",
-          "X-Request-ID": requestId,
+        const axiosClient = client._client;
+        const sendChatCompletionsRequest = async (): Promise<GigachatTransportResponse> => {
+          const accessToken = await ensureGigachatAccessToken(client);
+          return axiosClient.request({
+            method: "POST",
+            url: "/chat/completions",
+            data: { ...chatRequest, stream: true },
+            responseType: "stream",
+            headers: {
+              ...resolveGigachatModelHeaders(model),
+              ...options?.headers,
+              Authorization: `Bearer ${accessToken}`,
+              Accept: "text/event-stream",
+              "Cache-Control": "no-store",
+              "X-Request-ID": requestId,
+            },
+            signal: options?.signal,
+          });
         };
 
-        const response = await axiosClient.request({
-          method: "POST",
-          url: "/chat/completions",
-          data: { ...chatRequest, stream: true },
-          responseType: "stream",
-          headers,
-          signal: options?.signal,
-        });
+        let response = await sendChatCompletionsRequest();
+        if (response.status === 401) {
+          log.warn(
+            `GigaChat request ${requestId}: received 401 from chat endpoint, refreshing token and retrying`,
+          );
+          resetGigachatAccessToken(client);
+          await ensureGigachatAccessToken(client);
+          response = await sendChatCompletionsRequest();
+        }
 
         if (response.status !== 200) {
-          let errorText = "unknown error";
-          try {
-            if (typeof response.data === "string") {
-              errorText = response.data;
-            } else if (response.data && typeof response.data.pipe === "function") {
-              // It's a stream, try to read it
-              const chunks: Buffer[] = [];
-              for await (const chunk of response.data) {
-                chunks.push(chunk);
-              }
-              errorText = Buffer.concat(chunks).toString();
-            }
-          } catch {
-            errorText = `status ${response.status}`;
-          }
+          const errorText = await readGigachatErrorText(response.data, response.status);
           throw new Error(
             `GigaChat API error ${response.status} (${effectiveBaseUrl}/chat/completions): ${errorText}`,
           );

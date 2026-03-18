@@ -1,16 +1,23 @@
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const updateToken = vi.fn(async () => {});
+let initialAccessToken: { access_token: string } | undefined = { access_token: "test-token" };
+let refreshedAccessToken = "refreshed-token";
+const updateToken = vi.fn(async function (this: { _accessToken?: { access_token: string } }) {
+  this._accessToken = { access_token: refreshedAccessToken };
+});
 const request = vi.fn();
 const clientConfigs: Array<Record<string, unknown>> = [];
 
 vi.mock("gigachat", () => {
   class MockGigaChat {
     _client = { request };
-    _accessToken = { access_token: "test-token" };
+    _accessToken = initialAccessToken ? { ...initialAccessToken } : undefined;
 
     updateToken = updateToken;
+    resetToken() {
+      this._accessToken = undefined;
+    }
 
     constructor(config: Record<string, unknown>) {
       clientConfigs.push(config);
@@ -34,6 +41,8 @@ describe("createGigachatStreamFn tool calling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clientConfigs.length = 0;
+    initialAccessToken = { access_token: "test-token" };
+    refreshedAccessToken = "refreshed-token";
     vi.unstubAllEnvs();
   });
 
@@ -74,7 +83,7 @@ describe("createGigachatStreamFn tool calling", () => {
 
     const event = await stream.result();
 
-    expect(updateToken).toHaveBeenCalled();
+    expect(updateToken).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -176,6 +185,117 @@ describe("createGigachatStreamFn tool calling", () => {
     const event = await stream.result();
 
     expect(event.content).toEqual([{ type: "text", text: "final tail" }]);
+  });
+
+  it("reuses a cached token across turns for the same GigaChat credentials", async () => {
+    initialAccessToken = undefined;
+    refreshedAccessToken = "cached-after-refresh";
+    request
+      .mockResolvedValueOnce({
+        status: 200,
+        data: createSseStream([
+          'data: {"choices":[{"delta":{"content":"first"}}]}',
+          "data: [DONE]",
+        ]),
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: createSseStream([
+          'data: {"choices":[{"delta":{"content":"second"}}]}',
+          "data: [DONE]",
+        ]),
+      });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const firstStream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "token" } as never,
+    );
+    await expect(firstStream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "first" }],
+    });
+
+    const secondStream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "token" } as never,
+    );
+    await expect(secondStream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "second" }],
+    });
+
+    expect(updateToken).toHaveBeenCalledTimes(1);
+    expect(clientConfigs).toHaveLength(1);
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer cached-after-refresh",
+        }),
+      }),
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer cached-after-refresh",
+        }),
+      }),
+    );
+  });
+
+  it("refreshes once and retries the chat request after a 401", async () => {
+    refreshedAccessToken = "fresh-token";
+    request
+      .mockResolvedValueOnce({
+        status: 401,
+        data: "expired token",
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: createSseStream([
+          'data: {"choices":[{"delta":{"content":"recovered"}}]}',
+          "data: [DONE]",
+        ]),
+      });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "token" } as never,
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "recovered" }],
+    });
+
+    expect(updateToken).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer test-token",
+        }),
+      }),
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer fresh-token",
+        }),
+      }),
+    );
   });
 
   it("prefers the resolved GigaChat baseUrl over the env override", async () => {
