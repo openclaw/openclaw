@@ -84,7 +84,10 @@ export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
-export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export {
+  formatPairingApproveHint,
+  parseOptionalDelimitedEntries,
+} from "../channels/plugins/helpers.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
