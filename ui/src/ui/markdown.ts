@@ -245,7 +245,7 @@ htmlEscapeRenderer.code = ({
   escaped?: boolean;
 }) => {
   const normalizedLang = lang?.trim().toLowerCase() ?? "";
-  const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
+  const langClass = normalizedLang ? ` class="language-${escapeHtml(normalizedLang)}"` : "";
   const safeText = escaped ? text : escapeHtml(text);
   const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
