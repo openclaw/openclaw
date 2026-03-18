@@ -464,8 +464,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           // This ensures /new creates a fresh session that doesn't broadcast
           // to other connected TUI clients sharing the original session key.
           const uniqueKey = `tui-${randomUUID()}`;
+          const nextSessionKey = `agent:${normalizeAgentId(state.currentAgentId)}:${uniqueKey}`;
+          await client.resetSession(nextSessionKey, "new");
           await setSession(uniqueKey);
-          chatLog.addSystem(`new session: ${uniqueKey}`);
+          chatLog.addSystem(`new session: ${formatSessionKey(nextSessionKey)}`);
         } catch (err) {
           chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
         }

@@ -150,6 +150,7 @@ Docs: https://docs.openclaw.ai
 - xAI/web search: add missing Grok credential metadata so the bundled provider registration type-checks again. (#49472) thanks @scoootscooob.
 - Signal/runtime API: re-export `SignalAccountConfig` so Signal account resolution type-checks again. (#49470) Thanks @scoootscooob.
 - Google Chat/runtime API: thin the private runtime barrel onto the curated public SDK surface while keeping public Google Chat exports intact. (#49504) Thanks @scoootscooob.
+- TUI/hooks: route `/new` back through `sessions.reset(reason="new")` before switching to the per-client `tui-<uuid>` session key, so isolated TUI resets emit hook-visible `command:new` events again. (#49918)
 
 ### Breaking
 
