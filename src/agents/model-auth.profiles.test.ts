@@ -269,6 +269,37 @@ describe("getApiKeyForModel", () => {
     }
   });
 
+  it("preserves the explicit google-vertex profile error when ADC fallback is unavailable", async () => {
+    await withEnvAsync(
+      {
+        GOOGLE_APPLICATION_CREDENTIALS: undefined,
+        GOOGLE_CLOUD_PROJECT: undefined,
+        GCLOUD_PROJECT: undefined,
+        GOOGLE_CLOUD_LOCATION: undefined,
+        GOOGLE_CLOUD_API_KEY: undefined,
+      },
+      async () => {
+        await expect(
+          resolveApiKeyForProvider({
+            provider: "google-vertex",
+            profileId: "google-vertex:default",
+            store: {
+              version: 1,
+              profiles: {
+                "google-vertex:default": {
+                  type: "token",
+                  provider: "google-vertex",
+                  token: "stale-token",
+                  expires: Date.now() - 60_000,
+                },
+              },
+            },
+          }),
+        ).rejects.toThrow('No credentials found for profile "google-vertex:default".');
+      },
+    );
+  });
+
   it("keeps explicit profile failures strict for non-google-vertex providers", async () => {
     await withEnvAsync(
       {
