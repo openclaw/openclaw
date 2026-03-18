@@ -375,6 +375,7 @@ async function importChannelPluginModule(rootDir: string): Promise<ChannelPlugin
 async function importChannelSurfaceMetadata(
   rootDir: string,
   repoRoot: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<ChannelSurfaceMetadata | null> {
   logConfigDocBaselineDebug(`resolve channel config surface ${rootDir}`);
   const packageMetadata = loadPackageChannelMetadata(rootDir);
@@ -408,6 +409,7 @@ async function importChannelSurfaceMetadata(
       {
         cwd: repoRoot,
         encoding: "utf8",
+        env,
         timeout: 15_000,
         maxBuffer: 10 * 1024 * 1024,
       },
@@ -438,9 +440,10 @@ async function importChannelSurfaceMetadata(
 async function loadChannelSurfaceMetadata(
   rootDir: string,
   repoRoot: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<ChannelSurfaceMetadata> {
   logConfigDocBaselineDebug(`load channel surface ${rootDir}`);
-  const configSurface = await importChannelSurfaceMetadata(rootDir, repoRoot);
+  const configSurface = await importChannelSurfaceMetadata(rootDir, repoRoot, env);
   if (configSurface) {
     logConfigDocBaselineDebug(`resolved channel config surface ${rootDir}`);
     return configSurface;
@@ -480,14 +483,14 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     ? await bundledChannelPlugins.reduce<Promise<ChannelSurfaceMetadata[]>>(
         async (promise, plugin) => {
           const loaded = await promise;
-          loaded.push(await loadChannelSurfaceMetadata(plugin.rootDir, repoRoot));
+          loaded.push(await loadChannelSurfaceMetadata(plugin.rootDir, repoRoot, env));
           return loaded;
         },
         Promise.resolve([]),
       )
     : await Promise.all(
         bundledChannelPlugins.map(
-          async (plugin) => await loadChannelSurfaceMetadata(plugin.rootDir, repoRoot),
+          async (plugin) => await loadChannelSurfaceMetadata(plugin.rootDir, repoRoot, env),
         ),
       );
   logConfigDocBaselineDebug(`imported ${channelPlugins.length} bundled channel plugins`);
