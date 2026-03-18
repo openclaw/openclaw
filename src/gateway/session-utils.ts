@@ -797,13 +797,22 @@ export function resolveSessionModelRef(
   // then finally to configured defaults.
   const storedModelOverride = entry?.modelOverride?.trim();
   if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
-    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
+    const explicitProviderOverride = entry?.providerOverride?.trim();
+    if (explicitProviderOverride) {
+      // Provider override is explicitly recorded — use it directly. Re-parsing
+      // the model string through parseModelRef would incorrectly split OpenRouter
+      // vendor-prefixed model names (e.g. modelOverride="anthropic/claude-opus-4.6"
+      // with providerOverride="openrouter") into { provider: "anthropic" }, discarding
+      // the stored OpenRouter provider and causing direct API calls to a
+      // provider the user has no credentials for.
+      return { provider: explicitProviderOverride, model: storedModelOverride };
+    }
+    // No explicit providerOverride — parse the model string for provider prefix
+    const parsedOverride = parseModelRef(storedModelOverride, provider || DEFAULT_PROVIDER);
     if (parsedOverride) {
       provider = parsedOverride.provider;
       model = parsedOverride.model;
     } else {
-      provider = overrideProvider;
       model = storedModelOverride;
     }
   }
