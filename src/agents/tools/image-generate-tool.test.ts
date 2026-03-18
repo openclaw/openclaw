@@ -138,6 +138,7 @@ describe("createImageGenerateTool", () => {
     const result = await tool.execute("call-1", {
       prompt: "A cat wearing sunglasses",
       model: "openai/gpt-image-1",
+      filename: "cats/output.png",
       count: 2,
       size: "1024x1024",
     });
@@ -167,7 +168,7 @@ describe("createImageGenerateTool", () => {
       "image/png",
       "tool-image-generation",
       undefined,
-      "cat-one.png",
+      "cats/output.png",
     );
     expect(saveMediaBuffer).toHaveBeenNthCalledWith(
       2,
@@ -175,7 +176,7 @@ describe("createImageGenerateTool", () => {
       "image/png",
       "tool-image-generation",
       undefined,
-      "cat-two.png",
+      "cats/output.png",
     );
     expect(result).toMatchObject({
       content: [
@@ -189,6 +190,7 @@ describe("createImageGenerateTool", () => {
         model: "gpt-image-1",
         count: 2,
         paths: ["/tmp/generated-1.png", "/tmp/generated-2.png"],
+        filename: "cats/output.png",
         revisedPrompts: ["A more cinematic cat"],
       },
     });
@@ -273,6 +275,7 @@ describe("createImageGenerateTool", () => {
 
     expect(generateImage).toHaveBeenCalledWith(
       expect.objectContaining({
+        aspectRatio: undefined,
         resolution: "4K",
         inputImages: [
           expect.objectContaining({
@@ -282,6 +285,91 @@ describe("createImageGenerateTool", () => {
         ],
       }),
     );
+  });
+
+  it("forwards explicit aspect ratio and supports up to 5 reference images", async () => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "google",
+      model: "gemini-3-pro-image-preview",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "edited.png",
+        },
+      ],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/png",
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "google/gemini-3-pro-image-preview",
+            },
+          },
+        },
+      },
+      workspaceDir: process.cwd(),
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    const images = Array.from({ length: 5 }, (_, index) => `./fixtures/ref-${index + 1}.png`);
+    await tool.execute("call-compose", {
+      prompt: "Combine these into one scene",
+      images,
+      aspectRatio: "16:9",
+    });
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aspectRatio: "16:9",
+        inputImages: expect.arrayContaining([
+          expect.objectContaining({ buffer: Buffer.from("input-image"), mimeType: "image/png" }),
+        ]),
+      }),
+    );
+    expect(generateImage.mock.calls[0]?.[0].inputImages).toHaveLength(5);
+  });
+
+  it("rejects unsupported aspect ratios", async () => {
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "google/gemini-3-pro-image-preview",
+            },
+          },
+        },
+      },
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    await expect(tool.execute("call-bad-aspect", { prompt: "portrait", aspectRatio: "7:5" }))
+      .rejects.toThrow(
+        "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+      );
   });
 
   it("lists registered provider and model options", async () => {

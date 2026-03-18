@@ -11,7 +11,6 @@ import type { ImageGenerationProviderPlugin } from "../../plugins/types.js";
 const DEFAULT_GOOGLE_IMAGE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 const DEFAULT_OUTPUT_MIME = "image/png";
-const DEFAULT_ASPECT_RATIO = "1:1";
 
 type GoogleInlineDataPart = {
   mimeType?: string;
@@ -46,7 +45,7 @@ function mapSizeToImageConfig(
 ): { aspectRatio?: string; imageSize?: "2K" | "4K" } | undefined {
   const trimmed = size?.trim();
   if (!trimmed) {
-    return { aspectRatio: DEFAULT_ASPECT_RATIO };
+    return undefined;
   }
 
   const normalized = trimmed.toLowerCase();
@@ -111,6 +110,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProviderPlu
       }));
       const resolvedImageConfig = {
         ...imageConfig,
+        ...(req.aspectRatio?.trim() ? { aspectRatio: req.aspectRatio.trim() } : {}),
         ...(req.resolution ? { imageSize: req.resolution } : {}),
       };
 

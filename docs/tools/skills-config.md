@@ -44,8 +44,8 @@ third-party skill workflows.
 
 Examples:
 
-- `google/gemini-3-pro-image-preview` for the native Nano Banana-style flow
-- `fal/fal-ai/flux/dev` for the native fal image-generation flow
+- Native Nano Banana-style setup: `agents.defaults.imageGenerationModel.primary: "google/gemini-3-pro-image-preview"`
+- Native fal setup: `agents.defaults.imageGenerationModel.primary: "fal/fal-ai/flux/dev"`
 
 ## Fields
 

@@ -27,6 +27,7 @@ export type ImageGenerationRequest = {
   authStore?: AuthProfileStore;
   count?: number;
   size?: string;
+  aspectRatio?: string;
   resolution?: ImageGenerationResolution;
   inputImages?: ImageGenerationSourceImage[];
 };

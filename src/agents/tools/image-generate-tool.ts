@@ -36,8 +36,20 @@ import {
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
-const MAX_INPUT_IMAGES = 4;
+const MAX_INPUT_IMAGES = 5;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
+const SUPPORTED_ASPECT_RATIOS = new Set([
+  "1:1",
+  "2:3",
+  "3:2",
+  "3:4",
+  "4:3",
+  "4:5",
+  "5:4",
+  "9:16",
+  "16:9",
+  "21:9",
+]);
 
 const ImageGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -60,10 +72,22 @@ const ImageGenerateToolSchema = Type.Object({
   model: Type.Optional(
     Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-1." }),
   ),
+  filename: Type.Optional(
+    Type.String({
+      description:
+        "Optional output filename hint. OpenClaw preserves the basename and saves under its managed media directory.",
+    }),
+  ),
   size: Type.Optional(
     Type.String({
       description:
         "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 1024x1792, or 1792x1024.",
+    }),
+  ),
+  aspectRatio: Type.Optional(
+    Type.String({
+      description:
+        "Optional aspect ratio hint: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9.",
     }),
   ),
   resolution: Type.Optional(
@@ -160,6 +184,19 @@ function normalizeResolution(raw: string | undefined): ImageGenerationResolution
     return normalized;
   }
   throw new ToolInputError("resolution must be one of 1K, 2K, or 4K");
+}
+
+function normalizeAspectRatio(raw: string | undefined): string | undefined {
+  const normalized = raw?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  if (SUPPORTED_ASPECT_RATIOS.has(normalized)) {
+    return normalized;
+  }
+  throw new ToolInputError(
+    "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+  );
 }
 
 function normalizeReferenceImages(args: Record<string, unknown>): string[] {
@@ -396,7 +433,9 @@ export function createImageGenerateTool(options?: {
       const prompt = readStringParam(params, "prompt", { required: true });
       const imageInputs = normalizeReferenceImages(params);
       const model = readStringParam(params, "model");
+      const filename = readStringParam(params, "filename");
       const size = readStringParam(params, "size");
+      const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
@@ -419,6 +458,7 @@ export function createImageGenerateTool(options?: {
         agentDir: options?.agentDir,
         modelOverride: model,
         size,
+        aspectRatio,
         resolution,
         count,
         inputImages,
@@ -431,7 +471,7 @@ export function createImageGenerateTool(options?: {
             image.mimeType,
             "tool-image-generation",
             undefined,
-            image.fileName,
+            filename || image.fileName,
           ),
         ),
       );
@@ -468,6 +508,8 @@ export function createImageGenerateTool(options?: {
               : {}),
           ...(resolution ? { resolution } : {}),
           ...(size ? { size } : {}),
+          ...(aspectRatio ? { aspectRatio } : {}),
+          ...(filename ? { filename } : {}),
           attempts: result.attempts,
           metadata: result.metadata,
           ...(revisedPrompts.length > 0 ? { revisedPrompts } : {}),
