@@ -290,6 +290,48 @@ describe("config schema", () => {
     }
   });
 
+  it("rejects browser search warning threshold when it exceeds the default critical threshold", () => {
+    const parsed = ToolsSchema.safeParse({
+      loopDetection: {
+        browserSearchWarningThreshold: 10,
+      },
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["loopDetection", "browserSearchWarningThreshold"],
+            message:
+              "tools.loopDetection.browserSearchWarningThreshold must be lower than the effective browserSearchCriticalThreshold (8).",
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("rejects browser search critical threshold when it is not above the default warning threshold", () => {
+    const parsed = ToolsSchema.safeParse({
+      loopDetection: {
+        browserSearchCriticalThreshold: 4,
+      },
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["loopDetection", "browserSearchCriticalThreshold"],
+            message:
+              "tools.loopDetection.browserSearchCriticalThreshold must be higher than the effective browserSearchWarningThreshold (4).",
+          }),
+        ]),
+      );
+    }
+  });
+
   it("rejects browser search loop detection config when thresholds are below 2", () => {
     const parsed = ToolsSchema.safeParse({
       loopDetection: {
