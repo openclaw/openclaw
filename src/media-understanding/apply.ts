@@ -564,6 +564,7 @@ export async function applyMediaUnderstanding(params: {
       (output) => !audioOutputAttachmentIndexes.has(output.attachmentIndex),
     );
     outputs.push(...syntheticSkippedAudioOutputs);
+    outputs.sort((left, right) => left.attachmentIndex - right.attachmentIndex);
 
     if (decisions.length > 0) {
       ctx.MediaUnderstandingDecisions = [...(ctx.MediaUnderstandingDecisions ?? []), ...decisions];
