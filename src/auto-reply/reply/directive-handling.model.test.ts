@@ -499,6 +499,56 @@ describe("/model chat UX", () => {
     expect(sessionEntry.modelOverride).toBe("vertex-ai_claude-haiku-4-5@20251001");
     expect(sessionEntry.authProfileOverride).toBe("work");
   });
+
+  it("ignores invalid mixed-content model directives during persistence", async () => {
+    setAuthProfiles({
+      "20251001": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
+      },
+    });
+
+    const directives = parseInlineDirectives("/model 99 hello");
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      providerOverride: "openai",
+      modelOverride: "gpt-4o",
+      authProfileOverride: "20251001",
+      authProfileOverrideSource: "user",
+    } as SessionEntry;
+    const sessionStore = { "agent:main:dm:1": sessionEntry };
+
+    const persisted = await persistInlineDirectives({
+      directives,
+      effectiveModelDirective: directives.rawModelDirective,
+      cfg: baseConfig(),
+      agentDir: TEST_AGENT_DIR,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["openai/gpt-4o"]),
+      provider: "openai",
+      model: "gpt-4o",
+      initialModelLabel: "openai/gpt-4o",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: baseConfig().agents?.defaults,
+    });
+
+    expect(persisted.provider).toBe("openai");
+    expect(persisted.model).toBe("gpt-4o");
+    expect(sessionEntry.providerOverride).toBe("openai");
+    expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(sessionEntry.authProfileOverride).toBe("20251001");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
+  });
 });
 
 describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {

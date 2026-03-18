@@ -152,9 +152,6 @@ export async function persistInlineDirectives(params: {
         allowedModelCatalog: [],
         provider,
       });
-      if (modelResolution.errorText) {
-        throw new Error(modelResolution.errorText);
-      }
       if (modelResolution.modelSelection) {
         const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
