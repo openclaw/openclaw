@@ -1608,7 +1608,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("uses the qmd.query mcporter tool when searchMode=query", async () => {
+  it("uses qmd.query with structured searches when searchMode=query", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1633,7 +1633,7 @@ describe("QmdMemoryManager", () => {
       return child;
     });
 
-    const { manager } = await createManager();
+    const { manager, resolved } = await createManager();
     await expect(
       manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
     ).resolves.toEqual([]);
@@ -1642,7 +1642,18 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     expect(mcporterCall).toBeDefined();
-    expect((mcporterCall?.[1] as string[])[1]).toBe("qmd.query");
+    const mcporterArgs = mcporterCall?.[1] as string[];
+    expect(mcporterArgs[1]).toBe("qmd.query");
+    const parsedArgs = JSON.parse(mcporterArgs[3] ?? "{}");
+    expect(parsedArgs).toEqual({
+      searches: [
+        { type: "lex", query: "hello" },
+        { type: "vec", query: "hello" },
+      ],
+      limit: resolved.qmd?.limits.maxResults,
+      minScore: 0,
+      collections: [resolved.qmd?.collections[0]?.name],
+    });
 
     await manager.close();
   });

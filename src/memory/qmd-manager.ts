@@ -1261,6 +1261,39 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
+  private buildMcporterSearchCallArgs(params: {
+    tool: "search" | "vector_search" | "query";
+    query: string;
+    limit: number;
+    minScore: number;
+    collection?: string;
+  }): Record<string, unknown> {
+    if (params.tool === "query") {
+      const callArgs: Record<string, unknown> = {
+        searches: [
+          { type: "lex", query: params.query },
+          { type: "vec", query: params.query },
+        ],
+        limit: params.limit,
+        minScore: params.minScore,
+      };
+      if (params.collection) {
+        callArgs.collections = [params.collection];
+      }
+      return callArgs;
+    }
+
+    const callArgs: Record<string, unknown> = {
+      query: params.query,
+      limit: params.limit,
+      minScore: params.minScore,
+    };
+    if (params.collection) {
+      callArgs.collection = params.collection;
+    }
+    return callArgs;
+  }
+
   private async runQmdSearchViaMcporter(params: {
     mcporter: ResolvedQmdMcporterConfig;
     tool: "search" | "vector_search" | "query";
@@ -1273,14 +1306,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.ensureMcporterDaemonStarted(params.mcporter);
 
     const selector = `${params.mcporter.serverName}.${params.tool}`;
-    const callArgs: Record<string, unknown> = {
-      query: params.query,
-      limit: params.limit,
-      minScore: params.minScore,
-    };
-    if (params.collection) {
-      callArgs.collection = params.collection;
-    }
+    const callArgs = this.buildMcporterSearchCallArgs(params);
 
     const result = await this.runMcporter(
       [
