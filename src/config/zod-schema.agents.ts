@@ -34,12 +34,21 @@ const BindingMatchSchema = z
   })
   .strict();
 
+const BindingToolsSchema = z
+  .object({
+    allow: z.array(z.string()).optional(),
+    deny: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 const RouteBindingSchema = z
   .object({
     type: z.literal("route").optional(),
     agentId: z.string(),
     comment: z.string().optional(),
     match: BindingMatchSchema,
+    tools: BindingToolsSchema,
   })
   .strict();
 
