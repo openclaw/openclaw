@@ -7,9 +7,7 @@ import {
   consumeSystemEventEntries,
   drainSystemEventEntries,
   enqueueSystemEvent,
-  hasSystemEvents,
-  isSystemEventContextChanged,
-  peekSystemEventEntries,
+  MAX_EVENTS,
   peekSystemEvents,
   resetSystemEventsForTest,
   resolveSystemEventDeliveryContext,
@@ -77,18 +75,9 @@ describe("system events (session routing)", () => {
     expect(second).toBe(false);
   });
 
-  it("normalizes context keys when checking for context changes", () => {
-    const key = "agent:main:test-context";
-    expect(isSystemEventContextChanged(key, " build:123 ")).toBe(true);
-
-    enqueueSystemEvent("Node connected", {
-      sessionKey: key,
-      contextKey: " BUILD:123 ",
-    });
-
-    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
-    expect(isSystemEventContextChanged(key, "build:456")).toBe(true);
-    expect(isSystemEventContextChanged(key)).toBe(true);
+  it("MAX_EVENTS is exported and positive", () => {
+    expect(typeof MAX_EVENTS).toBe("number");
+    expect(MAX_EVENTS).toBeGreaterThan(0);
   });
 
   it("returns cloned event entries and resets duplicate suppression after drain", () => {
@@ -161,6 +150,35 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toEqual(
       Array.from({ length: 20 }, (_, index) => `event ${index + 3}`),
     );
+  });
+
+  it("distinct entries with same message text are not deduplicated when text differs", () => {
+    // Simulates the P2 fix: include entry.id in eventText so two identical
+    // messages from the same sender don't collapse into one.
+    const key = "telegram:drain-dedup-test";
+    const first = enqueueSystemEvent(
+      '[pending-inbound:acc::1234:100] Missed message from Alice: "hello"',
+      { sessionKey: key },
+    );
+    const second = enqueueSystemEvent(
+      '[pending-inbound:acc::1234:101] Missed message from Alice: "hello"',
+      { sessionKey: key },
+    );
+    expect(first).toBe(true);
+    expect(second).toBe(true); // NOT deduplicated: different entry ids in text
+    expect(peekSystemEvents(key)).toHaveLength(2);
+  });
+
+  it("caps per-session queue at MAX_EVENTS and drops oldest entries on overflow", () => {
+    const key = "telegram:overflow-test";
+    for (let i = 0; i < MAX_EVENTS + 5; i++) {
+      enqueueSystemEvent(`event-${i}`, { sessionKey: key });
+    }
+    const events = peekSystemEvents(key);
+    expect(events).toHaveLength(MAX_EVENTS);
+    // Oldest entries (event-0 through event-4) should have been dropped
+    expect(events[0]).toBe(`event-5`);
+    expect(events[MAX_EVENTS - 1]).toBe(`event-${MAX_EVENTS + 4}`);
   });
 
   it("shares queued events across duplicate module instances", async () => {

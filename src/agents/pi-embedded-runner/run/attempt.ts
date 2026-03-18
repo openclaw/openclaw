@@ -15,6 +15,7 @@ import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import { clearActiveTurn, writeActiveTurn } from "../../../infra/pending-inbound-store.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import {
   isOllamaCompatProvider,
@@ -1643,6 +1644,24 @@ export async function runEmbeddedAttempt(
       }
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
 
+      // Track active turn on disk for crash recovery.
+      // Awaited to guarantee the record is persisted before the run proceeds;
+      // otherwise clearActiveTurn in the finally block can race ahead of the
+      // write on short runs, leaving a ghost active-turn record.
+      if (!params.sessionId?.startsWith("probe-")) {
+        const runtimeChannel = params.messageChannel ?? params.messageProvider ?? "unknown";
+        try {
+          await writeActiveTurn(resolveStateDir(process.env), {
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey ?? params.sessionId,
+            channel: runtimeChannel,
+            startedAt: Date.now(),
+          });
+        } catch (err) {
+          log.warn(`active-turn write failed: sessionId=${params.sessionId} ${String(err)}`);
+        }
+      }
+
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
@@ -2405,6 +2424,16 @@ export async function runEmbeddedAttempt(
           params.replyOperation.detachBackend(queueHandle);
         }
         clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        // Clear active-turn disk record.  Awaited so the clear cannot settle
+        // before a preceding writeActiveTurn on short-lived runs — preventing
+        // ghost active-turn records that trigger false stale-turn recovery.
+        if (!params.sessionId?.startsWith("probe-")) {
+          try {
+            await clearActiveTurn(resolveStateDir(process.env), params.sessionId);
+          } catch (err) {
+            log.warn(`active-turn clear failed: sessionId=${params.sessionId} ${String(err)}`);
+          }
+        }
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
 
