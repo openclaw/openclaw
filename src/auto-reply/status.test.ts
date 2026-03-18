@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
   buildCommandsMessage,
@@ -90,6 +91,45 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Queue: collect");
   });
 
+  it("falls back to sessionEntry levels when resolved levels are not passed", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        thinkingLevel: "high",
+        verboseLevel: "full",
+        reasoningLevel: "on",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Think: high");
+    expect(normalized).toContain("verbose:full");
+    expect(normalized).toContain("Reasoning: on");
+  });
+
+  it("shows fast mode when enabled", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "fast",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast: on");
+  });
+
   it("notes channel model overrides in status output", () => {
     const text = buildStatusMessage({
       config: {
@@ -118,6 +158,69 @@ describe("buildStatusMessage", () => {
 
     expect(normalized).toContain("Model: openai/gpt-4.1");
     expect(normalized).toContain("channel override");
+  });
+
+  it("shows 1M context window when anthropic context1m is enabled", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "ctx1m",
+        updatedAt: 0,
+        totalTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
+  });
+
+  it("recomputes context window from the active model after switching away from a smaller session override", () => {
+    const sessionEntry = {
+      sessionId: "switch-back",
+      updatedAt: 0,
+      providerOverride: "local",
+      modelOverride: "small-model",
+      contextTokens: 4_096,
+      totalTokens: 1_024,
+    };
+
+    applyModelOverrideToSessionEntry({
+      entry: sessionEntry,
+      selection: {
+        provider: "local",
+        model: "large-model",
+        isDefault: true,
+      },
+    });
+
+    const text = buildStatusMessage({
+      agent: {
+        model: "local/large-model",
+        contextTokens: 65_536,
+      },
+      sessionEntry,
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: 1.0k/66k");
   });
 
   it("uses per-agent sandbox config when config and session key are provided", () => {
@@ -621,6 +724,10 @@ describe("buildHelpMessage", () => {
     expect(text).toContain("/skill <name> [input]");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
+  });
+
+  it("includes /fast in help output", () => {
+    expect(buildHelpMessage()).toContain("/fast on|off");
   });
 });
 

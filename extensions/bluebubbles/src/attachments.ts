@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
-import { postMultipartFormData } from "./multipart.js";
+import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import {
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
 import { resolveRequestUrl } from "./request-url.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { resolveChatGuidForTarget } from "./send.js";
@@ -62,6 +62,15 @@ function resolveAccount(params: BlueBubblesAttachmentOpts) {
   return resolveBlueBubblesServerAccount(params);
 }
 
+function safeExtractHostname(url: string): string | undefined {
+  try {
+    const hostname = new URL(url).hostname.trim();
+    return hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
 function readMediaFetchErrorCode(error: unknown): MediaFetchErrorCode | undefined {
@@ -82,18 +91,24 @@ export async function downloadBlueBubblesAttachment(
   if (!guid) {
     throw new Error("BlueBubbles attachment guid is required");
   }
-  const { baseUrl, password } = resolveAccount(opts);
+  const { baseUrl, password, allowPrivateNetwork } = resolveAccount(opts);
   const url = buildBlueBubblesApiUrl({
     baseUrl,
     path: `/api/v1/attachment/${encodeURIComponent(guid)}/download`,
     password,
   });
   const maxBytes = typeof opts.maxBytes === "number" ? opts.maxBytes : DEFAULT_ATTACHMENT_MAX_BYTES;
+  const trustedHostname = safeExtractHostname(baseUrl);
   try {
     const fetched = await getBlueBubblesRuntime().channel.media.fetchRemoteMedia({
       url,
       filePathHint: attachment.transferName ?? attachment.guid ?? "attachment",
       maxBytes,
+      ssrfPolicy: allowPrivateNetwork
+        ? { allowPrivateNetwork: true }
+        : trustedHostname
+          ? { allowedHostnames: [trustedHostname] }
+          : undefined,
       fetchImpl: async (input, init) =>
         await blueBubblesFetchWithTimeout(
           resolveRequestUrl(input),
@@ -247,12 +262,7 @@ export async function sendBlueBubblesAttachment(params: {
     timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
   });
 
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(
-      `BlueBubbles attachment send failed (${res.status}): ${errorText || "unknown"}`,
-    );
-  }
+  await assertMultipartActionOk(res, "attachment send");
 
   const responseBody = await res.text();
   if (!responseBody) {

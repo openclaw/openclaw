@@ -1,8 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
+import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
-export type ImageModelConfig = { primary?: string; fallbacks?: string[]; force?: boolean };
+export type ImageModelConfig = ToolModelConfig & { force?: boolean };
 
 export function decodeDataUrl(dataUrl: string): {
   buffer: Buffer;
@@ -51,16 +52,14 @@ export function coerceImageAssistantText(params: {
 }
 
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
-  const imageModel = cfg?.agents?.defaults?.imageModel as
-    | { primary?: string; fallbacks?: string[]; force?: boolean }
-    | string
-    | undefined;
-  const primary = typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
-  const fallbacks = typeof imageModel === "object" ? (imageModel?.fallbacks ?? []) : [];
-  const force = typeof imageModel === "object" ? imageModel?.force : undefined;
+  const base = coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
+  const imageModel = cfg?.agents?.defaults?.imageModel;
+  const force =
+    typeof imageModel === "object" && imageModel !== null && "force" in imageModel
+      ? (imageModel as { force?: boolean }).force
+      : undefined;
   return {
-    ...(primary?.trim() ? { primary: primary.trim() } : {}),
-    ...(fallbacks.length > 0 ? { fallbacks } : {}),
+    ...base,
     ...(force != null ? { force } : {}),
   };
 }

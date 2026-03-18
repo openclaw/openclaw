@@ -14,6 +14,7 @@ import {
 
 type HandshakeConnectAuth = {
   token?: string;
+  bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
 };
@@ -26,11 +27,13 @@ export type ConnectAuthState = {
   authMethod: GatewayAuthResult["method"];
   sharedAuthOk: boolean;
   sharedAuthProvided: boolean;
+  bootstrapTokenCandidate?: string;
   deviceTokenCandidate?: string;
   deviceTokenCandidateSource?: DeviceTokenCandidateSource;
 };
 
 type VerifyDeviceTokenResult = { ok: boolean };
+type VerifyBootstrapTokenResult = { ok: boolean; reason?: string };
 
 export type ConnectAuthDecision = {
   authResult: GatewayAuthResult;
@@ -72,6 +75,12 @@ function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | 
   return { token: fallbackToken, source: "shared-token-fallback" };
 }
 
+function resolveBootstrapTokenCandidate(
+  connectAuth: HandshakeConnectAuth | null | undefined,
+): string | undefined {
+  return trimToUndefined(connectAuth?.bootstrapToken);
+}
+
 export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   connectAuth: HandshakeConnectAuth | null | undefined;
@@ -84,6 +93,9 @@ export async function resolveConnectAuthState(params: {
 }): Promise<ConnectAuthState> {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
+  const bootstrapTokenCandidate = params.hasDeviceIdentity
+    ? resolveBootstrapTokenCandidate(params.connectAuth)
+    : undefined;
   const { token: deviceTokenCandidate, source: deviceTokenCandidateSource } =
     params.hasDeviceIdentity ? resolveDeviceTokenCandidate(params.connectAuth) : {};
   const hasDeviceTokenCandidate = Boolean(deviceTokenCandidate);
@@ -133,9 +145,13 @@ export async function resolveConnectAuthState(params: {
       // primary auth flow (or deferred for device-token candidates).
       rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
     }));
+  // Trusted-proxy auth is semantically shared: the proxy vouches for identity,
+  // no per-device credential needed. Include it so operator connections
+  // can skip device identity via roleCanSkipDeviceIdentity().
   const sharedAuthOk =
-    sharedAuthResult?.ok === true &&
-    (sharedAuthResult.method === "token" || sharedAuthResult.method === "password");
+    (sharedAuthResult?.ok === true &&
+      (sharedAuthResult.method === "token" || sharedAuthResult.method === "password")) ||
+    (authResult.ok && authResult.method === "trusted-proxy");
 
   return {
     authResult,
@@ -144,6 +160,7 @@ export async function resolveConnectAuthState(params: {
       authResult.method ?? (params.resolvedAuth.mode === "password" ? "password" : "token"),
     sharedAuthOk,
     sharedAuthProvided,
+    bootstrapTokenCandidate,
     deviceTokenCandidate,
     deviceTokenCandidateSource,
   };
@@ -153,10 +170,18 @@ export async function resolveConnectAuthDecision(params: {
   state: ConnectAuthState;
   hasDeviceIdentity: boolean;
   deviceId?: string;
+  publicKey?: string;
   role: string;
   scopes: string[];
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
+  verifyBootstrapToken: (params: {
+    deviceId: string;
+    publicKey: string;
+    token: string;
+    role: string;
+    scopes: string[];
+  }) => Promise<VerifyBootstrapTokenResult>;
   verifyDeviceToken: (params: {
     deviceId: string;
     token: string;
@@ -167,6 +192,29 @@ export async function resolveConnectAuthDecision(params: {
   let authResult = params.state.authResult;
   let authOk = params.state.authOk;
   let authMethod = params.state.authMethod;
+
+  const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
+  if (
+    params.hasDeviceIdentity &&
+    params.deviceId &&
+    params.publicKey &&
+    !authOk &&
+    bootstrapTokenCandidate
+  ) {
+    const tokenCheck = await params.verifyBootstrapToken({
+      deviceId: params.deviceId,
+      publicKey: params.publicKey,
+      token: bootstrapTokenCandidate,
+      role: params.role,
+      scopes: params.scopes,
+    });
+    if (tokenCheck.ok) {
+      authOk = true;
+      authMethod = "bootstrap-token";
+    } else {
+      authResult = { ok: false, reason: tokenCheck.reason ?? "bootstrap_token_invalid" };
+    }
+  }
 
   const deviceTokenCandidate = params.state.deviceTokenCandidate;
   if (!params.hasDeviceIdentity || !params.deviceId || authOk || !deviceTokenCandidate) {

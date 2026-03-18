@@ -3,7 +3,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
   normalizePluginsConfig,
-  resolveEnableState,
+  resolveEffectiveEnableState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -15,12 +15,133 @@ import {
   isPathWithinRoot,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
+import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
+import {
+  listLegacyWebSearchConfigPaths,
+  normalizeLegacyWebSearchConfig,
+} from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
+
+const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+
+type UnknownIssueRecord = Record<string, unknown>;
+type AllowedValuesCollection = {
+  values: unknown[];
+  incomplete: boolean;
+  hasValues: boolean;
+};
+
+function toIssueRecord(value: unknown): UnknownIssueRecord | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return value as UnknownIssueRecord;
+}
+
+function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
+  const record = toIssueRecord(issue);
+  if (!record) {
+    return { values: [], incomplete: false, hasValues: false };
+  }
+  const code = typeof record.code === "string" ? record.code : "";
+
+  if (code === "invalid_value") {
+    const values = record.values;
+    if (!Array.isArray(values)) {
+      return { values: [], incomplete: true, hasValues: false };
+    }
+    return { values, incomplete: false, hasValues: values.length > 0 };
+  }
+
+  if (code === "invalid_type") {
+    const expected = typeof record.expected === "string" ? record.expected : "";
+    if (expected === "boolean") {
+      return { values: [true, false], incomplete: false, hasValues: true };
+    }
+    return { values: [], incomplete: true, hasValues: false };
+  }
+
+  if (code !== "invalid_union") {
+    return { values: [], incomplete: false, hasValues: false };
+  }
+
+  const nested = record.errors;
+  if (!Array.isArray(nested) || nested.length === 0) {
+    return { values: [], incomplete: true, hasValues: false };
+  }
+
+  const collected: unknown[] = [];
+  for (const branch of nested) {
+    if (!Array.isArray(branch) || branch.length === 0) {
+      return { values: [], incomplete: true, hasValues: false };
+    }
+    const branchCollected = collectAllowedValuesFromIssueList(branch);
+    if (branchCollected.incomplete || !branchCollected.hasValues) {
+      return { values: [], incomplete: true, hasValues: false };
+    }
+    collected.push(...branchCollected.values);
+  }
+
+  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
+}
+
+function collectAllowedValuesFromIssueList(
+  issues: ReadonlyArray<unknown>,
+): AllowedValuesCollection {
+  const collected: unknown[] = [];
+  let hasValues = false;
+  for (const issue of issues) {
+    const branch = collectAllowedValuesFromIssue(issue);
+    if (branch.incomplete) {
+      return { values: [], incomplete: true, hasValues: false };
+    }
+    if (!branch.hasValues) {
+      continue;
+    }
+    hasValues = true;
+    collected.push(...branch.values);
+  }
+  return { values: collected, incomplete: false, hasValues };
+}
+
+function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
+  const collection = collectAllowedValuesFromIssue(issue);
+  if (collection.incomplete || !collection.hasValues) {
+    return [];
+  }
+  return collection.values;
+}
+
+function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
+  const record = toIssueRecord(issue);
+  const path = Array.isArray(record?.path)
+    ? record.path
+        .filter((segment): segment is string | number => {
+          const segmentType = typeof segment;
+          return segmentType === "string" || segmentType === "number";
+        })
+        .join(".")
+    : "";
+  const message = typeof record?.message === "string" ? record.message : "Invalid input";
+  const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
+
+  if (!allowedValuesSummary) {
+    return { path, message };
+  }
+
+  return {
+    path,
+    message: appendAllowedValuesHint(message, allowedValuesSummary),
+    allowedValues: allowedValuesSummary.values,
+    allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
+  };
+}
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
@@ -78,6 +199,33 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
   return issues;
 }
 
+function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationIssue[] {
+  const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
+  if (tailscaleMode !== "serve" && tailscaleMode !== "funnel") {
+    return [];
+  }
+  const bindMode = config.gateway?.bind ?? "loopback";
+  if (bindMode === "loopback") {
+    return [];
+  }
+  const customBindHost = config.gateway?.customBindHost;
+  if (
+    bindMode === "custom" &&
+    isCanonicalDottedDecimalIPv4(customBindHost) &&
+    isLoopbackIpAddress(customBindHost)
+  ) {
+    return [];
+  }
+  return [
+    {
+      path: "gateway.bind",
+      message:
+        `gateway.bind must resolve to loopback when gateway.tailscale.mode=${tailscaleMode} ` +
+        '(use gateway.bind="loopback" or gateway.bind="custom" with gateway.customBindHost="127.0.0.1")',
+    },
+  ];
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -85,7 +233,8 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const legacyIssues = findLegacyConfigIssues(raw);
+  const normalizedRaw = normalizeLegacyWebSearchConfig(raw);
+  const legacyIssues = findLegacyConfigIssues(normalizedRaw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -95,14 +244,11 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(raw);
+  const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
     return {
       ok: false,
-      issues: validated.error.issues.map((iss) => ({
-        path: iss.path.join("."),
-        message: iss.message,
-      })),
+      issues: validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue)),
     };
   }
   const duplicates = findDuplicateAgentDirs(validated.data as OpenClawConfig);
@@ -120,6 +266,10 @@ export function validateConfigObjectRaw(
   const avatarIssues = validateIdentityAvatar(validated.data as OpenClawConfig);
   if (avatarIssues.length > 0) {
     return { ok: false, issues: avatarIssues };
+  }
+  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
+  if (gatewayTailscaleBindIssues.length > 0) {
+    return { ok: false, issues: gatewayTailscaleBindIssues };
   }
   return {
     ok: true,
@@ -140,7 +290,7 @@ export function validateConfigObject(
   };
 }
 
-export function validateConfigObjectWithPlugins(raw: unknown):
+type ValidateConfigWithPluginsResult =
   | {
       ok: true;
       config: OpenClawConfig;
@@ -150,38 +300,26 @@ export function validateConfigObjectWithPlugins(raw: unknown):
       ok: false;
       issues: ConfigValidationIssue[];
       warnings: ConfigValidationIssue[];
-    } {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true });
+    };
+
+export function validateConfigObjectWithPlugins(
+  raw: unknown,
+  params?: { env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true, env: params?.env });
 }
 
-export function validateConfigObjectRawWithPlugins(raw: unknown):
-  | {
-      ok: true;
-      config: OpenClawConfig;
-      warnings: ConfigValidationIssue[];
-    }
-  | {
-      ok: false;
-      issues: ConfigValidationIssue[];
-      warnings: ConfigValidationIssue[];
-    } {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false });
+export function validateConfigObjectRawWithPlugins(
+  raw: unknown,
+  params?: { env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
+  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, env: params?.env });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean },
-):
-  | {
-      ok: true;
-      config: OpenClawConfig;
-      warnings: ConfigValidationIssue[];
-    }
-  | {
-      ok: false;
-      issues: ConfigValidationIssue[];
-      warnings: ConfigValidationIssue[];
-    } {
+  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
+): ValidateConfigWithPluginsResult {
   const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
@@ -189,14 +327,27 @@ function validateConfigObjectWithPluginsBase(
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = listLegacyWebSearchConfigPaths(raw).map((path) => ({
+    path,
+    message:
+      `${path} is deprecated for web search provider config. ` +
+      "Move it under plugins.entries.<plugin>.config.webSearch.*; OpenClaw mapped it automatically for compatibility.",
+  }));
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
+  const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
+    const base = `plugins.entries.${pluginId}.config`;
+    if (!errorPath || errorPath === "<root>") {
+      return base;
+    }
+    return `${base}.${errorPath}`;
+  };
+
   type RegistryInfo = {
     registry: ReturnType<typeof loadPluginManifestRegistry>;
-    knownIds: Set<string>;
-    normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
+    knownIds?: Set<string>;
+    normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
   };
 
   let registryInfo: RegistryInfo | null = null;
@@ -210,9 +361,8 @@ function validateConfigObjectWithPluginsBase(
     const registry = loadPluginManifestRegistry({
       config,
       workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
     });
-    const knownIds = new Set(registry.plugins.map((record) => record.id));
-    const normalizedPlugins = normalizePluginsConfig(config.plugins);
 
     for (const diag of registry.diagnostics) {
       let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
@@ -228,8 +378,24 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    registryInfo = { registry, knownIds, normalizedPlugins };
+    registryInfo = { registry };
     return registryInfo;
+  };
+
+  const ensureKnownIds = (): Set<string> => {
+    const info = ensureRegistry();
+    if (!info.knownIds) {
+      info.knownIds = new Set(info.registry.plugins.map((record) => record.id));
+    }
+    return info.knownIds;
+  };
+
+  const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
+    const info = ensureRegistry();
+    if (!info.normalizedPlugins) {
+      info.normalizedPlugins = normalizePluginsConfig(config.plugins);
+    }
+    return info.normalizedPlugins;
   };
 
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
@@ -312,7 +478,33 @@ function validateConfigObjectWithPluginsBase(
     return { ok: true, config, warnings };
   }
 
-  const { registry, knownIds, normalizedPlugins } = ensureRegistry();
+  const { registry } = ensureRegistry();
+  const knownIds = ensureKnownIds();
+  const normalizedPlugins = ensureNormalizedPlugins();
+  const pushMissingPluginIssue = (
+    path: string,
+    pluginId: string,
+    opts?: { warnOnly?: boolean },
+  ) => {
+    if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
+      warnings.push({
+        path,
+        message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+      });
+      return;
+    }
+    if (opts?.warnOnly) {
+      warnings.push({
+        path,
+        message: `plugin not found: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+      });
+      return;
+    }
+    issues.push({
+      path,
+      message: `plugin not found: ${pluginId}`,
+    });
+  };
 
   const pluginsConfig = config.plugins;
 
@@ -320,10 +512,8 @@ function validateConfigObjectWithPluginsBase(
   if (entries && isRecord(entries)) {
     for (const pluginId of Object.keys(entries)) {
       if (!knownIds.has(pluginId)) {
-        issues.push({
-          path: `plugins.entries.${pluginId}`,
-          message: `plugin not found: ${pluginId}`,
-        });
+        // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
+        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
       }
     }
   }
@@ -334,10 +524,7 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      issues.push({
-        path: "plugins.allow",
-        message: `plugin not found: ${pluginId}`,
-      });
+      pushMissingPluginIssue("plugins.allow", pluginId);
     }
   }
 
@@ -347,19 +534,22 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      issues.push({
-        path: "plugins.deny",
-        message: `plugin not found: ${pluginId}`,
-      });
+      pushMissingPluginIssue("plugins.deny", pluginId);
     }
   }
 
+  // The default memory slot is inferred; only a user-configured slot should block startup.
+  const pluginSlots = pluginsConfig?.slots;
+  const hasExplicitMemorySlot =
+    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
-  if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
-    issues.push({
-      path: "plugins.slots.memory",
-      message: `plugin not found: ${memorySlot}`,
-    });
+  if (
+    hasExplicitMemorySlot &&
+    typeof memorySlot === "string" &&
+    memorySlot.trim() &&
+    !knownIds.has(memorySlot)
+  ) {
+    pushMissingPluginIssue("plugins.slots.memory", memorySlot);
   }
 
   let selectedMemoryPluginId: string | null = null;
@@ -373,7 +563,12 @@ function validateConfigObjectWithPluginsBase(
     const entry = normalizedPlugins.entries[pluginId];
     const entryHasConfig = Boolean(entry?.config);
 
-    const enableState = resolveEnableState(pluginId, record.origin, normalizedPlugins);
+    const enableState = resolveEffectiveEnableState({
+      id: pluginId,
+      origin: record.origin,
+      config: normalizedPlugins,
+      rootConfig: config,
+    });
     let enabled = enableState.enabled;
     let reason = enableState.reason;
 
@@ -404,11 +599,16 @@ function validateConfigObjectWithPluginsBase(
         if (!res.ok) {
           for (const error of res.errors) {
             issues.push({
-              path: `plugins.entries.${pluginId}.config`,
-              message: `invalid config: ${error}`,
+              path: resolvePluginConfigIssuePath(pluginId, error.path),
+              message: `invalid config: ${error.message}`,
+              allowedValues: error.allowedValues,
+              allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
         }
+      } else if (record.format === "bundle") {
+        // Compatible bundles currently expose no native OpenClaw config schema.
+        // Treat them as schema-less capability packs rather than failing validation.
       } else {
         issues.push({
           path: `plugins.entries.${pluginId}`,

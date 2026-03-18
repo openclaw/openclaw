@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/pi-tools-fs-helpers.js";
@@ -18,6 +19,35 @@ async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+}
+
+function createExecTool(workspaceDir: string) {
+  const tools = createOpenClawCodingTools({
+    workspaceDir,
+    exec: { host: "gateway", ask: "off", security: "full" },
+  });
+  const execTool = tools.find((tool) => tool.name === "exec");
+  expect(execTool).toBeDefined();
+  return execTool;
+}
+
+async function expectExecCwdResolvesTo(
+  execTool: ReturnType<typeof createExecTool>,
+  callId: string,
+  params: { command: string; workdir?: string },
+  expectedDir: string,
+) {
+  const result = await execTool?.execute(callId, params);
+  const cwd =
+    result?.details && typeof result.details === "object" && "cwd" in result.details
+      ? (result.details as { cwd?: string }).cwd
+      : undefined;
+  expect(cwd).toBeTruthy();
+  const [resolvedOutput, resolvedExpected] = await Promise.all([
+    fs.realpath(String(cwd)),
+    fs.realpath(expectedDir),
+  ]);
+  expect(resolvedOutput).toBe(resolvedExpected);
 }
 
 describe("workspace path resolution", () => {
@@ -60,56 +90,102 @@ describe("workspace path resolution", () => {
     });
   });
 
+  it("allows deletion edits with empty newText", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-cwd-", async (otherDir) => {
+        const testFile = "delete.txt";
+        await fs.writeFile(path.join(workspaceDir, testFile), "hello world", "utf8");
+
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
+        try {
+          const tools = createOpenClawCodingTools({ workspaceDir });
+          const { editTool } = expectReadWriteEditTools(tools);
+
+          await editTool.execute("ws-edit-delete", {
+            path: testFile,
+            oldText: " world",
+            newText: "",
+          });
+
+          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe("hello");
+        } finally {
+          cwdSpy.mockRestore();
+        }
+      });
+    });
+  });
+
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      const tools = createOpenClawCodingTools({
-        workspaceDir,
-        exec: { host: "gateway", ask: "off", security: "full" },
-      });
-      const execTool = tools.find((tool) => tool.name === "exec");
-      expect(execTool).toBeDefined();
-
-      const result = await execTool?.execute("ws-exec", {
-        command: "echo ok",
-      });
-      const cwd =
-        result?.details && typeof result.details === "object" && "cwd" in result.details
-          ? (result.details as { cwd?: string }).cwd
-          : undefined;
-      expect(cwd).toBeTruthy();
-      const [resolvedOutput, resolvedWorkspace] = await Promise.all([
-        fs.realpath(String(cwd)),
-        fs.realpath(workspaceDir),
-      ]);
-      expect(resolvedOutput).toBe(resolvedWorkspace);
+      const execTool = createExecTool(workspaceDir);
+      await expectExecCwdResolvesTo(execTool, "ws-exec", { command: "echo ok" }, workspaceDir);
     });
   });
 
   it("lets exec workdir override the workspace default", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-override-", async (overrideDir) => {
-        const tools = createOpenClawCodingTools({
-          workspaceDir,
-          exec: { host: "gateway", ask: "off", security: "full" },
-        });
-        const execTool = tools.find((tool) => tool.name === "exec");
-        expect(execTool).toBeDefined();
-
-        const result = await execTool?.execute("ws-exec-override", {
-          command: "echo ok",
-          workdir: overrideDir,
-        });
-        const cwd =
-          result?.details && typeof result.details === "object" && "cwd" in result.details
-            ? (result.details as { cwd?: string }).cwd
-            : undefined;
-        expect(cwd).toBeTruthy();
-        const [resolvedOutput, resolvedOverride] = await Promise.all([
-          fs.realpath(String(cwd)),
-          fs.realpath(overrideDir),
-        ]);
-        expect(resolvedOutput).toBe(resolvedOverride);
+        const execTool = createExecTool(workspaceDir);
+        await expectExecCwdResolvesTo(
+          execTool,
+          "ws-exec-override",
+          { command: "echo ok", workdir: overrideDir },
+          overrideDir,
+        );
       });
+    });
+  });
+
+  it("rejects @-prefixed absolute paths outside workspace when workspaceOnly is enabled", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+      const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+      const { readTool } = expectReadWriteEditTools(tools);
+
+      const outsideAbsolute = path.resolve(path.parse(workspaceDir).root, "outside-openclaw.txt");
+      await expect(
+        readTool.execute("ws-read-at-prefix", { path: `@${outsideAbsolute}` }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+    });
+  });
+
+  it("rejects hardlinked file aliases when workspaceOnly is enabled", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+      const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+      const { readTool, writeTool } = expectReadWriteEditTools(tools);
+      const outsidePath = path.join(
+        path.dirname(workspaceDir),
+        `outside-hardlink-${process.pid}-${Date.now()}.txt`,
+      );
+      const hardlinkPath = path.join(workspaceDir, "linked.txt");
+      await fs.writeFile(outsidePath, "top-secret", "utf8");
+      try {
+        try {
+          await fs.link(outsidePath, hardlinkPath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return;
+          }
+          throw err;
+        }
+        await expect(readTool.execute("ws-read-hardlink", { path: "linked.txt" })).rejects.toThrow(
+          /hardlink|sandbox/i,
+        );
+        await expect(
+          writeTool.execute("ws-write-hardlink", {
+            path: "linked.txt",
+            content: "pwned",
+          }),
+        ).rejects.toThrow(/hardlink|sandbox/i);
+        expect(await fs.readFile(outsidePath, "utf8")).toBe("top-secret");
+      } finally {
+        await fs.rm(hardlinkPath, { force: true });
+        await fs.rm(outsidePath, { force: true });
+      }
     });
   });
 });

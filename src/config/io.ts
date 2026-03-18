@@ -6,7 +6,6 @@ import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { loadDotEnv } from "../infra/dotenv.js";
-import { normalizeSafeBinProfileFixtures } from "../infra/exec-safe-bin-policy.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadShellEnvFallback,
@@ -14,9 +13,10 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
-import { rotateConfigBackups } from "./backup-rotation.js";
+import { maintainConfigBackups } from "./backup-rotation.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -25,20 +25,28 @@ import {
   applyMessageDefaults,
   applyModelDefaults,
   applySessionDefaults,
+  applyTalkConfigNormalization,
   applyTalkApiKey,
 } from "./defaults.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
+  type EnvSubstitutionWarning,
   MissingEnvVarError,
   containsEnvVarReference,
   resolveConfigEnvVars,
 } from "./env-substitution.js";
 import { applyConfigEnvVars } from "./env-vars.js";
-import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
+import {
+  ConfigIncludeError,
+  readConfigIncludeFileWithGuards,
+  resolveConfigIncludes,
+} from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
+import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -60,7 +68,9 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENROUTER_API_KEY",
   "AI_GATEWAY_API_KEY",
   "MINIMAX_API_KEY",
+  "MODELSTUDIO_API_KEY",
   "SYNTHETIC_API_KEY",
+  "KILOCODE_API_KEY",
   "ELEVENLABS_API_KEY",
   "TELEGRAM_BOT_TOKEN",
   "DISCORD_BOT_TOKEN",
@@ -69,6 +79,9 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
 ];
+
+const OPEN_DM_POLICY_ALLOW_FROM_RE =
+  /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
@@ -128,11 +141,74 @@ export type ReadConfigFileSnapshotForWriteResult = {
   writeOptions: ConfigWriteOptions;
 };
 
+export type RuntimeConfigSnapshotRefreshParams = {
+  sourceConfig: OpenClawConfig;
+};
+
+export type RuntimeConfigSnapshotRefreshHandler = {
+  refresh: (params: RuntimeConfigSnapshotRefreshParams) => boolean | Promise<boolean>;
+  clearOnRefreshFailure?: () => void;
+};
+
+export class ConfigRuntimeRefreshError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ConfigRuntimeRefreshError";
+  }
+}
+
 function hashConfigRaw(raw: string | null): string {
   return crypto
     .createHash("sha256")
     .update(raw ?? "")
     .digest("hex");
+}
+
+async function tightenStateDirPermissionsIfNeeded(params: {
+  configPath: string;
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  fsModule: typeof fs;
+}): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  const stateDir = resolveStateDir(params.env, params.homedir);
+  const configDir = path.dirname(params.configPath);
+  if (path.resolve(configDir) !== path.resolve(stateDir)) {
+    return;
+  }
+  try {
+    const stat = await params.fsModule.promises.stat(configDir);
+    const mode = stat.mode & 0o777;
+    if ((mode & 0o077) === 0) {
+      return;
+    }
+    await params.fsModule.promises.chmod(configDir, 0o700);
+  } catch {
+    // Best-effort hardening only; callers still need the config write to proceed.
+  }
+}
+
+function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
+  const match = issueMessage.match(OPEN_DM_POLICY_ALLOW_FROM_RE);
+  const policyPath = match?.groups?.policyPath?.trim();
+  const allowPath = match?.groups?.allowPath?.trim();
+  if (!policyPath || !allowPath) {
+    return `Config validation failed: ${pathLabel}: ${issueMessage}`;
+  }
+
+  return [
+    `Config validation failed: ${pathLabel}`,
+    "",
+    `Configuration mismatch: ${policyPath} is "open", but ${allowPath} does not include "*".`,
+    "",
+    "Fix with:",
+    `  openclaw config set ${allowPath} '["*"]'`,
+    "",
+    "Or switch policy:",
+    `  openclaw config set ${policyPath} "pairing"`,
+  ].join("\n");
 }
 
 function isNumericPathSegment(raw: string): boolean {
@@ -143,76 +219,104 @@ function isWritePlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function unsetPathForWrite(root: Record<string, unknown>, pathSegments: string[]): boolean {
-  if (pathSegments.length === 0) {
-    return false;
+function hasOwnObjectKey(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+const WRITE_PRUNED_OBJECT = Symbol("write-pruned-object");
+
+type UnsetPathWriteResult = {
+  changed: boolean;
+  value: unknown;
+};
+
+function unsetPathForWriteAt(
+  value: unknown,
+  pathSegments: string[],
+  depth: number,
+): UnsetPathWriteResult {
+  if (depth >= pathSegments.length) {
+    return { changed: false, value };
   }
+  const segment = pathSegments[depth];
+  const isLeaf = depth === pathSegments.length - 1;
 
-  const traversal: Array<{ container: unknown; key: string | number }> = [];
-  let cursor: unknown = root;
-
-  for (let i = 0; i < pathSegments.length - 1; i += 1) {
-    const segment = pathSegments[i];
-    if (Array.isArray(cursor)) {
-      if (!isNumericPathSegment(segment)) {
-        return false;
-      }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= cursor.length) {
-        return false;
-      }
-      traversal.push({ container: cursor, key: index });
-      cursor = cursor[index];
-      continue;
+  if (Array.isArray(value)) {
+    if (!isNumericPathSegment(segment)) {
+      return { changed: false, value };
     }
-    if (!isWritePlainObject(cursor) || !(segment in cursor)) {
-      return false;
+    const index = Number.parseInt(segment, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+      return { changed: false, value };
     }
-    traversal.push({ container: cursor, key: segment });
-    cursor = cursor[segment];
-  }
-
-  const leaf = pathSegments[pathSegments.length - 1];
-  if (Array.isArray(cursor)) {
-    if (!isNumericPathSegment(leaf)) {
-      return false;
+    if (isLeaf) {
+      const next = value.slice();
+      next.splice(index, 1);
+      return { changed: true, value: next };
     }
-    const index = Number.parseInt(leaf, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= cursor.length) {
-      return false;
+    const child = unsetPathForWriteAt(value[index], pathSegments, depth + 1);
+    if (!child.changed) {
+      return { changed: false, value };
     }
-    cursor.splice(index, 1);
-  } else {
-    if (!isWritePlainObject(cursor) || !(leaf in cursor)) {
-      return false;
-    }
-    delete cursor[leaf];
-  }
-
-  // Prune now-empty object branches after unsetting to avoid dead config scaffolding.
-  for (let i = traversal.length - 1; i >= 0; i -= 1) {
-    const { container, key } = traversal[i];
-    let child: unknown;
-    if (Array.isArray(container)) {
-      child = typeof key === "number" ? container[key] : undefined;
-    } else if (isWritePlainObject(container)) {
-      child = container[String(key)];
+    const next = value.slice();
+    if (child.value === WRITE_PRUNED_OBJECT) {
+      next.splice(index, 1);
     } else {
-      break;
+      next[index] = child.value;
     }
-    if (!isWritePlainObject(child) || Object.keys(child).length > 0) {
-      break;
-    }
-    if (Array.isArray(container) && typeof key === "number") {
-      if (key >= 0 && key < container.length) {
-        container.splice(key, 1);
-      }
-    } else if (isWritePlainObject(container)) {
-      delete container[String(key)];
-    }
+    return { changed: true, value: next };
   }
 
-  return true;
+  if (
+    isBlockedObjectKey(segment) ||
+    !isWritePlainObject(value) ||
+    !hasOwnObjectKey(value, segment)
+  ) {
+    return { changed: false, value };
+  }
+  if (isLeaf) {
+    const next: Record<string, unknown> = { ...value };
+    delete next[segment];
+    return {
+      changed: true,
+      value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
+    };
+  }
+
+  const child = unsetPathForWriteAt(value[segment], pathSegments, depth + 1);
+  if (!child.changed) {
+    return { changed: false, value };
+  }
+  const next: Record<string, unknown> = { ...value };
+  if (child.value === WRITE_PRUNED_OBJECT) {
+    delete next[segment];
+  } else {
+    next[segment] = child.value;
+  }
+  return {
+    changed: true,
+    value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
+  };
+}
+
+function unsetPathForWrite(
+  root: OpenClawConfig,
+  pathSegments: string[],
+): { changed: boolean; next: OpenClawConfig } {
+  if (pathSegments.length === 0) {
+    return { changed: false, next: root };
+  }
+  const result = unsetPathForWriteAt(root, pathSegments, 0);
+  if (!result.changed) {
+    return { changed: false, next: root };
+  }
+  if (result.value === WRITE_PRUNED_OBJECT) {
+    return { changed: true, next: {} };
+  }
+  if (isWritePlainObject(result.value)) {
+    return { changed: true, next: coerceConfig(result.value) };
+  }
+  return { changed: false, next: root };
 }
 
 export function resolveConfigSnapshotHash(snapshot: {
@@ -556,33 +660,6 @@ function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
   loadDotEnv({ quiet: true });
 }
 
-function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void {
-  const normalizeExec = (exec: unknown) => {
-    if (!exec || typeof exec !== "object" || Array.isArray(exec)) {
-      return;
-    }
-    const typedExec = exec as { safeBinProfiles?: Record<string, unknown> };
-    const normalized = normalizeSafeBinProfileFixtures(
-      typedExec.safeBinProfiles as Record<
-        string,
-        {
-          minPositional?: number;
-          maxPositional?: number;
-          allowedValueFlags?: readonly string[];
-          deniedFlags?: readonly string[];
-        }
-      >,
-    );
-    typedExec.safeBinProfiles = Object.keys(normalized).length > 0 ? normalized : undefined;
-  };
-
-  normalizeExec(cfg.tools?.exec);
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
-    normalizeExec(agent?.tools?.exec);
-  }
-}
-
 export function parseConfigJson5(
   raw: string,
   json5: { parse: (value: string) => unknown } = JSON5,
@@ -597,6 +674,7 @@ export function parseConfigJson5(
 type ConfigReadResolution = {
   resolvedConfigRaw: unknown;
   envSnapshotForRestore: Record<string, string | undefined>;
+  envWarnings: EnvSubstitutionWarning[];
 };
 
 function resolveConfigIncludesForRead(
@@ -606,6 +684,13 @@ function resolveConfigIncludesForRead(
 ): unknown {
   return resolveConfigIncludes(parsed, configPath, {
     readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+    readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+      readConfigIncludeFileWithGuards({
+        includePath,
+        resolvedPath,
+        rootRealDir,
+        ioFs: deps.fs,
+      }),
     parseJson: (raw) => deps.json5.parse(raw),
   });
 }
@@ -619,10 +704,16 @@ function resolveConfigForRead(
     applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env);
   }
 
+  // Collect missing env var references as warnings instead of throwing,
+  // so non-critical config sections with unset vars don't crash the gateway.
+  const envWarnings: EnvSubstitutionWarning[] = [];
   return {
-    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env),
+    resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, {
+      onMissing: (w) => envWarnings.push(w),
+    }),
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,
+    envWarnings,
   };
 }
 
@@ -657,10 +748,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
-      const { resolvedConfigRaw: resolvedConfig } = resolveConfigForRead(
+      const readResolution = resolveConfigForRead(
         resolveConfigIncludesForRead(parsed, configPath, deps),
         deps.env,
       );
+      const resolvedConfig = readResolution.resolvedConfigRaw;
+      for (const w of readResolution.envWarnings) {
+        deps.logger.warn(
+          `Config (${configPath}): missing env var "${w.varName}" at ${w.configPath} — feature using this value will be unavailable`,
+        );
+      }
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
@@ -675,29 +772,37 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const validated = validateConfigObjectWithPlugins(resolvedConfig);
       if (!validated.ok) {
         const details = validated.issues
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+          .map(
+            (iss) =>
+              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
+          )
           .join("\n");
         if (!loggedInvalidConfigs.has(configPath)) {
           loggedInvalidConfigs.add(configPath);
           deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
         }
-        const error = new Error("Invalid config");
+        const error = new Error(`Invalid config at ${configPath}:\n${details}`);
         (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
         (error as { code?: string; details?: string }).details = details;
         throw error;
       }
       if (validated.warnings.length > 0) {
         const details = validated.warnings
-          .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
+          .map(
+            (iss) =>
+              `- ${sanitizeTerminalText(iss.path || "<root>")}: ${sanitizeTerminalText(iss.message)}`,
+          )
           .join("\n");
         deps.logger.warn(`Config warnings:\\n${details}`);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
-      const cfg = applyModelDefaults(
-        applyCompactionDefaults(
-          applyContextPruningDefaults(
-            applyAgentDefaults(
-              applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+      const cfg = applyTalkConfigNormalization(
+        applyModelDefaults(
+          applyCompactionDefaults(
+            applyContextPruningDefaults(
+              applyAgentDefaults(
+                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+              ),
             ),
           ),
         ),
@@ -769,10 +874,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const error = err as { code?: string };
       if (error?.code === "INVALID_CONFIG") {
-        return {};
+        // Fail closed so invalid configs cannot silently fall back to permissive defaults.
+        throw err;
       }
       deps.logger.error(`Failed to read config at ${configPath}`, err);
-      return {};
+      throw err;
     }
   }
 
@@ -782,10 +888,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     if (!exists) {
       const hash = hashConfigRaw(null);
       const config = applyTalkApiKey(
-        applyModelDefaults(
-          applyCompactionDefaults(
-            applyContextPruningDefaults(
-              applyAgentDefaults(applySessionDefaults(applyMessageDefaults({}))),
+        applyTalkConfigNormalization(
+          applyModelDefaults(
+            applyCompactionDefaults(
+              applyContextPruningDefaults(
+                applyAgentDefaults(applySessionDefaults(applyMessageDefaults({}))),
+              ),
             ),
           ),
         ),
@@ -856,33 +964,20 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      let readResolution: ConfigReadResolution;
-      try {
-        readResolution = resolveConfigForRead(resolved, deps.env);
-      } catch (err) {
-        const message =
-          err instanceof MissingEnvVarError
-            ? err.message
-            : `Env var substitution failed: ${String(err)}`;
-        return {
-          snapshot: {
-            path: configPath,
-            exists: true,
-            raw,
-            parsed: parsedRes.parsed,
-            resolved: coerceConfig(resolved),
-            valid: false,
-            config: coerceConfig(resolved),
-            hash,
-            issues: [{ path: "", message }],
-            warnings: [],
-            legacyIssues: [],
-          },
-        };
-      }
+      const readResolution = resolveConfigForRead(resolved, deps.env);
+
+      // Convert missing env var references to config warnings instead of fatal errors.
+      // This allows the gateway to start in degraded mode when non-critical config
+      // sections reference unset env vars (e.g. optional provider API keys).
+      const envVarWarnings = readResolution.envWarnings.map((w) => ({
+        path: w.configPath,
+        message: `Missing env var "${w.varName}" — feature using this value will be unavailable`,
+      }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
+      // Detect legacy keys on resolved config, but only mark source-literal legacy
+      // entries (for auto-migration) when they are present in the parsed source.
+      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw, parsedRes.parsed);
 
       const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
       if (!validated.ok) {
@@ -897,7 +992,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             config: coerceConfig(resolvedConfigRaw),
             hash,
             issues: validated.issues,
-            warnings: validated.warnings,
+            warnings: [...validated.warnings, ...envVarWarnings],
             legacyIssues,
           },
         };
@@ -906,9 +1001,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       warnIfConfigFromFuture(validated.config, deps.logger);
       const snapshotConfig = normalizeConfigPaths(
         applyTalkApiKey(
-          applyModelDefaults(
-            applyAgentDefaults(
-              applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+          applyTalkConfigNormalization(
+            applyModelDefaults(
+              applyAgentDefaults(
+                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+              ),
             ),
           ),
         ),
@@ -927,12 +1024,31 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           config: snapshotConfig,
           hash,
           issues: [],
-          warnings: validated.warnings,
+          warnings: [...validated.warnings, ...envVarWarnings],
           legacyIssues,
         },
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
       };
     } catch (err) {
+      const nodeErr = err as NodeJS.ErrnoException;
+      let message: string;
+      if (nodeErr?.code === "EACCES") {
+        // Permission denied — common in Docker/container deployments where the
+        // config file is owned by root but the gateway runs as a non-root user.
+        const uid = process.getuid?.();
+        const uidHint = typeof uid === "number" ? String(uid) : "$(id -u)";
+        message = [
+          `read failed: ${String(err)}`,
+          ``,
+          `Config file is not readable by the current process. If running in a container`,
+          `or 1-click deployment, fix ownership with:`,
+          `  chown ${uidHint} "${configPath}"`,
+          `Then restart the gateway.`,
+        ].join("\n");
+        deps.logger.error(message);
+      } else {
+        message = `read failed: ${String(err)}`;
+      }
       return {
         snapshot: {
           path: configPath,
@@ -943,7 +1059,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           valid: false,
           config: {},
           hash: hashConfigRaw(null),
-          issues: [{ path: "", message: `read failed: ${String(err)}` }],
+          issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],
         },
@@ -979,6 +1095,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
           readFile: (candidate) => deps.fs.readFileSync(candidate, "utf-8"),
+          readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+            readConfigIncludeFileWithGuards({
+              includePath,
+              resolvedPath,
+              rootRealDir,
+              ioFs: deps.fs,
+            }),
           parseJson: (raw) => deps.json5.parse(raw),
         });
         const collected = new Map<string, string>();
@@ -997,7 +1120,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     if (!validated.ok) {
       const issue = validated.issues[0];
       const pathLabel = issue?.path ? issue.path : "<root>";
-      throw new Error(`Config validation failed: ${pathLabel}: ${issue?.message ?? "invalid"}`);
+      const issueMessage = issue?.message ?? "invalid";
+      throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
     }
     if (validated.warnings.length > 0) {
       const details = validated.warnings
@@ -1038,16 +1162,26 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const outputConfig =
+    await tightenStateDirPermissionsIfNeeded({
+      configPath,
+      env: deps.env,
+      homedir: deps.homedir,
+      fsModule: deps.fs,
+    });
+    const outputConfigBase =
       envRefMap && changedPaths
         ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
         : cfgToWrite;
+    let outputConfig = outputConfigBase;
     if (options.unsetPaths?.length) {
       for (const unsetPath of options.unsetPaths) {
         if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
           continue;
         }
-        unsetPathForWrite(outputConfig as Record<string, unknown>, unsetPath);
+        const unsetResult = unsetPathForWrite(outputConfig, unsetPath);
+        if (unsetResult.changed) {
+          outputConfig = unsetResult.next;
+        }
       }
     }
     // Do NOT apply runtime defaults when writing — user config should only contain
@@ -1163,10 +1297,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       });
 
       if (deps.fs.existsSync(configPath)) {
-        await rotateConfigBackups(configPath, deps.fs.promises);
-        await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
-          // best-effort
-        });
+        await maintainConfigBackups(configPath, deps.fs.promises);
       }
 
       try {
@@ -1222,6 +1353,9 @@ let configCache: {
   expiresAt: number;
   config: OpenClawConfig;
 } | null = null;
+let runtimeConfigSnapshot: OpenClawConfig | null = null;
+let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
+let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
@@ -1249,7 +1383,91 @@ export function clearConfigCache(): void {
   configCache = null;
 }
 
+export function setRuntimeConfigSnapshot(
+  config: OpenClawConfig,
+  sourceConfig?: OpenClawConfig,
+): void {
+  runtimeConfigSnapshot = config;
+  runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  clearConfigCache();
+}
+
+export function clearRuntimeConfigSnapshot(): void {
+  runtimeConfigSnapshot = null;
+  runtimeConfigSourceSnapshot = null;
+  clearConfigCache();
+}
+
+export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
+  return runtimeConfigSnapshot;
+}
+
+export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
+  return runtimeConfigSourceSnapshot;
+}
+
+function isCompatibleTopLevelRuntimeProjectionShape(params: {
+  runtimeSnapshot: OpenClawConfig;
+  candidate: OpenClawConfig;
+}): boolean {
+  const runtime = params.runtimeSnapshot as Record<string, unknown>;
+  const candidate = params.candidate as Record<string, unknown>;
+  for (const key of Object.keys(runtime)) {
+    if (!Object.hasOwn(candidate, key)) {
+      return false;
+    }
+    const runtimeValue = runtime[key];
+    const candidateValue = candidate[key];
+    const runtimeType = Array.isArray(runtimeValue)
+      ? "array"
+      : runtimeValue === null
+        ? "null"
+        : typeof runtimeValue;
+    const candidateType = Array.isArray(candidateValue)
+      ? "array"
+      : candidateValue === null
+        ? "null"
+        : typeof candidateValue;
+    if (runtimeType !== candidateType) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
+  if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
+    return config;
+  }
+  if (config === runtimeConfigSnapshot) {
+    return runtimeConfigSourceSnapshot;
+  }
+  // This projection expects callers to pass config objects derived from the
+  // active runtime snapshot (for example shallow/deep clones with targeted edits).
+  // For structurally unrelated configs, skip projection to avoid accidental
+  // merge-patch deletions or reintroducing resolved values into source refs.
+  if (
+    !isCompatibleTopLevelRuntimeProjectionShape({
+      runtimeSnapshot: runtimeConfigSnapshot,
+      candidate: config,
+    })
+  ) {
+    return config;
+  }
+  const runtimePatch = createMergePatch(runtimeConfigSnapshot, config);
+  return coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
+}
+
+export function setRuntimeConfigSnapshotRefreshHandler(
+  refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
+): void {
+  runtimeConfigSnapshotRefreshHandler = refreshHandler;
+}
+
 export function loadConfig(): OpenClawConfig {
+  if (runtimeConfigSnapshot) {
+    return runtimeConfigSnapshot;
+  }
   const io = createConfigIO();
   const configPath = io.configPath;
   const now = Date.now();
@@ -1273,6 +1491,11 @@ export function loadConfig(): OpenClawConfig {
   return config;
 }
 
+export async function readBestEffortConfig(): Promise<OpenClawConfig> {
+  const snapshot = await readConfigFileSnapshot();
+  return snapshot.valid ? loadConfig() : snapshot.config;
+}
+
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   return await createConfigIO().readConfigFileSnapshot();
 }
@@ -1286,10 +1509,51 @@ export async function writeConfigFile(
   options: ConfigWriteOptions = {},
 ): Promise<void> {
   const io = createConfigIO();
+  let nextCfg = cfg;
+  const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
+  const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
+  if (hadBothSnapshots) {
+    const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
+    nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
+  }
   const sameConfigPath =
     options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
-  await io.writeConfigFile(cfg, {
+  await io.writeConfigFile(nextCfg, {
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
+  // Keep the last-known-good runtime snapshot active until the specialized refresh path
+  // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
+  const refreshHandler = runtimeConfigSnapshotRefreshHandler;
+  if (refreshHandler) {
+    try {
+      const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
+      if (refreshed) {
+        return;
+      }
+    } catch (error) {
+      try {
+        refreshHandler.clearOnRefreshFailure?.();
+      } catch {
+        // Keep the original refresh failure as the surfaced error.
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new ConfigRuntimeRefreshError(
+        `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
+        { cause: error },
+      );
+    }
+  }
+  if (hadBothSnapshots) {
+    // Refresh both snapshots from disk atomically so follow-up reads get normalized config and
+    // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
+    const fresh = io.loadConfig();
+    setRuntimeConfigSnapshot(fresh, nextCfg);
+    return;
+  }
+  if (hadRuntimeSnapshot) {
+    clearRuntimeConfigSnapshot();
+  }
+  // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
+  // edits to openclaw.json remain visible (no stale snapshot).
 }

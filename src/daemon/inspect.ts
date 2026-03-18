@@ -7,6 +7,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+import { resolveHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 
 export type ExtraGatewayService = {
@@ -47,14 +48,6 @@ export function renderGatewayServiceCleanupHints(
     default:
       return [];
   }
-}
-
-function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
-  if (!home) {
-    throw new Error("Missing HOME");
-  }
-  return home;
 }
 
 type Marker = (typeof EXTRA_MARKERS)[number];
@@ -152,19 +145,26 @@ async function readUtf8File(filePath: string): Promise<string | null> {
   }
 }
 
-async function scanLaunchdDir(params: {
-  dir: string;
-  scope: "user" | "system";
-}): Promise<ExtraGatewayService[]> {
-  const results: ExtraGatewayService[] = [];
-  const entries = await readDirEntries(params.dir);
+type ServiceFileEntry = {
+  entry: string;
+  name: string;
+  fullPath: string;
+  contents: string;
+};
 
+async function collectServiceFiles(params: {
+  dir: string;
+  extension: string;
+  isIgnoredName: (name: string) => boolean;
+}): Promise<ServiceFileEntry[]> {
+  const out: ServiceFileEntry[] = [];
+  const entries = await readDirEntries(params.dir);
   for (const entry of entries) {
-    if (!entry.endsWith(".plist")) {
+    if (!entry.endsWith(params.extension)) {
       continue;
     }
-    const labelFromName = entry.replace(/\.plist$/, "");
-    if (isIgnoredLaunchdLabel(labelFromName)) {
+    const name = entry.slice(0, -params.extension.length);
+    if (params.isIgnoredName(name)) {
       continue;
     }
     const fullPath = path.join(params.dir, entry);
@@ -172,6 +172,23 @@ async function scanLaunchdDir(params: {
     if (contents === null) {
       continue;
     }
+    out.push({ entry, name, fullPath, contents });
+  }
+  return out;
+}
+
+async function scanLaunchdDir(params: {
+  dir: string;
+  scope: "user" | "system";
+}): Promise<ExtraGatewayService[]> {
+  const results: ExtraGatewayService[] = [];
+  const candidates = await collectServiceFiles({
+    dir: params.dir,
+    extension: ".plist",
+    isIgnoredName: isIgnoredLaunchdLabel,
+  });
+
+  for (const { name: labelFromName, fullPath, contents } of candidates) {
     const marker = detectMarker(contents);
     const label = tryExtractPlistLabel(contents) ?? labelFromName;
     if (!marker) {
@@ -213,21 +230,13 @@ async function scanSystemdDir(params: {
   scope: "user" | "system";
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
-  const entries = await readDirEntries(params.dir);
+  const candidates = await collectServiceFiles({
+    dir: params.dir,
+    extension: ".service",
+    isIgnoredName: isIgnoredSystemdName,
+  });
 
-  for (const entry of entries) {
-    if (!entry.endsWith(".service")) {
-      continue;
-    }
-    const name = entry.replace(/\.service$/, "");
-    if (isIgnoredSystemdName(name)) {
-      continue;
-    }
-    const fullPath = path.join(params.dir, entry);
-    const contents = await readUtf8File(fullPath);
-    if (contents === null) {
-      continue;
-    }
+  for (const { entry, name, fullPath, contents } of candidates) {
     const marker = detectMarker(contents);
     if (!marker) {
       continue;

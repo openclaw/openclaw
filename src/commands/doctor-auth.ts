@@ -4,6 +4,7 @@ import {
   formatRemainingShort,
 } from "../agents/auth-health.js";
 import {
+  type AuthCredentialReasonCode,
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
@@ -14,8 +15,13 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolvePluginProviders } from "../plugins/providers.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  buildProviderAuthRecoveryHint,
+  resolveProviderAuthLoginCommand,
+} from "./provider-auth-guidance.js";
 
 export async function maybeRepairAnthropicOAuthProfileId(
   cfg: OpenClawConfig,
@@ -114,30 +120,36 @@ export async function maybeRemoveDeprecatedCliAuthProfiles(
   prompter: DoctorPrompter,
 ): Promise<OpenClawConfig> {
   const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
-  const deprecated = new Set<string>();
-  if (store.profiles[CLAUDE_CLI_PROFILE_ID] || cfg.auth?.profiles?.[CLAUDE_CLI_PROFILE_ID]) {
-    deprecated.add(CLAUDE_CLI_PROFILE_ID);
-  }
-  if (store.profiles[CODEX_CLI_PROFILE_ID] || cfg.auth?.profiles?.[CODEX_CLI_PROFILE_ID]) {
-    deprecated.add(CODEX_CLI_PROFILE_ID);
-  }
+  const providers = resolvePluginProviders({
+    config: cfg,
+    env: process.env,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
+  const deprecatedEntries = providers.flatMap((provider) =>
+    (provider.deprecatedProfileIds ?? [])
+      .filter((profileId) => store.profiles[profileId] || cfg.auth?.profiles?.[profileId])
+      .map((profileId) => ({
+        profileId,
+        providerId: provider.id,
+        providerLabel: provider.label,
+      })),
+  );
+  const deprecated = new Set(deprecatedEntries.map((entry) => entry.profileId));
 
   if (deprecated.size === 0) {
     return cfg;
   }
 
   const lines = ["Deprecated external CLI auth profiles detected (no longer supported):"];
-  if (deprecated.has(CLAUDE_CLI_PROFILE_ID)) {
-    lines.push(
-      `- ${CLAUDE_CLI_PROFILE_ID} (Anthropic): use setup-token → ${formatCliCommand("openclaw models auth setup-token")}`,
-    );
-  }
-  if (deprecated.has(CODEX_CLI_PROFILE_ID)) {
-    lines.push(
-      `- ${CODEX_CLI_PROFILE_ID} (OpenAI Codex): use OAuth → ${formatCliCommand(
-        "openclaw models auth login --provider openai-codex",
-      )}`,
-    );
+  for (const entry of deprecatedEntries) {
+    const authCommand =
+      resolveProviderAuthLoginCommand({
+        provider: entry.providerId,
+        config: cfg,
+        env: process.env,
+      }) ?? formatCliCommand("openclaw configure");
+    lines.push(`- ${entry.profileId} (${entry.providerLabel}): use ${authCommand}`);
   }
   note(lines.join("\n"), "Auth profiles");
 
@@ -203,28 +215,50 @@ type AuthIssue = {
   profileId: string;
   provider: string;
   status: string;
+  reasonCode?: AuthCredentialReasonCode;
   remainingMs?: number;
 };
 
+export function resolveUnusableProfileHint(params: {
+  kind: "cooldown" | "disabled";
+  reason?: string;
+}): string {
+  if (params.kind === "disabled") {
+    if (params.reason === "billing") {
+      return "Top up credits (provider billing) or switch provider.";
+    }
+    if (params.reason === "auth_permanent" || params.reason === "auth") {
+      return "Refresh or replace credentials, then retry.";
+    }
+  }
+  return "Wait for cooldown or switch provider.";
+}
+
 function formatAuthIssueHint(issue: AuthIssue): string | null {
+  if (issue.reasonCode === "invalid_expires") {
+    return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
+  }
   if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
-    return `Deprecated profile. Use ${formatCliCommand("openclaw models auth setup-token")} or ${formatCliCommand(
-      "openclaw configure",
-    )}.`;
+    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
+      provider: "anthropic",
+    })}`;
   }
   if (issue.provider === "openai-codex" && issue.profileId === CODEX_CLI_PROFILE_ID) {
-    return `Deprecated profile. Use ${formatCliCommand(
-      "openclaw models auth login --provider openai-codex",
-    )} or ${formatCliCommand("openclaw configure")}.`;
+    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
+      provider: "openai-codex",
+    })}`;
   }
-  return `Re-auth via \`${formatCliCommand("openclaw configure")}\` or \`${formatCliCommand("openclaw onboard")}\`.`;
+  return buildProviderAuthRecoveryHint({
+    provider: issue.provider,
+  }).replace(/^Run /, "Re-auth via ");
 }
 
 function formatAuthIssueLine(issue: AuthIssue): string {
   const remaining =
     issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
   const hint = formatAuthIssueHint(issue);
-  return `- ${issue.profileId}: ${issue.status}${remaining}${hint ? ` — ${hint}` : ""}`;
+  const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
+  return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
 
 export async function noteAuthProfileHealth(params: {
@@ -245,13 +279,14 @@ export async function noteAuthProfileHealth(params: {
       }
       const stats = store.usageStats?.[profileId];
       const remaining = formatRemainingShort(until - now);
-      const kind =
-        typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
-          ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
-          : "cooldown";
-      const hint = kind.startsWith("disabled:billing")
-        ? "Top up credits (provider billing) or switch provider."
-        : "Wait for cooldown or switch provider.";
+      const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
+      const kind = disabledActive
+        ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
+        : "cooldown";
+      const hint = resolveUnusableProfileHint({
+        kind: disabledActive ? "disabled" : "cooldown",
+        reason: stats?.disabledReason,
+      });
       out.push(`- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`);
     }
     return out;
@@ -324,6 +359,7 @@ export async function noteAuthProfileHealth(params: {
             profileId: issue.profileId,
             provider: issue.provider,
             status: issue.status,
+            reasonCode: issue.reasonCode,
             remainingMs: issue.remainingMs,
           }),
         )

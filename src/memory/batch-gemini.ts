@@ -1,14 +1,18 @@
-import { runEmbeddingBatchGroups } from "./batch-runner.js";
+import {
+  buildEmbeddingBatchGroupOptions,
+  runEmbeddingBatchGroups,
+  type EmbeddingBatchExecutionParams,
+} from "./batch-runner.js";
 import { buildBatchHeaders, normalizeBatchBaseUrl } from "./batch-utils.js";
+import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
-import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embeddings-gemini.js";
 import { hashText } from "./internal.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 
 export type GeminiBatchRequest = {
   custom_id: string;
-  content: { parts: Array<{ text: string }> };
-  taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY";
+  request: GeminiTextEmbeddingRequest;
 };
 
 export type GeminiBatchStatus = {
@@ -78,10 +82,7 @@ async function submitGeminiBatch(params: {
     .map((request) =>
       JSON.stringify({
         key: request.custom_id,
-        request: {
-          content: request.content,
-          task_type: request.taskType,
-        },
+        request: request.request,
       }),
     )
     .join("\n");
@@ -261,25 +262,18 @@ async function waitForGeminiBatch(params: {
   }
 }
 
-export async function runGeminiEmbeddingBatches(params: {
-  gemini: GeminiEmbeddingClient;
-  agentId: string;
-  requests: GeminiBatchRequest[];
-  wait: boolean;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  concurrency: number;
-  debug?: (message: string, data?: Record<string, unknown>) => void;
-}): Promise<Map<string, number[]>> {
+export async function runGeminiEmbeddingBatches(
+  params: {
+    gemini: GeminiEmbeddingClient;
+    agentId: string;
+    requests: GeminiBatchRequest[];
+  } & EmbeddingBatchExecutionParams,
+): Promise<Map<string, number[]>> {
   return await runEmbeddingBatchGroups({
-    requests: params.requests,
-    maxRequests: GEMINI_BATCH_MAX_REQUESTS,
-    wait: params.wait,
-    pollIntervalMs: params.pollIntervalMs,
-    timeoutMs: params.timeoutMs,
-    concurrency: params.concurrency,
-    debug: params.debug,
-    debugLabel: "memory embeddings: gemini batch submit",
+    ...buildEmbeddingBatchGroupOptions(params, {
+      maxRequests: GEMINI_BATCH_MAX_REQUESTS,
+      debugLabel: "memory embeddings: gemini batch submit",
+    }),
     runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
       const batchInfo = await submitGeminiBatch({
         gemini: params.gemini,
@@ -353,7 +347,9 @@ export async function runGeminiEmbeddingBatches(params: {
           errors.push(`${customId}: ${line.response.error.message}`);
           continue;
         }
-        const embedding = line.embedding?.values ?? line.response?.embedding?.values ?? [];
+        const embedding = sanitizeAndNormalizeEmbedding(
+          line.embedding?.values ?? line.response?.embedding?.values ?? [],
+        );
         if (embedding.length === 0) {
           errors.push(`${customId}: empty embedding`);
           continue;

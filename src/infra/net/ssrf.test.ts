@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeFingerprint } from "../tls/fingerprint.js";
+import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
 import { isBlockedHostnameOrIp, isPrivateIpAddress } from "./ssrf.js";
 
 const privateIpCases = [
@@ -38,6 +38,7 @@ const privateIpCases = [
   "fe80::1%lo0",
   "fd00::1",
   "fec0::1",
+  ...blockedIpv6MulticastLiterals,
   "2001:db8:1234::5efe:127.0.0.1",
   "2001:db8:1234:1:200:5efe:7f00:1",
 ];
@@ -100,34 +101,43 @@ describe("ssrf ip classification", () => {
   });
 });
 
-describe("normalizeFingerprint", () => {
-  it("strips sha256 prefixes and separators", () => {
-    expect(normalizeFingerprint("sha256:AA:BB:cc")).toBe("aabbcc");
-    expect(normalizeFingerprint("SHA-256 11-22-33")).toBe("112233");
-    expect(normalizeFingerprint("aa:bb:cc")).toBe("aabbcc");
-  });
-});
-
 describe("isBlockedHostnameOrIp", () => {
-  it("blocks localhost.localdomain and metadata hostname aliases", () => {
-    expect(isBlockedHostnameOrIp("localhost.localdomain")).toBe(true);
-    expect(isBlockedHostnameOrIp("metadata.google.internal")).toBe(true);
+  it.each([
+    "localhost.localdomain",
+    "metadata.google.internal",
+    "api.localhost",
+    "svc.local",
+    "db.internal",
+  ])("blocks reserved hostname %s", (hostname) => {
+    expect(isBlockedHostnameOrIp(hostname)).toBe(true);
   });
 
-  it("blocks private transition addresses via shared IP classifier", () => {
-    expect(isBlockedHostnameOrIp("2001:db8:1234::5efe:127.0.0.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("2001:db8::1")).toBe(false);
+  it.each([
+    ["2001:db8:1234::5efe:127.0.0.1", true],
+    ["2001:db8::1", false],
+    ["198.18.0.1", true],
+    ["198.20.0.1", false],
+  ])("returns %s => %s", (value, expected) => {
+    expect(isBlockedHostnameOrIp(value)).toBe(expected);
   });
 
-  it("blocks IPv4 special-use ranges but allows adjacent public ranges", () => {
+  it("supports opt-in policy to allow RFC2544 benchmark range", () => {
+    const policy = { allowRfc2544BenchmarkRange: true };
     expect(isBlockedHostnameOrIp("198.18.0.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("198.20.0.1")).toBe(false);
+    expect(isBlockedHostnameOrIp("198.18.0.1", policy)).toBe(false);
+    expect(isBlockedHostnameOrIp("::ffff:198.18.0.1", policy)).toBe(false);
+    expect(isBlockedHostnameOrIp("198.51.100.1", policy)).toBe(true);
   });
 
-  it("blocks legacy IPv4 literal representations", () => {
-    expect(isBlockedHostnameOrIp("0177.0.0.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("8.8.2056")).toBe(true);
-    expect(isBlockedHostnameOrIp("127.1")).toBe(true);
-    expect(isBlockedHostnameOrIp("2130706433")).toBe(true);
+  it.each(["0177.0.0.1", "8.8.2056", "127.1", "2130706433"])(
+    "blocks legacy IPv4 literal %s",
+    (address) => {
+      expect(isBlockedHostnameOrIp(address)).toBe(true);
+    },
+  );
+
+  it("does not block ordinary hostnames", () => {
+    expect(isBlockedHostnameOrIp("example.com")).toBe(false);
+    expect(isBlockedHostnameOrIp("api.example.net")).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
-import { handleControlUiHttpRequest } from "./control-ui.js";
+import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("handleControlUiHttpRequest", () => {
@@ -42,9 +42,10 @@ describe("handleControlUiHttpRequest", () => {
 
   function runControlUiRequest(params: {
     url: string;
-    method: "GET" | "HEAD";
+    method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = handleControlUiHttpRequest(
@@ -52,7 +53,25 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
-        root: { kind: "resolved", path: params.rootPath },
+        root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
+      },
+    );
+    return { res, end, handled };
+  }
+
+  function runAvatarRequest(params: {
+    url: string;
+    method: "GET" | "HEAD";
+    resolveAvatar: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
+    basePath?: string;
+  }) {
+    const { res, end } = makeMockHttpResponse();
+    const handled = handleControlUiAvatarRequest(
+      { url: params.url, method: params.method } as IncomingMessage,
+      res,
+      {
+        ...(params.basePath ? { basePath: params.basePath } : {}),
+        resolveAvatar: params.resolveAvatar,
       },
     );
     return { res, end, handled };
@@ -64,6 +83,13 @@ describe("handleControlUiHttpRequest", () => {
     const filePath = path.join(assetsDir, filename);
     await fs.writeFile(filePath, contents);
     return { assetsDir, filePath };
+  }
+
+  async function createHardlinkedAssetFile(rootPath: string) {
+    const { filePath } = await writeAssetFile(rootPath, "app.js", "console.log('hi');");
+    const hardlinkPath = path.join(path.dirname(filePath), "app.hl.js");
+    await fs.link(filePath, hardlinkPath);
+    return hardlinkPath;
   }
 
   async function withBasePathRootFixture<T>(params: {
@@ -179,6 +205,48 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves local avatar bytes through hardened avatar handler", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-"));
+    try {
+      const avatarPath = path.join(tmp, "main.png");
+      await fs.writeFile(avatarPath, "avatar-bytes\n");
+
+      const { res, end, handled } = runAvatarRequest({
+        url: "/avatar/main",
+        method: "GET",
+        resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
+      });
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects avatar symlink paths from resolver", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-link-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-outside-"));
+    try {
+      const outsideFile = path.join(outside, "secret.txt");
+      await fs.writeFile(outsideFile, "outside-secret\n");
+      const linkPath = path.join(tmp, "avatar-link.png");
+      await fs.symlink(outsideFile, linkPath);
+
+      const { res, end, handled } = runAvatarRequest({
+        url: "/avatar/main",
+        method: "GET",
+        resolveAvatar: () => ({ kind: "local", filePath: linkPath }),
+      });
+
+      expectNotFoundResponse({ handled, res, end });
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("rejects symlinked assets that resolve outside control-ui root", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -261,6 +329,159 @@ describe("handleControlUiHttpRequest", () => {
           expectNotFoundResponse({ handled, res, end });
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("rejects hardlinked index.html for non-package control-ui roots", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-index-hardlink-"));
+        try {
+          const outsideIndex = path.join(outsideDir, "index.html");
+          await fs.writeFile(outsideIndex, "<html>outside-hardlink</html>\n");
+          await fs.rm(path.join(tmp, "index.html"));
+          await fs.link(outsideIndex, path.join(tmp, "index.html"));
+
+          const { res, end, handled } = runControlUiRequest({
+            url: "/",
+            method: "GET",
+            rootPath: tmp,
+          });
+          expectNotFoundResponse({ handled, res, end });
+        } finally {
+          await fs.rm(outsideDir, { recursive: true, force: true });
+        }
+      },
+    });
+  });
+
+  it("rejects hardlinked asset files for custom/resolved roots (security boundary)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await createHardlinkedAssetFile(tmp);
+
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/app.hl.js",
+          method: "GET",
+          rootPath: tmp,
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(404);
+        expect(end).toHaveBeenCalledWith("Not Found");
+      },
+    });
+  });
+
+  it("serves hardlinked asset files for bundled roots (pnpm global install)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await createHardlinkedAssetFile(tmp);
+
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/app.hl.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
+      },
+    });
+  });
+
+  it("does not handle POST to root-mounted paths (plugin webhook passthrough)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const webhookPath of ["/bluebubbles-webhook", "/custom-webhook", "/callback"]) {
+          const { res } = makeMockHttpResponse();
+          const handled = handleControlUiHttpRequest(
+            { url: webhookPath, method: "POST" } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp } },
+          );
+          expect(handled, `POST to ${webhookPath} should pass through to plugin handlers`).toBe(
+            false,
+          );
+        }
+      },
+    });
+  });
+
+  it("does not handle POST to paths outside basePath", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res } = makeMockHttpResponse();
+        const handled = handleControlUiHttpRequest(
+          { url: "/bluebubbles-webhook", method: "POST" } as IncomingMessage,
+          res,
+          { basePath: "/openclaw", root: { kind: "resolved", path: tmp } },
+        );
+        expect(handled).toBe(false);
+      },
+    });
+  });
+
+  it("does not handle /api paths when basePath is empty", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const apiPath of ["/api", "/api/sessions", "/api/channels/nostr"]) {
+          const { handled } = runControlUiRequest({
+            url: apiPath,
+            method: "GET",
+            rootPath: tmp,
+          });
+          expect(handled, `expected ${apiPath} to not be handled`).toBe(false);
+        }
+      },
+    });
+  });
+
+  it("does not handle /plugins paths when basePath is empty", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const pluginPath of ["/plugins", "/plugins/diffs/view/abc/def"]) {
+          const { handled } = runControlUiRequest({
+            url: pluginPath,
+            method: "GET",
+            rootPath: tmp,
+          });
+          expect(handled, `expected ${pluginPath} to not be handled`).toBe(false);
+        }
+      },
+    });
+  });
+
+  it("falls through POST requests when basePath is empty", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled, end } = runControlUiRequest({
+          url: "/webhook/bluebubbles",
+          method: "POST",
+          rootPath: tmp,
+        });
+        expect(handled).toBe(false);
+        expect(end).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("falls through POST requests under configured basePath (plugin webhook passthrough)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        for (const route of ["/openclaw", "/openclaw/", "/openclaw/some-page"]) {
+          const { handled, end } = runControlUiRequest({
+            url: route,
+            method: "POST",
+            rootPath: tmp,
+            basePath: "/openclaw",
+          });
+          expect(handled, `POST to ${route} should pass through to plugin handlers`).toBe(false);
+          expect(end, `POST to ${route} should not write a response`).not.toHaveBeenCalled();
         }
       },
     });

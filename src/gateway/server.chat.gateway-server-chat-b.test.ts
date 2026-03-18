@@ -16,6 +16,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const FAST_WAIT_OPTS = { timeout: 250, interval: 2 } as const;
 
 const sendReq = (
   ws: { send: (payload: string) => void },
@@ -82,15 +83,29 @@ async function fetchHistoryMessages(
   return historyRes.payload?.messages ?? [];
 }
 
+async function prepareMainHistoryHarness(params: {
+  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+  createSessionDir: () => Promise<string>;
+  historyMaxBytes?: number;
+}) {
+  if (params.historyMaxBytes !== undefined) {
+    __setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
+  }
+  await connectOk(params.ws);
+  const sessionDir = await params.createSessionDir();
+  await writeMainSessionStore();
+  return sessionDir;
+}
+
 describe("gateway server chat", () => {
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
 
       const bigText = "x".repeat(2_000);
       const historyLines: string[] = [];
@@ -165,12 +180,9 @@ describe("gateway server chat", () => {
         });
         expect(sendRes.ok).toBe(true);
 
-        await vi.waitFor(
-          () => {
-            expect(spy.mock.calls.length).toBeGreaterThan(0);
-          },
-          { timeout: 500, interval: 10 },
-        );
+        await vi.waitFor(() => {
+          expect(spy.mock.calls.length).toBeGreaterThan(0);
+        }, FAST_WAIT_OPTS);
 
         expect(capturedOpts?.disableBlockStreaming).toBeUndefined();
       } finally {
@@ -182,11 +194,11 @@ describe("gateway server chat", () => {
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
 
       const hugeNestedText = "n".repeat(120_000);
       const oversizedLine = JSON.stringify({
@@ -221,11 +233,11 @@ describe("gateway server chat", () => {
   test("chat.history keeps recent small messages when latest message is oversized", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
-      __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
-      await connectOk(ws);
-
-      const sessionDir = await createSessionDir();
-      await writeMainSessionStore();
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes,
+      });
 
       const baseText = "s".repeat(1_200);
       const lines: string[] = [];
@@ -272,6 +284,37 @@ describe("gateway server chat", () => {
       expect(serialized).toContain("small-29:");
       expect(serialized).toContain("[chat.history omitted: message too large]");
       expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
+    });
+  });
+
+  test("chat.history preserves usage and cost metadata for assistant messages", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            timestamp: Date.now(),
+            content: [{ type: "text", text: "hello" }],
+            usage: { input: 12, output: 5, totalTokens: 17 },
+            cost: { total: 0.0123 },
+            details: { debug: true },
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        role: "assistant",
+        usage: { input: 12, output: 5, totalTokens: 17 },
+        cost: { total: 0.0123 },
+      });
+      expect(messages[0]).not.toHaveProperty("details");
     });
   });
 
@@ -375,12 +418,9 @@ describe("gateway server chat", () => {
 
       const sendRes = await sendResP;
       expect(sendRes.ok).toBe(true);
-      await vi.waitFor(
-        () => {
-          expect(spy.mock.calls.length).toBeGreaterThan(0);
-        },
-        { timeout: 500, interval: 10 },
-      );
+      await vi.waitFor(() => {
+        expect(spy.mock.calls.length).toBeGreaterThan(0);
+      }, FAST_WAIT_OPTS);
 
       const inFlight = await rpcReq<{ status?: string }>(ws, "chat.send", {
         sessionKey: "main",
@@ -396,12 +436,9 @@ describe("gateway server chat", () => {
       });
       expect(abortRes.ok).toBe(true);
       expect(abortRes.payload?.aborted).toBe(true);
-      await vi.waitFor(
-        () => {
-          expect(aborted).toBe(true);
-        },
-        { timeout: 500, interval: 10 },
-      );
+      await vi.waitFor(() => {
+        expect(aborted).toBe(true);
+      }, FAST_WAIT_OPTS);
 
       spy.mockClear();
       spy.mockResolvedValueOnce(undefined);
@@ -413,18 +450,15 @@ describe("gateway server chat", () => {
       });
       expect(completeRes.ok).toBe(true);
 
-      await vi.waitFor(
-        async () => {
-          const again = await rpcReq<{ status?: string }>(ws, "chat.send", {
-            sessionKey: "main",
-            message: "hello",
-            idempotencyKey: "idem-complete-1",
-          });
-          expect(again.ok).toBe(true);
-          expect(again.payload?.status).toBe("ok");
-        },
-        { timeout: 500, interval: 10 },
-      );
+      await vi.waitFor(async () => {
+        const again = await rpcReq<{ status?: string }>(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-complete-1",
+        });
+        expect(again.ok).toBe(true);
+        expect(again.payload?.status).toBe("ok");
+      }, FAST_WAIT_OPTS);
     });
   });
 });

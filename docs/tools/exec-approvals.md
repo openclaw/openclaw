@@ -25,6 +25,20 @@ Exec approvals are enforced locally on the execution host:
 - **gateway host** → `openclaw` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
+Trust model note:
+
+- Gateway-authenticated callers are trusted operators for that Gateway.
+- Paired nodes extend that trusted operator capability onto the node host.
+- Exec approvals reduce accidental execution risk, but are not a per-user auth boundary.
+- Approved node-host runs bind canonical execution context: canonical cwd, exact argv, env
+  binding when present, and pinned executable path when applicable.
+- For shell scripts and direct interpreter/runtime file invocations, OpenClaw also tries to bind
+  one concrete local file operand. If that bound file changes after approval but before execution,
+  the run is denied instead of executing drifted content.
+- This file binding is intentionally best-effort, not a complete semantic model of every
+  interpreter/runtime loader path. If approval mode cannot identify exactly one concrete local
+  file to bind, it refuses to mint an approval-backed run instead of pretending full coverage.
+
 macOS split:
 
 - **node host service** forwards `system.run` to the **macOS app** over local IPC.
@@ -119,6 +133,12 @@ When **Auto-allow skill CLIs** is enabled, executables referenced by known skill
 are treated as allowlisted on nodes (macOS node or headless node host). This uses
 `skills.bins` over the Gateway RPC to fetch the skill bin list. Disable this if you want strict manual allowlists.
 
+Important trust notes:
+
+- This is an **implicit convenience allowlist**, separate from manual path allowlist entries.
+- It is intended for trusted operator environments where Gateway and node are in the same trust boundary.
+- If you require strict explicit trust, keep `autoAllowSkills: false` and use manual path allowlist entries only.
+
 ## Safe bins (stdin-only)
 
 `tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `jq`)
@@ -131,25 +151,33 @@ Custom safe bins must define an explicit profile in `tools.exec.safeBinProfiles.
 Validation is deterministic from argv shape only (no host filesystem existence checks), which
 prevents file-existence oracle behavior from allow/deny differences.
 File-oriented options are denied for default safe bins (for example `sort -o`, `sort --output`,
-`sort --files0-from`, `sort --compress-program`, `wc --files0-from`, `jq -f/--from-file`,
+`sort --files0-from`, `sort --compress-program`, `sort --random-source`,
+`sort --temporary-directory`/`-T`, `wc --files0-from`, `jq -f/--from-file`,
 `grep -f/--file`).
 Safe bins also enforce explicit per-binary flag policy for options that break stdin-only
 behavior (for example `sort -o/--output/--compress-program` and grep recursive flags).
+Long options are validated fail-closed in safe-bin mode: unknown flags and ambiguous
+abbreviations are rejected.
 Denied flags by safe-bin profile:
 
-<!-- SAFE_BIN_DENIED_FLAGS:START -->
+[//]: # "SAFE_BIN_DENIED_FLAGS:START"
 
 - `grep`: `--dereference-recursive`, `--directories`, `--exclude-from`, `--file`, `--recursive`, `-R`, `-d`, `-f`, `-r`
 - `jq`: `--argfile`, `--from-file`, `--library-path`, `--rawfile`, `--slurpfile`, `-L`, `-f`
-- `sort`: `--compress-program`, `--files0-from`, `--output`, `-o`
+- `sort`: `--compress-program`, `--files0-from`, `--output`, `--random-source`, `--temporary-directory`, `-T`, `-o`
 - `wc`: `--files0-from`
-<!-- SAFE_BIN_DENIED_FLAGS:END -->
+
+[//]: # "SAFE_BIN_DENIED_FLAGS:END"
 
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
 and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
 used to smuggle file reads.
-Safe bins must also resolve from trusted binary directories (system defaults plus the gateway
-process `PATH` at startup). This blocks request-scoped PATH hijacking attempts.
+Safe bins must also resolve from trusted binary directories (system defaults plus optional
+`tools.exec.safeBinTrustedDirs`). `PATH` entries are never auto-trusted.
+Default trusted safe-bin directories are intentionally minimal: `/bin`, `/usr/bin`.
+If your safe-bin executable lives in package-manager/user paths (for example
+`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `/snap/bin`), add them explicitly
+to `tools.exec.safeBinTrustedDirs`.
 Shell chaining and redirections are not auto-allowed in allowlist mode.
 
 Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfies the allowlist
@@ -161,6 +189,11 @@ On macOS companion-app approvals, raw shell text containing shell control or exp
 the shell binary itself is allowlisted.
 For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped env overrides are reduced to a
 small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
+For allow-always decisions in allowlist mode, known dispatch wrappers
+(`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper
+paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
+etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
+multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
 
 Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
@@ -182,6 +215,7 @@ rejected so file operands cannot be smuggled as ambiguous positionals.
 Configuration location:
 
 - `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.list[].tools.exec.safeBins`).
+- `safeBinTrustedDirs` comes from config (`tools.exec.safeBinTrustedDirs` or per-agent `agents.list[].tools.exec.safeBinTrustedDirs`).
 - `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
 - allowlist entries live in host-local `~/.openclaw/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
 - `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
@@ -226,6 +260,26 @@ CLI: `openclaw approvals` supports gateway or node editing (see [Approvals CLI](
 When a prompt is required, the gateway broadcasts `exec.approval.requested` to operator clients.
 The Control UI and macOS app resolve it via `exec.approval.resolve`, then the gateway forwards the
 approved request to the node host.
+
+For `host=node`, approval requests include a canonical `systemRunPlan` payload. The gateway uses
+that plan as the authoritative command/cwd/session context when forwarding approved `system.run`
+requests.
+
+## Interpreter/runtime commands
+
+Approval-backed interpreter/runtime runs are intentionally conservative:
+
+- Exact argv/cwd/env context is always bound.
+- Direct shell script and direct runtime file forms are best-effort bound to one concrete local
+  file snapshot.
+- Common package-manager wrapper forms that still resolve to one direct local file (for example
+  `pnpm exec`, `pnpm node`, `npm exec`, `npx`) are unwrapped before binding.
+- If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command
+  (for example package scripts, eval forms, runtime-specific loader chains, or ambiguous multi-file
+  forms), approval-backed execution is denied instead of claiming semantic coverage it does not
+  have.
+- For those workflows, prefer sandboxing, a separate host boundary, or an explicit trusted
+  allowlist/full workflow where the operator accepts the broader runtime semantics.
 
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
@@ -276,6 +330,32 @@ Reply in chat:
 /approve <id> allow-always
 /approve <id> deny
 ```
+
+### Built-in chat approval clients
+
+Discord and Telegram can also act as explicit exec approval clients with channel-specific config.
+
+- Discord: `channels.discord.execApprovals.*`
+- Telegram: `channels.telegram.execApprovals.*`
+
+These clients are opt-in. If a channel does not have exec approvals enabled, OpenClaw does not treat
+that channel as an approval surface just because the conversation happened there.
+
+Shared behavior:
+
+- only configured approvers can approve or deny
+- the requester does not need to be an approver
+- when channel delivery is enabled, approval prompts include the command text
+- if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
+
+Telegram defaults to approver DMs (`target: "dm"`). You can switch to `channel` or `both` when you
+want approval prompts to appear in the originating Telegram chat/topic as well. For Telegram forum
+topics, OpenClaw preserves the topic for the approval prompt and the post-approval follow-up.
+
+See:
+
+- [Discord](/channels/discord#exec-approvals-in-discord)
+- [Telegram](/channels/telegram#exec-approvals-in-telegram)
 
 ### macOS IPC flow
 

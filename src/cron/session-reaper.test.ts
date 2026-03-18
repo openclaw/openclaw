@@ -109,6 +109,61 @@ describe("sweepCronRunSessions", () => {
     expect(updated["agent:main:telegram:dm:123"]).toBeDefined();
   });
 
+  it("archives transcript files for pruned run sessions that are no longer referenced", async () => {
+    const now = Date.now();
+    const runSessionId = "old-run";
+    const runTranscript = path.join(tmpDir, `${runSessionId}.jsonl`);
+    fs.writeFileSync(runTranscript, '{"type":"session"}\n');
+    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: runSessionId,
+        updatedAt: now - 25 * 3_600_000,
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1);
+    expect(fs.existsSync(runTranscript)).toBe(false);
+    const files = fs.readdirSync(tmpDir);
+    expect(files.some((name) => name.startsWith(`${runSessionId}.jsonl.deleted.`))).toBe(true);
+  });
+
+  it("does not archive external transcript paths for pruned runs", async () => {
+    const now = Date.now();
+    const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-external-"));
+    const externalTranscript = path.join(externalDir, "outside.jsonl");
+    fs.writeFileSync(externalTranscript, '{"type":"session"}\n');
+    const store: Record<string, { sessionId: string; sessionFile?: string; updatedAt: number }> = {
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: "old-run",
+        sessionFile: externalTranscript,
+        updatedAt: now - 25 * 3_600_000,
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    try {
+      const result = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+        force: true,
+      });
+
+      expect(result.pruned).toBe(1);
+      expect(fs.existsSync(externalTranscript)).toBe(true);
+    } finally {
+      fs.rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
   it("respects custom retention", async () => {
     const now = Date.now();
     const store: Record<string, { sessionId: string; updatedAt: number }> = {

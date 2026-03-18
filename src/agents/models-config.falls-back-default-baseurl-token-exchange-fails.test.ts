@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_COPILOT_API_BASE_URL } from "../providers/github-copilot-token.js";
+import { DEFAULT_COPILOT_API_BASE_URL } from "../../extensions/github-copilot/token.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   installModelsConfigTestHooks,
@@ -32,9 +32,7 @@ describe("models-config", () => {
         });
         globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-        await ensureOpenClawModelsJson({ models: { providers: {} } });
-
-        const agentDir = path.join(process.env.HOME ?? "", ".openclaw", "agents", "main", "agent");
+        const { agentDir } = await ensureOpenClawModelsJson({ models: { providers: {} } });
         expect(await readCopilotBaseUrl(agentDir)).toBe(DEFAULT_COPILOT_API_BASE_URL);
       });
     });

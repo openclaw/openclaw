@@ -11,6 +11,18 @@ describe("sanitizeToolsForGoogle", () => {
       execute: async () => ({ ok: true, content: [] }),
     }) as unknown as AgentTool;
 
+  const createSchemaToolWithFormat = () =>
+    createTool({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        foo: {
+          type: "string",
+          format: "uuid",
+        },
+      },
+    });
+
   const expectFormatRemoved = (
     sanitized: AgentTool,
     key: "additionalProperties" | "patternProperties",
@@ -25,16 +37,7 @@ describe("sanitizeToolsForGoogle", () => {
   };
 
   it("strips unsupported schema keywords for Google providers", () => {
-    const tool = createTool({
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        foo: {
-          type: "string",
-          format: "uuid",
-        },
-      },
-    });
+    const tool = createSchemaToolWithFormat();
     const [sanitized] = sanitizeToolsForGoogle({
       tools: [tool],
       provider: "google-gemini-cli",
@@ -42,37 +45,8 @@ describe("sanitizeToolsForGoogle", () => {
     expectFormatRemoved(sanitized, "additionalProperties");
   });
 
-  it("strips unsupported schema keywords for google-antigravity", () => {
-    const tool = createTool({
-      type: "object",
-      patternProperties: {
-        "^x-": { type: "string" },
-      },
-      properties: {
-        foo: {
-          type: "string",
-          format: "uuid",
-        },
-      },
-    });
-    const [sanitized] = sanitizeToolsForGoogle({
-      tools: [tool],
-      provider: "google-antigravity",
-    });
-    expectFormatRemoved(sanitized, "patternProperties");
-  });
-
   it("returns original tools for non-google providers", () => {
-    const tool = createTool({
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        foo: {
-          type: "string",
-          format: "uuid",
-        },
-      },
-    });
+    const tool = createSchemaToolWithFormat();
     const sanitized = sanitizeToolsForGoogle({
       tools: [tool],
       provider: "openai",

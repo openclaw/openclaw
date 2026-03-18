@@ -142,6 +142,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "exec",
   "gateway",
   "image",
+  "image_generate",
   "memory_get",
   "memory_search",
   "message",
@@ -286,6 +287,14 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   return normalizeToolErrorText(text);
 }
 
+function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
+  const toRaw = typeof args.to === "string" ? args.to : undefined;
+  if (toRaw) {
+    return toRaw;
+  }
+  return typeof args.target === "string" ? args.target : undefined;
+}
+
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
@@ -298,7 +307,7 @@ export function extractMessagingToolSend(
     if (action !== "send" && action !== "thread-reply") {
       return undefined;
     }
-    const toRaw = typeof args.to === "string" ? args.to : undefined;
+    const toRaw = resolveMessageToolTarget(args);
     if (!toRaw) {
       return undefined;
     }

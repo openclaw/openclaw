@@ -1,27 +1,93 @@
-import { describe, expect, it } from "vitest";
-import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clampPercent,
+  resolveLegacyPiAgentAccessToken,
+  resolveUsageProviderId,
+  withTimeout,
+} from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
-  it("normalizes supported usage provider ids", () => {
-    expect(resolveUsageProviderId("z-ai")).toBe("zai");
-    expect(resolveUsageProviderId(" GOOGLE-ANTIGRAVITY ")).toBe("google-antigravity");
-    expect(resolveUsageProviderId("unknown-provider")).toBeUndefined();
-    expect(resolveUsageProviderId()).toBeUndefined();
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  it("clamps usage percents and handles non-finite values", () => {
-    expect(clampPercent(-5)).toBe(0);
-    expect(clampPercent(120)).toBe(100);
-    expect(clampPercent(Number.NaN)).toBe(0);
-    expect(clampPercent(Number.POSITIVE_INFINITY)).toBe(0);
+  it.each([
+    { value: "z-ai", expected: "zai" },
+    { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
+    { value: "unknown-provider", expected: undefined },
+    { value: undefined, expected: undefined },
+    { value: null, expected: undefined },
+  ])("normalizes provider ids for %j", ({ value, expected }) => {
+    expect(resolveUsageProviderId(value)).toBe(expected);
+  });
+
+  it.each([
+    { value: -5, expected: 0 },
+    { value: 42, expected: 42 },
+    { value: 120, expected: 100 },
+    { value: Number.NaN, expected: 0 },
+    { value: Number.POSITIVE_INFINITY, expected: 0 },
+  ])("clamps usage percents for %j", ({ value, expected }) => {
+    expect(clampPercent(value)).toBe(expected);
   });
 
   it("returns work result when it resolves before timeout", async () => {
     await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
   });
 
+  it("propagates work errors before timeout", async () => {
+    await expect(withTimeout(Promise.reject(new Error("boom")), 100, "fallback")).rejects.toThrow(
+      "boom",
+    );
+  });
+
   it("returns fallback when timeout wins", async () => {
+    vi.useFakeTimers();
     const late = new Promise<string>((resolve) => setTimeout(() => resolve("late"), 50));
-    await expect(withTimeout(late, 1, "fallback")).resolves.toBe("fallback");
+    const result = withTimeout(late, 1, "fallback");
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBe("fallback");
+  });
+
+  it("clears the timeout after successful work", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+
+    await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
+
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads legacy pi auth tokens for known provider aliases", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
+    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
+    await fs.writeFile(
+      path.join(home, ".pi", "agent", "auth.json"),
+      `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
+      "utf8",
+    );
+
+    try {
+      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBe(
+        "legacy-zai-key",
+      );
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("returns undefined for invalid legacy pi auth files", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
+    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
+    await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), "{not-json", "utf8");
+
+    try {
+      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBeUndefined();
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 });

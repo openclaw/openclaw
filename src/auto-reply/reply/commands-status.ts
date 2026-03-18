@@ -3,6 +3,7 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
@@ -10,6 +11,7 @@ import {
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -39,6 +41,7 @@ export async function buildStatusReply(params: {
   model: string;
   contextTokens: number;
   resolvedThinkLevel?: ThinkLevel;
+  resolvedFastMode?: boolean;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
@@ -59,6 +62,7 @@ export async function buildStatusReply(params: {
     model,
     contextTokens,
     resolvedThinkLevel,
+    resolvedFastMode,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -159,12 +163,20 @@ export async function buildStatusReply(params: {
       })
     : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
+  const effectiveFastMode =
+    resolvedFastMode ??
+    resolveFastModeState({
+      cfg,
+      provider,
+      model,
+      sessionEntry,
+    }).enabled;
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
       ...agentDefaults,
       model: {
-        ...agentDefaults.model,
+        ...toAgentModelListLike(agentDefaults.model),
         primary: `${provider}/${model}`,
       },
       contextTokens,
@@ -180,6 +192,7 @@ export async function buildStatusReply(params: {
     sessionStorePath: storePath,
     groupActivation,
     resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
+    resolvedFast: effectiveFastMode,
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,

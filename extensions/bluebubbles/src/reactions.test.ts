@@ -19,6 +19,27 @@ describe("reactions", () => {
   });
 
   describe("sendBlueBubblesReaction", () => {
+    async function expectRemovedReaction(emoji: string, expectedReaction = "-love") {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await sendBlueBubblesReaction({
+        chatGuid: "chat-123",
+        messageGuid: "msg-123",
+        emoji,
+        remove: true,
+        opts: {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        },
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.reaction).toBe(expectedReaction);
+    }
+
     it("throws when chatGuid is empty", async () => {
       await expect(
         sendBlueBubblesReaction({
@@ -208,45 +229,11 @@ describe("reactions", () => {
     });
 
     it("sends reaction removal with dash prefix", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
-      });
-
-      await sendBlueBubblesReaction({
-        chatGuid: "chat-123",
-        messageGuid: "msg-123",
-        emoji: "love",
-        remove: true,
-        opts: {
-          serverUrl: "http://localhost:1234",
-          password: "test",
-        },
-      });
-
-      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.reaction).toBe("-love");
+      await expectRemovedReaction("love");
     });
 
     it("strips leading dash from emoji when remove flag is set", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
-      });
-
-      await sendBlueBubblesReaction({
-        chatGuid: "chat-123",
-        messageGuid: "msg-123",
-        emoji: "-love",
-        remove: true,
-        opts: {
-          serverUrl: "http://localhost:1234",
-          password: "test",
-        },
-      });
-
-      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.reaction).toBe("-love");
+      await expectRemovedReaction("-love");
     });
 
     it("uses custom partIndex when provided", async () => {
@@ -340,45 +327,11 @@ describe("reactions", () => {
 
     describe("reaction removal aliases", () => {
       it("handles emoji-based removal", async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        });
-
-        await sendBlueBubblesReaction({
-          chatGuid: "chat-123",
-          messageGuid: "msg-123",
-          emoji: "👍",
-          remove: true,
-          opts: {
-            serverUrl: "http://localhost:1234",
-            password: "test",
-          },
-        });
-
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-        expect(body.reaction).toBe("-like");
+        await expectRemovedReaction("👍", "-like");
       });
 
       it("handles text alias removal", async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        });
-
-        await sendBlueBubblesReaction({
-          chatGuid: "chat-123",
-          messageGuid: "msg-123",
-          emoji: "haha",
-          remove: true,
-          opts: {
-            serverUrl: "http://localhost:1234",
-            password: "test",
-          },
-        });
-
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-        expect(body.reaction).toBe("-laugh");
+        await expectRemovedReaction("haha", "-laugh");
       });
     });
   });

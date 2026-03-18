@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildSandboxCreateArgs, type SandboxDockerConfig } from "./sandbox.js";
+import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+import { buildSandboxCreateArgs } from "./sandbox/docker.js";
+import type { SandboxDockerConfig } from "./sandbox/types.js";
 
 describe("buildSandboxCreateArgs", () => {
   function createSandboxConfig(
@@ -112,7 +114,14 @@ describe("buildSandboxCreateArgs", () => {
         "1.5",
       ]),
     );
-    expect(args).toEqual(expect.arrayContaining(["--env", "LANG=C.UTF-8"]));
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--env",
+        "LANG=C.UTF-8",
+        "--env",
+        `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
+      ]),
+    );
 
     const ulimitValues: string[] = [];
     for (let i = 0; i < args.length; i += 1) {
@@ -125,6 +134,33 @@ describe("buildSandboxCreateArgs", () => {
     }
     expect(ulimitValues).toEqual(
       expect.arrayContaining(["nofile=1024:2048", "nproc=128", "core=0"]),
+    );
+  });
+
+  it("preserves the OpenClaw exec marker when strict env sanitization is enabled", () => {
+    const cfg = createSandboxConfig({
+      env: {
+        NODE_ENV: "test",
+      },
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-marker",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+      envSanitizationOptions: {
+        strictMode: true,
+      },
+    });
+
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--env",
+        "NODE_ENV=test",
+        "--env",
+        `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
+      ]),
     );
   });
 
@@ -181,6 +217,12 @@ describe("buildSandboxCreateArgs", () => {
       expected: /network mode "host" is blocked/,
     },
     {
+      name: "network container namespace join",
+      containerName: "openclaw-sbx-container-network",
+      cfg: createSandboxConfig({ network: "container:peer" }),
+      expected: /network mode "container:peer" is blocked by default/,
+    },
+    {
       name: "seccomp unconfined",
       containerName: "openclaw-sbx-seccomp",
       cfg: createSandboxConfig({ seccompProfile: "unconfined" }),
@@ -226,5 +268,62 @@ describe("buildSandboxCreateArgs", () => {
       }
     }
     expect(customVFlags).toHaveLength(0);
+  });
+
+  it("blocks bind sources outside runtime allowlist roots", () => {
+    const cfg = createSandboxConfig({}, ["/opt/external:/data:rw"]);
+    expect(() =>
+      buildSandboxCreateArgs({
+        name: "openclaw-sbx-outside-roots",
+        cfg,
+        scopeKey: "main",
+        createdAtMs: 1700000000000,
+        bindSourceRoots: ["/tmp/workspace", "/tmp/agent"],
+      }),
+    ).toThrow(/outside allowed roots/);
+  });
+
+  it("allows bind sources outside runtime allowlist with explicit override", () => {
+    const cfg = createSandboxConfig({}, ["/opt/external:/data:rw"]);
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-outside-roots-override",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+      bindSourceRoots: ["/tmp/workspace", "/tmp/agent"],
+      allowSourcesOutsideAllowedRoots: true,
+    });
+    expect(args).toEqual(expect.arrayContaining(["-v", "/opt/external:/data:rw"]));
+  });
+
+  it("blocks reserved /workspace target bind mounts by default", () => {
+    const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
+    expectBuildToThrow("openclaw-sbx-reserved-target", cfg, /reserved container path/);
+  });
+
+  it("allows reserved /workspace target bind mounts with explicit dangerous override", () => {
+    const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-reserved-target-override",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+      allowReservedContainerTargets: true,
+    });
+    expect(args).toEqual(expect.arrayContaining(["-v", "/tmp/override:/workspace:rw"]));
+  });
+
+  it("allows container namespace join with explicit dangerous override", () => {
+    const cfg = createSandboxConfig({
+      network: "container:peer",
+      dangerouslyAllowContainerNamespaceJoin: true,
+    });
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-container-network-override",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+    expect(args).toEqual(expect.arrayContaining(["--network", "container:peer"]));
   });
 });

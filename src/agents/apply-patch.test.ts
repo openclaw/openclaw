@@ -1,11 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyPatch } from "./apply-patch.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-"));
+  try {
+    return await fn(dir);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function withWorkspaceTempDir<T>(fn: (dir: string) => Promise<T>) {
+  const dir = await fs.mkdtemp(path.join(process.cwd(), "openclaw-patch-workspace-"));
   try {
     return await fn(dir);
   } finally {
@@ -138,7 +147,30 @@ describe("applyPatch", () => {
     });
   });
 
+  it("resolves delete targets before calling fs.rm", async () => {
+    await withTempDir(async (dir) => {
+      const target = path.join(dir, "delete-me.txt");
+      await fs.writeFile(target, "x\n", "utf8");
+      const rmSpy = vi.spyOn(fs, "rm");
+
+      try {
+        const patch = `*** Begin Patch
+*** Delete File: delete-me.txt
+*** End Patch`;
+
+        await applyPatch(patch, { cwd: dir });
+        expect(rmSpy).toHaveBeenCalledWith(target);
+      } finally {
+        rmSpy.mockRestore();
+      }
+    });
+  });
+
   it("rejects symlink escape attempts by default", async () => {
+    // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
+    if (process.platform === "win32") {
+      return;
+    }
     await withTempDir(async (dir) => {
       const outside = path.join(path.dirname(dir), "outside-target.txt");
       const linkPath = path.join(dir, "link.txt");
@@ -159,7 +191,74 @@ describe("applyPatch", () => {
     });
   });
 
+  it("rejects broken final symlink targets outside cwd by default", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withWorkspaceTempDir(async (dir) => {
+      const outsideDir = path.join(path.dirname(dir), `outside-broken-link-${Date.now()}`);
+      const outsideFile = path.join(outsideDir, "owned.txt");
+      const linkPath = path.join(dir, "jump");
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.symlink(outsideFile, linkPath);
+
+      const patch = `*** Begin Patch
+*** Add File: jump
++pwned
+*** End Patch`;
+
+      try {
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+          /Symlink escapes sandbox root/,
+        );
+        await expect(fs.readFile(outsideFile, "utf8")).rejects.toBeDefined();
+      } finally {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("rejects hardlink alias escapes by default", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir(async (dir) => {
+      const outside = path.join(
+        path.dirname(dir),
+        `outside-hardlink-${process.pid}-${Date.now()}.txt`,
+      );
+      const linkPath = path.join(dir, "hardlink.txt");
+      await fs.writeFile(outside, "initial\n", "utf8");
+      try {
+        try {
+          await fs.link(outside, linkPath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return;
+          }
+          throw err;
+        }
+        const patch = `*** Begin Patch
+*** Update File: hardlink.txt
+@@
+-initial
++pwned
+*** End Patch`;
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/hardlink|sandbox/i);
+        const outsideContents = await fs.readFile(outside, "utf8");
+        expect(outsideContents).toBe("initial\n");
+      } finally {
+        await fs.rm(linkPath, { force: true });
+        await fs.rm(outside, { force: true });
+      }
+    });
+  });
+
   it("allows symlinks that resolve within cwd by default", async () => {
+    // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
+    if (process.platform === "win32") {
+      return;
+    }
     await withTempDir(async (dir) => {
       const target = path.join(dir, "target.txt");
       const linkPath = path.join(dir, "link.txt");
@@ -187,7 +286,9 @@ describe("applyPatch", () => {
       await fs.writeFile(outsideFile, "victim\n", "utf8");
 
       const linkDir = path.join(dir, "linkdir");
-      await fs.symlink(outsideDir, linkDir);
+      // Use 'junction' on Windows — junctions target directories without
+      // requiring SeCreateSymbolicLinkPrivilege.
+      await fs.symlink(outsideDir, linkDir, process.platform === "win32" ? "junction" : undefined);
 
       const patch = `*** Begin Patch
 *** Delete File: linkdir/victim.txt
@@ -238,7 +339,13 @@ describe("applyPatch", () => {
         await fs.writeFile(outsideTarget, "keep\n", "utf8");
 
         const linkDir = path.join(dir, "link");
-        await fs.symlink(outsideDir, linkDir);
+        // Use 'junction' on Windows — junctions target directories without
+        // requiring SeCreateSymbolicLinkPrivilege.
+        await fs.symlink(
+          outsideDir,
+          linkDir,
+          process.platform === "win32" ? "junction" : undefined,
+        );
 
         const patch = `*** Begin Patch
 *** Delete File: link
@@ -252,6 +359,48 @@ describe("applyPatch", () => {
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  it("uses container paths when the sandbox bridge has no local host path", async () => {
+    const files = new Map<string, string>([["/sandbox/source.txt", "before\n"]]);
+    const bridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        relativePath: filePath,
+        containerPath: `/sandbox/${filePath}`,
+      }),
+      readFile: vi.fn(async ({ filePath }: { filePath: string }) =>
+        Buffer.from(files.get(filePath) ?? "", "utf8"),
+      ),
+      writeFile: vi.fn(async ({ filePath, data }: { filePath: string; data: Buffer | string }) => {
+        files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
+      }),
+      remove: vi.fn(async ({ filePath }: { filePath: string }) => {
+        files.delete(filePath);
+      }),
+      mkdirp: vi.fn(async () => {}),
+    };
+
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-before
++after
+*** End Patch`;
+
+    const result = await applyPatch(patch, {
+      cwd: "/local/workspace",
+      sandbox: {
+        root: "/local/workspace",
+        bridge: bridge as never,
+      },
+    });
+
+    expect(files.get("/sandbox/source.txt")).toBe("after\n");
+    expect(result.summary.modified).toEqual(["source.txt"]);
+    expect(bridge.readFile).toHaveBeenCalledWith({
+      filePath: "/sandbox/source.txt",
+      cwd: "/local/workspace",
     });
   });
 });

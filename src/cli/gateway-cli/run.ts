@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { readSecretFromFile } from "../../acp/secret-file.js";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
 import {
   CONFIG_PATH,
@@ -9,6 +10,7 @@ import {
   resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -16,12 +18,13 @@ import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
+import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
-import { forceFreePortAndWait } from "../ports.js";
+import { forceFreePortAndWait, waitForPortBindable } from "../ports.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -38,6 +41,7 @@ type GatewayRunOpts = {
   token?: unknown;
   auth?: unknown;
   password?: unknown;
+  passwordFile?: unknown;
   tailscale?: unknown;
   tailscaleResetOnExit?: boolean;
   allowUnconfigured?: boolean;
@@ -60,6 +64,7 @@ const GATEWAY_RUN_VALUE_KEYS = [
   "token",
   "auth",
   "password",
+  "passwordFile",
   "tailscale",
   "wsLog",
   "rawStreamPath",
@@ -76,6 +81,60 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "compact",
   "rawStream",
 ] as const;
+
+const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
+  "none",
+  "token",
+  "password",
+  "trusted-proxy",
+];
+const GATEWAY_TAILSCALE_MODES: readonly GatewayTailscaleMode[] = ["off", "serve", "funnel"];
+
+function warnInlinePasswordFlag() {
+  defaultRuntime.error(
+    "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+  );
+}
+
+function resolveGatewayPasswordOption(opts: GatewayRunOpts): string | undefined {
+  const direct = toOptionString(opts.password);
+  const file = toOptionString(opts.passwordFile);
+  if (direct && file) {
+    throw new Error("Use either --password or --password-file.");
+  }
+  if (file) {
+    return readSecretFromFile(file, "Gateway password");
+  }
+  return direct;
+}
+
+function parseEnumOption<T extends string>(
+  raw: string | undefined,
+  allowed: readonly T[],
+): T | null {
+  if (!raw) {
+    return null;
+  }
+  return (allowed as readonly string[]).includes(raw) ? (raw as T) : null;
+}
+
+function formatModeChoices<T extends string>(modes: readonly T[]): string {
+  return modes.map((mode) => `"${mode}"`).join("|");
+}
+
+function formatModeErrorList<T extends string>(modes: readonly T[]): string {
+  const quoted = modes.map((mode) => `"${mode}"`);
+  if (quoted.length === 0) {
+    return "";
+  }
+  if (quoted.length === 1) {
+    return quoted[0];
+  }
+  if (quoted.length === 2) {
+    return `${quoted[0]} or ${quoted[1]}`;
+  }
+  return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
+}
 
 function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
   const resolved: GatewayRunOpts = { ...opts };
@@ -150,6 +209,28 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error("Invalid port");
     defaultRuntime.exit(1);
   }
+  const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
+  const bind =
+    bindRaw === "loopback" ||
+    bindRaw === "lan" ||
+    bindRaw === "auto" ||
+    bindRaw === "custom" ||
+    bindRaw === "tailnet"
+      ? bindRaw
+      : null;
+  if (!bind) {
+    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    const stale = cleanStaleGatewayProcessesSync(port);
+    if (stale.length > 0) {
+      gatewayLog.info(
+        `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
+      );
+    }
+  }
   if (opts.force) {
     try {
       const { killed, waitedMs, escalatedToSigkill } = await forceFreePortAndWait(port, {
@@ -172,6 +253,23 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           gatewayLog.info(`force: waited ${waitedMs}ms for port ${port} to free`);
         }
       }
+      // After killing, verify the port is actually bindable (handles TIME_WAIT).
+      const bindProbeHost =
+        bind === "loopback"
+          ? "127.0.0.1"
+          : bind === "lan"
+            ? "0.0.0.0"
+            : bind === "custom"
+              ? toOptionString(cfg.gateway?.customBindHost)
+              : undefined;
+      const bindWaitMs = await waitForPortBindable(port, {
+        timeoutMs: 3000,
+        intervalMs: 150,
+        host: bindProbeHost,
+      });
+      if (bindWaitMs > 0) {
+        gatewayLog.info(`force: waited ${bindWaitMs}ms for port ${port} to become bindable`);
+      }
     } catch (err) {
       defaultRuntime.error(`Force: ${String(err)}`);
       defaultRuntime.exit(1);
@@ -185,24 +283,32 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     }
   }
   const authModeRaw = toOptionString(opts.auth);
-  const authMode: GatewayAuthMode | null =
-    authModeRaw === "token" || authModeRaw === "password" ? authModeRaw : null;
+  const authMode = parseEnumOption(authModeRaw, GATEWAY_AUTH_MODES);
   if (authModeRaw && !authMode) {
-    defaultRuntime.error('Invalid --auth (use "token" or "password")');
+    defaultRuntime.error(`Invalid --auth (use ${formatModeErrorList(GATEWAY_AUTH_MODES)})`);
     defaultRuntime.exit(1);
     return;
   }
   const tailscaleRaw = toOptionString(opts.tailscale);
-  const tailscaleMode: GatewayTailscaleMode | null =
-    tailscaleRaw === "off" || tailscaleRaw === "serve" || tailscaleRaw === "funnel"
-      ? tailscaleRaw
-      : null;
+  const tailscaleMode = parseEnumOption(tailscaleRaw, GATEWAY_TAILSCALE_MODES);
   if (tailscaleRaw && !tailscaleMode) {
-    defaultRuntime.error('Invalid --tailscale (use "off", "serve", or "funnel")');
+    defaultRuntime.error(
+      `Invalid --tailscale (use ${formatModeErrorList(GATEWAY_TAILSCALE_MODES)})`,
+    );
     defaultRuntime.exit(1);
     return;
   }
-  const passwordRaw = toOptionString(opts.password);
+  let passwordRaw: string | undefined;
+  try {
+    passwordRaw = resolveGatewayPasswordOption(opts);
+  } catch (err) {
+    defaultRuntime.error(err instanceof Error ? err.message : String(err));
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (toOptionString(opts.password)) {
+    warnInlinePasswordFlag();
+  }
   const tokenRaw = toOptionString(opts.token);
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
@@ -223,21 +329,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
-  const bind =
-    bindRaw === "loopback" ||
-    bindRaw === "lan" ||
-    bindRaw === "auto" ||
-    bindRaw === "custom" ||
-    bindRaw === "tailnet"
-      ? bindRaw
-      : null;
-  if (!bind) {
-    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "tailnet", "auto", or "custom")');
-    defaultRuntime.exit(1);
-    return;
-  }
-
   const miskeys = extractGatewayMiskeys(snapshot?.parsed);
   const authOverride =
     authMode || passwordRaw || tokenRaw || authModeRaw
@@ -258,9 +349,22 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const passwordValue = resolvedAuth.password;
   const hasToken = typeof tokenValue === "string" && tokenValue.trim().length > 0;
   const hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
+  const tokenConfigured =
+    hasToken ||
+    hasConfiguredSecretInput(
+      authOverride?.token ?? cfg.gateway?.auth?.token,
+      cfg.secrets?.defaults,
+    );
+  const passwordConfigured =
+    hasPassword ||
+    hasConfiguredSecretInput(
+      authOverride?.password ?? cfg.gateway?.auth?.password,
+      cfg.secrets?.defaults,
+    );
   const hasSharedSecret =
-    (resolvedAuthMode === "token" && hasToken) || (resolvedAuthMode === "password" && hasPassword);
-  const canBootstrapToken = resolvedAuthMode === "token" && !hasToken;
+    (resolvedAuthMode === "token" && tokenConfigured) ||
+    (resolvedAuthMode === "password" && passwordConfigured);
+  const canBootstrapToken = resolvedAuthMode === "token" && !tokenConfigured;
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
     authHints.push('Found "gateway.token" in config. Use "gateway.auth.token" instead.');
@@ -270,7 +374,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
     );
   }
-  if (resolvedAuthMode === "password" && !hasPassword) {
+  if (resolvedAuthMode === "password" && !passwordConfigured) {
     defaultRuntime.error(
       [
         "Gateway auth is set to password, but no password is configured.",
@@ -317,6 +421,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   try {
     await runGatewayLoop({
       runtime: defaultRuntime,
+      lockPort: port,
       start: async () =>
         await startGatewayServer(port, {
           bind,
@@ -363,9 +468,13 @@ export function addGatewayRunCommand(cmd: Command): Command {
       "--token <token>",
       "Shared token required in connect.params.auth.token (default: OPENCLAW_GATEWAY_TOKEN env if set)",
     )
-    .option("--auth <mode>", 'Gateway auth mode ("token"|"password")')
+    .option("--auth <mode>", `Gateway auth mode (${formatModeChoices(GATEWAY_AUTH_MODES)})`)
     .option("--password <password>", "Password for auth mode=password")
-    .option("--tailscale <mode>", 'Tailscale exposure mode ("off"|"serve"|"funnel")')
+    .option("--password-file <path>", "Read gateway password from file")
+    .option(
+      "--tailscale <mode>",
+      `Tailscale exposure mode (${formatModeChoices(GATEWAY_TAILSCALE_MODES)})`,
+    )
     .option(
       "--tailscale-reset-on-exit",
       "Reset Tailscale serve/funnel configuration on shutdown",

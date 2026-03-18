@@ -7,9 +7,12 @@ vi.mock("../pi-model-discovery.js", () => ({
 
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
+  GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+  GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
   makeModel,
   mockDiscoveredModel,
-  OPENAI_CODEX_TEMPLATE_MODEL,
+  mockGoogleGeminiCliFlashTemplateModel,
+  mockGoogleGeminiCliProTemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
@@ -37,27 +40,125 @@ describe("pi embedded model e2e smoke", () => {
     ]);
   });
 
-  it("builds an openai-codex forward-compat fallback for gpt-5.3-codex", () => {
-    mockDiscoveredModel({
-      provider: "openai-codex",
-      modelId: "gpt-5.2-codex",
-      templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
-    });
-
-    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.3-codex",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: true,
-    });
-  });
-
   it("keeps unknown-model errors for non-forward-compat IDs", () => {
     const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: openai-codex/gpt-4.1-mini");
+  });
+
+  it("builds a google-gemini-cli forward-compat fallback for gemini-3.1-pro-preview", () => {
+    mockGoogleGeminiCliProTemplateModel();
+
+    const result = resolveModel("google-gemini-cli", "gemini-3.1-pro-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+      id: "gemini-3.1-pro-preview",
+      name: "gemini-3.1-pro-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a google-gemini-cli forward-compat fallback for gemini-3.1-flash-preview", () => {
+    mockGoogleGeminiCliFlashTemplateModel();
+
+    const result = resolveModel("google-gemini-cli", "gemini-3.1-flash-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+      id: "gemini-3.1-flash-preview",
+      name: "gemini-3.1-flash-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a google-gemini-cli forward-compat fallback for gemini-3.1-flash-lite-preview", () => {
+    mockGoogleGeminiCliFlashTemplateModel();
+
+    const result = resolveModel("google-gemini-cli", "gemini-3.1-flash-lite-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+      id: "gemini-3.1-flash-lite-preview",
+      name: "gemini-3.1-flash-lite-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a google forward-compat fallback for gemini-3.1-pro-preview", () => {
+    mockDiscoveredModel({
+      provider: "google",
+      modelId: "gemini-3-pro-preview",
+      templateModel: {
+        ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+        provider: "google",
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com",
+      },
+    });
+
+    const result = resolveModel("google", "gemini-3.1-pro-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      id: "gemini-3.1-pro-preview",
+      name: "gemini-3.1-pro-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds a google forward-compat fallback for gemini-3.1-flash-lite-preview", () => {
+    mockDiscoveredModel({
+      provider: "google",
+      modelId: "gemini-3-flash-preview",
+      templateModel: {
+        ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+        provider: "google",
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com",
+      },
+    });
+
+    const result = resolveModel("google", "gemini-3.1-flash-lite-preview", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      id: "gemini-3.1-flash-lite-preview",
+      name: "gemini-3.1-flash-lite-preview",
+      reasoning: true,
+    });
+  });
+
+  it("builds an xai forward-compat fallback for Grok 4.1 fast reasoning", () => {
+    const result = resolveModel("xai", "grok-4-1-fast-reasoning", "/tmp/agent");
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "xai",
+      api: "openai-completions",
+      baseUrl: "https://api.x.ai/v1",
+      id: "grok-4-1-fast-reasoning",
+      reasoning: true,
+      contextWindow: 2_000_000,
+    });
+  });
+
+  it("keeps unknown-model errors for xai multi-agent-only ids", () => {
+    const result = resolveModel(
+      "xai",
+      "grok-4.20-multi-agent-experimental-beta-0304",
+      "/tmp/agent",
+    );
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: xai/grok-4.20-multi-agent-experimental-beta-0304");
+  });
+
+  it("keeps unknown-model errors for unrecognized google-gemini-cli model IDs", () => {
+    const result = resolveModel("google-gemini-cli", "gemini-4-unknown", "/tmp/agent");
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: google-gemini-cli/gemini-4-unknown");
   });
 });

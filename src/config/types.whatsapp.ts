@@ -4,7 +4,10 @@ import type {
   GroupPolicy,
   MarkdownConfig,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -36,6 +39,8 @@ export type WhatsAppAckReactionConfig = {
 };
 
 type WhatsAppSharedConfig = {
+  /** Whether the WhatsApp channel is enabled. */
+  enabled?: boolean;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
   /** Same-phone setup (bot uses your personal WhatsApp number). */
@@ -76,6 +81,8 @@ type WhatsAppSharedConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
 };
 
 type WhatsAppConfigCore = {
@@ -97,6 +104,8 @@ export type WhatsAppConfig = WhatsAppConfigCore &
   WhatsAppSharedConfig & {
     /** Optional per-account WhatsApp configuration (multi-account). */
     accounts?: Record<string, WhatsAppAccountConfig>;
+    /** Optional default account id when multiple accounts are configured. */
+    defaultAccount?: string;
     /** Per-action tool gating (default: true for all). */
     actions?: WhatsAppActionConfig;
   };

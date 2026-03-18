@@ -43,7 +43,14 @@ Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `sl
 Stored under `~/.openclaw/credentials/`:
 
 - Pending requests: `<channel>-pairing.json`
-- Approved allowlist store: `<channel>-allowFrom.json`
+- Approved allowlist store:
+  - Default account: `<channel>-allowFrom.json`
+  - Non-default account: `<channel>-<accountId>-allowFrom.json`
+
+Account scoping behavior:
+
+- Non-default accounts read/write only their scoped allowlist file.
+- Default account uses the channel-scoped unscoped allowlist file.
 
 Treat these as sensitive (they gate access to your assistant).
 
@@ -65,7 +72,7 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 The setup code is a base64-encoded JSON payload that contains:
 
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
-- `token`: a short-lived pairing token
+- `bootstrapToken`: a short-lived single-device bootstrap token used for the initial pairing handshake
 
 Treat the setup code like a password while it is valid.
 

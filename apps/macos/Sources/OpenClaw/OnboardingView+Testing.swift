@@ -37,18 +37,9 @@ extension OnboardingView {
         view.cliStatus = "Installed"
         view.workspacePath = "/tmp/openclaw"
         view.workspaceStatus = "Saved workspace"
-        view.anthropicAuthPKCE = AnthropicOAuth.PKCE(verifier: "verifier", challenge: "challenge")
-        view.anthropicAuthCode = "code#state"
-        view.anthropicAuthStatus = "Connected"
-        view.anthropicAuthDetectedStatus = .connected(expiresAtMs: 1_700_000_000_000)
-        view.anthropicAuthConnected = true
-        view.anthropicAuthAutoDetectClipboard = false
-        view.anthropicAuthAutoConnectClipboard = false
-
         view.state.connectionMode = .local
         _ = view.welcomePage()
         _ = view.connectionPage()
-        _ = view.anthropicAuthPage()
         _ = view.wizardPage()
         _ = view.permissionsPage()
         _ = view.cliPage()

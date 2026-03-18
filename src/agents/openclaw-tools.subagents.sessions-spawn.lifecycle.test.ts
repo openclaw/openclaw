@@ -10,11 +10,21 @@ import {
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
+const fastModeEnv = vi.hoisted(() => {
+  const previous = process.env.OPENCLAW_TEST_FAST;
+  process.env.OPENCLAW_TEST_FAST = "1";
+  return { previous };
+});
+
 vi.mock("./pi-embedded.js", () => ({
   isEmbeddedPiRunActive: () => false,
   isEmbeddedPiRunStreaming: () => false,
   queueEmbeddedPiMessage: () => false,
   waitForEmbeddedPiRunEnd: async () => true,
+}));
+
+vi.mock("./tools/agent-step.js", () => ({
+  readLatestAssistantReply: async () => "done",
 }));
 
 const callGatewayMock = getCallGatewayMock();
@@ -69,14 +79,31 @@ async function executeSpawnAndExpectAccepted(params: {
   return result;
 }
 
-describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
-  let previousFastTestEnv: string | undefined;
+async function emitLifecycleEndAndFlush(params: {
+  runId: string;
+  startedAt: number;
+  endedAt: number;
+}) {
+  vi.useFakeTimers();
+  try {
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: params.startedAt,
+        endedAt: params.endedAt,
+      },
+    });
 
+    await vi.runAllTimersAsync();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   beforeEach(() => {
-    if (previousFastTestEnv === undefined) {
-      previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
-    }
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetSessionsSpawnConfigOverride();
     setSessionsSpawnConfigOverride({
       session: {
@@ -94,11 +121,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   });
 
   afterAll(() => {
-    if (previousFastTestEnv === undefined) {
+    if (fastModeEnv.previous === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;
       return;
     }
-    process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+    process.env.OPENCLAW_TEST_FAST = fastModeEnv.previous;
   });
 
   it("sessions_spawn runs cleanup flow after subagent completion", async () => {
@@ -128,19 +155,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    emitAgentEvent({
-      runId: child.runId,
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: 1000,
-        endedAt: 2000,
-      },
-    });
-
-    await waitFor(() => ctx.waitCalls.some((call) => call.runId === child.runId));
-    await waitFor(() => patchCalls.some((call) => call.label === "my-task"));
-    await waitFor(() => ctx.calls.filter((c) => c.method === "agent").length >= 2);
+    await waitFor(
+      () =>
+        ctx.waitCalls.some((call) => call.runId === child.runId) &&
+        patchCalls.some((call) => call.label === "my-task") &&
+        ctx.calls.filter((call) => call.method === "agent").length >= 2,
+    );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
@@ -187,25 +207,15 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    vi.useFakeTimers();
-    try {
-      emitAgentEvent({
-        runId: child.runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt: 1234,
-          endedAt: 2345,
-        },
-      });
+    await emitLifecycleEndAndFlush({
+      runId: child.runId,
+      startedAt: 1234,
+      endedAt: 2345,
+    });
 
-      await vi.runAllTimersAsync();
-    } finally {
-      vi.useRealTimers();
-    }
-
-    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
-    await waitFor(() => Boolean(deletedKey));
+    await waitFor(
+      () => ctx.calls.filter((call) => call.method === "agent").length >= 2 && Boolean(deletedKey),
+    );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
@@ -235,7 +245,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
         }
       | undefined;
     expect(second?.sessionKey).toBe("agent:main:discord:group:req");
-    expect(second?.deliver).toBe(true);
+    expect(second?.deliver).toBe(false);
     expect(second?.message).toContain("subagent task");
 
     const sendCalls = ctx.calls.filter((c) => c.method === "send");
@@ -265,9 +275,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    await waitFor(() => ctx.waitCalls.some((call) => call.runId === child.runId));
-    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
-    await waitFor(() => Boolean(deletedKey));
+    await waitFor(
+      () =>
+        ctx.waitCalls.some((call) => call.runId === child.runId) &&
+        ctx.calls.filter((call) => call.method === "agent").length >= 2 &&
+        Boolean(deletedKey),
+    );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
@@ -284,7 +297,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     // Second call: main agent trigger
     const second = agentCalls[1]?.params as { sessionKey?: string; deliver?: boolean } | undefined;
     expect(second?.sessionKey).toBe("agent:main:discord:group:req");
-    expect(second?.deliver).toBe(true);
+    expect(second?.deliver).toBe(false);
 
     // No direct send to external channel (main agent handles delivery)
     const sendCalls = ctx.calls.filter((c) => c.method === "send");
@@ -341,30 +354,19 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    vi.useFakeTimers();
-    try {
-      emitAgentEvent({
-        runId: child.runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt: 1000,
-          endedAt: 2000,
-        },
-      });
-
-      await vi.runAllTimersAsync();
-    } finally {
-      vi.useRealTimers();
-    }
+    await emitLifecycleEndAndFlush({
+      runId: child.runId,
+      startedAt: 1000,
+      endedAt: 2000,
+    });
 
     const agentCalls = ctx.calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);
     const announceParams = agentCalls[1]?.params as
       | { accountId?: string; channel?: string; deliver?: boolean }
       | undefined;
-    expect(announceParams?.deliver).toBe(true);
-    expect(announceParams?.channel).toBe("whatsapp");
-    expect(announceParams?.accountId).toBe("kev");
+    expect(announceParams?.deliver).toBe(false);
+    expect(announceParams?.channel).toBeUndefined();
+    expect(announceParams?.accountId).toBeUndefined();
   });
 });

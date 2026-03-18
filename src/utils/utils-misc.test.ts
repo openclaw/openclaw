@@ -58,16 +58,20 @@ describe("isReasoningTagProvider", () => {
       value: "Ollama",
       expected: false,
     },
+    {
+      name: "returns true for google (gemini-api-key auth provider)",
+      value: "google",
+      expected: true,
+    },
+    {
+      name: "returns true for Google (case-insensitive)",
+      value: "Google",
+      expected: true,
+    },
     { name: "returns true for google-gemini-cli", value: "google-gemini-cli", expected: true },
     {
       name: "returns true for google-generative-ai",
       value: "google-generative-ai",
-      expected: true,
-    },
-    { name: "returns true for google-antigravity", value: "google-antigravity", expected: true },
-    {
-      name: "returns true for google-antigravity model suffixes",
-      value: "google-antigravity/gemini-3",
       expected: true,
     },
     { name: "returns true for minimax", value: "minimax", expected: true },
@@ -101,5 +105,11 @@ describe("splitShellArgs", () => {
   it("returns null for unterminated quotes", () => {
     expect(splitShellArgs(`echo "oops`)).toBeNull();
     expect(splitShellArgs(`echo 'oops`)).toBeNull();
+  });
+
+  it("stops at unquoted shell comments but keeps quoted hashes literal", () => {
+    expect(splitShellArgs(`echo hi # comment && whoami`)).toEqual(["echo", "hi"]);
+    expect(splitShellArgs(`echo "hi # still-literal"`)).toEqual(["echo", "hi # still-literal"]);
+    expect(splitShellArgs(`echo hi#tail`)).toEqual(["echo", "hi#tail"]);
   });
 });

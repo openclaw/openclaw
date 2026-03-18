@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { detectMime } from "../../media/mime.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
@@ -53,6 +54,10 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
   };
 }
 
+function readParamRaw(params: Record<string, unknown>, key: string): unknown {
+  return readSnakeCaseParamRaw(params, key);
+}
+
 export function readStringParam(
   params: Record<string, unknown>,
   key: string,
@@ -69,7 +74,7 @@ export function readStringParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, trim = true, label = key, allowEmpty = false } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   if (typeof raw !== "string") {
     if (required) {
       throw new ToolInputError(`${label} required`);
@@ -92,7 +97,7 @@ export function readStringOrNumberParam(
   options: { required?: boolean; label?: string } = {},
 ): string | undefined {
   const { required = false, label = key } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return String(raw);
   }
@@ -111,17 +116,17 @@ export function readStringOrNumberParam(
 export function readNumberParam(
   params: Record<string, unknown>,
   key: string,
-  options: { required?: boolean; label?: string; integer?: boolean } = {},
+  options: { required?: boolean; label?: string; integer?: boolean; strict?: boolean } = {},
 ): number | undefined {
-  const { required = false, label = key, integer = false } = options;
-  const raw = params[key];
+  const { required = false, label = key, integer = false, strict = false } = options;
+  const raw = readParamRaw(params, key);
   let value: number | undefined;
   if (typeof raw === "number" && Number.isFinite(raw)) {
     value = raw;
   } else if (typeof raw === "string") {
     const trimmed = raw.trim();
     if (trimmed) {
-      const parsed = Number.parseFloat(trimmed);
+      const parsed = strict ? Number(trimmed) : Number.parseFloat(trimmed);
       if (Number.isFinite(parsed)) {
         value = parsed;
       }
@@ -152,7 +157,7 @@ export function readStringArrayParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, label = key } = options;
-  const raw = params[key];
+  const raw = readParamRaw(params, key);
   if (Array.isArray(raw)) {
     const values = raw
       .filter((entry) => typeof entry === "string")

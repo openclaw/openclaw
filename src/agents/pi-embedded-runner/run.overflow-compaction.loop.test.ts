@@ -1,29 +1,44 @@
-import "./run.overflow-compaction.mocks.shared.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { isCompactionFailureError, isLikelyContextOverflowError } from "../pi-embedded-helpers.js";
-
-vi.mock("../../utils.js", () => ({
-  resolveUserPath: vi.fn((p: string) => p),
-}));
-
-import { log } from "./logger.js";
-import { runEmbeddedPiAgent } from "./run.js";
-import { makeAttemptResult, mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  makeAttemptResult,
+  makeCompactionSuccess,
+  makeOverflowError,
+  mockOverflowRetrySuccess,
+  queueOverflowAttemptWithOversizedToolOutput,
+} from "./run.overflow-compaction.fixture.js";
+import {
+  loadRunOverflowCompactionHarness,
+  mockedContextEngine,
   mockedCompactDirect,
+  mockedIsCompactionFailureError,
+  mockedIsLikelyContextOverflowError,
+  mockedLog,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams as baseParams,
-} from "./run.overflow-compaction.shared-test.js";
+} from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-const mockedIsCompactionFailureError = vi.mocked(isCompactionFailureError);
-const mockedIsLikelyContextOverflowError = vi.mocked(isLikelyContextOverflowError);
+let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
 describe("overflow compaction in run loop", () => {
+  beforeAll(async () => {
+    ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
+  });
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockedRunEmbeddedAttempt.mockReset();
+    mockedCompactDirect.mockReset();
+    mockedSessionLikelyHasOversizedToolResults.mockReset();
+    mockedTruncateOversizedToolResultsInSession.mockReset();
+    mockedContextEngine.info.ownsCompaction = false;
+    mockedLog.debug.mockReset();
+    mockedLog.info.mockReset();
+    mockedLog.warn.mockReset();
+    mockedLog.error.mockReset();
+    mockedLog.isEnabled.mockReset();
+    mockedLog.isEnabled.mockReturnValue(false);
     mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
       if (!msg) {
         return false;
@@ -66,15 +81,19 @@ describe("overflow compaction in run loop", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedCompactDirect).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: "test-profile" }),
+      expect.objectContaining({
+        runtimeContext: expect.objectContaining({ authProfileId: "test-profile" }),
+      }),
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(log.warn).toHaveBeenCalledWith(
+    expect(mockedLog.warn).toHaveBeenCalledWith(
       expect.stringContaining(
         "context overflow detected (attempt 1/3); attempting auto-compaction",
       ),
     );
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("auto-compaction succeeded"));
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("auto-compaction succeeded"),
+    );
     // Should not be an error result
     expect(result.meta.error).toBeUndefined();
   });
@@ -86,26 +105,24 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowHintError }))
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
         summary: "Compacted session",
         firstKeptEntryId: "entry-6",
         tokensBefore: 140000,
-      },
-    });
+      }),
+    );
 
     const result = await runEmbeddedPiAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("source=promptError"));
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("source=promptError"));
     expect(result.meta.error).toBeUndefined();
   });
 
   it("returns error if compaction fails", async () => {
-    const overflowError = new Error("request_too_large: Request size exceeds model context window");
+    const overflowError = makeOverflowError();
 
     mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError: overflowError }));
 
@@ -121,25 +138,12 @@ describe("overflow compaction in run loop", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.meta.error?.kind).toBe("context_overflow");
     expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("auto-compaction failed"));
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("auto-compaction failed"));
   });
 
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
-    const overflowError = new Error("request_too_large: Request size exceeds model context window");
-
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: overflowError,
-          messagesSnapshot: [
-            {
-              role: "assistant",
-              content: "big tool output",
-            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-          ],
-        }),
-      )
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     mockedCompactDirect.mockResolvedValueOnce({
       ok: false,
@@ -162,12 +166,14 @@ describe("overflow compaction in run loop", () => {
       expect.objectContaining({ sessionFile: "/tmp/session.json" }),
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("Truncated 1 tool result(s)"));
+    expect(mockedLog.info).toHaveBeenCalledWith(
+      expect.stringContaining("Truncated 1 tool result(s)"),
+    );
     expect(result.meta.error).toBeUndefined();
   });
 
   it("retries compaction up to 3 times before giving up", async () => {
-    const overflowError = new Error("request_too_large: Request size exceeds model context window");
+    const overflowError = makeOverflowError();
 
     // 4 overflow errors: 3 compaction retries + final failure
     mockedRunEmbeddedAttempt
@@ -177,21 +183,27 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }));
 
     mockedCompactDirect
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { summary: "Compacted 1", firstKeptEntryId: "entry-3", tokensBefore: 180000 },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { summary: "Compacted 2", firstKeptEntryId: "entry-5", tokensBefore: 160000 },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { summary: "Compacted 3", firstKeptEntryId: "entry-7", tokensBefore: 140000 },
-      });
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted 1",
+          firstKeptEntryId: "entry-3",
+          tokensBefore: 180000,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted 2",
+          firstKeptEntryId: "entry-5",
+          tokensBefore: 160000,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted 3",
+          firstKeptEntryId: "entry-7",
+          tokensBefore: 140000,
+        }),
+      );
 
     const result = await runEmbeddedPiAgent(baseParams);
 
@@ -204,7 +216,7 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("succeeds after second compaction attempt", async () => {
-    const overflowError = new Error("request_too_large: Request size exceeds model context window");
+    const overflowError = makeOverflowError();
 
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
@@ -212,16 +224,20 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     mockedCompactDirect
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { summary: "Compacted 1", firstKeptEntryId: "entry-3", tokensBefore: 180000 },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { summary: "Compacted 2", firstKeptEntryId: "entry-5", tokensBefore: 160000 },
-      });
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted 1",
+          firstKeptEntryId: "entry-3",
+          tokensBefore: 180000,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted 2",
+          firstKeptEntryId: "entry-5",
+          tokensBefore: 160000,
+        }),
+      );
 
     const result = await runEmbeddedPiAgent(baseParams);
 
@@ -259,21 +275,19 @@ describe("overflow compaction in run loop", () => {
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
         summary: "Compacted session",
         firstKeptEntryId: "entry-5",
         tokensBefore: 150000,
-      },
-    });
+      }),
+    );
 
     const result = await runEmbeddedPiAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -291,7 +305,9 @@ describe("overflow compaction in run loop", () => {
     await expect(runEmbeddedPiAgent(baseParams)).rejects.toThrow("transport disconnected");
 
     expect(mockedCompactDirect).not.toHaveBeenCalled();
-    expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+    expect(mockedLog.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("source=assistantError"),
+    );
   });
 
   it("returns an explicit timeout payload when the run times out before producing any reply", async () => {

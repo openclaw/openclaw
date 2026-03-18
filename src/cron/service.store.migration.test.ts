@@ -1,28 +1,13 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
+import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import { loadCronStore } from "./store.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
-
-async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-migrate-"));
-  return {
-    dir,
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
-}
+const noopLogger = createNoopLogger();
+const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-migrate-" });
 
 async function writeLegacyStore(storePath: string, legacyJob: Record<string, unknown>) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -77,6 +62,26 @@ async function migrateLegacyJob(legacyJob: Record<string, unknown>) {
   }
 }
 
+async function expectDefaultCronStaggerForLegacySchedule(params: {
+  id: string;
+  name: string;
+  expr: string;
+}) {
+  const createdAtMs = 1_700_000_000_000;
+  const migrated = await migrateLegacyJob(
+    makeLegacyJob({
+      id: params.id,
+      name: params.name,
+      createdAtMs,
+      updatedAtMs: createdAtMs,
+      schedule: { kind: "cron", expr: params.expr, tz: "UTC" },
+    }),
+  );
+  const schedule = migrated.schedule as Record<string, unknown>;
+  expect(schedule.kind).toBe("cron");
+  expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+}
+
 describe("cron store migration", () => {
   beforeEach(() => {
     noopLogger.debug.mockClear();
@@ -128,6 +133,24 @@ describe("cron store migration", () => {
     expect(schedule.at).toBe(new Date(atMs).toISOString());
   });
 
+  it("preserves stored custom session targets", async () => {
+    const migrated = await migrateLegacyJob(
+      makeLegacyJob({
+        id: "job-custom-session",
+        name: "Custom session",
+        schedule: { kind: "cron", expr: "0 23 * * *", tz: "UTC" },
+        sessionTarget: "session:ProjectAlpha",
+        payload: {
+          kind: "agentTurn",
+          message: "hello",
+        },
+      }),
+    );
+
+    expect(migrated.sessionTarget).toBe("session:ProjectAlpha");
+    expect(migrated.delivery).toEqual({ mode: "announce" });
+  });
+
   it("adds anchorMs to legacy every schedules", async () => {
     const createdAtMs = 1_700_000_000_000;
     const migrated = await migrateLegacyJob(
@@ -145,35 +168,19 @@ describe("cron store migration", () => {
   });
 
   it("adds default staggerMs to legacy recurring top-of-hour cron schedules", async () => {
-    const createdAtMs = 1_700_000_000_000;
-    const migrated = await migrateLegacyJob(
-      makeLegacyJob({
-        id: "job-cron-legacy",
-        name: "Legacy cron",
-        createdAtMs,
-        updatedAtMs: createdAtMs,
-        schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
-      }),
-    );
-    const schedule = migrated.schedule as Record<string, unknown>;
-    expect(schedule.kind).toBe("cron");
-    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+    await expectDefaultCronStaggerForLegacySchedule({
+      id: "job-cron-legacy",
+      name: "Legacy cron",
+      expr: "0 */2 * * *",
+    });
   });
 
   it("adds default staggerMs to legacy 6-field top-of-hour cron schedules", async () => {
-    const createdAtMs = 1_700_000_000_000;
-    const migrated = await migrateLegacyJob(
-      makeLegacyJob({
-        id: "job-cron-seconds-legacy",
-        name: "Legacy cron seconds",
-        createdAtMs,
-        updatedAtMs: createdAtMs,
-        schedule: { kind: "cron", expr: "0 0 */3 * * *", tz: "UTC" },
-      }),
-    );
-    const schedule = migrated.schedule as Record<string, unknown>;
-    expect(schedule.kind).toBe("cron");
-    expect(schedule.staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
+    await expectDefaultCronStaggerForLegacySchedule({
+      id: "job-cron-seconds-legacy",
+      name: "Legacy cron seconds",
+      expr: "0 0 */3 * * *",
+    });
   });
 
   it("removes invalid legacy staggerMs from non top-of-hour cron schedules", async () => {
@@ -192,5 +199,48 @@ describe("cron store migration", () => {
     const schedule = migrated.schedule as Record<string, unknown>;
     expect(schedule.kind).toBe("cron");
     expect(schedule.staggerMs).toBeUndefined();
+  });
+
+  it("migrates legacy string schedules and command-only payloads (#18445)", async () => {
+    const store = await makeStorePath();
+    try {
+      await writeLegacyStore(store.storePath, {
+        id: "imessage-refresh",
+        name: "iMessage Refresh",
+        enabled: true,
+        createdAtMs: 1_700_000_000_000,
+        updatedAtMs: 1_700_000_000_000,
+        schedule: "0 */2 * * *",
+        command: "bash /tmp/imessage-refresh.sh",
+        timeout: 120,
+        state: {},
+      });
+
+      await migrateAndLoadFirstJob(store.storePath);
+      const loaded = await loadCronStore(store.storePath);
+      const migrated = loaded.jobs[0] as Record<string, unknown>;
+
+      expect(migrated.schedule).toEqual(
+        expect.objectContaining({
+          kind: "cron",
+          expr: "0 */2 * * *",
+        }),
+      );
+      expect(migrated.sessionTarget).toBe("main");
+      expect(migrated.wakeMode).toBe("now");
+      expect(migrated.payload).toEqual({
+        kind: "systemEvent",
+        text: "bash /tmp/imessage-refresh.sh",
+      });
+      expect("command" in migrated).toBe(false);
+      expect("timeout" in migrated).toBe(false);
+
+      const scheduleWarn = noopLogger.warn.mock.calls.find((args) =>
+        String(args[1] ?? "").includes("failed to compute next run for job (skipping)"),
+      );
+      expect(scheduleWarn).toBeUndefined();
+    } finally {
+      await store.cleanup();
+    }
   });
 });
