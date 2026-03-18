@@ -218,14 +218,14 @@ function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
 }
 
 const zalouserMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
+  describeMessageTool: ({ cfg }) => {
     const accounts = listZalouserAccountIds(cfg)
       .map((accountId) => resolveZalouserAccountSync({ cfg, accountId }))
       .filter((account) => account.enabled);
     if (accounts.length === 0) {
-      return [];
+      return null;
     }
-    return ["react"];
+    return { actions: ["react"] };
   },
   supportsAction: ({ action }) => action === "react",
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
