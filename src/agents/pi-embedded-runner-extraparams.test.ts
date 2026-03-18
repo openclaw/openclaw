@@ -450,6 +450,7 @@ describe("applyExtraParamsToAgent", () => {
       | Model<"openai-completions">
       | Model<"openai-responses">
       | Model<"azure-openai-responses">
+      | Model<"openai-codex-responses">
       | Model<"anthropic-messages">;
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
@@ -467,6 +468,10 @@ describe("applyExtraParamsToAgent", () => {
       params.applyProvider,
       params.applyModelId,
       params.extraParamsOverride,
+      undefined,
+      undefined,
+      undefined,
+      params.model,
     );
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, {});
@@ -716,6 +721,61 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.parallel_tool_calls).toBe(true);
   });
 
+  it("respects camelCase parallelToolCalls: false config to disable default for openai-codex", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.3-codex",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.3-codex": {
+                params: {
+                  parallelToolCalls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.3-codex",
+      } as unknown as Model<"openai-codex-responses">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("defaults parallel_tool_calls on for openai-codex responses", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.3-codex",
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.3-codex",
+      } as unknown as Model<"openai-codex-responses">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(true);
+  });
+
+  it("does not default parallel_tool_calls on for openai-codex openai-completions", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      model: {
+        api: "openai-completions",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+      } as unknown as Model<"openai-completions">,
+    });
+
+    expect(payload).not.toHaveProperty("parallel_tool_calls");
+  });
+
   it("does not inject parallel_tool_calls for unsupported APIs", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "anthropic",
@@ -768,6 +828,33 @@ describe("applyExtraParamsToAgent", () => {
         provider: "nvidia-nim",
         id: "moonshotai/kimi-k2.5",
       } as Model<"openai-completions">,
+    });
+
+    expect(payload.parallel_tool_calls).toBe(false);
+  });
+
+  it("lets explicit false config disable default openai-codex parallel_tool_calls", () => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.3-codex",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.3-codex": {
+                params: {
+                  parallel_tool_calls: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.3-codex",
+      } as unknown as Model<"openai-codex-responses">,
     });
 
     expect(payload.parallel_tool_calls).toBe(false);

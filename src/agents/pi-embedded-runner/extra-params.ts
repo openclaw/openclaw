@@ -276,7 +276,8 @@ function createParallelToolCallsWrapper(
     if (
       model.api !== "openai-completions" &&
       model.api !== "openai-responses" &&
-      model.api !== "azure-openai-responses"
+      model.api !== "azure-openai-responses" &&
+      model.api !== "openai-codex-responses"
     ) {
       return underlying(model, context, options);
     }
@@ -287,6 +288,17 @@ function createParallelToolCallsWrapper(
       payloadObj.parallel_tool_calls = enabled;
     });
   };
+}
+
+function resolveDefaultParallelToolCalls(
+  provider: string,
+  modelApi?: ProviderRuntimeModel["api"],
+): boolean | undefined {
+  // Codex workloads are often tool-heavy; default to parallel tool calls for
+  // Codex Responses unless explicitly overridden by config/runtime params.
+  return provider === "openai-codex" && modelApi === "openai-codex-responses"
+    ? true
+    : undefined;
 }
 
 type ApplyExtraParamsContext = {
@@ -445,19 +457,28 @@ function applyPostPluginStreamWrappers(
     "parallel_tool_calls",
     "parallelToolCalls",
   );
-  if (rawParallelToolCalls === undefined) {
+  const resolvedParallelToolCalls =
+    rawParallelToolCalls === undefined
+      ? resolveDefaultParallelToolCalls(ctx.provider, ctx.model?.api)
+      : rawParallelToolCalls;
+  if (resolvedParallelToolCalls === undefined) {
     return;
   }
-  if (typeof rawParallelToolCalls === "boolean") {
-    ctx.agent.streamFn = createParallelToolCallsWrapper(ctx.agent.streamFn, rawParallelToolCalls);
+  if (typeof resolvedParallelToolCalls === "boolean") {
+    ctx.agent.streamFn = createParallelToolCallsWrapper(
+      ctx.agent.streamFn,
+      resolvedParallelToolCalls,
+    );
     return;
   }
-  if (rawParallelToolCalls === null) {
+  if (resolvedParallelToolCalls === null) {
     log.debug("parallel_tool_calls suppressed by null override, skipping injection");
     return;
   }
   const summary =
-    typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
+    typeof resolvedParallelToolCalls === "string"
+      ? resolvedParallelToolCalls
+      : typeof resolvedParallelToolCalls;
   log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
 }
 
