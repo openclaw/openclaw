@@ -10,11 +10,11 @@ import {
   resolveTimeoutSeconds,
   resolveWebSearchProviderCredential,
   setScopedCredentialValue,
+  type WebSearchProviderPlugin,
   withTrustedWebToolsEndpoint,
   wrapWebContent,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
-import type { WebSearchProviderPlugin } from "../../src/plugins/types.js";
 
 const XAI_WEB_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
 const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
