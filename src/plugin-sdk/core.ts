@@ -13,6 +13,19 @@ export type { OpenClawConfig } from "../config/config.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
+export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+export {
+  applyAccountNameToChannelSection,
+  migrateBaseNameToDefaultAccount,
+} from "../channels/plugins/setup-helpers.js";
+export {
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "../channels/plugins/config-helpers.js";
+export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { getChatChannelMeta } from "../channels/registry.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   applyProviderDefaultModel,

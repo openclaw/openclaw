@@ -808,6 +808,7 @@ export type {
 } from "../context-engine/types.js";
 export { registerContextEngine } from "../context-engine/registry.js";
 export type { ContextEngineFactory } from "../context-engine/registry.js";
+export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 
 // Model authentication types for plugins.
 // Plugins should use runtime.modelAuth (which strips unsafe overrides like
