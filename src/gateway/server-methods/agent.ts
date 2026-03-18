@@ -835,7 +835,10 @@ export const agentHandlers: GatewayRequestHandlers = {
               new Promise<null>((resolve) => {
                 graceTimer = setTimeout(
                   () => resolve(null),
-                  Math.max(1, Math.min(timeoutMs, AGENT_WAIT_DEDUPE_METADATA_GRACE_MS, 2_147_483_647)),
+                  Math.max(
+                    1,
+                    Math.min(timeoutMs, AGENT_WAIT_DEDUPE_METADATA_GRACE_MS, 2_147_483_647),
+                  ),
                 );
                 graceTimer.unref?.();
               }),
