@@ -35,6 +35,7 @@ export {
   buildSingleChannelSecretPromptState,
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
+  createAllowFromSection,
   createLegacyCompatChannelDmPolicy,
   createNestedChannelAllowFromSetter,
   createNestedChannelDmPolicy,
@@ -55,13 +56,16 @@ export {
   patchChannelConfigForAccount,
   promptLegacyChannelAllowFrom,
   promptLegacyChannelAllowFromForAccount,
+  promptParsedAllowFromForAccount,
   promptParsedAllowFromForScopedChannel,
   promptSingleChannelSecretInput,
   promptResolvedAllowFrom,
+  resolveParsedAllowFromEntries,
   resolveEntriesWithOptionalToken,
   resolveSetupAccountId,
   resolveGroupAllowlistWithLookupNotes,
   runSingleChannelSecretStep,
+  setAccountAllowFromForChannel,
   setAccountDmAllowFromForChannel,
   setAccountGroupPolicyForChannel,
   setChannelDmPolicyWithAllowFrom,
@@ -75,5 +79,17 @@ export {
   splitSetupEntries,
 } from "../channels/plugins/setup-wizard-helpers.js";
 export { createAllowlistSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
+export {
+  createDelegatedFinalize,
+  createDelegatedPrepare,
+  createDelegatedResolveConfigured,
+  createDelegatedSetupWizardProxy,
+} from "../channels/plugins/setup-wizard-proxy.js";
+export {
+  createCliPathTextInput,
+  createDelegatedSetupWizardStatusResolvers,
+  createDelegatedTextInputShouldPrompt,
+  createDetectedBinaryStatus,
+} from "../channels/plugins/setup-wizard-binary.js";
 
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
