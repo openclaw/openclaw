@@ -55,6 +55,26 @@ export function getShellConfig(): { shell: string; args: string[] } {
       } else {
         shellPath = resolveShellFromPath(name) ?? name;
       }
+
+      // Preserve shell-specific safeguards even when overriding.
+      // Fish rejects common bashisms — fall back to bash/sh like the default path.
+      if (name === "fish") {
+        const bash = resolveShellFromPath("bash");
+        if (bash) {
+          return { shell: bash, args: ["-c"] };
+        }
+        const sh = resolveShellFromPath("sh");
+        if (sh) {
+          return { shell: sh, args: ["-c"] };
+        }
+      }
+
+      // PowerShell needs -NoProfile -NonInteractive to suppress profile
+      // banners and prompt hooks that leak into stdout or hang exec.
+      if (name === "pwsh" || name === "powershell") {
+        return { shell: shellPath, args: ["-NoProfile", "-NonInteractive", "-Command"] };
+      }
+
       return { shell: shellPath, args: ["-c"] };
     }
   }

@@ -107,6 +107,24 @@ describe("getShellConfig", () => {
     const { shell } = getShellConfig();
     expect(shell).toBe(path.join(binDir, "zsh"));
   });
+
+  it("CLAWDBOT_SHELL=fish falls back to bash like default path", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
+    process.env.CLAWDBOT_SHELL = "/usr/bin/fish";
+    process.env.SHELL = "/usr/bin/bash";
+    process.env.PATH = binDir;
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe(path.join(binDir, "bash"));
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("CLAWDBOT_SHELL=pwsh uses PowerShell safeguard args", () => {
+    process.env.CLAWDBOT_SHELL = "/usr/bin/pwsh";
+    process.env.SHELL = "/usr/bin/bash";
+    const { shell, args } = getShellConfig();
+    expect(shell).toBe("/usr/bin/pwsh");
+    expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+  });
 });
 
 describe("resolveShellFromPath", () => {
