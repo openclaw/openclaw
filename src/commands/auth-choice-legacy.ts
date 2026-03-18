@@ -16,7 +16,10 @@ export function normalizeLegacyOnboardAuthChoice(
   if (authChoice === "oauth" || authChoice === "claude-cli") {
     return "setup-token";
   }
-  if (authChoice === "codex-cli" || authChoice === "openai-device-code") {
+  if (authChoice === "codex-cli") {
+    return "openai-codex";
+  }
+  if (authChoice === "openai-device-code") {
     return "openai-codex-cli";
   }
   return authChoice;

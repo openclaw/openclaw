@@ -175,11 +175,33 @@ describe("onboardCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       [
         'Auth choice "codex-cli" is deprecated.',
-        'Run "openclaw onboard" and choose OpenAI Codex CLI login or OpenAI Codex (ChatGPT OAuth).',
+        'Use "--auth-choice openai-codex" for OpenAI Codex (ChatGPT OAuth).',
       ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.runInteractiveOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
+  });
+
+  it("maps interactive codex-cli to OpenAI Codex OAuth", async () => {
+    const runtime = makeRuntime();
+
+    await onboardCommand(
+      {
+        authChoice: "codex-cli",
+      },
+      runtime,
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      'Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.',
+    );
+    expect(mocks.runInteractiveOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authChoice: "openai-codex",
+      }),
+      runtime,
+    );
     expect(mocks.runNonInteractiveOnboarding).not.toHaveBeenCalled();
   });
 });

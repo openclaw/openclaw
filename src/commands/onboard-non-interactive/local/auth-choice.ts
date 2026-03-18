@@ -157,7 +157,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     runtime.error(
       [
         'Auth choice "codex-cli" is deprecated.',
-        'Run "openclaw onboard" and choose OpenAI Codex CLI login or OpenAI Codex (ChatGPT OAuth).',
+        'Use "--auth-choice openai-codex" for OpenAI Codex (ChatGPT OAuth).',
       ].join("\n"),
     );
     runtime.exit(1);
