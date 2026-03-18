@@ -1,74 +1,72 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DirectoryConfigParams } from "../../../src/channels/plugins/directory-config.js";
-
-const mocks = vi.hoisted(() => ({
-  fetchDiscord: vi.fn(),
-  normalizeDiscordToken: vi.fn((token: string) => token.trim()),
-  resolveDiscordAccount: vi.fn(),
-}));
-
-vi.mock("./accounts.js", () => ({
-  resolveDiscordAccount: mocks.resolveDiscordAccount,
-}));
-
-vi.mock("./api.js", () => ({
-  fetchDiscord: mocks.fetchDiscord,
-}));
-
-vi.mock("./token.js", () => ({
-  normalizeDiscordToken: mocks.normalizeDiscordToken,
-}));
-
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { DirectoryConfigParams } from "../../../src/plugin-sdk/directory-runtime.js";
 import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "./directory-live.js";
 
 function makeParams(overrides: Partial<DirectoryConfigParams> = {}): DirectoryConfigParams {
   return {
-    cfg: {} as DirectoryConfigParams["cfg"],
+    cfg: {
+      channels: {
+        discord: {
+          token: "test-token",
+        },
+      },
+    } as OpenClawConfig,
+    accountId: "default",
     ...overrides,
   };
 }
 
+function jsonResponse(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 describe("discord directory live lookups", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveDiscordAccount.mockReturnValue({ token: "test-token" });
-    mocks.normalizeDiscordToken.mockImplementation((token: string) => token.trim());
+    vi.restoreAllMocks();
   });
 
   it("returns empty group directory when token is missing", async () => {
-    mocks.normalizeDiscordToken.mockReturnValue("");
-
-    const rows = await listDiscordDirectoryGroupsLive(makeParams({ query: "general" }));
+    const rows = await listDiscordDirectoryGroupsLive({
+      ...makeParams(),
+      cfg: { channels: { discord: { token: "" } } } as OpenClawConfig,
+      query: "general",
+    });
 
     expect(rows).toEqual([]);
-    expect(mocks.fetchDiscord).not.toHaveBeenCalled();
   });
 
   it("returns empty peer directory without query and skips guild listing", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
     const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "  " }));
 
     expect(rows).toEqual([]);
-    expect(mocks.fetchDiscord).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("filters group channels by query and respects limit", async () => {
-    mocks.fetchDiscord.mockImplementation(async (path: string) => {
-      if (path === "/users/@me/guilds") {
-        return [
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([
           { id: "g1", name: "Guild 1" },
           { id: "g2", name: "Guild 2" },
-        ];
+        ]);
       }
-      if (path === "/guilds/g1/channels") {
-        return [
+      if (url.endsWith("/guilds/g1/channels")) {
+        return jsonResponse([
           { id: "c1", name: "general" },
           { id: "c2", name: "random" },
-        ];
+        ]);
       }
-      if (path === "/guilds/g2/channels") {
-        return [{ id: "c3", name: "announcements" }];
+      if (url.endsWith("/guilds/g2/channels")) {
+        return jsonResponse([{ id: "c3", name: "announcements" }]);
       }
-      return [];
+      return jsonResponse([]);
     });
 
     const rows = await listDiscordDirectoryGroupsLive(makeParams({ query: "an", limit: 2 }));
@@ -80,21 +78,22 @@ describe("discord directory live lookups", () => {
   });
 
   it("returns ranked peer results and caps member search by limit", async () => {
-    mocks.fetchDiscord.mockImplementation(async (path: string) => {
-      if (path === "/users/@me/guilds") {
-        return [{ id: "g1", name: "Guild 1" }];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/users/@me/guilds")) {
+        return jsonResponse([{ id: "g1", name: "Guild 1" }]);
       }
-      if (path.startsWith("/guilds/g1/members/search?")) {
-        const params = new URLSearchParams(path.split("?")[1] ?? "");
+      if (url.includes("/guilds/g1/members/search?")) {
+        const params = new URL(url).searchParams;
         expect(params.get("query")).toBe("alice");
         expect(params.get("limit")).toBe("2");
-        return [
+        return jsonResponse([
           { user: { id: "u1", username: "alice", bot: false }, nick: "Ali" },
           { user: { id: "u2", username: "alice-bot", bot: true }, nick: null },
           { user: { id: "u3", username: "ignored", bot: false }, nick: null },
-        ];
+        ]);
       }
-      return [];
+      return jsonResponse([]);
     });
 
     const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "alice", limit: 2 }));

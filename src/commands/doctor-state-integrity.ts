@@ -787,9 +787,16 @@ export async function noteStateIntegrity(
       try {
         let transcriptPath: string;
         if (entry.sessionFile) {
-          transcriptPath = path.resolve(
+          const sessionFilePath = path.resolve(
             resolveSessionFilePath(entry.sessionId, entry, { sessionsDir: sessionsDirForChecks }),
           );
+          if (existsFile(sessionFilePath)) {
+            transcriptPath = sessionFilePath;
+          } else {
+            transcriptPath = path.resolve(
+              resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDirForChecks),
+            );
+          }
         } else {
           transcriptPath = path.resolve(
             resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDirForChecks),
@@ -806,11 +813,17 @@ export async function noteStateIntegrity(
       .map((entry) => path.resolve(path.join(sessionsDirForChecks, entry.name)))
       .filter((filePath) => !referencedTranscriptPaths.has(filePath));
     if (orphanTranscriptPaths.length > 0) {
+      const orphanBasenames = orphanTranscriptPaths.slice(0, 3).map((p) => path.basename(p));
       warnings.push(
-        `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDirForChecks}. They are not referenced by sessions.json and can consume disk over time.`,
+        [
+          `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDirForChecks}.`,
+          "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
+          "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
+          `  Examples: ${orphanBasenames.join(", ")}`,
+        ].join("\n"),
       );
       const archiveOrphans = await prompter.confirmSkipInNonInteractive({
-        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDirForChecks}?`,
+        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDirForChecks}? This only renames them to *.deleted.<timestamp>.`,
         initialValue: false,
       });
       if (archiveOrphans) {

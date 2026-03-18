@@ -80,7 +80,7 @@ const modelCatalogMocks = vi.hoisted(() => ({
     { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
     { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
     { provider: "openai-codex", id: "gpt-5.2", name: "GPT-5.2 (Codex)" },
-    { provider: "minimax", id: "MiniMax-M2.5", name: "MiniMax M2.5" },
+    { provider: "minimax", id: "MiniMax-M2.7", name: "MiniMax M2.7" },
   ]),
   resetModelCatalogCacheForTest: vi.fn(),
 }));
@@ -101,7 +101,7 @@ export function getWebSessionMocks(): AnyMocks {
   return webSessionMocks;
 }
 
-vi.mock("../../extensions/whatsapp/src/session.js", () => webSessionMocks);
+vi.mock("../../extensions/whatsapp/runtime-api.js", () => webSessionMocks);
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 

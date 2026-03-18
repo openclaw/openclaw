@@ -48,6 +48,7 @@ import {
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
+import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   buildSafeExternalPrompt,
@@ -171,6 +172,27 @@ async function resolveCronDeliveryContext(params: {
   deliveryContract: IsolatedDeliveryContract;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  if (!deliveryPlan.requested) {
+    const resolvedDelivery = {
+      ok: false as const,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit" as const,
+      error: new Error("cron delivery not requested"),
+    };
+    return {
+      deliveryPlan,
+      deliveryRequested: false,
+      resolvedDelivery,
+      toolPolicy: resolveCronToolPolicy({
+        deliveryRequested: false,
+        resolvedDelivery,
+        deliveryContract: params.deliveryContract,
+      }),
+    };
+  }
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
@@ -601,6 +623,9 @@ export async function runCronIsolatedAgentTurn(params: {
             sessionKey: agentSessionKey,
             agentId,
             trigger: "cron",
+            // Cron runs execute inside the gateway process and need the same
+            // explicit subagent late-binding as other gateway-owned runners.
+            allowGatewaySubagentBinding: true,
             // Cron jobs are trusted local automation, so isolated runs should
             // inherit owner-only tooling like local `openclaw agent` runs.
             senderIsOwner: true,
@@ -663,9 +688,9 @@ export async function runCronIsolatedAgentTurn(params: {
       const interimPayloads = interimRunResult.payloads ?? [];
       const interimDeliveryPayload = pickLastDeliverablePayload(interimPayloads);
       const interimPayloadHasStructuredContent =
-        Boolean(interimDeliveryPayload?.mediaUrl) ||
-        (interimDeliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
-        Object.keys(interimDeliveryPayload?.channelData ?? {}).length > 0;
+        (interimDeliveryPayload
+          ? resolveSendableOutboundReplyParts(interimDeliveryPayload).hasMedia
+          : false) || Object.keys(interimDeliveryPayload?.channelData ?? {}).length > 0;
       const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
       const hasDescendantsSinceRunStart = listDescendantRunsForRequester(agentSessionKey).some(
         (entry) => {
@@ -785,8 +810,7 @@ export async function runCronIsolatedAgentTurn(params: {
         ? [{ text: synthesizedText }]
         : [];
   const deliveryPayloadHasStructuredContent =
-    Boolean(deliveryPayload?.mediaUrl) ||
-    (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
+    (deliveryPayload ? resolveSendableOutboundReplyParts(deliveryPayload).hasMedia : false) ||
     Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
   const hasErrorPayload = payloads.some((payload) => payload?.isError === true);

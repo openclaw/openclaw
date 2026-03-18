@@ -1,38 +1,4 @@
-import { auditDiscordChannelPermissions } from "../../../extensions/discord/src/audit.js";
-import {
-  listDiscordDirectoryGroupsLive,
-  listDiscordDirectoryPeersLive,
-} from "../../../extensions/discord/src/directory-live.js";
-import { monitorDiscordProvider } from "../../../extensions/discord/src/monitor.js";
-import { probeDiscord } from "../../../extensions/discord/src/probe.js";
-import { resolveDiscordChannelAllowlist } from "../../../extensions/discord/src/resolve-channels.js";
-import { resolveDiscordUserAllowlist } from "../../../extensions/discord/src/resolve-users.js";
-import { sendMessageDiscord, sendPollDiscord } from "../../../extensions/discord/src/send.js";
-import { monitorIMessageProvider } from "../../../extensions/imessage/src/monitor.js";
-import { probeIMessage } from "../../../extensions/imessage/src/probe.js";
-import { sendMessageIMessage } from "../../../extensions/imessage/src/send.js";
-import { monitorSignalProvider } from "../../../extensions/signal/src/index.js";
-import { probeSignal } from "../../../extensions/signal/src/probe.js";
-import { sendMessageSignal } from "../../../extensions/signal/src/send.js";
-import {
-  listSlackDirectoryGroupsLive,
-  listSlackDirectoryPeersLive,
-} from "../../../extensions/slack/src/directory-live.js";
-import { monitorSlackProvider } from "../../../extensions/slack/src/index.js";
-import { probeSlack } from "../../../extensions/slack/src/probe.js";
-import { resolveSlackChannelAllowlist } from "../../../extensions/slack/src/resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../../../extensions/slack/src/resolve-users.js";
-import { sendMessageSlack } from "../../../extensions/slack/src/send.js";
-import {
-  auditTelegramGroupMembership,
-  collectTelegramUnmentionedGroupIds,
-} from "../../../extensions/telegram/src/audit.js";
-import { monitorTelegramProvider } from "../../../extensions/telegram/src/monitor.js";
-import { probeTelegram } from "../../../extensions/telegram/src/probe.js";
-import { sendMessageTelegram, sendPollTelegram } from "../../../extensions/telegram/src/send.js";
-import { resolveTelegramToken } from "../../../extensions/telegram/src/token.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
-import { handleSlackAction } from "../../agents/tools/slack-actions.js";
 import {
   chunkByNewline,
   chunkMarkdownText,
@@ -69,9 +35,6 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
-import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
-import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
-import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
   resolveChannelGroupPolicy,
@@ -113,11 +76,36 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
+import { createRuntimeDiscord } from "./runtime-discord.js";
+import { createRuntimeIMessage } from "./runtime-imessage.js";
+import { createRuntimeSignal } from "./runtime-signal.js";
+import { createRuntimeSlack } from "./runtime-slack.js";
+import { createRuntimeTelegram } from "./runtime-telegram.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
 
+function defineCachedValue<T extends object, K extends PropertyKey>(
+  target: T,
+  key: K,
+  create: () => unknown,
+): void {
+  let cached: unknown;
+  let ready = false;
+  Object.defineProperty(target, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      if (!ready) {
+        cached = create();
+        ready = true;
+      }
+      return cached;
+    },
+  });
+}
+
 export function createRuntimeChannel(): PluginRuntime["channel"] {
-  return {
+  const channelRuntime = {
     text: {
       chunkByNewline,
       chunkMarkdownText,
@@ -199,50 +187,6 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       shouldComputeCommandAuthorized,
       shouldHandleTextCommands,
     },
-    discord: {
-      messageActions: discordMessageActions,
-      auditChannelPermissions: auditDiscordChannelPermissions,
-      listDirectoryGroupsLive: listDiscordDirectoryGroupsLive,
-      listDirectoryPeersLive: listDiscordDirectoryPeersLive,
-      probeDiscord,
-      resolveChannelAllowlist: resolveDiscordChannelAllowlist,
-      resolveUserAllowlist: resolveDiscordUserAllowlist,
-      sendMessageDiscord,
-      sendPollDiscord,
-      monitorDiscordProvider,
-    },
-    slack: {
-      listDirectoryGroupsLive: listSlackDirectoryGroupsLive,
-      listDirectoryPeersLive: listSlackDirectoryPeersLive,
-      probeSlack,
-      resolveChannelAllowlist: resolveSlackChannelAllowlist,
-      resolveUserAllowlist: resolveSlackUserAllowlist,
-      sendMessageSlack,
-      monitorSlackProvider,
-      handleSlackAction,
-    },
-    telegram: {
-      auditGroupMembership: auditTelegramGroupMembership,
-      collectUnmentionedGroupIds: collectTelegramUnmentionedGroupIds,
-      probeTelegram,
-      resolveTelegramToken,
-      sendMessageTelegram,
-      sendPollTelegram,
-      monitorTelegramProvider,
-      messageActions: telegramMessageActions,
-    },
-    signal: {
-      probeSignal,
-      sendMessageSignal,
-      monitorSignalProvider,
-      messageActions: signalMessageActions,
-    },
-    imessage: {
-      monitorIMessageProvider,
-      probeIMessage,
-      sendMessageIMessage,
-    },
-    whatsapp: createRuntimeWhatsApp(),
     line: {
       listLineAccountIds,
       resolveDefaultLineAccountId,
@@ -260,5 +204,23 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildTemplateMessageFromPayload,
       monitorLineProvider,
     },
-  };
+  } satisfies Omit<
+    PluginRuntime["channel"],
+    "discord" | "slack" | "telegram" | "signal" | "imessage" | "whatsapp"
+  > &
+    Partial<
+      Pick<
+        PluginRuntime["channel"],
+        "discord" | "slack" | "telegram" | "signal" | "imessage" | "whatsapp"
+      >
+    >;
+
+  defineCachedValue(channelRuntime, "discord", createRuntimeDiscord);
+  defineCachedValue(channelRuntime, "slack", createRuntimeSlack);
+  defineCachedValue(channelRuntime, "telegram", createRuntimeTelegram);
+  defineCachedValue(channelRuntime, "signal", createRuntimeSignal);
+  defineCachedValue(channelRuntime, "imessage", createRuntimeIMessage);
+  defineCachedValue(channelRuntime, "whatsapp", createRuntimeWhatsApp);
+
+  return channelRuntime as PluginRuntime["channel"];
 }

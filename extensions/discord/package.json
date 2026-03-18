@@ -6,6 +6,10 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "release": {
+      "publishToNpm": true
+    }
   }
 }
