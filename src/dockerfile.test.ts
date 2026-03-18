@@ -44,6 +44,10 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );
+    expect(dockerfile).toContain("COPY --from=runtime-assets --chown=node:node /app/src ./src");
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json ./apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+    );
   });
 
   it("normalizes plugin and agent paths permissions in image layers", async () => {

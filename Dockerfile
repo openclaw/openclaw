@@ -144,6 +144,8 @@ COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
 COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
+COPY --from=runtime-assets --chown=node:node /app/src ./src
+COPY --from=runtime-assets --chown=node:node /app/apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json ./apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
