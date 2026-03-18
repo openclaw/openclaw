@@ -135,6 +135,9 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "thread-ownership",
   "tlon",
   "voice-call",
+  "twitch",
+  "zalo",
+  "zalouser",
 ] as const;
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
