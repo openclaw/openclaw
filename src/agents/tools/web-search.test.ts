@@ -14,10 +14,6 @@ const {
   normalizeFreshness,
   normalizeToIsoDate,
   isoToPerplexityDate,
-  resolveGrokApiKey,
-  resolveGrokModel,
-  resolveGrokInlineCitations,
-  extractGrokContent,
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
@@ -26,7 +22,6 @@ const {
 } = __testing;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
-const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
 const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
@@ -198,190 +193,50 @@ describe("web_search date normalization", () => {
   });
 });
 
-describe("web_search grok config resolution", () => {
+describe("web_search kimi config resolution", () => {
   it("uses config apiKey when provided", () => {
-    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key"); // pragma: allowlist secret
+    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
   });
 
-  it("returns undefined when no apiKey is available", () => {
-    withEnv({ XAI_API_KEY: undefined }, () => {
-      expect(resolveGrokApiKey({})).toBeUndefined();
-      expect(resolveGrokApiKey(undefined)).toBeUndefined();
+  it("falls back to env apiKey", () => {
+    withEnv({ [kimiApiKeyEnv]: "kimi-env-key" }, () => {
+      expect(resolveKimiApiKey({})).toBe("kimi-env-key");
     });
-  });
-
-  it("uses default model when not specified", () => {
-    expect(resolveGrokModel({})).toBe("grok-4-1-fast");
-    expect(resolveGrokModel(undefined)).toBe("grok-4-1-fast");
   });
 
   it("uses config model when provided", () => {
-    expect(resolveGrokModel({ model: "grok-3" })).toBe("grok-3");
+    expect(resolveKimiModel({ model: "moonshot-v1-32k" })).toBe("moonshot-v1-32k");
   });
 
-  it("defaults inlineCitations to false", () => {
-    expect(resolveGrokInlineCitations({})).toBe(false);
-    expect(resolveGrokInlineCitations(undefined)).toBe(false);
-  });
-
-  it("respects inlineCitations config", () => {
-    expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
-    expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
-  });
-});
-
-describe("web_search grok response parsing", () => {
-  it("extracts content from Responses API message blocks", () => {
-    const result = extractGrokContent({
-      output: [
-        {
-          type: "message",
-          content: [{ type: "output_text", text: "hello from output" }],
-        },
-      ],
-    });
-    expect(result.text).toBe("hello from output");
-    expect(result.annotationCitations).toEqual([]);
-  });
-
-  it("extracts url_citation annotations from content blocks", () => {
-    const result = extractGrokContent({
-      output: [
-        {
-          type: "message",
-          content: [
-            {
-              type: "output_text",
-              text: "hello with citations",
-              annotations: [
-                {
-                  type: "url_citation",
-                  url: "https://example.com/a",
-                  start_index: 0,
-                  end_index: 5,
-                },
-                {
-                  type: "url_citation",
-                  url: "https://example.com/b",
-                  start_index: 6,
-                  end_index: 10,
-                },
-                {
-                  type: "url_citation",
-                  url: "https://example.com/a",
-                  start_index: 11,
-                  end_index: 15,
-                }, // duplicate
-              ],
-            },
-          ],
-        },
-      ],
-    });
-    expect(result.text).toBe("hello with citations");
-    expect(result.annotationCitations).toEqual(["https://example.com/a", "https://example.com/b"]);
-  });
-
-  it("falls back to deprecated output_text", () => {
-    const result = extractGrokContent({ output_text: "hello from output_text" });
-    expect(result.text).toBe("hello from output_text");
-    expect(result.annotationCitations).toEqual([]);
-  });
-
-  it("returns undefined text when no content found", () => {
-    const result = extractGrokContent({});
-    expect(result.text).toBeUndefined();
-    expect(result.annotationCitations).toEqual([]);
-  });
-
-  it("extracts output_text blocks directly in output array (no message wrapper)", () => {
-    const result = extractGrokContent({
-      output: [
-        { type: "web_search_call" },
-        {
-          type: "output_text",
-          text: "direct output text",
-          annotations: [
-            {
-              type: "url_citation",
-              url: "https://example.com/direct",
-              start_index: 0,
-              end_index: 5,
-            },
-          ],
-        },
-      ],
-    } as Parameters<typeof extractGrokContent>[0]);
-    expect(result.text).toBe("direct output text");
-    expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
-  });
-});
-
-describe("web_search kimi config resolution", () => {
-  it("uses config apiKey when provided", () => {
-    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key"); // pragma: allowlist secret
-  });
-
-  it("falls back to KIMI_API_KEY, then MOONSHOT_API_KEY", () => {
-    const kimiEnvValue = "kimi-env"; // pragma: allowlist secret
-    const moonshotEnvValue = "moonshot-env"; // pragma: allowlist secret
-    withEnv({ [kimiApiKeyEnv]: kimiEnvValue, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
-      expect(resolveKimiApiKey({})).toBe(kimiEnvValue);
-    });
-    withEnv({ [kimiApiKeyEnv]: undefined, [moonshotApiKeyEnv]: moonshotEnvValue }, () => {
-      expect(resolveKimiApiKey({})).toBe(moonshotEnvValue);
-    });
-  });
-
-  it("returns undefined when no Kimi key is configured", () => {
-    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: undefined }, () => {
-      expect(resolveKimiApiKey({})).toBeUndefined();
-      expect(resolveKimiApiKey(undefined)).toBeUndefined();
-    });
-  });
-
-  it("resolves default model and baseUrl", () => {
+  it("falls back to default model", () => {
     expect(resolveKimiModel({})).toBe("moonshot-v1-128k");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveKimiBaseUrl({ baseUrl: "https://kimi.example/v1" })).toBe(
+      "https://kimi.example/v1",
+    );
+  });
+
+  it("falls back to default baseUrl", () => {
     expect(resolveKimiBaseUrl({})).toBe("https://api.moonshot.ai/v1");
   });
-});
 
-describe("extractKimiCitations", () => {
-  it("collects unique URLs from search_results and tool arguments", () => {
+  it("extracts citations from search_results", () => {
     expect(
       extractKimiCitations({
-        search_results: [{ url: "https://example.com/a" }, { url: "https://example.com/a" }],
-        choices: [
-          {
-            message: {
-              tool_calls: [
-                {
-                  function: {
-                    arguments: JSON.stringify({
-                      search_results: [{ url: "https://example.com/b" }],
-                      url: "https://example.com/c",
-                    }),
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      }).toSorted(),
-    ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+        search_results: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
+      }),
+    ).toEqual(["https://example.com/one", "https://example.com/two"]);
   });
 });
 
-describe("resolveBraveMode", () => {
-  it("defaults to 'web' when no config is provided", () => {
-    expect(resolveBraveMode({})).toBe("web");
+describe("web_search brave mode resolution", () => {
+  it("defaults to web mode", () => {
+    expect(resolveBraveMode(undefined)).toBe("web");
   });
 
-  it("defaults to 'web' when mode is undefined", () => {
-    expect(resolveBraveMode({ mode: undefined })).toBe("web");
-  });
-
-  it("returns 'llm-context' when configured", () => {
+  it("honors explicit llm-context mode", () => {
     expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
   });
 

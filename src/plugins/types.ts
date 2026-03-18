@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -33,6 +34,9 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
+
+// Runtime model type — wraps pi-ai Model<Api> for provider plugin contracts.
+export type ProviderRuntimeModel = Model<Api>;
 
 export type PluginLogger = {
   debug?: (message: string) => void;

@@ -102,6 +102,7 @@
   "provider-models",
   "provider-onboard",
   "provider-stream",
+  "provider-tools",
   "provider-usage",
   "provider-web-search",
   "param-readers",
