@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import { resolveChannelGroupPolicy, resolveToolsBySender } from "./group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+  resolveToolsBySender,
+} from "./group-policy.js";
 
 describe("resolveChannelGroupPolicy", () => {
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
@@ -128,6 +132,65 @@ describe("resolveChannelGroupPolicy", () => {
 
     expect(policy.allowlistEnabled).toBe(true);
     expect(policy.allowed).toBe(false);
+  });
+});
+
+describe("resolveChannelGroupRequireMention", () => {
+  it("defaults to false when groupPolicy is open and no requireMention is configured", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveChannelGroupRequireMention({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123@g.us",
+    });
+
+    expect(result).toBe(false);
+  });
+
+  it("defaults to true when groupPolicy is allowlist and no requireMention is configured", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveChannelGroupRequireMention({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123@g.us",
+    });
+
+    expect(result).toBe(true);
+  });
+
+  it("respects explicit requireMention even when groupPolicy is open", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          groups: {
+            "*": { requireMention: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveChannelGroupRequireMention({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123@g.us",
+    });
+
+    expect(result).toBe(true);
   });
 });
 
