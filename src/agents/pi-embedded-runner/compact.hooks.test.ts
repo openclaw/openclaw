@@ -1,5 +1,5 @@
 import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
 import {
   contextEngineCompactMock,
@@ -13,6 +13,7 @@ import {
   resolveMemorySearchConfigMock,
   resolveModelMock,
   resolveSessionAgentIdMock,
+  resetCompactHooksHarnessMocks,
   sanitizeSessionHistoryMock,
   sessionAbortCompactionMock,
   sessionCompactImpl,
@@ -103,11 +104,15 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
     return event?.type === "session" && event.action === action;
   })?.[0] as SessionHookEvent | undefined;
 
-beforeEach(async () => {
+beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
   compactEmbeddedPiSessionDirect = loaded.compactEmbeddedPiSessionDirect;
   compactEmbeddedPiSession = loaded.compactEmbeddedPiSession;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
+});
+
+beforeEach(() => {
+  resetCompactHooksHarnessMocks();
 });
 
 describe("compactEmbeddedPiSessionDirect hooks", () => {
