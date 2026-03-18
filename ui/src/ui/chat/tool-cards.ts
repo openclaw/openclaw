@@ -48,6 +48,18 @@ export function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
+export function buildToolCardSidebarContent(card: ToolCard): string {
+  const display = resolveToolDisplay({ name: card.name, args: card.args });
+  const detail = formatToolDetail(display);
+  const hasText = Boolean(card.text?.trim());
+  if (hasText) {
+    return formatToolOutputForSidebar(card.text!);
+  }
+
+  const argsBlock = formatToolArgsBlock(card.args);
+  return `## ${display.label}\n\n${detail ? `**Command:** \`${detail}\`\n\n` : ""}${argsBlock}*No output — tool completed successfully.*`;
+}
+
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -56,14 +68,7 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
-        if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
-          return;
-        }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
-        onOpenSidebar!(info);
+        onOpenSidebar!(buildToolCardSidebarContent(card));
       }
     : undefined;
 
@@ -153,4 +158,22 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
     return item.content;
   }
   return undefined;
+}
+
+function formatToolArgsBlock(args: unknown): string {
+  if (args == null) {
+    return "";
+  }
+  if (typeof args === "string") {
+    const trimmed = args.trim();
+    if (!trimmed) {
+      return "";
+    }
+    return `**Arguments:**\n\n\`\`\`json\n${trimmed}\n\`\`\`\n\n`;
+  }
+  try {
+    return `**Arguments:**\n\n\`\`\`json\n${JSON.stringify(args, null, 2)}\n\`\`\`\n\n`;
+  } catch {
+    return `**Arguments:** \`${String(args)}\`\n\n`;
+  }
 }
