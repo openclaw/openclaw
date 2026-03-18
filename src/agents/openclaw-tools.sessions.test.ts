@@ -633,7 +633,7 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "webchat",
+        channel: "discord",
         inputProvenance: { kind: "inter_session" },
       });
     }
@@ -813,7 +813,7 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "webchat",
+        channel: "discord",
         inputProvenance: { kind: "inter_session" },
       });
     }
@@ -831,6 +831,47 @@ describe("sessions tools", () => {
       to: "channel:target",
       channel: "discord",
       message: "announce now",
+    });
+  });
+
+  it("sessions_send falls back to webchat when no requester channel is available", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return {
+          runId: "run-no-channel",
+          status: "accepted",
+          acceptedAt: 3001,
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "main",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call8", {
+      sessionKey: "main",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-no-channel",
+    });
+    const agentCall = calls.find((call) => call.method === "agent");
+    expect(agentCall?.params).toMatchObject({
+      channel: "webchat",
+      inputProvenance: {
+        sourceChannel: undefined,
+      },
     });
   });
 
