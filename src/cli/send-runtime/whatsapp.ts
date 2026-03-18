@@ -1,7 +1,7 @@
-import { sendMessageWhatsApp as sendMessageWhatsAppImpl } from "../../plugin-sdk/whatsapp.js";
+import { sendMessageWhatsApp as sendMessageWhatsAppImpl } from "openclaw/plugin-sdk/whatsapp";
 
 type RuntimeSend = {
-  sendMessage: typeof import("../../plugin-sdk/whatsapp.js").sendMessageWhatsApp;
+  sendMessage: typeof import("openclaw/plugin-sdk/whatsapp").sendMessageWhatsApp;
 };
 
 export const runtimeSend = {
