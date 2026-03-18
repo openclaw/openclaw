@@ -165,7 +165,7 @@ OpenClaw 在调用 `/json/*` 端点和连接 CDP WebSocket 时会保留认证信
     remoteCdpHandshakeTimeoutMs: 4000,
     profiles: {
       browserless: {
-        cdpUrl: "https://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
+        cdpUrl: "wss://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
         color: "#00AA00",
       },
     },
@@ -177,6 +177,8 @@ OpenClaw 在调用 `/json/*` 端点和连接 CDP WebSocket 时会保留认证信
 
 - 将 `<BROWSERLESS_API_KEY>` 替换为你真实的 Browserless 令牌。
 - 选择与你的 Browserless 账户匹配的区域端点（请参阅其文档）。
+
+> Browserless 的 CDP 端点只接受 WebSocket (`wss://`) 连接；`https://` 只能访问它的 REST API，浏览器工具会直接报 Remote CDP websocket not reachable。
 
 ## 安全性
 

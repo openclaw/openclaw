@@ -205,7 +205,7 @@ Example:
     remoteCdpHandshakeTimeoutMs: 4000,
     profiles: {
       browserless: {
-        cdpUrl: "https://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
+        cdpUrl: "wss://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
         color: "#00AA00",
       },
     },
@@ -217,6 +217,8 @@ Notes:
 
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
+
+> Browserless CDP endpoints speak WebSocket only, so keep the `cdpUrl` on `wss://` — `https://` will only reach their REST API and the browser tool will fail to connect.
 
 ## Direct WebSocket CDP providers
 
