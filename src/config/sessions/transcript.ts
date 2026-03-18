@@ -69,23 +69,18 @@ export function resolveMirroredTranscriptText(params: {
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
-  agentId?: string;
+  cwd: string;
 }): Promise<void> {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
   await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
-  const cfg = loadConfig();
-  const agentId =
-    typeof params.agentId === "string" && params.agentId.trim()
-      ? params.agentId.trim()
-      : resolveDefaultAgentId(cfg);
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
     id: params.sessionId,
     timestamp: new Date().toISOString(),
-    cwd: resolveAgentWorkspaceDir(cfg, agentId),
+    cwd: params.cwd,
   };
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
     encoding: "utf-8",
@@ -166,6 +161,12 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
+  const cfg = loadConfig();
+  const agentId =
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? params.agentId.trim()
+      : resolveDefaultAgentId(cfg);
+  const sessionCwd = resolveAgentWorkspaceDir(cfg, agentId);
 
   let sessionFile: string;
   try {
@@ -186,7 +187,11 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     };
   }
 
-  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId, agentId: params.agentId });
+  await ensureSessionHeader({
+    sessionFile,
+    sessionId: entry.sessionId,
+    cwd: sessionCwd,
+  });
 
   if (
     params.idempotencyKey &&
