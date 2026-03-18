@@ -14,31 +14,37 @@ vi.mock("../plugins/web-search-providers.js", () => {
       {
         id: "brave",
         envVars: ["BRAVE_API_KEY"],
+        credentialPath: "tools.web.search.apiKey",
         getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
       },
       {
         id: "firecrawl",
         envVars: ["FIRECRAWL_API_KEY"],
+        credentialPath: "tools.web.search.firecrawl.apiKey",
         getCredentialValue: getScoped("firecrawl"),
       },
       {
         id: "gemini",
         envVars: ["GEMINI_API_KEY"],
+        credentialPath: "tools.web.search.gemini.apiKey",
         getCredentialValue: getScoped("gemini"),
       },
       {
         id: "grok",
         envVars: ["XAI_API_KEY"],
+        credentialPath: "tools.web.search.grok.apiKey",
         getCredentialValue: getScoped("grok"),
       },
       {
         id: "kimi",
         envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+        credentialPath: "tools.web.search.kimi.apiKey",
         getCredentialValue: getScoped("kimi"),
       },
       {
         id: "perplexity",
         envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+        credentialPath: "tools.web.search.perplexity.apiKey",
         getCredentialValue: getScoped("perplexity"),
       },
     ],
