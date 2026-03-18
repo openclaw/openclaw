@@ -52,7 +52,9 @@ async function expectSymlinkWriteRaceRejectsOutside(params: {
   await expectWriteOpenRaceIsBlocked({
     slotPath: params.slotPath,
     outsideDir: params.outsideDir,
-    runWrite: async () => await params.runWrite(relativePath),
+    runWrite: async () => {
+      await params.runWrite(relativePath);
+    },
   });
 }
 
