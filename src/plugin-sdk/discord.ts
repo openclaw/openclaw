@@ -1,6 +1,24 @@
-export type { ChannelMessageActionAdapter } from "../channels/plugins/types.js";
+export type {
+  ChannelAccountSnapshot,
+  ChannelGatewayContext,
+  ChannelMessageActionAdapter,
+} from "../channels/plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
+export type { DiscordPluralKitConfig } from "../../extensions/discord/api.js";
+export type { InspectedDiscordAccount } from "../../extensions/discord/api.js";
+export type { ResolvedDiscordAccount } from "../../extensions/discord/api.js";
+export type { DiscordSendComponents, DiscordSendEmbeds } from "../../extensions/discord/api.js";
+export type {
+  ThreadBindingManager,
+  ThreadBindingRecord,
+  ThreadBindingTargetKind,
+} from "../../extensions/discord/runtime-api.js";
+export type {
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+} from "../channels/plugins/types.adapters.js";
 export type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -20,6 +38,7 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
+export { formatDocsLink } from "../terminal/links.js";
 
 export {
   projectCredentialSnapshotFields,
@@ -44,3 +63,76 @@ export {
   buildComputedAccountStatusSnapshot,
   buildTokenChannelStatusSummary,
 } from "./status-helpers.js";
+
+export {
+  createDiscordActionGate,
+  listDiscordAccountIds,
+  resolveDefaultDiscordAccountId,
+} from "../../extensions/discord/api.js";
+export { inspectDiscordAccount } from "../../extensions/discord/api.js";
+export {
+  looksLikeDiscordTargetId,
+  normalizeDiscordMessagingTarget,
+  normalizeDiscordOutboundTarget,
+} from "../../extensions/discord/api.js";
+export { collectDiscordAuditChannelIds } from "../../extensions/discord/runtime-api.js";
+export { collectDiscordStatusIssues } from "../../extensions/discord/api.js";
+export {
+  DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
+  DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
+} from "../../extensions/discord/runtime-api.js";
+export { normalizeExplicitDiscordSessionKey } from "../../extensions/discord/api.js";
+export {
+  autoBindSpawnedDiscordSubagent,
+  listThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKey,
+} from "../../extensions/discord/runtime-api.js";
+export { getGateway } from "../../extensions/discord/runtime-api.js";
+export { getPresence } from "../../extensions/discord/runtime-api.js";
+export { readDiscordComponentSpec } from "../../extensions/discord/api.js";
+export { resolveDiscordChannelId } from "../../extensions/discord/api.js";
+export {
+  addRoleDiscord,
+  banMemberDiscord,
+  createChannelDiscord,
+  createScheduledEventDiscord,
+  createThreadDiscord,
+  deleteChannelDiscord,
+  deleteMessageDiscord,
+  editChannelDiscord,
+  editMessageDiscord,
+  fetchChannelInfoDiscord,
+  fetchChannelPermissionsDiscord,
+  fetchMemberInfoDiscord,
+  fetchMessageDiscord,
+  fetchReactionsDiscord,
+  fetchRoleInfoDiscord,
+  fetchVoiceStatusDiscord,
+  hasAnyGuildPermissionDiscord,
+  kickMemberDiscord,
+  listGuildChannelsDiscord,
+  listGuildEmojisDiscord,
+  listPinsDiscord,
+  listScheduledEventsDiscord,
+  listThreadsDiscord,
+  moveChannelDiscord,
+  pinMessageDiscord,
+  reactMessageDiscord,
+  readMessagesDiscord,
+  removeChannelPermissionDiscord,
+  removeOwnReactionsDiscord,
+  removeReactionDiscord,
+  removeRoleDiscord,
+  searchMessagesDiscord,
+  sendDiscordComponentMessage,
+  sendMessageDiscord,
+  sendPollDiscord,
+  sendStickerDiscord,
+  sendVoiceMessageDiscord,
+  setChannelPermissionDiscord,
+  timeoutMemberDiscord,
+  unpinMessageDiscord,
+  uploadEmojiDiscord,
+  uploadStickerDiscord,
+} from "../../extensions/discord/runtime-api.js";
+export { discordMessageActions } from "../../extensions/discord/runtime-api.js";

@@ -1,13 +1,12 @@
-import { normalizeProviderId } from "../../src/agents/provider-id.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-models";
 import {
   createPluginBackedWebSearchProvider,
   getScopedCredentialValue,
   setScopedCredentialValue,
-} from "../../src/agents/tools/web-search-plugin-factory.js";
-import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.js";
-import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/provider-web-search";
+import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "xai";
 const XAI_MODERN_MODEL_PREFIXES = ["grok-4"] as const;
@@ -17,12 +16,11 @@ function matchesModernXaiModel(modelId: string): boolean {
   return XAI_MODERN_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
-const xaiPlugin = {
+export default definePluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "xAI",
@@ -69,6 +67,4 @@ const xaiPlugin = {
       }),
     );
   },
-};
-
-export default xaiPlugin;
+});
