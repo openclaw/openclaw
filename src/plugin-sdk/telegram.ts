@@ -55,7 +55,7 @@ export {
 export {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
-} from "../../extensions/telegram/src/group-policy.js";
+} from "../../extensions/telegram/api.js";
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";
