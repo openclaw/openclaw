@@ -13,6 +13,7 @@ import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -114,10 +115,15 @@ export async function getReplyFromConfig(
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
+  const typingChannel = normalizeMessageChannel(ctx.Surface ?? ctx.Provider);
   const typing = createTypingController({
     onReplyStart: opts?.onReplyStart,
     onCleanup: opts?.onTypingCleanup,
     typingIntervalSeconds,
+    // Mattermost DMs should keep the native typing indicator alive until the run
+    // actually finishes. The client already expires stale typing pulses on its
+    // own, so the generic 2m safety TTL only hides long-running work.
+    typingTtlMs: typingChannel === "mattermost" ? 0 : undefined,
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
   });
