@@ -7,6 +7,7 @@ registries:
   npm-npmjs:
     type: npm-registry
     url: https://registry.npmjs.org
+    token: ${{secrets.NPM_NPMJS_TOKEN}}
     replaces-base: true
 
 updates:
@@ -14,9 +15,9 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       production:
         dependency-type: production
@@ -36,9 +37,9 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       actions:
         patterns:
@@ -52,9 +53,9 @@ updates:
   - package-ecosystem: swift
     directory: /apps/macos
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       swift-deps:
         patterns:
@@ -68,9 +69,9 @@ updates:
   - package-ecosystem: swift
     directory: /apps/shared/MoltbotKit
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       swift-deps:
         patterns:
@@ -84,9 +85,9 @@ updates:
   - package-ecosystem: swift
     directory: /Swabble
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       swift-deps:
         patterns:
@@ -100,9 +101,9 @@ updates:
   - package-ecosystem: gradle
     directory: /apps/android
     schedule:
-      interval: weekly
+      interval: daily
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       android-deps:
         patterns:
@@ -118,7 +119,7 @@ updates:
     schedule:
       interval: weekly
     cooldown:
-      default-days: 7
+      default-days: 2
     groups:
       docker-images:
         patterns:

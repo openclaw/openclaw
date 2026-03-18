@@ -12,19 +12,6 @@ enum ExecCommandToken {
 enum ExecEnvInvocationUnwrapper {
     static let maxWrapperDepth = 4
 
-    private static let optionsWithValue = Set([
-        "-u",
-        "--unset",
-        "-c",
-        "--chdir",
-        "-s",
-        "--split-string",
-        "--default-signal",
-        "--ignore-signal",
-        "--block-signal",
-    ])
-    private static let flagOptions = Set(["-i", "--ignore-environment", "-0", "--null"])
-
     private static func isEnvAssignment(_ token: String) -> Bool {
         let pattern = #"^[A-Za-z_][A-Za-z0-9_]*=.*"#
         return token.range(of: pattern, options: .regularExpression) != nil
@@ -55,11 +42,11 @@ enum ExecEnvInvocationUnwrapper {
             if token.hasPrefix("-"), token != "-" {
                 let lower = token.lowercased()
                 let flag = lower.split(separator: "=", maxSplits: 1).first.map(String.init) ?? lower
-                if self.flagOptions.contains(flag) {
+                if ExecEnvOptions.flagOnly.contains(flag) {
                     idx += 1
                     continue
                 }
-                if self.optionsWithValue.contains(flag) {
+                if ExecEnvOptions.withValue.contains(flag) {
                     if !lower.contains("=") {
                         expectsOptionValue = true
                     }

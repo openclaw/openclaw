@@ -7,7 +7,7 @@ status: active
 
 # Sandboxing
 
-OpenClaw can run **tools inside Docker containers** to reduce blast radius.
+OpenClaw can run **tools inside sandbox backends** to reduce blast radius.
 This is **optional** and controlled by configuration (`agents.defaults.sandbox` or
 `agents.list[].sandbox`). If sandboxing is off, tools run on the host.
 The Gateway stays on the host; tool execution runs in an isolated sandbox
@@ -25,7 +25,7 @@ and process access when the model does something dumb.
   - By default, sandbox browser containers use a dedicated Docker network (`openclaw-sandbox-browser`) instead of the global `bridge` network.
     Configure with `agents.defaults.sandbox.browser.network`.
   - Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress with a CIDR allowlist (for example `172.21.0.1/32`).
-  - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that resolves to the observer session.
+  - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that serves a local bootstrap page and opens noVNC with password in URL fragment (not query/header logs).
   - `agents.defaults.sandbox.browser.allowHostControl` lets sandboxed sessions target the host browser explicitly.
   - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
 
@@ -54,6 +54,187 @@ Not sandboxed:
 - `"agent"`: one container per agent.
 - `"shared"`: one container shared by all sandboxed sessions.
 
+## Backend
+
+`agents.defaults.sandbox.backend` controls **which runtime** provides the sandbox:
+
+- `"docker"` (default): local Docker-backed sandbox runtime.
+- `"ssh"`: generic SSH-backed remote sandbox runtime.
+- `"openshell"`: OpenShell-backed sandbox runtime.
+
+SSH-specific config lives under `agents.defaults.sandbox.ssh`.
+OpenShell-specific config lives under `plugins.entries.openshell.config`.
+
+### SSH backend
+
+Use `backend: "ssh"` when you want OpenClaw to sandbox `exec`, file tools, and media reads on
+an arbitrary SSH-accessible machine.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "ssh",
+        scope: "session",
+        workspaceAccess: "rw",
+        ssh: {
+          target: "user@gateway-host:22",
+          workspaceRoot: "/tmp/openclaw-sandboxes",
+          strictHostKeyChecking: true,
+          updateHostKeys: true,
+          identityFile: "~/.ssh/id_ed25519",
+          certificateFile: "~/.ssh/id_ed25519-cert.pub",
+          knownHostsFile: "~/.ssh/known_hosts",
+          // Or use SecretRefs / inline contents instead of local files:
+          // identityData: { source: "env", provider: "default", id: "SSH_IDENTITY" },
+          // certificateData: { source: "env", provider: "default", id: "SSH_CERTIFICATE" },
+          // knownHostsData: { source: "env", provider: "default", id: "SSH_KNOWN_HOSTS" },
+        },
+      },
+    },
+  },
+}
+```
+
+How it works:
+
+- OpenClaw creates a per-scope remote root under `sandbox.ssh.workspaceRoot`.
+- On first use after create or recreate, OpenClaw seeds that remote workspace from the local workspace once.
+- After that, `exec`, `read`, `write`, `edit`, `apply_patch`, prompt media reads, and inbound media staging run directly against the remote workspace over SSH.
+- OpenClaw does not sync remote changes back to the local workspace automatically.
+
+Authentication material:
+
+- `identityFile`, `certificateFile`, `knownHostsFile`: use existing local files and pass them through OpenSSH config.
+- `identityData`, `certificateData`, `knownHostsData`: use inline strings or SecretRefs. OpenClaw resolves them through the normal secrets runtime snapshot, writes them to temp files with `0600`, and deletes them when the SSH session ends.
+- If both `*File` and `*Data` are set for the same item, `*Data` wins for that SSH session.
+
+This is a **remote-canonical** model. The remote SSH workspace becomes the real sandbox state after the initial seed.
+
+Important consequences:
+
+- Host-local edits made outside OpenClaw after the seed step are not visible remotely until you recreate the sandbox.
+- `openclaw sandbox recreate` deletes the per-scope remote root and seeds again from local on next use.
+- Browser sandboxing is not supported on the SSH backend.
+- `sandbox.docker.*` settings do not apply to the SSH backend.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "openshell",
+        scope: "session",
+        workspaceAccess: "rw",
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      openshell: {
+        enabled: true,
+        config: {
+          from: "openclaw",
+          mode: "remote", // mirror | remote
+          remoteWorkspaceDir: "/sandbox",
+          remoteAgentWorkspaceDir: "/agent",
+        },
+      },
+    },
+  },
+}
+```
+
+OpenShell modes:
+
+- `mirror` (default): local workspace stays canonical. OpenClaw syncs local files into OpenShell before exec and syncs the remote workspace back after exec.
+- `remote`: OpenShell workspace is canonical after the sandbox is created. OpenClaw seeds the remote workspace once from the local workspace, then file tools and exec run directly against the remote sandbox without syncing changes back.
+
+OpenShell reuses the same core SSH transport and remote filesystem bridge as the generic SSH backend.
+The plugin adds OpenShell-specific lifecycle (`sandbox create/get/delete`, `sandbox ssh-config`) and the optional `mirror` mode.
+
+Remote transport details:
+
+- OpenClaw asks OpenShell for sandbox-specific SSH config via `openshell sandbox ssh-config <name>`.
+- Core writes that SSH config to a temp file, opens the SSH session, and reuses the same remote filesystem bridge used by `backend: "ssh"`.
+- In `mirror` mode only the lifecycle differs: sync local to remote before exec, then sync back after exec.
+
+Current OpenShell limitations:
+
+- sandbox browser is not supported yet
+- `sandbox.docker.binds` is not supported on the OpenShell backend
+- Docker-specific runtime knobs under `sandbox.docker.*` still apply only to the Docker backend
+
+## OpenShell workspace modes
+
+OpenShell has two workspace models. This is the part that matters most in practice.
+
+### `mirror`
+
+Use `plugins.entries.openshell.config.mode: "mirror"` when you want the **local workspace to stay canonical**.
+
+Behavior:
+
+- Before `exec`, OpenClaw syncs the local workspace into the OpenShell sandbox.
+- After `exec`, OpenClaw syncs the remote workspace back to the local workspace.
+- File tools still operate through the sandbox bridge, but the local workspace remains the source of truth between turns.
+
+Use this when:
+
+- you edit files locally outside OpenClaw and want those changes to show up in the sandbox automatically
+- you want the OpenShell sandbox to behave as much like the Docker backend as possible
+- you want the host workspace to reflect sandbox writes after each exec turn
+
+Tradeoff:
+
+- extra sync cost before and after exec
+
+### `remote`
+
+Use `plugins.entries.openshell.config.mode: "remote"` when you want the **OpenShell workspace to become canonical**.
+
+Behavior:
+
+- When the sandbox is first created, OpenClaw seeds the remote workspace from the local workspace once.
+- After that, `exec`, `read`, `write`, `edit`, and `apply_patch` operate directly against the remote OpenShell workspace.
+- OpenClaw does **not** sync remote changes back into the local workspace after exec.
+- Prompt-time media reads still work because file and media tools read through the sandbox bridge instead of assuming a local host path.
+- Transport is SSH into the OpenShell sandbox returned by `openshell sandbox ssh-config`.
+
+Important consequences:
+
+- If you edit files on the host outside OpenClaw after the seed step, the remote sandbox will **not** see those changes automatically.
+- If the sandbox is recreated, the remote workspace is seeded from the local workspace again.
+- With `scope: "agent"` or `scope: "shared"`, that remote workspace is shared at that same scope.
+
+Use this when:
+
+- the sandbox should live primarily on the remote OpenShell side
+- you want lower per-turn sync overhead
+- you do not want host-local edits to silently overwrite remote sandbox state
+
+Choose `mirror` if you think of the sandbox as a temporary execution environment.
+Choose `remote` if you think of the sandbox as the real workspace.
+
+## OpenShell lifecycle
+
+OpenShell sandboxes are still managed through the normal sandbox lifecycle:
+
+- `openclaw sandbox list` shows OpenShell runtimes as well as Docker runtimes
+- `openclaw sandbox recreate` deletes the current runtime and lets OpenClaw recreate it on next use
+- prune logic is backend-aware too
+
+For `remote` mode, recreate is especially important:
+
+- recreate deletes the canonical remote workspace for that scope
+- the next use seeds a fresh remote workspace from the local workspace
+
+For `mirror` mode, recreate mainly resets the remote execution environment
+because the local workspace remains canonical anyway.
+
 ## Workspace access
 
 `agents.defaults.sandbox.workspaceAccess` controls **what the sandbox can see**:
@@ -61,6 +242,12 @@ Not sandboxed:
 - `"none"` (default): tools see a sandbox workspace under `~/.openclaw/sandboxes`.
 - `"ro"`: mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`).
 - `"rw"`: mounts the agent workspace read/write at `/workspace`.
+
+With the OpenShell backend:
+
+- `mirror` mode still uses the local workspace as the canonical source between exec turns
+- `remote` mode uses the remote OpenShell workspace as the canonical source after the initial seed
+- `workspaceAccess: "ro"` and `"none"` still restrict write behavior the same way
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 Skills note: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`,
@@ -116,7 +303,7 @@ Security notes:
 
 ## Images + setup
 
-Default image: `openclaw-sandbox:bookworm-slim`
+Default Docker image: `openclaw-sandbox:bookworm-slim`
 
 Build it once:
 
@@ -129,14 +316,58 @@ other runtimes), either bake a custom image or install via
 `sandbox.docker.setupCommand` (requires network egress + writable root +
 root user).
 
+If you want a more functional sandbox image with common tooling (for example
+`curl`, `jq`, `nodejs`, `python3`, `git`), build:
+
+```bash
+scripts/sandbox-common-setup.sh
+```
+
+Then set `agents.defaults.sandbox.docker.image` to
+`openclaw-sandbox-common:bookworm-slim`.
+
 Sandboxed browser image:
 
 ```bash
 scripts/sandbox-browser-setup.sh
 ```
 
-By default, sandbox containers run with **no network**.
+By default, Docker sandbox containers run with **no network**.
 Override with `agents.defaults.sandbox.docker.network`.
+
+The bundled sandbox browser image also applies conservative Chromium startup defaults
+for containerized workloads. Current container defaults include:
+
+- `--remote-debugging-address=127.0.0.1`
+- `--remote-debugging-port=<derived from OPENCLAW_BROWSER_CDP_PORT>`
+- `--user-data-dir=${HOME}/.chrome`
+- `--no-first-run`
+- `--no-default-browser-check`
+- `--disable-3d-apis`
+- `--disable-gpu`
+- `--disable-dev-shm-usage`
+- `--disable-background-networking`
+- `--disable-extensions`
+- `--disable-features=TranslateUI`
+- `--disable-breakpad`
+- `--disable-crash-reporter`
+- `--disable-software-rasterizer`
+- `--no-zygote`
+- `--metrics-recording-only`
+- `--renderer-process-limit=2`
+- `--no-sandbox` and `--disable-setuid-sandbox` when `noSandbox` is enabled.
+- The three graphics hardening flags (`--disable-3d-apis`,
+  `--disable-software-rasterizer`, `--disable-gpu`) are optional and are useful
+  when containers lack GPU support. Set `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0`
+  if your workload requires WebGL or other 3D/browser features.
+- `--disable-extensions` is enabled by default and can be disabled with
+  `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` for extension-reliant flows.
+- `--renderer-process-limit=2` is controlled by
+  `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT=<N>`, where `0` keeps Chromium's default.
+
+If you need a different runtime profile, use a custom browser image and provide
+your own entrypoint. For local (non-container) Chromium profiles, use
+`browser.extraArgs` to append additional startup flags.
 
 Security defaults:
 
@@ -146,6 +377,11 @@ Security defaults:
 
 Docker installs and the containerized gateway live here:
 [Docker](/install/docker)
+
+For Docker gateway deployments, `docker-setup.sh` can bootstrap sandbox config.
+Set `OPENCLAW_SANDBOX=1` (or `true`/`yes`/`on`) to enable that path. You can
+override socket location with `OPENCLAW_DOCKER_SOCKET`. Full setup and env
+reference: [Docker](/install/docker#enable-agent-sandbox-for-docker-gateway-opt-in).
 
 ## setupCommand (one-time container setup)
 

@@ -6,7 +6,10 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  clearNostrProfileRateLimitStateForTest,
   createNostrProfileHttpHandler,
+  getNostrProfileRateLimitStateSizeForTest,
+  isNostrProfileRateLimitedForTest,
   type NostrProfileHttpContext,
 } from "./nostr-profile-http.js";
 
@@ -112,6 +115,13 @@ function createMockContext(overrides?: Partial<NostrProfileHttpContext>): NostrP
   };
 }
 
+function expectOkResponse(res: ReturnType<typeof createMockResponse>) {
+  expect(res._getStatusCode()).toBe(200);
+  const data = JSON.parse(res._getData());
+  expect(data.ok).toBe(true);
+  return data;
+}
+
 function mockSuccessfulProfileImport() {
   vi.mocked(importProfileFromRelays).mockResolvedValue({
     ok: true,
@@ -136,6 +146,7 @@ function mockSuccessfulProfileImport() {
 describe("nostr-profile-http", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearNostrProfileRateLimitStateForTest();
   });
 
   describe("route matching", () => {
@@ -204,6 +215,22 @@ describe("nostr-profile-http", () => {
   });
 
   describe("PUT /api/channels/nostr/:accountId/profile", () => {
+    function mockPublishSuccess() {
+      vi.mocked(publishNostrProfile).mockResolvedValue({
+        eventId: "event123",
+        createdAt: 1234567890,
+        successes: ["wss://relay.damus.io"],
+        failures: [],
+      });
+    }
+
+    function expectBadRequestResponse(res: ReturnType<typeof createMockResponse>) {
+      expect(res._getStatusCode()).toBe(400);
+      const data = JSON.parse(res._getData());
+      expect(data.ok).toBe(false);
+      return data;
+    }
+
     async function expectPrivatePictureRejected(pictureUrl: string) {
       const ctx = createMockContext();
       const handler = createNostrProfileHttpHandler(ctx);
@@ -215,9 +242,7 @@ describe("nostr-profile-http", () => {
 
       await handler(req, res);
 
-      expect(res._getStatusCode()).toBe(400);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(false);
+      const data = expectBadRequestResponse(res);
       expect(data.error).toContain("private");
     }
 
@@ -231,18 +256,11 @@ describe("nostr-profile-http", () => {
       });
       const res = createMockResponse();
 
-      vi.mocked(publishNostrProfile).mockResolvedValue({
-        eventId: "event123",
-        createdAt: 1234567890,
-        successes: ["wss://relay.damus.io"],
-        failures: [],
-      });
+      mockPublishSuccess();
 
       await handler(req, res);
 
-      expect(res._getStatusCode()).toBe(200);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(true);
+      const data = expectOkResponse(res);
       expect(data.eventId).toBe("event123");
       expect(data.successes).toContain("wss://relay.damus.io");
       expect(data.persisted).toBe(true);
@@ -279,6 +297,36 @@ describe("nostr-profile-http", () => {
       expect(res._getStatusCode()).toBe(403);
     });
 
+    it("rejects profile mutation with cross-site sec-fetch-site header", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        { name: "attacker" },
+        { headers: { "sec-fetch-site": "cross-site" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
+    it("rejects profile mutation when forwarded client ip is non-loopback", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "PUT",
+        "/api/channels/nostr/default/profile",
+        { name: "attacker" },
+        { headers: { "x-forwarded-for": "203.0.113.99, 127.0.0.1" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
     it("rejects private IP in picture URL (SSRF protection)", async () => {
       await expectPrivatePictureRejected("https://127.0.0.1/evil.jpg");
     });
@@ -298,9 +346,7 @@ describe("nostr-profile-http", () => {
 
       await handler(req, res);
 
-      expect(res._getStatusCode()).toBe(400);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(false);
+      const data = expectBadRequestResponse(res);
       // The schema validation catches non-https URLs before SSRF check
       expect(data.error).toBe("Validation failed");
       expect(data.details).toBeDefined();
@@ -334,12 +380,7 @@ describe("nostr-profile-http", () => {
       const ctx = createMockContext();
       const handler = createNostrProfileHttpHandler(ctx);
 
-      vi.mocked(publishNostrProfile).mockResolvedValue({
-        eventId: "event123",
-        createdAt: 1234567890,
-        successes: ["wss://relay.damus.io"],
-        failures: [],
-      });
+      mockPublishSuccess();
 
       // Make 6 requests (limit is 5/min)
       for (let i = 0; i < 6; i++) {
@@ -350,7 +391,7 @@ describe("nostr-profile-http", () => {
         await handler(req, res);
 
         if (i < 5) {
-          expect(res._getStatusCode()).toBe(200);
+          expectOkResponse(res);
         } else {
           expect(res._getStatusCode()).toBe(429);
           const data = JSON.parse(res._getData());
@@ -358,9 +399,34 @@ describe("nostr-profile-http", () => {
         }
       }
     });
+
+    it("caps tracked rate-limit keys to prevent unbounded growth", () => {
+      const now = 1_000_000;
+      for (let i = 0; i < 2_500; i += 1) {
+        isNostrProfileRateLimitedForTest(`rate-cap-${i}`, now);
+      }
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBeLessThanOrEqual(2_048);
+    });
+
+    it("prunes stale rate-limit keys after the window elapses", () => {
+      const now = 2_000_000;
+      for (let i = 0; i < 100; i += 1) {
+        isNostrProfileRateLimitedForTest(`rate-stale-${i}`, now);
+      }
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(100);
+
+      isNostrProfileRateLimitedForTest("fresh", now + 60_001);
+      expect(getNostrProfileRateLimitStateSizeForTest()).toBe(1);
+    });
   });
 
   describe("POST /api/channels/nostr/:accountId/profile/import", () => {
+    function expectImportSuccessResponse(res: ReturnType<typeof createMockResponse>) {
+      const data = expectOkResponse(res);
+      expect(data.imported.name).toBe("imported");
+      return data;
+    }
+
     it("imports profile from relays", async () => {
       const ctx = createMockContext();
       const handler = createNostrProfileHttpHandler(ctx);
@@ -371,10 +437,7 @@ describe("nostr-profile-http", () => {
 
       await handler(req, res);
 
-      expect(res._getStatusCode()).toBe(200);
-      const data = JSON.parse(res._getData());
-      expect(data.ok).toBe(true);
-      expect(data.imported.name).toBe("imported");
+      const data = expectImportSuccessResponse(res);
       expect(data.saved).toBe(false); // autoMerge not requested
     });
 
@@ -408,6 +471,21 @@ describe("nostr-profile-http", () => {
       expect(res._getStatusCode()).toBe(403);
     });
 
+    it("rejects import mutation when x-real-ip is non-loopback", async () => {
+      const ctx = createMockContext();
+      const handler = createNostrProfileHttpHandler(ctx);
+      const req = createMockRequest(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {},
+        { headers: { "x-real-ip": "198.51.100.55" } },
+      );
+      const res = createMockResponse();
+
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+    });
+
     it("auto-merges when requested", async () => {
       const ctx = createMockContext({
         getConfigProfile: vi.fn().mockReturnValue({ about: "local bio" }),
@@ -422,8 +500,7 @@ describe("nostr-profile-http", () => {
 
       await handler(req, res);
 
-      expect(res._getStatusCode()).toBe(200);
-      const data = JSON.parse(res._getData());
+      const data = expectImportSuccessResponse(res);
       expect(data.saved).toBe(true);
       expect(ctx.updateConfigProfile).toHaveBeenCalled();
     });

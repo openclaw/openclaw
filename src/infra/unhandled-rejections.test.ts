@@ -56,10 +56,13 @@ describe("isTransientNetworkError", () => {
       "EHOSTUNREACH",
       "ENETUNREACH",
       "EAI_AGAIN",
+      "EPROTO",
       "UND_ERR_CONNECT_TIMEOUT",
       "UND_ERR_SOCKET",
       "UND_ERR_HEADERS_TIMEOUT",
       "UND_ERR_BODY_TIMEOUT",
+      "ERR_SSL_WRONG_VERSION_NUMBER",
+      "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
     ];
 
     for (const code of codes) {
@@ -120,6 +123,33 @@ describe("isTransientNetworkError", () => {
     const networkError = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
     const error = new AggregateError([networkError], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for wrapped fetch-failed messages from integration clients", () => {
+    const error = new Error("Failed to get gateway information from Discord: fetch failed");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for wrapped Discord upstream-connect parse failures", () => {
+    const error = new Error(
+      `Failed to get gateway information from Discord: Unexpected token 'u', "upstream connect error or disconnect/reset before headers. reset reason: overflow" is not valid JSON`,
+    );
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns false for non-network fetch-failed wrappers from tools", () => {
+    const error = new Error("Web fetch failed (404): Not Found");
+    expect(isTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns true for TLS/SSL transient message snippets", () => {
+    expect(isTransientNetworkError(new Error("write EPROTO 00A8B0C9:error"))).toBe(true);
+    expect(
+      isTransientNetworkError(
+        new Error("SSL routines:OPENSSL_internal:WRONG_VERSION_NUMBER while connecting"),
+      ),
+    ).toBe(true);
+    expect(isTransientNetworkError(new Error("tlsv1 alert protocol version"))).toBe(true);
   });
 
   it("returns false for regular errors without network codes", () => {

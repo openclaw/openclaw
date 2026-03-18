@@ -28,6 +28,16 @@ describe("Agent-specific tool filtering", () => {
     stat: async () => null,
   };
 
+  function expectReadOnlyToolSet(toolNames: string[], extraDenied: string[] = []) {
+    expect(toolNames).toContain("read");
+    expect(toolNames).not.toContain("exec");
+    expect(toolNames).not.toContain("write");
+    expect(toolNames).not.toContain("apply_patch");
+    for (const toolName of extraDenied) {
+      expect(toolNames).not.toContain(toolName);
+    }
+  }
+
   async function withApplyPatchEscapeCase(
     opts: { workspaceOnly?: boolean },
     run: (params: {
@@ -250,12 +260,10 @@ describe("Agent-specific tool filtering", () => {
       agentDir: "/tmp/agent-restricted",
     });
 
-    const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("apply_patch");
-    expect(toolNames).not.toContain("edit");
+    expectReadOnlyToolSet(
+      tools.map((t) => t.name),
+      ["edit"],
+    );
   });
 
   it("should apply provider-specific tool policy", () => {
@@ -279,11 +287,7 @@ describe("Agent-specific tool filtering", () => {
       modelId: "claude-opus-4-6-thinking",
     });
 
-    const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("apply_patch");
+    expectReadOnlyToolSet(tools.map((t) => t.name));
   });
 
   it("should apply provider-specific tool profile overrides", () => {
@@ -570,10 +574,13 @@ describe("Agent-specific tool filtering", () => {
       agentDir: "/tmp/agent-restricted",
       sandbox: {
         enabled: true,
+        backendId: "docker",
         sessionKey: "agent:restricted:main",
         workspaceDir: "/tmp/sandbox",
         agentWorkspaceDir: "/tmp/test-restricted",
         workspaceAccess: "none",
+        runtimeId: "test-container",
+        runtimeLabel: "test-container",
         containerName: "test-container",
         containerWorkdir: "/workspace",
         docker: {

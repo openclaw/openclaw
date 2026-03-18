@@ -1,6 +1,7 @@
 import type { ProgressReporter } from "../../cli/progress.js";
-import { renderTable } from "../../terminal/table.js";
+import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
 import { isRich, theme } from "../../terminal/theme.js";
+import { groupChannelIssuesByChannel } from "./channel-issues.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 import { formatTimeAgo } from "./format.js";
 
@@ -56,7 +57,7 @@ export async function buildStatusAllReportLines(params: {
   const fail = (text: string) => (rich ? theme.error(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
 
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const tableWidth = getTerminalTableWidth();
 
   const overview = renderTable({
     width: tableWidth,
@@ -81,19 +82,7 @@ export async function buildStatusAllReportLines(params: {
             : theme.accentDim("SETUP"),
     Detail: row.detail,
   }));
-  const channelIssuesByChannel = (() => {
-    const map = new Map<string, ChannelIssueLike[]>();
-    for (const issue of params.channelIssues) {
-      const key = issue.channel;
-      const list = map.get(key);
-      if (list) {
-        list.push(issue);
-      } else {
-        map.set(key, [issue]);
-      }
-    }
-    return map;
-  })();
+  const channelIssuesByChannel = groupChannelIssuesByChannel(params.channelIssues);
   const channelRowsWithIssues = channelRows.map((row) => {
     const issues = channelIssuesByChannel.get(row.channelId) ?? [];
     if (issues.length === 0) {

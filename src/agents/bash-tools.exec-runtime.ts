@@ -1,15 +1,21 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
+import { type ExecHost } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
-import { mergePathPrepend } from "../infra/path-prepend.js";
+import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
-export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
+export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
+export {
+  normalizeExecAsk,
+  normalizeExecHost,
+  normalizeExecSecurity,
+} from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -155,30 +161,6 @@ export type ExecProcessHandle = {
   kill: () => void;
 };
 
-export function normalizeExecHost(value?: string | null): ExecHost | null {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
-    return normalized;
-  }
-  return null;
-}
-
-export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
-    return normalized;
-  }
-  return null;
-}
-
-export function normalizeExecAsk(value?: string | null): ExecAsk | null {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
-    return normalized as ExecAsk;
-  }
-  return null;
-}
-
 export function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
 }
@@ -210,9 +192,10 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   if (entries.length === 0) {
     return;
   }
-  const merged = mergePathPrepend(env.PATH, entries);
+  const pathKey = findPathKey(env);
+  const merged = mergePathPrepend(env[pathKey], entries);
   if (merged) {
-    env.PATH = merged;
+    env[pathKey] = merged;
   }
 }
 
@@ -238,11 +221,47 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
   enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+  requestHeartbeatNow(
+    scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
+  );
 }
 
 export function createApprovalSlug(id: string) {
   return id.slice(0, APPROVAL_SLUG_LENGTH);
+}
+
+export function buildApprovalPendingMessage(params: {
+  warningText?: string;
+  approvalSlug: string;
+  approvalId: string;
+  command: string;
+  cwd: string;
+  host: "gateway" | "node";
+  nodeId?: string;
+}) {
+  let fence = "```";
+  while (params.command.includes(fence)) {
+    fence += "`";
+  }
+  const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
+  const lines: string[] = [];
+  const warningText = params.warningText?.trim();
+  if (warningText) {
+    lines.push(warningText, "");
+  }
+  lines.push(`Approval required (id ${params.approvalSlug}, full ${params.approvalId}).`);
+  lines.push(`Host: ${params.host}`);
+  if (params.nodeId) {
+    lines.push(`Node: ${params.nodeId}`);
+  }
+  lines.push(`CWD: ${params.cwd}`);
+  lines.push("Command:");
+  lines.push(commandBlock);
+  lines.push("Mode: foreground (interactive approvals available).");
+  lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
+  lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
+  lines.push("If the short code is ambiguous, use the full id in /approve.");
+  return lines.join("\n");
 }
 
 export function resolveApprovalRunningNoticeMs(value?: number) {
@@ -264,7 +283,7 @@ export function emitExecSystemEvent(
     return;
   }
   enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
-  requestHeartbeatNow({ reason: "exec-event" });
+  requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
 }
 
 export async function runExecProcess(opts: {
@@ -291,6 +310,10 @@ export async function runExecProcess(opts: {
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
   const supervisor = getProcessSupervisor();
+  const shellRuntimeEnv: Record<string, string> = {
+    ...opts.env,
+    OPENCLAW_SHELL: "exec",
+  };
 
   const session: ProcessSession = {
     id: sessionId,
@@ -361,6 +384,7 @@ export async function runExecProcess(opts: {
     typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
       ? Math.floor(opts.timeoutSec * 1000)
       : undefined;
+  let sandboxFinalizeToken: unknown;
 
   const spawnSpec:
     | {
@@ -375,22 +399,31 @@ export async function runExecProcess(opts: {
         childFallbackArgv: string[];
         env: NodeJS.ProcessEnv;
         stdinMode: "pipe-open";
-      } = (() => {
+      } = await (async () => {
     if (opts.sandbox) {
+      const backendExecSpec = await opts.sandbox.buildExecSpec?.({
+        command: execCommand,
+        workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+        env: shellRuntimeEnv,
+        usePty: opts.usePty,
+      });
+      sandboxFinalizeToken = backendExecSpec?.finalizeToken;
       return {
         mode: "child" as const,
-        argv: [
+        argv: backendExecSpec?.argv ?? [
           "docker",
           ...buildDockerExecArgs({
             containerName: opts.sandbox.containerName,
             command: execCommand,
             workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
-            env: opts.env,
+            env: shellRuntimeEnv,
             tty: opts.usePty,
           }),
         ],
-        env: process.env,
-        stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+        env: backendExecSpec?.env ?? process.env,
+        stdinMode:
+          backendExecSpec?.stdinMode ??
+          (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
@@ -400,14 +433,14 @@ export async function runExecProcess(opts: {
         mode: "pty" as const,
         ptyCommand: execCommand,
         childFallbackArgv: childArgv,
-        env: opts.env,
+        env: shellRuntimeEnv,
         stdinMode: "pipe-open" as const,
       };
     }
     return {
       mode: "child" as const,
       argv: childArgv,
-      env: opts.env,
+      env: shellRuntimeEnv,
       stdinMode: "pipe-closed" as const,
     };
   })();
@@ -496,7 +529,7 @@ export async function runExecProcess(opts: {
 
   const promise = managedRun
     .wait()
-    .then((exit): ExecProcessOutcome => {
+    .then(async (exit): Promise<ExecProcessOutcome> => {
       const durationMs = Date.now() - startedAt;
       const isNormalExit = exit.reason === "exit";
       const exitCode = exit.exitCode ?? 0;
@@ -513,6 +546,14 @@ export async function runExecProcess(opts: {
         session.stdin.destroyed = true;
       }
       const aggregated = session.aggregated.trim();
+      if (opts.sandbox?.finalizeExec) {
+        await opts.sandbox.finalizeExec({
+          status,
+          exitCode: exit.exitCode ?? null,
+          timedOut: exit.timedOut,
+          token: sandboxFinalizeToken,
+        });
+      }
       if (status === "completed") {
         const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
         return {
@@ -530,8 +571,8 @@ export async function runExecProcess(opts: {
           : "Command not executable (permission denied)"
         : exit.reason === "overall-timeout"
           ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
-            ? `Command timed out after ${opts.timeoutSec} seconds`
-            : "Command timed out"
+            ? `Command timed out after ${opts.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
+            : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300)."
           : exit.reason === "no-output-timeout"
             ? "Command timed out waiting for output"
             : exit.exitSignal != null

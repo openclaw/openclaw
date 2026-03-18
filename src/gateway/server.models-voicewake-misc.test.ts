@@ -51,18 +51,21 @@ beforeAll(async () => {
 const whatsappOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   sendText: async ({ deps, to, text }) => {
-    if (!deps?.sendWhatsApp) {
-      throw new Error("Missing sendWhatsApp dep");
-    }
-    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { verbose: false })) };
-  },
-  sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    if (!deps?.sendWhatsApp) {
+    if (!deps?.["whatsapp"]) {
       throw new Error("Missing sendWhatsApp dep");
     }
     return {
       channel: "whatsapp",
-      ...(await deps.sendWhatsApp(to, text, { verbose: false, mediaUrl })),
+      ...(await (deps["whatsapp"] as Function)(to, text, { verbose: false })),
+    };
+  },
+  sendMedia: async ({ deps, to, text, mediaUrl }) => {
+    if (!deps?.["whatsapp"]) {
+      throw new Error("Missing sendWhatsApp dep");
+    }
+    return {
+      channel: "whatsapp",
+      ...(await (deps["whatsapp"] as Function)(to, text, { verbose: false, mediaUrl })),
     };
   },
 };
@@ -191,6 +194,29 @@ describe("gateway server models + voicewake", () => {
     }
   };
 
+  const expectAllowlistedModels = async (options: {
+    primary: string;
+    models: Record<string, object>;
+    expected: ModelCatalogRpcEntry[];
+  }): Promise<void> => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: options.primary },
+            models: options.models,
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual(options.expected);
+      },
+    );
+  };
+
   test(
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 20_000 },
@@ -294,66 +320,42 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("models.list filters to allowlisted configured models by default", async () => {
-    await withModelsConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-test-z" },
-            models: {
-              "openai/gpt-test-z": {},
-              "anthropic/claude-test-a": {},
-            },
-          },
+    await expectAllowlistedModels({
+      primary: "openai/gpt-test-z",
+      models: {
+        "openai/gpt-test-z": {},
+        "anthropic/claude-test-a": {},
+      },
+      expected: [
+        {
+          id: "claude-test-a",
+          name: "A-Model",
+          provider: "anthropic",
+          contextWindow: 200_000,
         },
-      },
-      async () => {
-        seedPiCatalog();
-        const res = await listModels();
-
-        expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          {
-            id: "claude-test-a",
-            name: "A-Model",
-            provider: "anthropic",
-            contextWindow: 200_000,
-          },
-          {
-            id: "gpt-test-z",
-            name: "gpt-test-z",
-            provider: "openai",
-          },
-        ]);
-      },
-    );
+        {
+          id: "gpt-test-z",
+          name: "gpt-test-z",
+          provider: "openai",
+        },
+      ],
+    });
   });
 
   test("models.list includes synthetic entries for allowlist models absent from catalog", async () => {
-    await withModelsConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "openai/not-in-catalog" },
-            models: {
-              "openai/not-in-catalog": {},
-            },
-          },
+    await expectAllowlistedModels({
+      primary: "openai/not-in-catalog",
+      models: {
+        "openai/not-in-catalog": {},
+      },
+      expected: [
+        {
+          id: "not-in-catalog",
+          name: "not-in-catalog",
+          provider: "openai",
         },
-      },
-      async () => {
-        seedPiCatalog();
-        const res = await listModels();
-
-        expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          {
-            id: "not-in-catalog",
-            name: "not-in-catalog",
-            provider: "openai",
-          },
-        ]);
-      },
-    );
+      ],
+    });
   });
 
   test("models.list rejects unknown params", async () => {
