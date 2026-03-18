@@ -251,7 +251,8 @@ export function registerControlUiAndPairingSuite(): void {
   test("clears self-declared scopes for trusted-proxy control ui without device identity", async () => {
     await configureTrustedProxyControlUiAuth();
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { requestDevicePairing } = await import("../infra/device-pairing.js");
+    const { rejectDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
     const { identity } = await createOperatorIdentityFixture("openclaw-control-ui-trusted-proxy-");
     const pendingRequest = await requestDevicePairing({
       deviceId: identity.deviceId,
@@ -279,6 +280,7 @@ export function registerControlUiAndPairingSuite(): void {
         await expectDevicePairApproveDenied(ws, pendingRequest.request.requestId);
       } finally {
         ws.close();
+        await rejectDevicePairing(pendingRequest.request.requestId);
       }
     });
   });
