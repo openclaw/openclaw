@@ -128,13 +128,19 @@ function buildMessagingSection(params: {
   if (params.isMinimal) {
     return [];
   }
-  return [
+  const lines = [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
-    "- Cross-session messaging → use sessions_send(sessionKey, message)",
-    "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
     `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
+  ];
+  if (params.availableTools.has("sessions_send")) {
+    lines.push("- Cross-session messaging → use sessions_send(sessionKey, message)");
+  }
+  if (params.availableTools.has("subagents")) {
+    lines.push("- Sub-agent orchestration → use subagents(action=list|steer|kill)");
+  }
+  lines.push(
     params.availableTools.has("message")
       ? [
           "",
@@ -154,7 +160,8 @@ function buildMessagingSection(params: {
           .join("\n")
       : "",
     "",
-  ];
+  );
+  return lines;
 }
 
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
@@ -317,7 +324,11 @@ export function buildAgentSystemPrompt(params: {
 
   const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
+  const hasExec = availableTools.has("exec");
+  const hasProcess = availableTools.has("process");
+  const hasSessionsList = availableTools.has("sessions_list");
   const hasSessionsSpawn = availableTools.has("sessions_spawn");
+  const hasSubagents = availableTools.has("subagents");
   const acpHarnessSpawnAllowed = hasSessionsSpawn && acpSpawnRuntimeEnabled;
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
@@ -346,6 +357,14 @@ export function buildAgentSystemPrompt(params: {
   const readToolName = resolveToolName("read");
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
+  const longWaitGuidance =
+    hasExec && hasProcess
+      ? `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`
+      : hasExec
+        ? `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs.`
+        : hasProcess
+          ? `For long waits, avoid rapid poll loops: use ${processToolName}(action=poll, timeout=<ms>).`
+          : "";
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
   const ownerLine = buildOwnerIdentityLine(
@@ -450,8 +469,10 @@ export function buildAgentSystemPrompt(params: {
           '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
-    `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
-    "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+    longWaitGuidance,
+    hasSessionsSpawn
+      ? "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done."
+      : "",
     ...(acpHarnessSpawnAllowed
       ? [
           'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
@@ -460,7 +481,9 @@ export function buildAgentSystemPrompt(params: {
           'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',
         ]
       : []),
-    "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
+    hasSubagents || hasSessionsList
+      ? "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked)."
+      : "",
     "",
     "## Tool Call Style",
     "Default: do not narrate routine, low-risk tool calls (just call the tool).",

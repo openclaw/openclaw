@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-core-tools.js";
 import * as harness from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
@@ -65,6 +65,10 @@ describe("sessions_spawn thinking defaults", () => {
     resetSubagentRegistryForTests();
     harness.getCallGatewayMock().mockClear();
     applyThinkingDefault("high");
+  });
+
+  afterEach(() => {
+    resetSubagentRegistryForTests();
   });
 
   it("applies agents.defaults.subagents.thinking when thinking is omitted", async () => {

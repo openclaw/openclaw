@@ -2,6 +2,7 @@ import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverReason,
   classifyFailoverReasonFromHttpStatus,
+  isSessionLockError,
   isTimeoutErrorMessage,
   type FailoverReason,
 } from "./pi-embedded-helpers.js";
@@ -227,6 +228,12 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
 
   const status = getStatusCode(err);
   const message = getErrorMessage(err);
+
+  // Session lock errors are model-independent; do not classify as failover.
+  if (message && isSessionLockError(message)) {
+    return null;
+  }
+
   const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
   if (statusReason) {
     return statusReason;

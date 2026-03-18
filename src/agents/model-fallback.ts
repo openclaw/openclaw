@@ -30,7 +30,7 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+import { isLikelyContextOverflowError, isSessionLockError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -709,6 +709,10 @@ export async function runWithModelFallback<T>(params: {
       // that may have a smaller context window and fail worse.
       const errMessage = err instanceof Error ? err.message : String(err);
       if (isLikelyContextOverflowError(errMessage)) {
+        throw err;
+      }
+      // Session lock is model-independent; do not trigger fallback.
+      if (isSessionLockError(errMessage)) {
         throw err;
       }
       const normalized =

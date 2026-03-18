@@ -24,7 +24,7 @@ function createTask(
       target: {
         capability: "marketing",
         team_id: "marketing",
-        alias: "tonys-angels",
+        alias: "angela",
       },
       objective: "Ship campaign draft",
       tier: "STANDARD",
@@ -35,7 +35,7 @@ function createTask(
       task_id: taskId,
       run_id: `run-${taskId}`,
       state: params.state ?? "completed",
-      owner: params.owner ?? "tonys-angels",
+      owner: params.owner ?? "angela",
       attempt: 0,
       created_at: params.createdAt ?? 1_700_000_000_000,
       updated_at: params.updatedAt ?? 1_700_000_060_000,
@@ -51,7 +51,7 @@ function createTask(
 describe("mission control team stats", () => {
   it("counts receipt-only completions as success for external specialists", () => {
     const stats = computeAgentStats(
-      "tonys-angels",
+      "angela",
       [
         createTask({ taskId: "task-success", state: "completed" }),
         createTask({ taskId: "task-failure", state: "dead-letter", failureCode: "tool-timeout" }),
@@ -68,7 +68,7 @@ describe("mission control team stats", () => {
 
   it("keeps average completion time in milliseconds", () => {
     const stats = computeAgentStats(
-      "tonys-angels",
+      "angela",
       [
         createTask({
           taskId: "task-a",

@@ -1,7 +1,12 @@
 import { ZodError } from "zod";
-import { resolveOperatorDelegatedDefaultAlias } from "./agent-registry.js";
+import {
+  resolveOperatorDelegatedDefaultAlias,
+  resolveOperatorDelegatedLeadAlias,
+} from "./agent-registry.js";
 import {
   CANONICAL_DELEGATED_EXECUTION_TRANSPORT,
+  DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION,
+  DELEGATED_LEAD_TASK_ENVELOPE_SCHEMA_VERSION,
   LEGACY_DELEGATED_EXECUTION_TRANSPORT,
   canonicalizeOperatorExecutionTransport,
   type OperatorBlockerCode,
@@ -643,14 +648,22 @@ function buildDelegatedTransportPayload(task: OperatorTaskRecord): {
   if (!baseUrl) {
     throw new Error("Delegated transport base URL not configured");
   }
-  const owner = resolveOperatorDelegatedDefaultAlias({
-    explicitAlias: task.envelope.target.alias ?? null,
-    teamId: task.envelope.target.team_id ?? null,
-  });
+  const owner =
+    resolveOperatorDelegatedLeadAlias({
+      teamId: task.envelope.target.team_id ?? null,
+    }) ??
+    resolveOperatorDelegatedDefaultAlias({
+      explicitAlias: task.envelope.target.alias ?? null,
+      teamId: task.envelope.target.team_id ?? null,
+    });
   if (!owner) {
-    throw new Error("delegated first-class-agent target alias not configured");
+    throw new Error("delegated lead target alias not configured");
   }
-  const delegateName = `${owner} via delegated first-class-agent boundary`;
+  const requestedInternalOwner =
+    task.envelope.target.alias?.trim() && task.envelope.target.alias !== owner
+      ? task.envelope.target.alias
+      : null;
+  const delegateName = `${owner} via delegated lead boundary`;
 
   return {
     baseUrl,
@@ -667,20 +680,23 @@ function buildDelegatedTransportPayload(task: OperatorTaskRecord): {
           : {}),
       },
       body: JSON.stringify({
-        schema: "AngelaTaskEnvelopeV1",
+        schema: DELEGATED_LEAD_TASK_ENVELOPE_SCHEMA_VERSION,
         task_id: task.envelope.task_id,
         run_id: task.receipt.run_id,
         callback_url: resolveReceiptUrl(task.envelope.task_id) ?? null,
-        receipt_schema: "AngelaTaskReceiptV1",
+        receipt_schema: DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION,
         objective: task.envelope.objective,
         capability: task.envelope.target.capability,
         team_id: task.envelope.target.team_id ?? null,
-        team_lead: team?.lead ?? null,
+        team_lead: team?.lead ?? owner,
         alias: owner,
         requester: task.envelope.requester,
         acceptance_criteria: task.envelope.acceptance_criteria,
         context_refs: task.envelope.context_refs,
-        inputs: task.envelope.inputs,
+        inputs: {
+          ...task.envelope.inputs,
+          ...(requestedInternalOwner ? { requested_internal_owner: requestedInternalOwner } : {}),
+        },
         reply_to: task.envelope.reply_to ?? null,
         execution: task.envelope.execution,
       }),

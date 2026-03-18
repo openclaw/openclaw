@@ -21,13 +21,6 @@ export type CompiledOperatorAgentRecord = {
   maxConcurrentSessions: number;
 };
 
-export type CompiledOperatorSkillOwnership = {
-  skill: string;
-  owner: string;
-  status: string | null;
-  rationale: string | null;
-};
-
 export type CompiledOperatorK8sRecord = {
   id: string;
   name: string | null;
@@ -55,7 +48,7 @@ export type CompiledOperatorDelegatedTransportConfig = {
 
 export type CompiledOperatorRuntimeConfig = {
   transports: {
-    angelaHttp: CompiledOperatorDelegatedTransportConfig;
+    delegatedHttp: CompiledOperatorDelegatedTransportConfig;
   };
 };
 
@@ -95,8 +88,6 @@ export type CompiledOperatorAgentRegistry = {
   operatorRuntime: CompiledOperatorRuntimeConfig;
   agents: CompiledOperatorAgentRecord[];
   teams: CompiledOperatorTeamRecord[];
-  pipelineOrder: string[];
-  skillOwnership: CompiledOperatorSkillOwnership[];
   k8sCluster: CompiledOperatorK8sRecord[];
   identities: CompiledOperatorIdentityRecord[];
 };
@@ -105,8 +96,6 @@ type RawAgentRegistry = {
   operator_runtime?: unknown;
   agents?: unknown;
   teams?: unknown;
-  pipeline_order?: unknown;
-  skill_ownership?: unknown;
   k8s_cluster?: unknown;
 };
 
@@ -246,31 +235,14 @@ function compileOperatorRuntime(record: RawAgentRegistry): CompiledOperatorRunti
   const operatorRuntime = asRecord(record.operator_runtime);
   const transports = asRecord(operatorRuntime?.transports);
   const delegatedHttp = asRecord(transports?.delegated_http) ?? asRecord(transports?.angela_http);
+  const delegatedTransportConfig = {
+    globalDefaultAlias: asString(delegatedHttp?.global_default_alias),
+  };
 
   return {
     transports: {
-      angelaHttp: {
-        globalDefaultAlias: asString(delegatedHttp?.global_default_alias),
-      },
+      delegatedHttp: delegatedTransportConfig,
     },
-  };
-}
-
-function compileSkillOwnership(entry: unknown): CompiledOperatorSkillOwnership {
-  const record = asRecord(entry);
-  if (!record) {
-    throw new Error("Invalid skill_ownership entry in agents.yaml");
-  }
-  const skill = asString(record.skill);
-  const owner = asString(record.owner);
-  if (!skill || !owner) {
-    throw new Error("skill_ownership entry must include skill and owner");
-  }
-  return {
-    skill,
-    owner,
-    status: asString(record.status),
-    rationale: asString(record.rationale),
   };
 }
 
@@ -409,34 +381,15 @@ export function compileOperatorAgentRegistry(params?: {
   );
   const teamIds = new Set(compiledTeams.map((entry) => entry.id.toLowerCase()));
 
-  const pipelineOrder = ensureUnique(
-    asStringArray(parsed.pipeline_order).map((entry) => entry.trim()),
-    "pipeline_order entry",
-  );
-  for (const entry of pipelineOrder) {
-    if (!agentIds.has(entry.toLowerCase())) {
-      throw new Error(`pipeline_order references unknown agent: ${entry}`);
-    }
-  }
-
-  const skillOwnership = (Array.isArray(parsed.skill_ownership) ? parsed.skill_ownership : []).map(
-    compileSkillOwnership,
-  );
-  for (const entry of skillOwnership) {
-    if (!agentIds.has(entry.owner.toLowerCase())) {
-      throw new Error(`skill_ownership references unknown owner: ${entry.owner}`);
-    }
-  }
-
   const k8sCluster = (Array.isArray(parsed.k8s_cluster) ? parsed.k8s_cluster : []).map(
     compileK8sRecord,
   );
   const k8sIds = new Set(k8sCluster.map((entry) => entry.id.toLowerCase()));
   const agentsById = new Map(compiledAgents.map((entry) => [entry.id.toLowerCase(), entry]));
-  if (operatorRuntime.transports.angelaHttp.globalDefaultAlias) {
-    if (!agentIds.has(operatorRuntime.transports.angelaHttp.globalDefaultAlias.toLowerCase())) {
+  if (operatorRuntime.transports.delegatedHttp.globalDefaultAlias) {
+    if (!agentIds.has(operatorRuntime.transports.delegatedHttp.globalDefaultAlias.toLowerCase())) {
       throw new Error(
-        `operator_runtime delegated_http global_default_alias references unknown agent: ${operatorRuntime.transports.angelaHttp.globalDefaultAlias}`,
+        `operator_runtime delegated_http global_default_alias references unknown agent: ${operatorRuntime.transports.delegatedHttp.globalDefaultAlias}`,
       );
     }
   }
@@ -526,8 +479,6 @@ export function compileOperatorAgentRegistry(params?: {
     operatorRuntime,
     agents: compiledAgents,
     teams: compiledTeams,
-    pipelineOrder,
-    skillOwnership,
     k8sCluster,
     identities: buildIdentityDirectory({
       agents: compiledAgents,
@@ -591,7 +542,23 @@ export function resolveOperatorDelegatedDefaultAlias(params?: {
   const team = teamId ? findCompiledOperatorTeam(registry, teamId) : null;
   return (
     team?.dispatchDefaultAlias ??
-    registry.operatorRuntime.transports.angelaHttp.globalDefaultAlias ??
+    registry.operatorRuntime.transports.delegatedHttp.globalDefaultAlias ??
+    null
+  );
+}
+
+export function resolveOperatorDelegatedLeadAlias(params?: {
+  teamId?: string | null;
+  workspaceDir?: string;
+  sourcePath?: string;
+}): string | null {
+  const registry = compileOperatorAgentRegistry(params);
+  const teamId = asString(params?.teamId);
+  const team = teamId ? findCompiledOperatorTeam(registry, teamId) : null;
+  return (
+    team?.lead ??
+    team?.dispatchDefaultAlias ??
+    registry.operatorRuntime.transports.delegatedHttp.globalDefaultAlias ??
     null
   );
 }

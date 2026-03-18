@@ -15,7 +15,7 @@ async function seedOperatorRegistryFixture(): Promise<void> {
       "operator_runtime:",
       "  transports:",
       "    delegated_http:",
-      "      global_default_alias: tonys-angels",
+      "      global_default_alias: angela",
       "agents:",
       "  - id: raekwon",
       "    name: Raekwon",
@@ -29,8 +29,8 @@ async function seedOperatorRegistryFixture(): Promise<void> {
       "    name: Jeffy",
       "    specialty: Kanban",
       "    triggers: [kanban, board_hygiene_packet]",
-      "  - id: tonys-angels",
-      "    name: Tony's Angels",
+      "  - id: angela",
+      "    name: Angela",
       "    specialty: Marketing",
       "    triggers: [marketing]",
       "  - id: bobby-digital",
@@ -51,11 +51,11 @@ async function seedOperatorRegistryFixture(): Promise<void> {
       "    dispatch_transport: deb-http",
       "  - id: marketing",
       "    name: Marketing",
-      "    lead: tonys-angels",
+      "    lead: angela",
       "    route_via_lead: true",
-      "    members: [tonys-angels]",
+      "    members: [angela]",
       "    dispatch_transport: delegated-http",
-      "    dispatch_default_alias: tonys-angels",
+      "    dispatch_default_alias: angela",
       "  - id: engineering",
       "    name: Engineering",
       "    lead: bobby-digital",
@@ -144,7 +144,7 @@ describe("operator team routing", () => {
       });
 
       expect(envelope.target.team_id).toBe("marketing");
-      expect(envelope.target.alias).toBe("tonys-angels");
+      expect(envelope.target.alias).toBe("angela");
       expect(envelope.execution.transport).toBe("delegated-http");
     });
   });

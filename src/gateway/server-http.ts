@@ -55,10 +55,11 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
-import { handleMissionControlHttpRequest } from "./mission-control.js";
+import { handleMartinaHttpRequest } from "./martina-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { handleOperatorHttpRequest } from "./operator-http.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   authorizeCanvasRequest,
@@ -909,9 +910,20 @@ export function createGatewayHttpServer(opts: {
       );
 
       requestStages.push({
-        name: "mission-control-http",
+        name: "martina-http",
         run: () =>
-          handleMissionControlHttpRequest(req, res, {
+          handleMartinaHttpRequest(req, res, {
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+          }),
+      });
+
+      requestStages.push({
+        name: "operator-http",
+        run: () =>
+          handleOperatorHttpRequest(req, res, {
             auth: resolvedAuth,
             trustedProxies,
             allowRealIpFallback,

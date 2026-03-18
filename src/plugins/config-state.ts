@@ -64,6 +64,8 @@ const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
   "openai-codex": "openai",
   "kimi-coding": "kimi",
   "minimax-portal-auth": "minimax",
+  "elevenlabs-speech": "elevenlabs",
+  "microsoft-speech": "microsoft",
 };
 
 function normalizePluginId(id: string): string {

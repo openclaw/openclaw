@@ -127,7 +127,14 @@ function validatePositionalCount(positional: string[], profile: SafeBinProfile):
   if (positional.length < minPositional) {
     return false;
   }
-  return typeof profile.maxPositional !== "number" || positional.length <= profile.maxPositional;
+  if (typeof profile.maxPositional === "number" && positional.length > profile.maxPositional) {
+    return false;
+  }
+  const allowedFirstPositionals = profile.allowedFirstPositionals;
+  if (allowedFirstPositionals && allowedFirstPositionals.size > 0 && positional.length > 0) {
+    return allowedFirstPositionals.has(positional[0] ?? "");
+  }
+  return true;
 }
 
 export function validateSafeBinArgv(args: string[], profile: SafeBinProfile): boolean {

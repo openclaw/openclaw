@@ -15,8 +15,8 @@ describe("operator worker status", () => {
     compileOperatorAgentRegistryMock.mockReturnValue({
       operatorRuntime: {
         transports: {
-          angelaHttp: {
-            globalDefaultAlias: "tonys-angels",
+          delegatedHttp: {
+            globalDefaultAlias: "angela",
           },
         },
       },
@@ -24,8 +24,8 @@ describe("operator worker status", () => {
         {
           id: "marketing",
           dispatchTransport: "angela-http",
-          lead: "tonys-angels",
-          dispatchDefaultAlias: "tonys-angels",
+          lead: "angela",
+          dispatchDefaultAlias: "angela",
           dispatchEndpointEnv: "OPENCLAW_MARKETING_GATEWAY_URL",
           dispatchAuthEnv: "OPENCLAW_MARKETING_GATEWAY_SECRET",
           dispatchPath: "/api/message",
@@ -67,16 +67,16 @@ describe("operator worker status", () => {
     expect(snapshot).toMatchObject({
       dispatchTransport: "delegated-http",
       transportAliases: ["angela-http"],
-      role: "delegated-first-class-agent-boundary",
+      role: "delegated-lead-boundary",
       configured: true,
       baseUrl: "http://tonya.internal:18789",
       authConfigured: true,
-      globalDefaultAlias: "tonys-angels",
+      globalDefaultAlias: "angela",
       servedTeams: ["engineering", "marketing"],
-      leadAliases: ["bobby-digital", "tonys-angels"],
+      leadAliases: ["angela", "bobby-digital"],
       defaultAliasByTeam: {
         engineering: "bobby-digital",
-        marketing: "tonys-angels",
+        marketing: "angela",
       },
       legacyTeams: ["execution-fleet"],
     });
@@ -98,8 +98,8 @@ describe("operator worker status", () => {
         teamId: "marketing",
         declaredTransport: "angela-http",
         resolvedTransport: "delegated-http",
-        leadAlias: "tonys-angels",
-        defaultAlias: "tonys-angels",
+        leadAlias: "angela",
+        defaultAlias: "angela",
         dispatchEndpointEnv: "OPENCLAW_MARKETING_GATEWAY_URL",
         dispatchPath: "/api/message",
         dispatchAuthEnv: "OPENCLAW_MARKETING_GATEWAY_SECRET",

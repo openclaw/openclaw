@@ -663,6 +663,18 @@ describe("resolveSessionTranscriptCandidates", () => {
       path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
     );
   });
+
+  test("does not fall back to legacy ~/.openclaw sessions when OPENCLAW_STATE_DIR is explicit", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "~/agents");
+
+    const candidates = resolveSessionTranscriptCandidates("sess-1", undefined);
+
+    expect(candidates).not.toContain(
+      path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "sessions", "sess-1.jsonl"),
+    );
+  });
 });
 
 describe("resolveSessionTranscriptCandidates safety", () => {

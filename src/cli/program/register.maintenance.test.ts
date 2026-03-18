@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const doctorCommand = vi.fn();
 const dashboardCommand = vi.fn();
 const resetCommand = vi.fn();
+const syncCommand = vi.fn();
 const uninstallCommand = vi.fn();
 
 const runtime = {
@@ -22,6 +23,10 @@ vi.mock("../../commands/dashboard.js", () => ({
 
 vi.mock("../../commands/reset.js", () => ({
   resetCommand,
+}));
+
+vi.mock("../../commands/sync.js", () => ({
+  syncCommand,
 }));
 
 vi.mock("../../commands/uninstall.js", () => ({
@@ -119,6 +124,35 @@ describe("registerMaintenanceCommands doctor action", () => {
         yes: true,
         nonInteractive: true,
         dryRun: true,
+      }),
+    );
+  });
+
+  it("passes sync options through to the sync command", async () => {
+    syncCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "sync",
+      "--target-home",
+      "/tmp/agents-home",
+      "--repo-source",
+      "/tmp/openclaw",
+      "--repo-dest",
+      "repo",
+      "--apply",
+      "--settings-only",
+      "--json",
+    ]);
+
+    expect(syncCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        targetHome: "/tmp/agents-home",
+        repoSource: "/tmp/openclaw",
+        repoDest: "repo",
+        apply: true,
+        settingsOnly: true,
+        json: true,
       }),
     );
   });

@@ -14,6 +14,7 @@ import {
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveUniversalTargetSessionAccess,
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
@@ -219,24 +220,40 @@ export function createSessionsHistoryTool(opts?: {
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
 
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const visibility = resolveEffectiveSessionToolsVisibility({
-        cfg,
-        sandboxed: opts?.sandboxed === true,
-        agentId: requesterAgentId,
-      });
-      const visibilityGuard = await createSessionVisibilityGuard({
-        action: "history",
+      const universalAccess = await resolveUniversalTargetSessionAccess({
         requesterSessionKey: effectiveRequesterKey,
-        visibility,
-        a2aPolicy,
+        targetSessionKey: resolvedKey,
       });
-      const access = visibilityGuard.check(resolvedKey);
-      if (!access.allowed) {
-        return jsonResult({
-          status: access.status,
-          error: access.error,
+      if (universalAccess) {
+        if (!universalAccess.allowed) {
+          return jsonResult({
+            status: universalAccess.status,
+            error: universalAccess.error,
+          });
+        }
+      }
+
+      if (!universalAccess) {
+        const a2aPolicy = createAgentToAgentPolicy(cfg);
+        const visibility = resolveEffectiveSessionToolsVisibility({
+          cfg,
+          sandboxed: opts?.sandboxed === true,
+          agentId: requesterAgentId,
         });
+        const visibilityGuard = await createSessionVisibilityGuard({
+          action: "history",
+          requesterSessionKey: effectiveRequesterKey,
+          visibility,
+          a2aPolicy,
+          mainKey,
+        });
+        const access = visibilityGuard.check(resolvedKey);
+        if (!access.allowed) {
+          return jsonResult({
+            status: access.status,
+            error: access.error,
+          });
+        }
       }
 
       const limit =

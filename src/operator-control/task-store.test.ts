@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { invalidateRegistryCache } from "./agent-registry.js";
+import { resolveOperatorReferenceSourcePath } from "./reference-paths.js";
 import {
   acceptOperatorExternalReceipt,
   applyOperatorExternalReceipt,
@@ -12,6 +16,47 @@ import {
   resubmitDeadLetteredTask,
   submitOperatorTask,
 } from "./task-store.js";
+
+async function seedOperatorRegistryFixture(): Promise<void> {
+  const sourcePath = resolveOperatorReferenceSourcePath("agents.yaml");
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(
+    sourcePath,
+    [
+      "operator_runtime:",
+      "  transports:",
+      "    delegated_http:",
+      "      global_default_alias: angela",
+      "agents:",
+      "  - id: angela",
+      "    name: Angela",
+      "    specialty: Marketing",
+      "    triggers: [marketing]",
+      "  - id: bobby-digital",
+      "    name: Bobby Digital",
+      "    specialty: Engineering",
+      "    triggers: [backend, engineering]",
+      "teams:",
+      "  - id: marketing",
+      "    name: Marketing",
+      "    lead: angela",
+      "    route_via_lead: true",
+      "    members: [angela]",
+      "    dispatch_transport: delegated-http",
+      "    dispatch_default_alias: angela",
+      "  - id: engineering",
+      "    name: Engineering",
+      "    lead: bobby-digital",
+      "    route_via_lead: true",
+      "    members: [bobby-digital]",
+      "    dispatch_transport: delegated-http",
+      "    dispatch_default_alias: bobby-digital",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  invalidateRegistryCache({ sourcePath: sourcePath });
+}
 
 describe("operator task store", () => {
   it("stores tasks idempotently and tracks lifecycle transitions", async () => {
@@ -162,8 +207,9 @@ describe("operator task store", () => {
     });
   });
 
-  it("applies Angela receipts onto marketing tasks", async () => {
+  it("applies delegated lead receipts onto marketing tasks", async () => {
     await withStateDirEnv("operator-task-store-angela-receipts-", async () => {
+      await seedOperatorRegistryFixture();
       const created = submitOperatorTask({
         task_id: "task-4",
         idempotency_key: "idem-4",
@@ -181,7 +227,7 @@ describe("operator task store", () => {
       });
 
       const completed = applyOperatorExternalReceipt("task-4", {
-        schema: "AngelaTaskReceiptV1",
+        schema: "DelegatedLeadReceiptV1",
         task_id: "task-4",
         run_id: created.task.receipt.run_id,
         state: "completed",
@@ -203,8 +249,9 @@ describe("operator task store", () => {
     });
   });
 
-  it("falls back to the delegated target agent when a delegated receipt omits owner", async () => {
+  it("falls back to delegated receipt metadata when owner is omitted", async () => {
     await withStateDirEnv("operator-task-store-angela-target-agent-fallback-", async () => {
+      await seedOperatorRegistryFixture();
       const created = submitOperatorTask({
         task_id: "task-5",
         idempotency_key: "idem-5",
@@ -222,7 +269,7 @@ describe("operator task store", () => {
       });
 
       const completed = applyOperatorExternalReceipt("task-5", {
-        schema: "AngelaTaskReceiptV1",
+        schema: "DelegatedLeadReceiptV1",
         task_id: "task-5",
         run_id: created.task.receipt.run_id,
         state: "completed",
@@ -236,7 +283,7 @@ describe("operator task store", () => {
           receipt: true,
         },
         metadata: {
-          targetAgentId: "bobby-digital",
+          resolved_internal_owner: "bobby-digital",
         },
       });
 
@@ -297,6 +344,7 @@ describe("operator task store", () => {
 
   it("queues out-of-order receipts and replays them once the task state catches up", async () => {
     await withStateDirEnv("operator-task-store-pending-receipts-", async () => {
+      await seedOperatorRegistryFixture();
       const created = submitOperatorTask({
         task_id: "task-pending-receipt-1",
         idempotency_key: "idem-pending-receipt-1",
@@ -309,7 +357,7 @@ describe("operator task store", () => {
       });
 
       const queued = acceptOperatorExternalReceipt("task-pending-receipt-1", {
-        schema: "AngelaTaskReceiptV1",
+        schema: "DelegatedLeadReceiptV1",
         task_id: "task-pending-receipt-1",
         run_id: created.task.receipt.run_id,
         state: "started",
@@ -327,7 +375,7 @@ describe("operator task store", () => {
 
       patchOperatorTask("task-pending-receipt-1", {
         state: "queued",
-        owner: "tonys-angels",
+        owner: "angela",
       });
 
       expect(processPendingReceipts()).toMatchObject({

@@ -118,9 +118,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
-    expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
-    );
+    expect(prompt).not.toContain("For long waits, avoid rapid poll loops:");
     expect(prompt).toContain("You have no independent goals");
     expect(prompt).toContain("Prioritize safety and human oversight");
     expect(prompt).toContain("if instructions conflict");
@@ -216,6 +214,7 @@ describe("buildAgentSystemPrompt", () => {
   it("guides subagent workflows to avoid polling loops", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec", "process", "sessions_list", "sessions_spawn", "subagents"],
     });
 
     expect(prompt).toContain(
@@ -226,6 +225,27 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     );
+  });
+
+  it("omits spawn and polling guidance for non-spawn lead routers", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: [
+        "read",
+        "write",
+        "edit",
+        "memory_search",
+        "memory_get",
+        "sessions_send",
+        "session_status",
+      ],
+    });
+
+    expect(prompt).not.toContain("spawn a sub-agent");
+    expect(prompt).not.toContain("Sub-agent orchestration");
+    expect(prompt).not.toContain("For long waits, avoid rapid poll loops:");
+    expect(prompt).toContain("- Cross-session messaging → use sessions_send(sessionKey, message)");
+    expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
   });
 
   it("lists available tools when provided", () => {
@@ -247,10 +267,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("sessions_spawn");
-    expect(prompt).toContain(
-      'runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured',
-    );
-    expect(prompt).toContain("not agents_list");
+    expect(prompt).toContain("Set `agentId` explicitly unless `acp.defaultAgent` is configured");
+    expect(prompt).toContain("do not route ACP harness requests through `subagents`/`agents_list`");
   });
 
   it("guides harness requests to ACP thread-bound spawns", () => {

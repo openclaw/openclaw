@@ -219,5 +219,5 @@ Notes:
 - `self`: only the current session key.
 - `tree`: current session + sessions spawned by the current session.
 - `agent`: any session belonging to the current agent id.
-- `all`: any session (cross-agent access still requires `tools.agentToAgent`).
+- `all`: any session (cross-agent access still requires `tools.agentToAgent`, and `tools.agentToAgent.sessionScope="main_only"` narrows cross-agent access to main sessions only).
 - When a session is sandboxed and `sessionToolsVisibility="spawned"`, OpenClaw clamps visibility to `tree` even if you set `tools.sessions.visibility="all"`.

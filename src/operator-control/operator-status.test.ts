@@ -98,18 +98,18 @@ describe("operator status", () => {
     getOperatorDelegatedTransportStatusMock.mockReturnValue({
       dispatchTransport: "delegated-http",
       transportAliases: ["angela-http"],
-      role: "delegated-first-class-agent-boundary",
+      role: "delegated-lead-boundary",
       configured: true,
       baseUrl: "http://tonya.internal:18789",
       authScheme: "bearer",
       authEnv: "OPENCLAW_OPERATOR_INTERNAL_CONTROL_SHARED_SECRET",
       authConfigured: true,
-      globalDefaultAlias: "tonys-angels",
+      globalDefaultAlias: "angela",
       servedTeams: ["engineering", "marketing"],
-      leadAliases: ["bobby-digital", "tonys-angels"],
+      leadAliases: ["angela", "bobby-digital"],
       defaultAliasByTeam: {
         engineering: "bobby-digital",
-        marketing: "tonys-angels",
+        marketing: "angela",
       },
       teamTopology: [],
       legacyTeams: ["execution-fleet"],
@@ -127,7 +127,7 @@ describe("operator status", () => {
     expect(snapshot.delegatedFirstClassAgents).toMatchObject({
       dispatchTransport: "delegated-http",
       transportAliases: ["angela-http"],
-      role: "delegated-first-class-agent-boundary",
+      role: "delegated-lead-boundary",
       servedTeams: ["engineering", "marketing"],
     });
     expect(snapshot.worker).toBe(snapshot.legacyWorkerFleet);

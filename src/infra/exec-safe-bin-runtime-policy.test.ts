@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { validateSafeBinArgv } from "./exec-safe-bin-policy-validator.js";
 import {
   isInterpreterLikeSafeBin,
   listInterpreterLikeSafeBins,
@@ -88,6 +89,25 @@ describe("exec safe-bin runtime policy", () => {
     });
 
     expect([...policy.safeBins]).toEqual(["sort"]);
+  });
+
+  it("enforces allowed first positional values for custom safe bins", () => {
+    const policy = resolveExecSafeBinRuntimePolicy({
+      local: {
+        safeBins: ["git"],
+        safeBinProfiles: {
+          git: {
+            minPositional: 1,
+            maxPositional: 4,
+            allowedFirstPositionals: ["status", "rev-parse", "log", "show", "diff", "ls-files"],
+          },
+        },
+      },
+    });
+
+    expect(validateSafeBinArgv(["status"], policy.safeBinProfiles.git)).toBe(true);
+    expect(validateSafeBinArgv(["rev-parse", "HEAD"], policy.safeBinProfiles.git)).toBe(true);
+    expect(validateSafeBinArgv(["commit", "-m", "nope"], policy.safeBinProfiles.git)).toBe(false);
   });
 
   it("merges explicit safe-bin trusted dirs from global and local config", () => {

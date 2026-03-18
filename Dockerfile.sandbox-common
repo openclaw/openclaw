@@ -7,7 +7,7 @@ USER root
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG PACKAGES="curl wget jq coreutils grep nodejs npm python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file"
+ARG PACKAGES="curl wget jq coreutils grep python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file nodejs"
 ARG INSTALL_PNPM=1
 ARG INSTALL_BUN=1
 ARG BUN_INSTALL_DIR=/opt/bun
@@ -24,7 +24,12 @@ ENV PATH=${BUN_INSTALL_DIR}/bin:${BREW_INSTALL_DIR}/bin:${BREW_INSTALL_DIR}/sbin
 
 RUN --mount=type=cache,id=openclaw-sandbox-common-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-sandbox-common-apt-lists,target=/var/lib/apt,sharing=locked \
-  apt-get update \
+  install -m 0755 -d /etc/apt/keyrings \
+  && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+     -o /etc/apt/keyrings/nodesource.asc \
+  && echo "deb [signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_24.x nodistro main" \
+     > /etc/apt/sources.list.d/nodesource.list \
+  && apt-get update \
   && apt-get upgrade -y --no-install-recommends \
   && apt-get install -y --no-install-recommends ${PACKAGES}
 

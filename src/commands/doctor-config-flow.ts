@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { collectSubagentAllowlistAudit } from "../agents/subagent-target-readiness.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
@@ -1926,6 +1927,28 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       lines.push(
         "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
       );
+      note(lines.join("\n"), "Doctor warnings");
+    }
+
+    const subagentAllowlistAudit = collectSubagentAllowlistAudit(candidate).filter(
+      (entry) => entry.status !== "ready",
+    );
+    if (subagentAllowlistAudit.length > 0) {
+      const lines = subagentAllowlistAudit.slice(0, 8).map((entry) => {
+        const target = `"${entry.agentId}"`;
+        if (entry.status === "missing_config") {
+          return `- ${entry.scopePath} includes ${target}, but it is missing an explicit agents.list entry with a workspace-backed runtime.`;
+        }
+        if (entry.status === "missing_workspace") {
+          return `- ${entry.scopePath} includes ${target}, but its explicit workspace runtime is not ready (${entry.reasons.join("; ")}).`;
+        }
+        return `- ${entry.scopePath} includes ${target}, but it is stale and should be removed or replaced with a real helper runtime.`;
+      });
+      if (subagentAllowlistAudit.length > 8) {
+        lines.push(
+          `- ${subagentAllowlistAudit.length - 8} more subagent allowlist entries are not runtime-ready.`,
+        );
+      }
       note(lines.join("\n"), "Doctor warnings");
     }
   }

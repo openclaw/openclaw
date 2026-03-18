@@ -46,4 +46,13 @@ if [ "${#format_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxfmt --write --no-error-on-unmatched-pattern "${format_files[@]}"
 fi
 
-git add -- "${files[@]}"
+# Re-add only non-ignored paths so git add does not fail on .gitignore'd entries (e.g. .agents)
+nonignored=()
+for f in "${files[@]}"; do
+  if ! git check-ignore -q "$f" 2>/dev/null; then
+    nonignored+=("$f")
+  fi
+done
+if [ "${#nonignored[@]}" -gt 0 ]; then
+  git add -- "${nonignored[@]}"
+fi

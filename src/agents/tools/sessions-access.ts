@@ -1,5 +1,11 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeMainKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
+import { isUniversalSubagentTarget } from "../universal-targets.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -7,11 +13,18 @@ import {
 } from "./sessions-resolution.js";
 
 export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
+export type AgentToAgentSessionScope = "all" | "main_only";
 
 export type AgentToAgentPolicy = {
   enabled: boolean;
+  sessionScope: AgentToAgentSessionScope;
   matchesAllow: (agentId: string) => boolean;
   isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
+  isSessionTargetAllowed: (params: {
+    requesterAgentId: string;
+    targetSessionKey: string;
+    mainKey?: string;
+  }) => boolean;
 };
 
 export type SessionAccessAction = "history" | "send" | "list" | "status";
@@ -19,6 +32,11 @@ export type SessionAccessAction = "history" | "send" | "list" | "status";
 export type SessionAccessResult =
   | { allowed: true }
   | { allowed: false; error: string; status: "forbidden" };
+
+function universalTargetAccessMessage(agentId: string): string {
+  const label = agentId === "scout" ? "Scout" : agentId;
+  return `${label} session access is limited to ${label} sessions spawned by this requester.`;
+}
 
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
@@ -108,6 +126,7 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
   const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
+  const sessionScope = routingA2A?.sessionScope === "main_only" ? "main_only" : "all";
   const matchesAllow = (agentId: string) => {
     if (allowPatterns.length === 0) {
       return true;
@@ -137,7 +156,68 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
     }
     return matchesAllow(requesterAgentId) && matchesAllow(targetAgentId);
   };
-  return { enabled, matchesAllow, isAllowed };
+  const isSessionTargetAllowed = (params: {
+    requesterAgentId: string;
+    targetSessionKey: string;
+    mainKey?: string;
+  }) => {
+    const targetAgentId = resolveAgentIdFromSessionKey(params.targetSessionKey);
+    if (!isAllowed(params.requesterAgentId, targetAgentId)) {
+      return false;
+    }
+    if (params.requesterAgentId === targetAgentId || sessionScope !== "main_only") {
+      return true;
+    }
+    const parsedTarget = parseAgentSessionKey(params.targetSessionKey);
+    if (!parsedTarget) {
+      return normalizeMainKey(params.targetSessionKey) === normalizeMainKey(params.mainKey);
+    }
+    return normalizeMainKey(parsedTarget.rest) === normalizeMainKey(params.mainKey);
+  };
+  return { enabled, sessionScope, matchesAllow, isAllowed, isSessionTargetAllowed };
+}
+
+export async function listOwnedUniversalTargetSessionKeys(params: {
+  requesterSessionKey: string;
+  limit?: number;
+}): Promise<Set<string>> {
+  const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const spawnedKeys = await listSpawnedSessionKeys({
+    requesterSessionKey: params.requesterSessionKey,
+    limit: params.limit,
+  });
+  const ownedUniversalTargetKeys = new Set<string>();
+  for (const key of spawnedKeys) {
+    const targetAgentId = resolveAgentIdFromSessionKey(key);
+    if (targetAgentId !== requesterAgentId && isUniversalSubagentTarget(targetAgentId)) {
+      ownedUniversalTargetKeys.add(key);
+    }
+  }
+  return ownedUniversalTargetKeys;
+}
+
+export async function resolveUniversalTargetSessionAccess(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+  limit?: number;
+}): Promise<SessionAccessResult | null> {
+  const requesterAgentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  const targetAgentId = resolveAgentIdFromSessionKey(params.targetSessionKey);
+  if (targetAgentId === requesterAgentId || !isUniversalSubagentTarget(targetAgentId)) {
+    return null;
+  }
+  const ownedUniversalTargetKeys = await listOwnedUniversalTargetSessionKeys({
+    requesterSessionKey: params.requesterSessionKey,
+    limit: params.limit,
+  });
+  if (ownedUniversalTargetKeys.has(params.targetSessionKey)) {
+    return { allowed: true };
+  }
+  return {
+    allowed: false,
+    status: "forbidden",
+    error: universalTargetAccessMessage(targetAgentId),
+  };
 }
 
 function actionPrefix(action: SessionAccessAction): string {
@@ -179,6 +259,19 @@ function a2aDeniedMessage(action: SessionAccessAction): string {
   return "Agent-to-agent listing denied by tools.agentToAgent.allow.";
 }
 
+export function a2aSessionScopeMessage(action: SessionAccessAction): string {
+  if (action === "history") {
+    return "Agent-to-agent history is restricted to main sessions by tools.agentToAgent.sessionScope=main_only.";
+  }
+  if (action === "send") {
+    return "Agent-to-agent messaging is restricted to main sessions by tools.agentToAgent.sessionScope=main_only.";
+  }
+  if (action === "status") {
+    return "Agent-to-agent status is restricted to main sessions by tools.agentToAgent.sessionScope=main_only.";
+  }
+  return "Agent-to-agent listing is restricted to main sessions by tools.agentToAgent.sessionScope=main_only.";
+}
+
 function crossVisibilityMessage(action: SessionAccessAction): string {
   if (action === "history") {
     return "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
@@ -205,6 +298,7 @@ export async function createSessionVisibilityGuard(params: {
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
+  mainKey?: string;
 }): Promise<{
   check: (targetSessionKey: string) => SessionAccessResult;
 }> {
@@ -237,6 +331,19 @@ export async function createSessionVisibilityGuard(params: {
           allowed: false,
           status: "forbidden",
           error: a2aDeniedMessage(params.action),
+        };
+      }
+      if (
+        !params.a2aPolicy.isSessionTargetAllowed({
+          requesterAgentId,
+          targetSessionKey,
+          mainKey: params.mainKey,
+        })
+      ) {
+        return {
+          allowed: false,
+          status: "forbidden",
+          error: a2aSessionScopeMessage(params.action),
         };
       }
       return { allowed: true };

@@ -115,4 +115,88 @@ describe("sessions tools visibility", () => {
     });
     expect(denied.details).toMatchObject({ status: "forbidden" });
   });
+
+  it("allows requester-owned Scout sessions for sessions_history", async () => {
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { agentToAgent: { enabled: false } },
+    };
+    mockGatewayWithHistory((req) => {
+      if (req.method === "sessions.resolve") {
+        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        return { key };
+      }
+      if (req.method === "sessions.list" && req.params?.spawnedBy === "main") {
+        return { sessions: [{ key: "agent:scout:subagent:owned" }] };
+      }
+      return undefined;
+    });
+
+    const tool = getSessionsHistoryTool();
+    const result = await tool.execute("call-scout-owned", {
+      sessionKey: "agent:scout:subagent:owned",
+    });
+
+    expect(result.details).toMatchObject({
+      sessionKey: "agent:scout:subagent:owned",
+    });
+  });
+
+  it("blocks non-owned Scout sessions even when cross-agent visibility is open", async () => {
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
+    };
+    mockGatewayWithHistory((req) => {
+      if (req.method === "sessions.resolve") {
+        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        return { key };
+      }
+      if (req.method === "sessions.list" && req.params?.spawnedBy === "main") {
+        return { sessions: [] };
+      }
+      return undefined;
+    });
+
+    const tool = getSessionsHistoryTool();
+    const result = await tool.execute("call-scout-blocked", {
+      sessionKey: "agent:scout:subagent:not-owned",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+    });
+    expect((result.details as { error?: string }).error).toContain("Scout session access");
+  });
+
+  it("blocks cross-agent non-main sessions when sessionScope=main_only", async () => {
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["main", "martina"], sessionScope: "main_only" },
+      },
+    };
+    mockGatewayWithHistory((req) => {
+      if (req.method === "sessions.resolve") {
+        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        return { key };
+      }
+      return undefined;
+    });
+
+    const tool = getSessionsHistoryTool();
+    const denied = await tool.execute("call-main-only-history", {
+      sessionKey: "agent:martina:subagent:margaret",
+    });
+    expect(denied.details).toMatchObject({ status: "forbidden" });
+    expect((denied.details as { error?: string }).error).toContain("sessionScope=main_only");
+
+    const allowed = await tool.execute("call-main-only-history-allowed", {
+      sessionKey: "agent:martina:main",
+    });
+    expect(allowed.details).toMatchObject({
+      sessionKey: "agent:martina:main",
+    });
+  });
 });

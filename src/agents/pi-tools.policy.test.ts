@@ -115,14 +115,14 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(true);
   });
 
-  it("depth-1 orchestrator (maxSpawnDepth=2) allows sessions_list", () => {
+  it("depth-1 orchestrator (maxSpawnDepth=2) denies sessions_list", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 1);
-    expect(isToolAllowedByPolicyName("sessions_list", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("sessions_list", policy)).toBe(false);
   });
 
-  it("depth-1 orchestrator (maxSpawnDepth=2) allows sessions_history", () => {
+  it("depth-1 orchestrator (maxSpawnDepth=2) denies sessions_history", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 1);
-    expect(isToolAllowedByPolicyName("sessions_history", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("sessions_history", policy)).toBe(false);
   });
 
   it("depth-1 orchestrator still denies gateway, cron, memory", () => {
@@ -229,7 +229,7 @@ describe("resolveEffectiveToolPolicy", () => {
     expect(result.profileAlsoAllow).toEqual(["exec", "process"]);
   });
 
-  it("implicitly re-exposes read, write, and edit when tools.fs is configured", () => {
+  it("implicitly re-exposes read, write, and edit when legacy tools.fs.workspaceOnly is configured", () => {
     const cfg = {
       tools: {
         profile: "messaging",
@@ -270,5 +270,29 @@ describe("resolveEffectiveToolPolicy", () => {
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "coder" });
     expect(result.profileAlsoAllow).toEqual(["read", "write", "edit"]);
+  });
+
+  it("only implicitly re-exposes the fs operations explicitly configured in split fs mode", () => {
+    const cfg = {
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "scout",
+            tools: {
+              fs: {
+                readWorkspaceOnly: false,
+                writeWorkspaceOnly: true,
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "scout" });
+    expect(result.profileAlsoAllow).toEqual(["read", "write"]);
   });
 });

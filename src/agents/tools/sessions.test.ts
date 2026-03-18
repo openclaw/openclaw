@@ -12,7 +12,7 @@ vi.mock("../../gateway/call.js", () => ({
 type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string };
   tools: {
-    agentToAgent: { enabled: boolean };
+    agentToAgent: { enabled: boolean; allow?: string[]; sessionScope?: "all" | "main_only" };
     sessions?: { visibility: "all" | "own" };
   };
 };
@@ -276,6 +276,65 @@ describe("sessions_list gating", () => {
       sessions: [{ key: MAIN_AGENT_SESSION_KEY }],
     });
   });
+
+  it("keeps requester-owned Scout sessions while filtering other cross-agent sessions", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (
+        request.method === "sessions.list" &&
+        request.params?.spawnedBy === MAIN_AGENT_SESSION_KEY
+      ) {
+        return {
+          sessions: [{ key: "agent:scout:subagent:owned" }],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            { key: MAIN_AGENT_SESSION_KEY, kind: "direct" },
+            { key: "agent:scout:subagent:owned", kind: "direct" },
+            { key: "agent:scout:subagent:not-owned", kind: "direct" },
+            { key: "agent:other:main", kind: "direct" },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsListTool();
+    const result = await tool.execute("call-scout-list", {});
+    expect(result.details).toMatchObject({
+      count: 2,
+      sessions: [{ key: MAIN_AGENT_SESSION_KEY }, { key: "agent:scout:subagent:owned" }],
+    });
+  });
+
+  it("shows only other agents' main sessions when sessionScope=main_only", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true, allow: ["main", "martina"], sessionScope: "main_only" },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        { key: "agent:main:main", kind: "direct" },
+        { key: "agent:martina:main", kind: "direct" },
+        { key: "agent:martina:subagent:margaret", kind: "direct" },
+      ],
+    });
+
+    const tool = createMainSessionsListTool();
+    const result = await tool.execute("call-list-main-only", {});
+
+    expect(result.details).toMatchObject({
+      count: 2,
+      sessions: [{ key: "agent:main:main" }, { key: "agent:martina:main" }],
+    });
+  });
 });
 
 describe("sessions_list transcriptPath resolution", () => {
@@ -448,5 +507,106 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.list" });
     expect(result.details).toMatchObject({ status: "forbidden" });
+  });
+
+  it("allows sends to requester-owned Scout sessions when agent-to-agent is disabled", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (
+        request.method === "sessions.list" &&
+        request.params?.spawnedBy === MAIN_AGENT_SESSION_KEY
+      ) {
+        return {
+          sessions: [{ key: "agent:scout:subagent:owned" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-scout", status: "accepted", acceptedAt: 2001 };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      if (request.method === "send") {
+        return { messageId: "m1" };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-scout-send", {
+      sessionKey: "agent:scout:subagent:owned",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-scout",
+      sessionKey: "agent:scout:subagent:owned",
+    });
+  });
+
+  it("blocks non-owned Scout sends even when general cross-agent access is open", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true, allow: ["*"] },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (
+        request.method === "sessions.list" &&
+        request.params?.spawnedBy === MAIN_AGENT_SESSION_KEY
+      ) {
+        return { sessions: [] };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-scout-send-blocked", {
+      sessionKey: "agent:scout:subagent:not-owned",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "Scout session access",
+    );
+  });
+
+  it("blocks cross-agent non-main sends when sessionScope=main_only", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true, allow: ["main", "martina"], sessionScope: "main_only" },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.list") {
+        return { sessions: [] };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-main-only-send", {
+      sessionKey: "agent:martina:subagent:margaret",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({ status: "forbidden" });
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "sessionScope=main_only",
+    );
   });
 });

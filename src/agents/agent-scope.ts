@@ -266,9 +266,9 @@ export function resolveEffectiveModelFallbacks(params: {
 
 export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
+  const configured = resolveConfiguredAgentWorkspaceDir(cfg, id);
   if (configured) {
-    return stripNullBytes(resolveUserPath(configured));
+    return configured;
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {
@@ -280,6 +280,17 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   }
   const stateDir = resolveStateDir(process.env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
+}
+
+export function resolveConfiguredAgentWorkspaceDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  const configured = resolveAgentConfig(cfg, normalizeAgentId(agentId))?.workspace?.trim();
+  if (!configured) {
+    return undefined;
+  }
+  return stripNullBytes(resolveUserPath(configured));
 }
 
 function normalizePathForComparison(input: string): string {

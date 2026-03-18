@@ -16,4 +16,14 @@ describe("DEFAULT_AGENT_WORKSPACE_DIR", () => {
       path.join(path.resolve(home), ".openclaw", "workspace"),
     );
   });
+
+  it("anchors the default workspace under OPENCLAW_STATE_DIR when explicitly set", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "~/agents");
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+
+    expect(resolveDefaultAgentWorkspaceDir()).toBe(
+      path.join(path.resolve("/srv/openclaw-home"), "agents", "workspace"),
+    );
+  });
 });

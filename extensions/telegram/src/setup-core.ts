@@ -1,7 +1,7 @@
 import { createPatchedAccountSetupAdapter } from "../../../src/channels/plugins/setup-helpers.js";
+import { formatCliCommand } from "../../../src/cli/command-format.js";
 import {
   DEFAULT_ACCOUNT_ID,
-  formatCliCommand,
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   setSetupChannelEnabled,

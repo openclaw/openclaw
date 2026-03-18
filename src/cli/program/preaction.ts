@@ -35,7 +35,7 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
   "status",
   "health",
 ]);
-const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets"]);
+const CONFIG_GUARD_BYPASS_COMMANDS = new Set(["backup", "doctor", "completion", "secrets", "sync"]);
 const JSON_PARSE_ONLY_COMMANDS = new Set(["config set"]);
 let configGuardModulePromise: Promise<typeof import("./config-guard.js")> | undefined;
 let pluginRegistryModulePromise: Promise<typeof import("../plugin-registry.js")> | undefined;

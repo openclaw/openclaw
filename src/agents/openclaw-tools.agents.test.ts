@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
@@ -69,9 +70,28 @@ describe("agents_list", () => {
     };
   }
 
-  function requireAgentsListTool() {
+  async function createReadyAgent(
+    rootDir: string,
+    params: {
+      id: string;
+      name?: string;
+      subagents?: AgentConfig["subagents"];
+    },
+  ): Promise<AgentConfig> {
+    const workspace = path.join(rootDir, params.id);
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, "AGENTS.md"), `# ${params.id}\n`, "utf8");
+    return {
+      id: params.id,
+      ...(params.name ? { name: params.name } : {}),
+      workspace,
+      ...(params.subagents ? { subagents: params.subagents } : {}),
+    };
+  }
+
+  function requireAgentsListTool(agentSessionKey = "main") {
     const tool = createOpenClawTools({
-      agentSessionKey: "main",
+      agentSessionKey,
     }).find((candidate) => candidate.name === "agents_list");
     if (!tool) {
       throw new Error("missing agents_list tool");
@@ -90,7 +110,7 @@ describe("agents_list", () => {
     };
   });
 
-  it("defaults to the requester agent only", async () => {
+  it("returns only the requester when no ready helper runtime exists", async () => {
     const tool = requireAgentsListTool();
     const result = await tool.execute("call1", {});
     expect(result.details).toMatchObject({
@@ -101,103 +121,142 @@ describe("agents_list", () => {
     expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
   });
 
-  it("includes allowlisted targets plus requester", async () => {
-    setConfigWithAgentList([
-      {
-        id: "main",
-        name: "Main",
-        subagents: {
-          allowAgents: ["research"],
-        },
-      },
-      {
-        id: "research",
-        name: "Research",
-      },
-    ]);
+  it("includes allowlisted targets plus Scout", async () => {
+    await withTempDir("agents-list-workspaces-", async (rootDir) => {
+      setConfigWithAgentList([
+        await createReadyAgent(rootDir, {
+          id: "main",
+          name: "Main",
+          subagents: {
+            allowAgents: ["research"],
+          },
+        }),
+        await createReadyAgent(rootDir, {
+          id: "research",
+          name: "Research",
+        }),
+        await createReadyAgent(rootDir, {
+          id: "scout",
+          name: "Scout",
+        }),
+      ]);
 
-    const tool = requireAgentsListTool();
-    const result = await tool.execute("call2", {});
-    const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
-  });
-
-  it("returns configured agents when allowlist is *", async () => {
-    setConfigWithAgentList([
-      {
-        id: "main",
-        subagents: {
-          allowAgents: ["*"],
-        },
-      },
-      {
-        id: "research",
-        name: "Research",
-      },
-      {
-        id: "coder",
-        name: "Coder",
-      },
-    ]);
-
-    const tool = requireAgentsListTool();
-    const result = await tool.execute("call3", {});
-    expect(result.details).toMatchObject({
-      allowAny: true,
+      const tool = requireAgentsListTool();
+      const result = await tool.execute("call2", {});
+      const agents = readAgentList(result);
+      expect(agents?.map((agent) => agent.id)).toEqual(["main", "research", "scout"]);
     });
-    const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
   });
 
-  it("marks allowlisted-but-unconfigured agents", async () => {
-    setConfigWithAgentList([
-      {
-        id: "main",
-        subagents: {
-          allowAgents: ["research"],
-        },
-      },
-    ]);
+  it("returns configured agents plus Scout when allowlist is *", async () => {
+    await withTempDir("agents-list-allow-any-", async (rootDir) => {
+      setConfigWithAgentList([
+        await createReadyAgent(rootDir, {
+          id: "main",
+          subagents: {
+            allowAgents: ["*"],
+          },
+        }),
+        await createReadyAgent(rootDir, {
+          id: "research",
+          name: "Research",
+        }),
+        await createReadyAgent(rootDir, {
+          id: "coder",
+          name: "Coder",
+        }),
+        await createReadyAgent(rootDir, {
+          id: "scout",
+          name: "Scout",
+        }),
+      ]);
 
-    const tool = requireAgentsListTool();
-    const result = await tool.execute("call4", {});
-    const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
-    const research = agents?.find((agent) => agent.id === "research");
-    expect(research?.configured).toBe(false);
+      const tool = requireAgentsListTool();
+      const result = await tool.execute("call3", {});
+      expect(result.details).toMatchObject({
+        allowAny: true,
+      });
+      const agents = readAgentList(result);
+      expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research", "scout"]);
+    });
+  });
+
+  it("hides allowlisted targets that are not runtime-ready", async () => {
+    await withTempDir("agents-list-hide-unready-", async (rootDir) => {
+      setConfigWithAgentList([
+        await createReadyAgent(rootDir, {
+          id: "main",
+          subagents: {
+            allowAgents: ["research"],
+          },
+        }),
+        await createReadyAgent(rootDir, {
+          id: "scout",
+          name: "Scout",
+        }),
+      ]);
+
+      const tool = requireAgentsListTool();
+      const result = await tool.execute("call4", {});
+      const agents = readAgentList(result);
+      expect(agents?.map((agent) => agent.id)).toEqual(["main", "scout"]);
+      expect(agents?.find((agent) => agent.id === "research")).toBeUndefined();
+    });
+  });
+
+  it("shows Scout for unconfigured specialist requesters", async () => {
+    await withTempDir("agents-list-specialist-scout-", async (rootDir) => {
+      setConfigWithAgentList([
+        await createReadyAgent(rootDir, {
+          id: "scout",
+          name: "Scout",
+        }),
+      ]);
+
+      const tool = requireAgentsListTool("agent:method-man:main");
+      const result = await tool.execute("call-specialist", {});
+      expect(result.details).toMatchObject({
+        requester: "method-man",
+        allowAny: false,
+      });
+      const agents = readAgentList(result);
+      expect(agents?.map((agent) => agent.id)).toEqual(["method-man", "scout"]);
+    });
   });
 
   it("includes caller-scoped team metadata when the operator registry is available", async () => {
     await withStateDirEnv("agents-list-teams-", async () => {
-      await seedRegistryFixture();
-      setConfigWithAgentList([
-        {
-          id: "bobby-digital",
-          name: "Bobby",
-          subagents: {
-            allowAgents: ["method-man"],
-          },
-        },
-        {
-          id: "method-man",
-          name: "Method",
-        },
-      ]);
+      await withTempDir("agents-list-team-workspaces-", async (rootDir) => {
+        await seedRegistryFixture();
+        setConfigWithAgentList([
+          await createReadyAgent(rootDir, {
+            id: "bobby-digital",
+            name: "Bobby",
+            subagents: {
+              allowAgents: ["method-man"],
+            },
+          }),
+          await createReadyAgent(rootDir, {
+            id: "method-man",
+            name: "Method",
+          }),
+        ]);
 
-      const tool = createOpenClawTools({
-        agentSessionKey: "agent:bobby-digital:main",
-      }).find((candidate) => candidate.name === "agents_list");
-      if (!tool) {
-        throw new Error("missing agents_list tool");
-      }
+        const tool = createOpenClawTools({
+          agentSessionKey: "agent:bobby-digital:main",
+        }).find((candidate) => candidate.name === "agents_list");
+        if (!tool) {
+          throw new Error("missing agents_list tool");
+        }
 
-      const result = await tool.execute("call-teams", {});
-      expect((result as { details?: { teams?: unknown[] } }).details?.teams).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: "engineering" }),
-          expect.objectContaining({ id: "frontend" }),
-        ]),
-      );
+        const result = await tool.execute("call-teams", {});
+        expect((result as { details?: { teams?: unknown[] } }).details?.teams).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: "engineering" }),
+            expect.objectContaining({ id: "frontend" }),
+          ]),
+        );
+      });
     });
   });
 });

@@ -1984,10 +1984,19 @@ Provider auth follows standard order: `auth-profiles.json` → env vars → `mod
     agentToAgent: {
       enabled: false,
       allow: ["home", "work"],
+      sessionScope: "all", // or "main_only"
     },
   },
 }
 ```
+
+Notes:
+
+- `enabled`: turns on cross-agent session tooling.
+- `allow`: restricts which agent ids can participate in cross-agent session access.
+- `sessionScope`:
+  - `all`: preserves current behavior for allowed agents.
+  - `main_only`: limits cross-agent session targeting to each allowed agent's main session. Same-agent sessions and requester-owned universal-target child sessions still work normally.
 
 ### `tools.sessions`
 
@@ -2011,7 +2020,7 @@ Notes:
 - `self`: only the current session key.
 - `tree`: current session + sessions spawned by the current session (subagents).
 - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
-- `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
+- `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`, and `tools.agentToAgent.sessionScope="main_only"` further limits cross-agent access to main sessions only.
 - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
 
 ### `tools.sessions_spawn`

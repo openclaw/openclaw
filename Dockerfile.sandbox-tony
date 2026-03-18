@@ -1,42 +1,42 @@
 # =============================================================================
 # Dockerfile.sandbox-tony — Golden Wu-Tang Sandbox
-# Last updated: 2026-03-09 — closed oxlint, docker-compose-plugin, Vercel CLI,
-#               yq, tree gaps. Playwright system deps included; browser binary
-#               NOT installed (Northstar uses Vercel CLI + Newman as primary;
-#               Playwright browser is last-resort only, install per-run if needed)
+# Last updated: 2026-03-17 — collapsed to 2 RUN layers to fix
+#               "mount options is too long" (base image has many layers)
 # =============================================================================
-# Base: openclaw-sandbox:tony (already includes):
-#   Node 22 LTS, npm, git, gh CLI, Ruby, Python3, az CLI, newman, shellcheck,
-#   ripgrep, docker-ce-cli, kubectl, kustomize, helm, kubelogin,
-#   Foundry (forge/cast/anvil/chisel), psql, redis-cli, slither, jq, make, acpx
+# Base: openclaw-sandbox:common (fewer layers than tony).
+# Override: docker build --build-arg SANDBOX_BASE=openclaw-sandbox:tony ...
 # =============================================================================
 
-FROM openclaw-sandbox:tony
+ARG SANDBOX_BASE=openclaw-sandbox:common
+FROM ${SANDBOX_BASE}
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ─── Docker Compose Plugin (Ghostface, Cilvaringz) ──────────────────────────
-# Docker repo already configured in base image — just add the plugin
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends docker-compose-plugin \
-  && rm -rf /var/lib/apt/lists/*
-
-# Docker CLI: base image (openclaw-sandbox:tony) already has Docker repo + docker-ce-cli.
-# Re-adding would trigger gpg "File exists" + flaky Docker gpg endpoint.
-
-# ─── ALL apt packages in ONE layer ───────────────────────────────────────────
-# Database (Raekwon, U-God):      postgresql-client, redis-tools
-# Utilities (all agents):         jq, build-essential (make), unzip, zip, socat, tree
+# ─── Layer 1: tony user (if missing) + ALL apt packages ─────────────────────
+# When base is common, create tony. Base tony image has tony pre-created.
+# Docker Compose Plugin (Ghostface, Cilvaringz):  docker-compose-plugin
+# Database (Raekwon, U-God):                      postgresql-client, redis-tools
+# Utilities (all agents):                         jq, build-essential (make), unzip, zip, socat, tree
 # Playwright Chromium system deps (Inspectah Deck, Northstar):
 #   libglib2.0-0 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2
 #   libdbus-1-3 libexpat1 libxcb1 libxkbcommon0 libx11-6 libxcomposite1
 #   libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0
 #   libcairo2 libasound2
-RUN apt-get update \
+# Docker CLI + Compose: common base has no Docker apt repo, so add it here.
+RUN (id -u tony >/dev/null 2>&1 || useradd -m -s /bin/bash tony) \
+  && install -m 0755 -d /etc/apt/keyrings \
+  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+  && chmod a+r /etc/apt/keyrings/docker.asc \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" \
+    > /etc/apt/sources.list.d/docker.list \
+  && apt-get update \
   && apt-get install -y --no-install-recommends \
+    docker-ce-cli \
+    docker-compose-plugin \
     postgresql-client \
     redis-tools \
+    python3-pip \
     jq \
     build-essential \
     unzip \
@@ -64,90 +64,41 @@ RUN apt-get update \
     libcairo2 \
     libasound2 \
   && apt-get clean \
-  && rm -rf /var/lib/apt/lists/* \
-  && apt-get install -y --no-install-recommends \
-    libglib2.0-0 \
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdbus-1-3 \
-    libexpat1 \
-    libxcb1 \
-    libxkbcommon0 \
-    libx11-6 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libasound2 \
-  && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
-# ─── yq v4.44.1 (all agents — YAML processing) ──────────────────────────────
-RUN curl -fsSLo /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64" \
-  && chmod 0755 /usr/local/bin/yq
-
-# ─── oxlint (Masta Killa — TypeScript/JS security linting) ──────────────────
-RUN npm install -g oxlint
-
-# ─── Vercel CLI (Northstar, SENTINEL — PRIMARY E2E tool for deploy previews) ─
-# Northstar uses Vercel CLI previews as primary E2E approach.
-# Playwright browser is last-resort only — NOT installed here to keep image lean.
-# If a subagent needs Playwright browser: npx playwright install chromium at runtime.
-RUN npm install -g vercel
-
-# ─── acpx CLI (ACP runtime bridge for sandboxed agent sessions) ──────────────
+# ─── Layer 2: binary downloads + npm globals + pip packages ────────────────
+# yq v4.44.1 (all agents — YAML processing)
+# kubectl v1.30.0 (Ghostface — K8s ops)
+# kustomize v5.4.1 (Ghostface — overlay management)
+# helm v3.16.4 (Ghostface — chart management)
+# kubelogin v0.1.4 (Ghostface — Azure AKS auth / AAD)
+# Foundry nightly (GZA — forge, cast, anvil, chisel)
+# npm globals: oxlint, Vercel CLI, acpx
+# pip: slither-analyzer (Masta Killa), requests, openai (memory pipeline)
 ARG OPENCLAW_ACPX_VERSION=0.1.15
-RUN npm install -g "acpx@${OPENCLAW_ACPX_VERSION}" \
-  && acpx --version
-
-# # ─── Restore expected user + workdir ─────────────────────────────────────────
-# USER node
-# WORKDIR /workspace
-# =======
-# ─── kubectl v1.30.0 (Ghostface — K8s ops) ───────────────────────────────────
-RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" \
-  && chmod 0755 /usr/local/bin/kubectl
-
-# ─── kustomize v5.4.1 (Ghostface — overlay management) ───────────────────────
-RUN curl -fsSLo /tmp/kustomize.tar.gz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.1/kustomize_v5.4.1_linux_amd64.tar.gz" \
+RUN curl -fsSLo /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64" \
+  && chmod 0755 /usr/local/bin/yq \
+  && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" \
+  && chmod 0755 /usr/local/bin/kubectl \
+  && curl -fsSLo /tmp/kustomize.tar.gz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.1/kustomize_v5.4.1_linux_amd64.tar.gz" \
   && tar -C /tmp -xzf /tmp/kustomize.tar.gz \
   && install -m 0755 /tmp/kustomize /usr/local/bin/kustomize \
-  && rm -f /tmp/kustomize /tmp/kustomize.tar.gz
-
-# ─── helm v3.16.4 (Ghostface — chart management) ─────────────────────────────
-RUN curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-v3.16.4-linux-amd64.tar.gz" \
+  && rm -f /tmp/kustomize /tmp/kustomize.tar.gz \
+  && curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-v3.16.4-linux-amd64.tar.gz" \
   && tar -C /tmp -xzf /tmp/helm.tar.gz \
   && install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm \
-  && rm -rf /tmp/linux-amd64 /tmp/helm.tar.gz
-
-# ─── kubelogin v0.1.4 (Ghostface — Azure AKS auth / AAD) ────────────────────
-RUN curl -fsSLo /tmp/kubelogin.zip "https://github.com/Azure/kubelogin/releases/download/v0.1.4/kubelogin-linux-amd64.zip" \
+  && rm -rf /tmp/linux-amd64 /tmp/helm.tar.gz \
+  && curl -fsSLo /tmp/kubelogin.zip "https://github.com/Azure/kubelogin/releases/download/v0.1.4/kubelogin-linux-amd64.zip" \
   && unzip -q /tmp/kubelogin.zip -d /tmp/kubelogin-extract \
   && install -m 0755 /tmp/kubelogin-extract/bin/linux_amd64/kubelogin /usr/local/bin/kubelogin \
-  && rm -rf /tmp/kubelogin.zip /tmp/kubelogin-extract
-
-# ─── Foundry (forge, cast, anvil, chisel) — GZA blockchain toolchain ─────────
-# Downloads prebuilt Linux amd64 binaries directly from GitHub releases.
-# Pinned to nightly release tag (all four tools in one tarball).
-# Note: Playwright itself installed via npm in each project — only system deps here.
-RUN curl -fsSLo /tmp/foundry.tar.gz "https://github.com/foundry-rs/foundry/releases/download/nightly/foundry_nightly_linux_amd64.tar.gz" \
+  && rm -rf /tmp/kubelogin.zip /tmp/kubelogin-extract \
+  && curl -fsSLo /tmp/foundry.tar.gz "https://github.com/foundry-rs/foundry/releases/download/nightly/foundry_nightly_linux_amd64.tar.gz" \
   && tar -C /usr/local/bin -xzf /tmp/foundry.tar.gz forge cast anvil chisel \
   && chmod 0755 /usr/local/bin/forge /usr/local/bin/cast /usr/local/bin/anvil /usr/local/bin/chisel \
-  && rm /tmp/foundry.tar.gz
-
-# ─── slither-analyzer (Masta Killa — Solidity static analysis) ───────────────
-# --break-system-packages required on Python 3.11+ (Debian bookworm enforces PEP 668)
-RUN pip3 install --break-system-packages slither-analyzer
-
-# ─── Python packages (persistent — memory pipeline, API clients) ─────────────
-RUN pip3 install --break-system-packages requests openai
+  && rm /tmp/foundry.tar.gz \
+  && npm install -g oxlint vercel "acpx@${OPENCLAW_ACPX_VERSION}" \
+  && acpx --version \
+  && pip3 install --break-system-packages slither-analyzer requests openai
 
 # ─── Restore expected user + workdir ─────────────────────────────────────────
 USER tony
@@ -158,10 +109,10 @@ WORKDIR /workspace
 # =============================================================================
 # Run inside container to confirm all tools are present:
 #
-#   docker run --rm openclaw-sandbox:tony-golden \
-#     sh -c 'for t in docker kubectl kustomize helm kubelogin forge cast anvil chisel \
-#              psql redis-cli jq make unzip zip socat slither; do \
-#       command -v $t && echo "✅ $t" || echo "❌ $t MISSING"; done'
+#   docker run --rm openclaw-sandbox:tony sh -c \
+#     'for t in docker kubectl kustomize helm kubelogin forge cast anvil chisel \
+#        psql redis-cli jq make unzip zip socat slither yq tree oxlint vercel acpx; do \
+#       command -v $t && echo "OK $t" || echo "MISSING $t"; done'
 #
-# Expected output: 14x ✅
+# Expected output: 21x OK
 # =============================================================================

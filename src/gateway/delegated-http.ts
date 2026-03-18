@@ -3,8 +3,14 @@ import type { RunCronAgentTurnResult } from "../cron/isolated-agent.js";
 import {
   getCompiledOperatorTeam,
   resolveOperatorDelegatedDefaultAlias,
+  resolveOperatorDelegatedLeadAlias,
 } from "../operator-control/agent-registry.js";
-import { angelaTaskEnvelopeSchema, type OperatorTaskState } from "../operator-control/contracts.js";
+import {
+  DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION,
+  delegatedLeadTaskEnvelopeSchema,
+  type DelegatedLeadTaskEnvelope,
+  type OperatorTaskState,
+} from "../operator-control/contracts.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   readJsonBodyOrError,
@@ -18,15 +24,13 @@ import { getBearerToken } from "./http-utils.js";
 export const DELEGATED_MESSAGE_PATH = "/api/message";
 const DEFAULT_BODY_BYTES = 128 * 1024;
 
-type DelegatedTaskEnvelope = ReturnType<typeof angelaTaskEnvelopeSchema.parse>;
-
 type DelegatedTaskRunObserver = {
   onStarted: () => void;
   onFinished: (result: RunCronAgentTurnResult) => void;
   onError: (error: unknown) => void;
 };
 
-function describeTaskDomain(task: DelegatedTaskEnvelope): string {
+function describeTaskDomain(task: DelegatedLeadTaskEnvelope): string {
   if (task.team_id?.trim()) {
     return `${task.team_id.trim()} domain`;
   }
@@ -44,7 +48,7 @@ function resolveDelegatedTransportSharedSecret(): string | null {
   return secret || null;
 }
 
-function resolveDelegatedTargetAgentId(task: DelegatedTaskEnvelope): string | null {
+function resolveDelegatedTargetAgentId(task: DelegatedLeadTaskEnvelope): string | null {
   if (task.team_id?.trim()) {
     const team = getCompiledOperatorTeam(task.team_id);
     if (!team) {
@@ -57,7 +61,30 @@ function resolveDelegatedTargetAgentId(task: DelegatedTaskEnvelope): string | nu
   });
 }
 
-export function buildDelegatedAgentMessage(task: DelegatedTaskEnvelope): string {
+function resolveDelegatedReceiptOwner(task: DelegatedLeadTaskEnvelope): string | null {
+  return resolveOperatorDelegatedLeadAlias({
+    teamId: task.team_id ?? null,
+  });
+}
+
+function buildDelegatedReceiptMetadata(params: {
+  task: DelegatedLeadTaskEnvelope;
+  targetAgentId: string;
+  delegatedRunId: string | null;
+  upstreamRunId: string;
+  artifactRefs?: string[];
+}): Record<string, unknown> {
+  return {
+    source: "delegated-http",
+    team_id: params.task.team_id ?? null,
+    resolved_internal_owner: params.targetAgentId,
+    artifact_refs: params.artifactRefs ?? [],
+    delegatedRunId: params.delegatedRunId,
+    upstreamRunId: params.upstreamRunId,
+  };
+}
+
+export function buildDelegatedAgentMessage(task: DelegatedLeadTaskEnvelope): string {
   const contextLines = task.context_refs.map(
     (ref) => `- [${ref.kind}] ${ref.label ? `${ref.label}: ` : ""}${ref.value}`,
   );
@@ -95,9 +122,11 @@ export function buildDelegatedAgentMessage(task: DelegatedTaskEnvelope): string 
 async function postDelegatedReceipt(params: {
   callbackUrl: string;
   receipt: {
-    schema: "AngelaTaskReceiptV1";
+    schema: typeof DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION;
     task_id: string;
     run_id: string;
+    delegated_run_id?: string | null;
+    upstream_run_id?: string | null;
     state: OperatorTaskState;
     owner: string;
     attempt: number;
@@ -155,7 +184,7 @@ function mapResultToReceiptState(
   if (result.status === "skipped") {
     return {
       state: "blocked",
-      failure_code: "angela-task-skipped",
+      failure_code: "delegated-task-skipped",
       result_status: null,
       summary: result.error?.trim() || result.summary?.trim() || "Delegated task was skipped",
       output: {
@@ -166,7 +195,7 @@ function mapResultToReceiptState(
   }
   return {
     state: "dead-letter",
-    failure_code: "angela-task-error",
+    failure_code: "delegated-task-error",
     result_status: "FAILED",
     summary: result.error?.trim() || result.summary?.trim() || "Delegated task failed",
     output: {
@@ -179,7 +208,7 @@ function mapResultToReceiptState(
 
 export function createDelegatedTaskRequestHandler(params: {
   runTask: (params: {
-    task: DelegatedTaskEnvelope;
+    task: DelegatedLeadTaskEnvelope;
     targetAgentId: string;
     message: string;
     observer: DelegatedTaskRunObserver;
@@ -211,7 +240,7 @@ export function createDelegatedTaskRequestHandler(params: {
       return true;
     }
 
-    const task = angelaTaskEnvelopeSchema.parse(body);
+    const task = delegatedLeadTaskEnvelopeSchema.parse(body);
     const targetAgentId = resolveDelegatedTargetAgentId(task);
     if (!targetAgentId) {
       sendInvalidRequest(
@@ -222,7 +251,7 @@ export function createDelegatedTaskRequestHandler(params: {
       );
       return true;
     }
-    const receiptOwner = targetAgentId;
+    const receiptOwner = resolveDelegatedReceiptOwner(task) ?? targetAgentId;
     const acceptedAt = Date.now();
     const callbackUrl = task.callback_url?.trim() || null;
     const upstreamRunId = task.run_id;
@@ -250,7 +279,7 @@ export function createDelegatedTaskRequestHandler(params: {
               callbackUrl,
               log: params.log,
               receipt: {
-                schema: "AngelaTaskReceiptV1",
+                schema: DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION,
                 task_id: task.task_id,
                 run_id: upstreamRunId,
                 delegated_run_id: delegatedRunId,
@@ -270,12 +299,12 @@ export function createDelegatedTaskRequestHandler(params: {
                   delegatedRunId,
                   upstreamRunId,
                 },
-                metadata: {
-                  source: "angela-http",
+                metadata: buildDelegatedReceiptMetadata({
+                  task,
                   targetAgentId,
                   delegatedRunId,
                   upstreamRunId,
-                },
+                }),
               },
             });
           });
@@ -290,7 +319,7 @@ export function createDelegatedTaskRequestHandler(params: {
               callbackUrl,
               log: params.log,
               receipt: {
-                schema: "AngelaTaskReceiptV1",
+                schema: DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION,
                 task_id: task.task_id,
                 run_id: upstreamRunId,
                 delegated_run_id: delegatedRunId,
@@ -311,12 +340,12 @@ export function createDelegatedTaskRequestHandler(params: {
                   delegatedRunId,
                   upstreamRunId,
                 },
-                metadata: {
-                  source: "angela-http",
+                metadata: buildDelegatedReceiptMetadata({
+                  task,
                   targetAgentId,
                   delegatedRunId,
                   upstreamRunId,
-                },
+                }),
               },
             });
           });
@@ -330,7 +359,7 @@ export function createDelegatedTaskRequestHandler(params: {
               callbackUrl,
               log: params.log,
               receipt: {
-                schema: "AngelaTaskReceiptV1",
+                schema: DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION,
                 task_id: task.task_id,
                 run_id: upstreamRunId,
                 delegated_run_id: delegatedRunId,
@@ -343,19 +372,19 @@ export function createDelegatedTaskRequestHandler(params: {
                 queue_latency_ms: Date.now() - acceptedAt,
                 summary: String(error),
                 artifacts: [],
-                failure_code: "angela-dispatch-error",
+                failure_code: "delegated-dispatch-error",
                 result_status: "FAILED",
                 output: {
                   agentId: targetAgentId,
                   delegatedRunId,
                   upstreamRunId,
                 },
-                metadata: {
-                  source: "angela-http",
+                metadata: buildDelegatedReceiptMetadata({
+                  task,
                   targetAgentId,
                   delegatedRunId,
                   upstreamRunId,
-                },
+                }),
               },
             });
           });

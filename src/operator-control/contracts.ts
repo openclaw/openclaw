@@ -4,7 +4,12 @@ export const OPERATOR_TASK_SCHEMA_VERSION = "TaskEnvelopeV1" as const;
 export const RUN_RECEIPT_SCHEMA_VERSION = "RunReceiptV1" as const;
 export const OUTCOME_RECORD_SCHEMA_VERSION = "OutcomeRecordV1" as const;
 export const VALIDATION_REPORT_SCHEMA_VERSION = "ValidationReportV1" as const;
+export const DELEGATED_LEAD_TASK_ENVELOPE_SCHEMA_VERSION = "DelegatedLeadTaskEnvelopeV1" as const;
+export const DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION = "DelegatedLeadReceiptV1" as const;
+// Legacy Angela schema aliases remain accepted for wire compatibility.
 export const ANGELA_TASK_ENVELOPE_SCHEMA_VERSION = "AngelaTaskEnvelopeV1" as const;
+export const ANGELA_TASK_RECEIPT_SCHEMA_VERSION = "AngelaTaskReceiptV1" as const;
+// Legacy transport alias remains accepted for wire compatibility.
 export const LEGACY_DELEGATED_EXECUTION_TRANSPORT = "angela-http" as const;
 export const CANONICAL_DELEGATED_EXECUTION_TRANSPORT = "delegated-http" as const;
 
@@ -43,7 +48,8 @@ export const OPERATOR_EXTERNAL_RECEIPT_STATES = [
 ] as const;
 export const OPERATOR_EXTERNAL_RECEIPT_SCHEMAS = [
   "2TonyTaskReceiptV1",
-  "AngelaTaskReceiptV1",
+  DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION,
+  ANGELA_TASK_RECEIPT_SCHEMA_VERSION,
 ] as const;
 
 export function canonicalizeOperatorExecutionTransport(
@@ -131,14 +137,16 @@ export const taskEnvelopeSchema = z.object({
   execution: operatorExecutionPreferenceSchema,
 });
 
-export const angelaTaskEnvelopeSchema = z.object({
+export const delegatedLeadTaskEnvelopeSchema = z.object({
   schema: z
-    .literal(ANGELA_TASK_ENVELOPE_SCHEMA_VERSION)
-    .default(ANGELA_TASK_ENVELOPE_SCHEMA_VERSION),
+    .enum([DELEGATED_LEAD_TASK_ENVELOPE_SCHEMA_VERSION, ANGELA_TASK_ENVELOPE_SCHEMA_VERSION])
+    .default(DELEGATED_LEAD_TASK_ENVELOPE_SCHEMA_VERSION),
   task_id: z.string().trim().min(1),
   run_id: z.string().trim().min(1),
   callback_url: z.string().url().nullable().optional(),
-  receipt_schema: z.literal("AngelaTaskReceiptV1").default("AngelaTaskReceiptV1"),
+  receipt_schema: z
+    .enum([DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION, ANGELA_TASK_RECEIPT_SCHEMA_VERSION])
+    .default(DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION),
   objective: z.string().trim().min(1),
   capability: z.string().trim().min(1),
   team_id: z.string().trim().min(1).nullable().optional(),
@@ -151,6 +159,8 @@ export const angelaTaskEnvelopeSchema = z.object({
   reply_to: operatorReplyTargetSchema.nullable().optional(),
   execution: operatorExecutionPreferenceSchema,
 });
+
+export const angelaTaskEnvelopeSchema = delegatedLeadTaskEnvelopeSchema;
 
 export const runReceiptSchema = z.object({
   schema: z.literal(RUN_RECEIPT_SCHEMA_VERSION).default(RUN_RECEIPT_SCHEMA_VERSION),
@@ -234,14 +244,18 @@ export const operatorExternalReceiptSchema = z.discriminatedUnion("schema", [
     schema: z.literal("2TonyTaskReceiptV1").default("2TonyTaskReceiptV1"),
   }),
   operatorExternalReceiptBaseSchema.extend({
-    schema: z.literal("AngelaTaskReceiptV1"),
+    schema: z.literal(DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION),
+  }),
+  operatorExternalReceiptBaseSchema.extend({
+    schema: z.literal(ANGELA_TASK_RECEIPT_SCHEMA_VERSION),
   }),
 ]);
 
 export type OperatorTaskTier = (typeof OPERATOR_TASK_TIERS)[number];
 export type OperatorTaskState = (typeof OPERATOR_TASK_STATES)[number];
 export type OperatorTaskEnvelope = z.infer<typeof taskEnvelopeSchema>;
-export type AngelaTaskEnvelope = z.infer<typeof angelaTaskEnvelopeSchema>;
+export type DelegatedLeadTaskEnvelope = z.infer<typeof delegatedLeadTaskEnvelopeSchema>;
+export type AngelaTaskEnvelope = DelegatedLeadTaskEnvelope;
 export type OperatorRunReceipt = z.infer<typeof runReceiptSchema>;
 export type OperatorOutcomeRecord = z.infer<typeof outcomeRecordSchema>;
 export type OperatorValidationReport = z.infer<typeof validationReportSchema>;

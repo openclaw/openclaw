@@ -1,17 +1,14 @@
-import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { ZodError, z } from "zod";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
-import { isWithinDir } from "../infra/path-safety.js";
 import { compileOperatorAgentRegistry } from "../operator-control/agent-registry.js";
 import {
+  DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION,
+  DELEGATED_LEAD_TASK_ENVELOPE_SCHEMA_VERSION,
   operatorContextRefSchema,
   operatorReplyTargetSchema,
 } from "../operator-control/contracts.js";
@@ -24,6 +21,7 @@ import {
   type OperatorMemoryCollection,
 } from "../operator-control/memory-store.js";
 import { getOperatorControlStatus } from "../operator-control/operator-status.js";
+import { parseProjectOpsUpdatePayload } from "../operator-control/project-ops-payloads.js";
 import {
   resolveDirectDebBaseUrl,
   resolveDirectDebSharedSecret,
@@ -46,11 +44,11 @@ import {
 } from "../operator-control/worker-client.js";
 import { resolveOperatorReceiptTemplate } from "../operator-control/worker-status.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import { DELEGATED_MESSAGE_PATH } from "./angela-http.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { buildControlUiCspHeader } from "./control-ui-csp.js";
-import { isReadHttpMethod, respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
+import { isReadHttpMethod, respondNotFound } from "./control-ui-http-utils.js";
+import { DELEGATED_MESSAGE_PATH } from "./delegated-http.js";
 import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import { sendUnauthorized } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
@@ -58,15 +56,6 @@ import {
   getMissionControlAcpxSessionsSnapshot,
   ingestMissionControlAcpxEvents,
 } from "./mission-control-acpx.js";
-import {
-  getMissionControlIncidents,
-  getMissionControlOverview,
-  getMissionControlRoutingMatrix,
-  getMissionControlRunDetail,
-  getMissionControlRuns,
-  parseMissionControlRoutingQuery,
-  parseMissionControlRunsQuery,
-} from "./mission-control-api.js";
 import {
   createMissionControlDebBacklogItem,
   createMissionControlDebCall,
@@ -88,33 +77,154 @@ import {
   updateMissionControlDebEmail,
   updateMissionControlDebProfile,
 } from "./mission-control-deb.js";
-import {
-  classifyMissionControlRequest,
-  MISSION_CONTROL_BASE_PATH,
-} from "./mission-control-routing.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 
-const ROOT_PREFIX = "/";
-const MISSION_CONTROL_BOOTSTRAP_PATH = `${MISSION_CONTROL_BASE_PATH}/__openclaw/mission-control-config.json`;
+/** Legacy /mission-control path. Kept for backward compatibility. */
+export const MISSION_CONTROL_BASE_PATH = "/mission-control" as const;
+const MISSION_CONTROL_ACPX_EVENTS_PATH = `${MISSION_CONTROL_BASE_PATH}/api/acpx-events`;
+const MISSION_CONTROL_DEB_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/deb`;
+const MISSION_CONTROL_MEMORY_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/memory`;
+const MISSION_CONTROL_PROJECT_OPS_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/project-ops`;
+const MISSION_CONTROL_TASKS_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/tasks`;
+const MISSION_CONTROL_WORKER_API_PREFIX = `${MISSION_CONTROL_BASE_PATH}/api/worker`;
+
+const OPERATOR_API_PREFIX = "/api/operator";
+const DEB_API_PREFIX = "/api/deb";
+
+type OperatorApiClassification =
+  | { kind: "not-operator-api" }
+  | { kind: "serve"; routePath: string };
+
+export function classifyOperatorApiRequest(params: {
+  pathname: string;
+  method: string | undefined;
+}): OperatorApiClassification {
+  const { pathname, method } = params;
+  if (pathname.startsWith(OPERATOR_API_PREFIX)) {
+    const suffix = pathname.slice(OPERATOR_API_PREFIX.length) || "/";
+    if (suffix === "/agents") {
+      return { kind: "serve", routePath: "/agents" };
+    }
+    if (suffix === "/acpx-events") {
+      if (method === "POST") {
+        return { kind: "serve", routePath: "/acpx-events" };
+      }
+      return { kind: "not-operator-api" };
+    }
+    if (suffix === "/status") {
+      return { kind: "serve", routePath: "/operator/status" };
+    }
+    if (suffix === "/tasks" || suffix.startsWith("/tasks/")) {
+      return { kind: "serve", routePath: suffix };
+    }
+    if (
+      suffix === "/memory" ||
+      suffix === "/memory/promote" ||
+      suffix === "/memory/service-context"
+    ) {
+      return { kind: "serve", routePath: suffix };
+    }
+    if (
+      suffix === "/worker/ready" ||
+      suffix === "/worker/tasks" ||
+      suffix.startsWith("/worker/tasks/")
+    ) {
+      return { kind: "serve", routePath: suffix };
+    }
+    if (
+      suffix === "/project-ops/ready" ||
+      suffix === "/project-ops/status" ||
+      suffix === "/project-ops/sync" ||
+      suffix === "/project-ops/update" ||
+      suffix === "/project-ops/task" ||
+      suffix === "/project-ops/operator/events"
+    ) {
+      return { kind: "serve", routePath: suffix };
+    }
+  }
+  if (pathname === DEB_API_PREFIX || pathname.startsWith(`${DEB_API_PREFIX}/`)) {
+    const suffix = pathname === DEB_API_PREFIX ? "" : pathname.slice(DEB_API_PREFIX.length);
+    return { kind: "serve", routePath: `/deb${suffix}` };
+  }
+  return { kind: "not-operator-api" };
+}
+
+type MissionControlRequestClassification =
+  | { kind: "not-mission-control" }
+  | { kind: "not-found" }
+  | { kind: "redirect"; location: string }
+  | { kind: "serve" };
+
+export function classifyMissionControlRequest(params: {
+  pathname: string;
+  search: string;
+  method: string | undefined;
+}): MissionControlRequestClassification {
+  const { pathname, search, method } = params;
+  if (pathname === MISSION_CONTROL_BASE_PATH) {
+    if (!isReadHttpMethod(method)) {
+      return { kind: "not-mission-control" };
+    }
+    return {
+      kind: "redirect",
+      location: `${MISSION_CONTROL_BASE_PATH}/${search}`,
+    };
+  }
+  if (!pathname.startsWith(`${MISSION_CONTROL_BASE_PATH}/`)) {
+    return { kind: "not-mission-control" };
+  }
+  if (!isReadHttpMethod(method)) {
+    if (method === "POST" && pathname === MISSION_CONTROL_ACPX_EVENTS_PATH) {
+      return { kind: "serve" };
+    }
+    if (
+      (method === "POST" && pathname === MISSION_CONTROL_TASKS_API_PREFIX) ||
+      (method === "POST" &&
+        pathname.startsWith(`${MISSION_CONTROL_TASKS_API_PREFIX}/`) &&
+        pathname.endsWith("/receipts")) ||
+      (method === "PATCH" && pathname.startsWith(`${MISSION_CONTROL_TASKS_API_PREFIX}/`))
+    ) {
+      return { kind: "serve" };
+    }
+    if (
+      method === "POST" &&
+      pathname.startsWith(`${MISSION_CONTROL_WORKER_API_PREFIX}/tasks/`) &&
+      pathname.endsWith("/cancel")
+    ) {
+      return { kind: "serve" };
+    }
+    if (
+      pathname === MISSION_CONTROL_MEMORY_API_PREFIX ||
+      pathname === `${MISSION_CONTROL_MEMORY_API_PREFIX}/promote` ||
+      pathname === `${MISSION_CONTROL_MEMORY_API_PREFIX}/service-context`
+    ) {
+      return { kind: "serve" };
+    }
+    if (
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/ready` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/status` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/sync` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/update` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/task` ||
+      pathname === `${MISSION_CONTROL_PROJECT_OPS_API_PREFIX}/operator/events`
+    ) {
+      return { kind: "serve" };
+    }
+    if (
+      pathname === MISSION_CONTROL_DEB_API_PREFIX ||
+      pathname.startsWith(`${MISSION_CONTROL_DEB_API_PREFIX}/`)
+    ) {
+      return { kind: "serve" };
+    }
+    return { kind: "not-found" };
+  }
+  return { kind: "serve" };
+}
+
 const MISSION_CONTROL_API_BASE_PATH = `${MISSION_CONTROL_BASE_PATH}/api`;
 const MISSION_CONTROL_ACPX_MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MISSION_CONTROL_DEB_MAX_BODY_BYTES = 512 * 1024;
 const PROJECT_OPS_TASK_SCHEMA_VERSION = "PawAndOrderTaskV1" as const;
-
-const STATIC_ASSET_EXTENSIONS = new Set([
-  ".js",
-  ".css",
-  ".json",
-  ".map",
-  ".svg",
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".ico",
-  ".txt",
-]);
 
 const missionControlProjectOpsTaskSchema = z.object({
   schema: z.literal(PROJECT_OPS_TASK_SCHEMA_VERSION).default(PROJECT_OPS_TASK_SCHEMA_VERSION),
@@ -140,11 +250,6 @@ const missionControlProjectOpsTaskSchema = z.object({
   inputs: z.record(z.string(), z.unknown()).default({}),
 });
 
-type MissionControlRootState =
-  | { kind: "resolved"; path: string }
-  | { kind: "missing" }
-  | { kind: "invalid"; path: string };
-
 export type MissionControlHttpAuthContext = {
   auth: ResolvedGatewayAuth;
   trustedProxies: string[];
@@ -153,71 +258,11 @@ export type MissionControlHttpAuthContext = {
   getReadiness?: ReadinessChecker;
 };
 
-function contentTypeForExt(ext: string): string {
-  switch (ext) {
-    case ".html":
-      return "text/html; charset=utf-8";
-    case ".js":
-      return "application/javascript; charset=utf-8";
-    case ".css":
-      return "text/css; charset=utf-8";
-    case ".json":
-    case ".map":
-      return "application/json; charset=utf-8";
-    case ".svg":
-      return "image/svg+xml";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".gif":
-      return "image/gif";
-    case ".webp":
-      return "image/webp";
-    case ".ico":
-      return "image/x-icon";
-    case ".txt":
-      return "text/plain; charset=utf-8";
-    default:
-      return "application/octet-stream";
-  }
-}
-
-function setStaticFileHeaders(res: ServerResponse, filePath: string): void {
-  const ext = path.extname(filePath).toLowerCase();
-  res.setHeader("Content-Type", contentTypeForExt(ext));
-  res.setHeader("Cache-Control", "no-cache");
-}
-
 function applyMissionControlSecurityHeaders(res: ServerResponse): void {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
-}
-
-function isExpectedSafePathError(error: unknown): boolean {
-  const code =
-    typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
-  return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
-}
-
-function isSafeRelativePath(relPath: string): boolean {
-  if (!relPath) {
-    return false;
-  }
-  const normalized = path.posix.normalize(relPath);
-  if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
-    return false;
-  }
-  if (normalized.startsWith("../") || normalized === "..") {
-    return false;
-  }
-  if (normalized.includes("\0")) {
-    return false;
-  }
-  return true;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -270,81 +315,6 @@ function buildOperatorReceiptUrl(taskId: string): string | null {
     return null;
   }
   return template.replace(/\{taskId\}/gu, encodeURIComponent(taskId));
-}
-
-function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath: string): boolean {
-  if (req.method !== "HEAD") {
-    return false;
-  }
-  res.statusCode = 200;
-  setStaticFileHeaders(res, filePath);
-  res.end();
-  return true;
-}
-
-function resolveMissionControlRootSync(moduleUrl = import.meta.url): MissionControlRootState {
-  const moduleDir = path.dirname(fileURLToPath(moduleUrl));
-  const explicitRoot = process.env.OPENCLAW_MISSION_CONTROL_ROOT?.trim();
-  const candidates = [
-    ...(explicitRoot ? [path.resolve(explicitRoot)] : []),
-    "/app/dist/mission-control",
-    path.resolve(process.cwd(), "dist/mission-control"),
-    path.resolve(moduleDir, "../../dist/mission-control"),
-    path.resolve(path.dirname(process.argv[1] ?? process.cwd()), "dist/mission-control"),
-  ];
-
-  for (const candidate of candidates) {
-    const indexPath = path.join(candidate, "index.html");
-    try {
-      const stats = fs.statSync(indexPath);
-      if (stats.isFile()) {
-        return { kind: "resolved", path: candidate };
-      }
-    } catch (error) {
-      if (isExpectedSafePathError(error)) {
-        continue;
-      }
-      return { kind: "invalid", path: candidate };
-    }
-  }
-
-  return { kind: "missing" };
-}
-
-function resolveSafeMissionControlFile(
-  rootReal: string,
-  filePath: string,
-): { path: string; fd: number } | null {
-  const opened = openBoundaryFileSync({
-    absolutePath: filePath,
-    rootPath: rootReal,
-    rootRealPath: rootReal,
-    boundaryLabel: "mission control root",
-    skipLexicalRootCheck: true,
-  });
-
-  if (!opened.ok) {
-    if (opened.reason === "io") {
-      throw opened.error;
-    }
-    return null;
-  }
-
-  return {
-    path: opened.path,
-    fd: opened.fd,
-  };
-}
-
-function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer): void {
-  setStaticFileHeaders(res, filePath);
-  res.end(body);
-}
-
-function serveResolvedIndexHtml(res: ServerResponse, body: string): void {
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache");
-  res.end(body);
 }
 
 function respondJson(
@@ -511,11 +481,11 @@ async function handleMissionControlProjectOpsTaskRequest(params: {
           : {}),
       },
       body: JSON.stringify({
-        schema: "AngelaTaskEnvelopeV1",
+        schema: DELEGATED_LEAD_TASK_ENVELOPE_SCHEMA_VERSION,
         task_id: parsed.task_id,
         run_id: parsed.run_id,
         callback_url: callbackUrl,
-        receipt_schema: "AngelaTaskReceiptV1",
+        receipt_schema: DELEGATED_LEAD_RECEIPT_SCHEMA_VERSION,
         objective: parsed.objective,
         capability: parsed.capability,
         team_id: parsed.team_id?.trim() || "project-ops",
@@ -650,12 +620,25 @@ async function handleMissionControlProjectOpsProxyRequest(params: {
             maxBytes: MISSION_CONTROL_DEB_MAX_BODY_BYTES,
           })
         : undefined;
-    const contentType = headerToString(req.headers["content-type"]);
+    let contentType = headerToString(req.headers["content-type"]);
+    let forwardedBody = rawBody;
+    if (routePath === "/project-ops/update" && rawBody !== undefined) {
+      const parsedBody = parseJsonBody(rawBody);
+      try {
+        forwardedBody = JSON.stringify(parseProjectOpsUpdatePayload(parsedBody));
+      } catch (error) {
+        throw new MissionControlApiRequestError(
+          error instanceof Error ? error.message : "Invalid project-ops update payload",
+          422,
+        );
+      }
+      contentType = "application/json";
+    }
     const response = await fetch(upstreamEndpoint, {
       method: req.method,
       headers: {
         accept: "application/json",
-        ...(contentType && rawBody !== undefined
+        ...(contentType && forwardedBody !== undefined
           ? {
               "content-type": contentType,
             }
@@ -666,7 +649,7 @@ async function handleMissionControlProjectOpsProxyRequest(params: {
             }
           : {}),
       },
-      body: rawBody,
+      body: forwardedBody,
     });
     const payload = await response.text();
     res.statusCode = response.status;
@@ -682,6 +665,14 @@ async function handleMissionControlProjectOpsProxyRequest(params: {
     res.end(payload);
     return true;
   } catch (error) {
+    if (error instanceof MissionControlApiRequestError) {
+      respondJson(res, error.statusCode, req, {
+        error: {
+          message: error.message,
+        },
+      });
+      return true;
+    }
     respondJson(res, 502, req, {
       error: {
         message: error instanceof Error ? error.message : "Project-ops proxy request failed",
@@ -695,6 +686,18 @@ async function readJsonRequestBody(req: IncomingMessage, maxBytes: number): Prom
   const rawBody = await readRequestBodyWithLimit(req, {
     maxBytes,
   });
+  const trimmed = rawBody.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    throw new MissionControlApiRequestError("Invalid JSON payload", 400);
+  }
+}
+
+function parseJsonBody(rawBody: string): unknown {
   const trimmed = rawBody.trim();
   if (!trimmed) {
     return {};
@@ -1439,50 +1442,6 @@ async function handleMissionControlApiRequest(params: {
   }
 
   try {
-    if (routePath === "/" || routePath === "/overview") {
-      const payload = await getMissionControlOverview({
-        getReadiness: authContext?.getReadiness,
-      });
-      respondJson(res, 200, req, payload);
-      return true;
-    }
-
-    if (routePath === "/runs") {
-      const filters = parseMissionControlRunsQuery(url.searchParams);
-      const payload = await getMissionControlRuns(filters);
-      respondJson(res, 200, req, payload);
-      return true;
-    }
-
-    if (routePath.startsWith("/runs/")) {
-      const encodedKey = routePath.slice("/runs/".length);
-      if (!encodedKey || encodedKey.includes("/")) {
-        respondNotFound(res);
-        return true;
-      }
-      const key = decodePathSegment(encodedKey);
-      if (!key) {
-        respondNotFound(res);
-        return true;
-      }
-      const payload = await getMissionControlRunDetail(key);
-      respondJson(res, 200, req, payload);
-      return true;
-    }
-
-    if (routePath === "/routing") {
-      const opts = parseMissionControlRoutingQuery(url.searchParams);
-      const payload = await getMissionControlRoutingMatrix(opts);
-      respondJson(res, 200, req, payload);
-      return true;
-    }
-
-    if (routePath === "/incidents") {
-      const payload = await getMissionControlIncidents();
-      respondJson(res, 200, req, payload);
-      return true;
-    }
-
     if (routePath === "/agents") {
       const payload = compileOperatorAgentRegistry();
       respondJson(res, 200, req, payload);
@@ -1514,7 +1473,7 @@ async function handleMissionControlApiRequest(params: {
   }
 }
 
-export async function handleMissionControlHttpRequest(
+export async function handleOperatorHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   authContext?: MissionControlHttpAuthContext,
@@ -1525,11 +1484,27 @@ export async function handleMissionControlHttpRequest(
   }
 
   const url = new URL(rawUrl, "http://localhost");
-  const classified = classifyMissionControlRequest({
+  let effectiveUrl = url;
+
+  const operatorClassified = classifyOperatorApiRequest({
     pathname: url.pathname,
-    search: url.search,
     method: req.method,
   });
+  if (operatorClassified.kind === "serve") {
+    effectiveUrl = new URL(
+      `${MISSION_CONTROL_API_BASE_PATH}${operatorClassified.routePath}${url.search}`,
+      url.href,
+    );
+  }
+
+  const classified =
+    operatorClassified.kind === "serve"
+      ? ({ kind: "serve" } as const)
+      : classifyMissionControlRequest({
+          pathname: url.pathname,
+          search: url.search,
+          method: req.method,
+        });
 
   if (classified.kind === "not-mission-control") {
     return false;
@@ -1553,139 +1528,11 @@ export async function handleMissionControlHttpRequest(
     await handleMissionControlApiRequest({
       req,
       res,
-      url,
+      url: effectiveUrl,
       authContext,
     })
   ) {
     return true;
-  }
-
-  if (url.pathname === MISSION_CONTROL_BOOTSTRAP_PATH) {
-    if (!isReadHttpMethod(req.method)) {
-      respondNotFound(res);
-      return true;
-    }
-    if (req.method === "HEAD") {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end();
-      return true;
-    }
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.end(
-      JSON.stringify({
-        basePath: MISSION_CONTROL_BASE_PATH,
-        wsPath: "/ws",
-        apiBasePath: MISSION_CONTROL_API_BASE_PATH,
-        generatedAt: Date.now(),
-      }),
-    );
-    return true;
-  }
-
-  const rootState = resolveMissionControlRootSync();
-  if (rootState.kind === "missing") {
-    respondPlainText(
-      res,
-      503,
-      "Mission Control assets not found. Build them with `pnpm mission-control:build`.",
-    );
-    return true;
-  }
-  if (rootState.kind === "invalid") {
-    respondPlainText(
-      res,
-      503,
-      `Mission Control assets invalid at ${rootState.path}. Rebuild with \`pnpm mission-control:build\`.`,
-    );
-    return true;
-  }
-
-  const root = rootState.path;
-  const rootReal = (() => {
-    try {
-      return fs.realpathSync(root);
-    } catch (error) {
-      if (isExpectedSafePathError(error)) {
-        return null;
-      }
-      throw error;
-    }
-  })();
-
-  if (!rootReal) {
-    respondPlainText(
-      res,
-      503,
-      "Mission Control assets unavailable. Build them with `pnpm mission-control:build`.",
-    );
-    return true;
-  }
-
-  const uiPath = url.pathname.startsWith(`${MISSION_CONTROL_BASE_PATH}/`)
-    ? url.pathname.slice(MISSION_CONTROL_BASE_PATH.length)
-    : ROOT_PREFIX;
-
-  const rel = (() => {
-    if (uiPath === ROOT_PREFIX) {
-      return "";
-    }
-    const assetsIndex = uiPath.indexOf("/assets/");
-    if (assetsIndex >= 0) {
-      return uiPath.slice(assetsIndex + 1);
-    }
-    return uiPath.slice(1);
-  })();
-
-  const requested = rel && !rel.endsWith("/") ? rel : `${rel}index.html`;
-  const fileRel = requested || "index.html";
-
-  if (!isSafeRelativePath(fileRel)) {
-    respondNotFound(res);
-    return true;
-  }
-
-  const filePath = path.resolve(root, fileRel);
-  if (!isWithinDir(root, filePath)) {
-    respondNotFound(res);
-    return true;
-  }
-
-  const safeFile = resolveSafeMissionControlFile(rootReal, filePath);
-  if (safeFile) {
-    try {
-      if (respondHeadForFile(req, res, safeFile.path)) {
-        return true;
-      }
-      if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, fs.readFileSync(safeFile.fd, "utf8"));
-        return true;
-      }
-      serveResolvedFile(res, safeFile.path, fs.readFileSync(safeFile.fd));
-      return true;
-    } finally {
-      fs.closeSync(safeFile.fd);
-    }
-  }
-
-  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
-    respondNotFound(res);
-    return true;
-  }
-
-  const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeMissionControlFile(rootReal, indexPath);
-  if (safeIndex) {
-    try {
-      if (respondHeadForFile(req, res, safeIndex.path)) {
-        return true;
-      }
-      serveResolvedIndexHtml(res, fs.readFileSync(safeIndex.fd, "utf8"));
-      return true;
-    } finally {
-      fs.closeSync(safeIndex.fd);
-    }
   }
 
   respondNotFound(res);

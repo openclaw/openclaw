@@ -1,5 +1,6 @@
 import {
   resolveProjectOpsEventTarget,
+  resolveProjectOpsCommandTarget,
   resolveProjectOpsControlPlaneBaseUrl,
   resolveDirectDebBaseUrl,
 } from "./project-ops-target.js";
@@ -15,7 +16,13 @@ export type OperatorDebSyncStatusSnapshot = {
   mode: "task-lifecycle";
   targetMode: "control-plane-proxy" | "direct-deb" | null;
   configured: boolean;
+  lifecycleSyncConfigured: boolean;
   baseUrl: string | null;
+  readyEndpoint: string | null;
+  statusEndpoint: string | null;
+  syncEndpoint: string | null;
+  updateEndpoint: string | null;
+  taskEndpoint: string | null;
   eventEndpoint: string | null;
   authScheme: "bearer" | null;
   authEnv: string | null;
@@ -46,11 +53,21 @@ export function resolveDebOperatorEventEndpoint(): string | null {
 
 export function getOperatorDebSyncStatus(): OperatorDebSyncStatusSnapshot {
   const target = resolveProjectOpsEventTarget();
+  const statusTarget = resolveProjectOpsCommandTarget("status");
+  const syncTarget = resolveProjectOpsCommandTarget("sync");
+  const updateTarget = resolveProjectOpsCommandTarget("update");
+  const taskTarget = resolveProjectOpsCommandTarget("task");
   return {
     mode: "task-lifecycle",
     targetMode: target?.mode ?? null,
     configured: Boolean(target),
+    lifecycleSyncConfigured: Boolean(target),
     baseUrl: target?.baseUrl ?? null,
+    readyEndpoint: target?.readyEndpoint ?? null,
+    statusEndpoint: statusTarget?.endpoint ?? null,
+    syncEndpoint: syncTarget?.endpoint ?? null,
+    updateEndpoint: updateTarget?.endpoint ?? null,
+    taskEndpoint: taskTarget?.endpoint ?? null,
     eventEndpoint: resolveDebOperatorEventEndpoint(),
     authScheme: "bearer",
     authEnv: target?.authEnv ?? null,

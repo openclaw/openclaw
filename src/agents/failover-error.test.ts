@@ -467,4 +467,17 @@ describe("failover-error", () => {
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
   });
+
+  it("session lock errors return null from resolveFailoverReasonFromError", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "session file locked (timeout 10000ms)",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError(
+        new Error("session file locked by another process (pid 24442)"),
+      ),
+    ).toBeNull();
+  });
 });

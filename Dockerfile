@@ -62,7 +62,10 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
-COPY mission-control-ui/package.json ./mission-control-ui/package.json
+# mission-control-ui lives in a separate project; use stub when absent
+RUN mkdir -p mission-control-ui /mission-control-ui && \
+  printf '%s\n' '{"name":"@openclaw/mission-control-ui","private":true,"scripts":{"build":"echo Mission Control UI stub; exit 0"}}' > mission-control-ui/package.json && \
+  cp mission-control-ui/package.json /mission-control-ui/package.json
 COPY patches ./patches
 
 COPY --from=ext-deps /out/ ./extensions/

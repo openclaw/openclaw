@@ -38,12 +38,14 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
+  a2aSessionScopeMessage,
   createSessionVisibilityGuard,
   shouldResolveSessionIdInput,
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
   resolveSandboxedSessionToolContext,
+  resolveUniversalTargetSessionAccess,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -243,6 +245,7 @@ export function createSessionStatusTool(opts?: {
                 sandboxed: true,
               }),
               a2aPolicy,
+              mainKey,
             })
           : null;
 
@@ -251,9 +254,20 @@ export function createSessionStatusTool(opts?: {
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
-      const ensureAgentAccess = (targetAgentId: string) => {
+      const ensureSessionAccess = async (targetSessionKey: string) => {
+        const universalAccess = await resolveUniversalTargetSessionAccess({
+          requesterSessionKey: visibilityRequesterKey,
+          targetSessionKey,
+        });
+        if (universalAccess) {
+          if (!universalAccess.allowed) {
+            throw new Error(universalAccess.error);
+          }
+          return true;
+        }
+        const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
         if (targetAgentId === requesterAgentId) {
-          return;
+          return false;
         }
         // Gate cross-agent access behind tools.agentToAgent settings.
         if (!a2aPolicy.enabled) {
@@ -264,16 +278,28 @@ export function createSessionStatusTool(opts?: {
         if (!a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
           throw new Error("Agent-to-agent session status denied by tools.agentToAgent.allow.");
         }
+        if (
+          !a2aPolicy.isSessionTargetAllowed({
+            requesterAgentId,
+            targetSessionKey,
+            mainKey,
+          })
+        ) {
+          throw new Error(a2aSessionScopeMessage("status"));
+        }
+        return false;
       };
 
       if (requestedKeyRaw.startsWith("agent:")) {
         const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyRaw);
-        ensureAgentAccess(requestedAgentId);
-        const access = visibilityGuard?.check(
-          normalizeVisibilityTargetSessionKey(requestedKeyRaw, requestedAgentId),
-        );
-        if (access && !access.allowed) {
-          throw new Error(access.error);
+        const bypassedVisibility = await ensureSessionAccess(requestedKeyRaw);
+        if (!bypassedVisibility) {
+          const access = visibilityGuard?.check(
+            normalizeVisibilityTargetSessionKey(requestedKeyRaw, requestedAgentId),
+          );
+          if (access && !access.allowed) {
+            throw new Error(access.error);
+          }
         }
       }
 
@@ -300,7 +326,7 @@ export function createSessionStatusTool(opts?: {
         });
         if (resolvedKey) {
           // If resolution points at another agent, enforce A2A policy before switching stores.
-          ensureAgentAccess(resolveAgentIdFromSessionKey(resolvedKey));
+          await ensureSessionAccess(resolvedKey);
           requestedKeyRaw = resolvedKey;
           agentId = resolveAgentIdFromSessionKey(resolvedKey);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -320,11 +346,14 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (visibilityGuard && !requestedKeyRaw.startsWith("agent:")) {
-        const access = visibilityGuard.check(
-          normalizeVisibilityTargetSessionKey(resolved.key, agentId),
-        );
-        if (!access.allowed) {
-          throw new Error(access.error);
+        const bypassedVisibility = await ensureSessionAccess(resolved.key);
+        if (!bypassedVisibility) {
+          const access = visibilityGuard.check(
+            normalizeVisibilityTargetSessionKey(resolved.key, agentId),
+          );
+          if (!access.allowed) {
+            throw new Error(access.error);
+          }
         }
       }
 

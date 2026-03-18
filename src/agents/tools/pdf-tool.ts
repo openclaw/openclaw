@@ -328,7 +328,7 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+    workspaceOnly: options?.fsPolicy?.readWorkspaceOnly === true,
   });
 
   const description =
@@ -413,7 +413,7 @@ export function createPdfTool(options?: {
           ? {
               root: options.sandbox.root.trim(),
               bridge: options.sandbox.bridge,
-              workspaceOnly: options.fsPolicy?.workspaceOnly === true,
+              workspaceOnly: options.fsPolicy?.readWorkspaceOnly === true,
             }
           : null;
 

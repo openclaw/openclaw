@@ -299,7 +299,7 @@ export function createImageTool(options?: {
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
 
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+    workspaceOnly: options?.fsPolicy?.readWorkspaceOnly === true,
   });
 
   return {
@@ -377,7 +377,7 @@ export function createImageTool(options?: {
           ? {
               root: options.sandbox.root.trim(),
               bridge: options.sandbox.bridge,
-              workspaceOnly: options.fsPolicy?.workspaceOnly === true,
+              workspaceOnly: options.fsPolicy?.readWorkspaceOnly === true,
             }
           : null;
 

@@ -2,7 +2,7 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
-import type { AgentToolsConfig } from "../config/types.tools.js";
+import type { AgentToolsConfig, FsToolsConfig } from "../config/types.tools.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -35,25 +35,22 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "memory_get",
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
+  // Push-based orchestration should use subagents/session_status, not transcript polling.
+  "sessions_list",
+  "sessions_history",
 ];
 
 /**
  * Additional tools denied for leaf sub-agents (depth >= maxSpawnDepth).
  * These are tools that only make sense for orchestrator sub-agents that can spawn children.
  */
-const SUBAGENT_TOOL_DENY_LEAF = [
-  "subagents",
-  "sessions_schedule",
-  "sessions_list",
-  "sessions_history",
-  "sessions_spawn",
-];
+const SUBAGENT_TOOL_DENY_LEAF = ["subagents", "sessions_schedule", "sessions_spawn"];
 
 /**
  * Build the deny list for a sub-agent at a given depth.
  *
- * - Depth 1 with maxSpawnDepth >= 2 (orchestrator): allowed to use sessions_spawn,
- *   subagents, sessions_list, sessions_history so it can manage its children.
+ * - Depth 1 with maxSpawnDepth >= 2 (orchestrator): allowed to use sessions_spawn
+ *   and subagents so it can manage its children without polling transcripts.
  * - Depth >= maxSpawnDepth (leaf): denied subagents, sessions_spawn, and
  *   session management tools.
  */
@@ -63,7 +60,7 @@ function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[]
     return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
   }
   // Orchestrator sub-agent: only deny the always-denied tools.
-  // sessions_spawn, subagents, sessions_list, sessions_history are allowed.
+  // sessions_spawn and subagents stay available for push-based orchestration.
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
@@ -208,6 +205,35 @@ function hasExplicitToolSection(section: unknown): boolean {
   return section !== undefined && section !== null;
 }
 
+function hasOwn(obj: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function resolveImplicitFsTools(fs: FsToolsConfig | undefined): string[] {
+  if (!fs) {
+    return [];
+  }
+  const implicit = new Set<string>();
+  const hasScopedKeys =
+    hasOwn(fs, "readWorkspaceOnly") ||
+    hasOwn(fs, "writeWorkspaceOnly") ||
+    hasOwn(fs, "editWorkspaceOnly");
+
+  if (!hasScopedKeys) {
+    return ["read", "write", "edit"];
+  }
+  if (hasOwn(fs, "workspaceOnly") || hasOwn(fs, "readWorkspaceOnly")) {
+    implicit.add("read");
+  }
+  if (hasOwn(fs, "workspaceOnly") || hasOwn(fs, "writeWorkspaceOnly")) {
+    implicit.add("write");
+  }
+  if (hasOwn(fs, "workspaceOnly") || hasOwn(fs, "editWorkspaceOnly")) {
+    implicit.add("edit");
+  }
+  return Array.from(implicit);
+}
+
 function resolveImplicitProfileAlsoAllow(params: {
   globalTools?: OpenClawConfig["tools"];
   agentTools?: AgentToolsConfig;
@@ -220,13 +246,8 @@ function resolveImplicitProfileAlsoAllow(params: {
     implicit.add("exec");
     implicit.add("process");
   }
-  if (
-    hasExplicitToolSection(params.agentTools?.fs) ||
-    hasExplicitToolSection(params.globalTools?.fs)
-  ) {
-    implicit.add("read");
-    implicit.add("write");
-    implicit.add("edit");
+  for (const toolName of resolveImplicitFsTools(params.agentTools?.fs ?? params.globalTools?.fs)) {
+    implicit.add(toolName);
   }
   return implicit.size > 0 ? Array.from(implicit) : undefined;
 }

@@ -4,6 +4,11 @@ import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 
+/**
+ * Mission Control keeps a local Deb workspace shim for UI-first backlog/profile editing.
+ * This is intentionally separate from the real Deb HTTP pod used by /project-ops/*
+ * routing and lifecycle fanout.
+ */
 export type MissionControlDebPriority = "p0" | "p1" | "p2" | "p3";
 export type MissionControlDebTaskStatus = "todo" | "in_progress" | "blocked" | "done";
 export type MissionControlDebUiPriority = "P0" | "P1" | "P2" | "P3";
@@ -183,6 +188,7 @@ const DEFAULT_DEB_AVATARS = [
 ] as const;
 const STORAGE_LIMITATIONS = [
   "MVP persistence is a process-local JSON file scoped to Mission Control.",
+  "This workspace shim is not the standalone Deb sync pod used by /project-ops/* routes.",
   "No multi-writer locking: concurrent writes from multiple gateway processes may race.",
   "Call actions are acknowledgements only; no outbound side effects are executed in pass 2.",
 ] as const;

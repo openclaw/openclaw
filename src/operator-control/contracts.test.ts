@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  angelaTaskEnvelopeSchema,
+  delegatedLeadTaskEnvelopeSchema,
   operatorExternalReceiptSchema,
   outcomeRecordSchema,
   runReceiptSchema,
@@ -81,8 +81,8 @@ describe("operator-control contracts", () => {
   });
 
   it("accepts external receipts from multiple worker schemas", () => {
-    const angelaReceipt = operatorExternalReceiptSchema.parse({
-      schema: "AngelaTaskReceiptV1",
+    const delegatedReceipt = operatorExternalReceiptSchema.parse({
+      schema: "DelegatedLeadReceiptV1",
       task_id: "task-1",
       run_id: "run-1",
       delegated_run_id: "delegated-run-1",
@@ -94,13 +94,13 @@ describe("operator-control contracts", () => {
       result_status: "SUCCESS",
     });
 
-    expect(angelaReceipt.schema).toBe("AngelaTaskReceiptV1");
-    expect(angelaReceipt.delegated_run_id).toBe("delegated-run-1");
-    expect(angelaReceipt.upstream_run_id).toBe("run-1");
+    expect(delegatedReceipt.schema).toBe("DelegatedLeadReceiptV1");
+    expect(delegatedReceipt.delegated_run_id).toBe("delegated-run-1");
+    expect(delegatedReceipt.upstream_run_id).toBe("run-1");
   });
 
-  it("accepts Angela task envelopes", () => {
-    const envelope = angelaTaskEnvelopeSchema.parse({
+  it("accepts delegated lead task envelopes and keeps Angela aliases readable", () => {
+    const envelope = delegatedLeadTaskEnvelopeSchema.parse({
       schema: "AngelaTaskEnvelopeV1",
       task_id: "task-1",
       run_id: "run-1",
@@ -115,7 +115,7 @@ describe("operator-control contracts", () => {
       },
     });
 
-    expect(envelope.receipt_schema).toBe("AngelaTaskReceiptV1");
+    expect(envelope.receipt_schema).toBe("DelegatedLeadReceiptV1");
     expect(envelope.schema).toBe("AngelaTaskEnvelopeV1");
   });
 });

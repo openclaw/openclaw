@@ -119,7 +119,7 @@ async function seedOperatorRegistryFixture(): Promise<void> {
       "operator_runtime:",
       "  transports:",
       "    delegated_http:",
-      "      global_default_alias: tonys-angels",
+      "      global_default_alias: angela",
       "agents:",
       "  - id: raekwon",
       "    name: Raekwon",
@@ -133,8 +133,8 @@ async function seedOperatorRegistryFixture(): Promise<void> {
       "    name: Jeffy",
       "    specialty: Kanban",
       "    triggers: [kanban, board_hygiene_packet]",
-      "  - id: tonys-angels",
-      "    name: Tony's Angels",
+      "  - id: angela",
+      "    name: Angela",
       "    specialty: Marketing",
       "    triggers: [marketing]",
       "  - id: bobby-digital",
@@ -155,11 +155,11 @@ async function seedOperatorRegistryFixture(): Promise<void> {
       "    dispatch_transport: deb-http",
       "  - id: marketing",
       "    name: Marketing",
-      "    lead: tonys-angels",
+      "    lead: angela",
       "    route_via_lead: true",
-      "    members: [tonys-angels]",
+      "    members: [angela]",
       "    dispatch_transport: delegated-http",
-      "    dispatch_default_alias: tonys-angels",
+      "    dispatch_default_alias: angela",
       "  - id: engineering",
       "    name: Engineering",
       "    lead: bobby-digital",
@@ -571,7 +571,7 @@ describe("operator task dispatch", () => {
               task_id: `task-delegated-circuit-${index}`,
               idempotency_key: `task-delegated-circuit-${index}`,
               requester: { id: "tonya", kind: "operator" },
-              target: { capability: "marketing", alias: "tonys-angels" },
+              target: { capability: "marketing", alias: "angela" },
               objective: "Trip the delegated transport circuit",
               tier: "STANDARD",
               acceptance_criteria: ["dispatch blocks"],
@@ -591,7 +591,7 @@ describe("operator task dispatch", () => {
             task_id: "task-delegated-circuit-open-block",
             idempotency_key: "task-delegated-circuit-open-block",
             requester: { id: "tonya", kind: "operator" },
-            target: { capability: "marketing", alias: "tonys-angels" },
+            target: { capability: "marketing", alias: "angela" },
             objective: "Circuit should short-circuit",
             tier: "STANDARD",
             acceptance_criteria: ["dispatch blocks before fetch"],
@@ -619,7 +619,7 @@ describe("operator task dispatch", () => {
             task_id: "task-delegated-circuit-recovered",
             idempotency_key: "task-delegated-circuit-recovered",
             requester: { id: "tonya", kind: "operator" },
-            target: { capability: "marketing", alias: "tonys-angels" },
+            target: { capability: "marketing", alias: "angela" },
             objective: "Half-open probe should recover the circuit",
             tier: "STANDARD",
             acceptance_criteria: ["dispatch succeeds"],
@@ -1144,7 +1144,7 @@ describe("operator task dispatch", () => {
     });
   });
 
-  it("dispatches marketing tasks through the delegated first-class-agent boundary", async () => {
+  it("dispatches marketing tasks through the delegated lead boundary", async () => {
     await withStateDirEnv("operator-dispatch-angela-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
@@ -1190,23 +1190,23 @@ describe("operator task dispatch", () => {
       expect(
         JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
       ).toMatchObject({
-        schema: "AngelaTaskEnvelopeV1",
+        schema: "DelegatedLeadTaskEnvelopeV1",
         task_id: "task-dispatch-4",
         capability: "marketing",
         team_id: "marketing",
-        alias: "tonys-angels",
+        alias: "angela",
       });
       const task = getOperatorTask("task-dispatch-4");
       expect(task?.receipt.state).toBe("queued");
-      expect(task?.receipt.owner).toBe("tonys-angels");
+      expect(task?.receipt.owner).toBe("angela");
       expect(task?.events.at(-1)?.note).toContain(
-        "dispatched to tonys-angels via delegated first-class-agent boundary",
+        "dispatched to angela via delegated lead boundary",
       );
       expect(task?.envelope.execution.transport).toBe("delegated-http");
     });
   });
 
-  it("dispatches engineering tasks to Bobby through the delegated first-class-agent boundary", async () => {
+  it("dispatches engineering tasks to Bobby through the delegated lead boundary", async () => {
     await withStateDirEnv("operator-dispatch-engineering-bobby-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
@@ -1248,7 +1248,7 @@ describe("operator task dispatch", () => {
       expect(
         JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
       ).toMatchObject({
-        schema: "AngelaTaskEnvelopeV1",
+        schema: "DelegatedLeadTaskEnvelopeV1",
         task_id: "task-dispatch-engineering-bobby",
         capability: "backend",
         team_id: "engineering",
@@ -1258,18 +1258,18 @@ describe("operator task dispatch", () => {
       expect(task?.receipt.state).toBe("queued");
       expect(task?.receipt.owner).toBe("bobby-digital");
       expect(task?.events.at(-1)?.note).toContain(
-        "dispatched to bobby-digital via delegated first-class-agent boundary",
+        "dispatched to bobby-digital via delegated lead boundary",
       );
       expect(task?.envelope.execution.transport).toBe("delegated-http");
     });
   });
 
-  it("uses the global angela-http default alias when a delegated task has no team or alias", async () => {
+  it("uses the global delegated default alias when a delegated task has no team or alias", async () => {
     await withStateDirEnv("operator-dispatch-angela-global-default-", async () => {
       const fetchMock = createHttpDelegateFetchMock({
         actionResponse: {
           status: "accepted",
-          message: "Global angela-http default accepted request",
+          message: "Global delegated default accepted request",
         },
         actionStatus: 202,
         actionStatusText: "Accepted",
@@ -1286,7 +1286,7 @@ describe("operator task dispatch", () => {
             idempotency_key: "task-dispatch-angela-global-default",
             requester: { id: "tonya", kind: "operator" },
             target: { capability: "marketing" },
-            objective: "Route through configured global angela-http fallback",
+            objective: "Route through configured global delegated fallback",
             tier: "STANDARD",
             acceptance_criteria: ["global fallback accepted"],
             timeout_s: 900,
@@ -1308,14 +1308,14 @@ describe("operator task dispatch", () => {
       expect(
         JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
       ).toMatchObject({
-        schema: "AngelaTaskEnvelopeV1",
+        schema: "DelegatedLeadTaskEnvelopeV1",
         task_id: "task-dispatch-angela-global-default",
         capability: "marketing",
-        alias: "tonys-angels",
+        alias: "angela",
       });
       const task = getOperatorTask("task-dispatch-angela-global-default");
       expect(task?.receipt.state).toBe("queued");
-      expect(task?.receipt.owner).toBe("tonys-angels");
+      expect(task?.receipt.owner).toBe("angela");
     });
   });
 
@@ -1439,7 +1439,7 @@ describe("operator task dispatch", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(getDispatchMessage(result.dispatch)).toContain(
-        "tonys-angels via delegated first-class-agent boundary not ready",
+        "angela via delegated lead boundary not ready",
       );
       const task = getOperatorTask("task-dispatch-angela-not-ready");
       expect(task?.receipt.state).toBe("blocked");
@@ -1486,7 +1486,7 @@ describe("operator task dispatch", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(getDispatchMessage(result.dispatch)).toContain(
-        "tonys-angels via delegated first-class-agent boundary runtime not ready for dispatch",
+        "angela via delegated lead boundary runtime not ready for dispatch",
       );
       const task = getOperatorTask("task-dispatch-angela-stale-runtime");
       expect(task?.receipt.state).toBe("blocked");

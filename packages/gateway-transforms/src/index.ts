@@ -1,5 +1,8 @@
-import { callGateway } from "./call.js";
-import type { ReadinessChecker } from "./server/readiness.js";
+/**
+ * Pure data transformation functions for Mission Control / Cavi Control.
+ * Zero dependencies. Takes raw gateway WS response payloads and returns
+ * composite snapshots the UI needs.
+ */
 
 export type MissionControlHealthSnapshot = {
   live: boolean;
@@ -46,6 +49,10 @@ export type MissionControlRun = {
   status: MissionControlRunStatus;
   totalTokens: number;
   errors: number;
+  /** Model identifier (e.g. "anthropic/claude-opus-4-6") when usage data provides it */
+  model?: string;
+  /** Estimated cost in USD when usage data provides it */
+  totalCostUsd?: number;
 };
 
 export type MissionControlRunsSnapshot = {
@@ -112,7 +119,7 @@ export type MissionControlIncidentsSnapshot = {
   blockers: MissionControlIncidentRecord[];
 };
 
-type RawSessionRow = {
+export type RawSessionRow = {
   key?: string;
   label?: string;
   derivedTitle?: string;
@@ -127,7 +134,7 @@ type RawSessionRow = {
   };
 };
 
-type RawUsageSession = {
+export type RawUsageSession = {
   key?: string;
   agentId?: string;
   channel?: string;
@@ -150,18 +157,22 @@ type RawUsageSession = {
   } | null;
 };
 
-type SessionsListPayload = {
+export type SessionsListPayload = {
   sessions?: RawSessionRow[];
 };
 
-type SessionsUsagePayload = {
+export type SessionsUsagePayload = {
   sessions?: RawUsageSession[];
   aggregates?: {
     byProvider?: Array<{
       provider?: string;
       totals?: { totalTokens?: number; totalCost?: number };
     }>;
-    byAgent?: Array<{ agentId?: string; totals?: { totalCost?: number }; messages?: number }>;
+    byAgent?: Array<{
+      agentId?: string;
+      totals?: { totalCost?: number };
+      messages?: number;
+    }>;
     messages?: {
       total?: number;
       toolCalls?: number;
@@ -173,7 +184,7 @@ type SessionsUsagePayload = {
   };
 };
 
-type SessionsPreviewPayload = {
+export type SessionsPreviewPayload = {
   previews?: Array<{
     key?: string;
     status?: string;
@@ -185,22 +196,34 @@ type SessionsPreviewPayload = {
   }>;
 };
 
-type LogsTailPayload = {
+export type LogsTailPayload = {
   lines?: string[];
+};
+
+export type ReadinessInput = {
+  ready: boolean;
+  failing: string[];
+  uptimeMs: number | null;
+  statusCode: 200 | 503;
 };
 
 const ACTIVE_WINDOW_MS = 5 * 60_000;
 const STALLED_WINDOW_MS = 30 * 60_000;
 
-function asNumber(value: unknown): number | null {
+export function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function asString(value: unknown): string | null {
+export function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function toIntInRange(raw: string | null, fallback: number, min: number, max: number): number {
+export function toIntInRange(
+  raw: string | null,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
   if (!raw) {
     return fallback;
   }
@@ -211,7 +234,7 @@ function toIntInRange(raw: string | null, fallback: number, min: number, max: nu
   return Math.min(max, Math.max(min, Math.round(parsed)));
 }
 
-function deriveRunStatus(run: MissionControlRun): MissionControlRunStatus {
+export function deriveRunStatus(run: MissionControlRun): MissionControlRunStatus {
   if (run.errors > 0) {
     return "error";
   }
@@ -228,7 +251,7 @@ function deriveRunStatus(run: MissionControlRun): MissionControlRunStatus {
   return "idle";
 }
 
-function normalizeRun(row: RawSessionRow, index: number): MissionControlRun {
+export function normalizeRun(row: RawSessionRow, index: number): MissionControlRun {
   const title = asString(row.label) ?? asString(row.derivedTitle) ?? `Session ${index + 1}`;
   const channel = asString(row.channel) ?? asString(row.origin?.provider) ?? "unknown";
   const base: MissionControlRun = {
@@ -247,29 +270,25 @@ function normalizeRun(row: RawSessionRow, index: number): MissionControlRun {
   };
 }
 
-function resolveRunModel(row: RawUsageSession | null | undefined): string | undefined {
+export function resolveRunModel(row: RawUsageSession | null | undefined): string | undefined {
   if (!row) {
     return undefined;
   }
-
   const explicitOverride = asString(row.modelOverride);
   if (explicitOverride) {
     return explicitOverride;
   }
-
   const providerOverride = asString(row.providerOverride);
   const provider =
     providerOverride ?? asString(row.modelProvider) ?? asString(row.origin?.provider);
   const model = asString(row.model);
-
   if (provider && model) {
     return `${provider}/${model}`;
   }
-
   return model ?? provider ?? undefined;
 }
 
-function extractLogIncident(line: string): {
+export function extractLogIncident(line: string): {
   severity: MissionControlIncidentRecord["severity"];
   title: string;
 } | null {
@@ -277,7 +296,6 @@ function extractLogIncident(line: string): {
   if (!lower.includes("error") && !lower.includes("warn") && !lower.includes("timeout")) {
     return null;
   }
-
   const severity: MissionControlIncidentRecord["severity"] = lower.includes("fatal")
     ? "critical"
     : lower.includes("error")
@@ -285,102 +303,20 @@ function extractLogIncident(line: string): {
       : lower.includes("warn") || lower.includes("timeout")
         ? "medium"
         : "low";
-
   const title = line.length > 120 ? `${line.slice(0, 117)}...` : line;
   return { severity, title };
 }
 
-async function loadSessionsList(params: {
-  limit: number;
-  activeMinutes?: number;
-  search?: string;
-  includeGlobal?: boolean;
-  includeUnknown?: boolean;
-}): Promise<RawSessionRow[]> {
-  const payload = await callGateway<SessionsListPayload>({
-    method: "sessions.list",
-    params: {
-      limit: params.limit,
-      activeMinutes: params.activeMinutes,
-      includeGlobal: params.includeGlobal ?? true,
-      includeUnknown: params.includeUnknown ?? true,
-      search: params.search,
-      includeDerivedTitles: true,
-    },
-  });
-  return Array.isArray(payload.sessions) ? payload.sessions : [];
-}
-
-async function loadSessionsUsage(params: {
-  limit: number;
-  startDate?: string;
-  endDate?: string;
-  key?: string;
-}): Promise<SessionsUsagePayload> {
-  return await callGateway<SessionsUsagePayload>({
-    method: "sessions.usage",
-    params: {
-      limit: params.limit,
-      includeContextWeight: false,
-      startDate: params.startDate,
-      endDate: params.endDate,
-      key: params.key,
-    },
-  });
-}
-
-function utcDateYmd(date: Date): string {
+export function utcDateYmd(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-function resolveOverviewReadiness(getReadiness?: ReadinessChecker): {
-  ready: boolean;
-  failing: string[];
-  uptimeMs: number | null;
-  statusCode: 200 | 503;
-} {
-  if (!getReadiness) {
-    return {
-      ready: true,
-      failing: [],
-      uptimeMs: null,
-      statusCode: 200,
-    };
-  }
-
-  try {
-    const snapshot = getReadiness();
-    const failing = Array.isArray(snapshot.failing)
-      ? snapshot.failing
-          .map((entry) => asString(entry))
-          .filter((entry): entry is string => Boolean(entry))
-      : [];
-
-    return {
-      ready: snapshot.ready,
-      failing,
-      uptimeMs: asNumber(snapshot.uptimeMs),
-      statusCode: snapshot.ready ? 200 : 503,
-    };
-  } catch {
-    return {
-      ready: false,
-      failing: ["internal"],
-      uptimeMs: 0,
-      statusCode: 503,
-    };
-  }
-}
-
-export async function getMissionControlOverview(params?: {
-  getReadiness?: ReadinessChecker;
-}): Promise<MissionControlOverviewSnapshot> {
-  const [sessions, usage] = await Promise.all([
-    loadSessionsList({ limit: 300, includeGlobal: true, includeUnknown: true }),
-    loadSessionsUsage({ limit: 300 }),
-  ]);
-  const readiness = resolveOverviewReadiness(params?.getReadiness);
-
+export function buildOverviewSnapshot(
+  sessions: RawSessionRow[],
+  usage: SessionsUsagePayload,
+  readiness: ReadinessInput,
+): MissionControlOverviewSnapshot {
+  const checkedAt = Date.now();
   const providerBreakdown = Array.isArray(usage.aggregates?.byProvider)
     ? usage.aggregates.byProvider
         .map((entry) => ({
@@ -388,9 +324,9 @@ export async function getMissionControlOverview(params?: {
           tokens: asNumber(entry.totals?.totalTokens) ?? 0,
           cost: asNumber(entry.totals?.totalCost) ?? 0,
         }))
+        .slice()
         .toSorted((left, right) => right.tokens - left.tokens)
     : [];
-
   const topAgents = Array.isArray(usage.aggregates?.byAgent)
     ? usage.aggregates.byAgent
         .map((entry) => ({
@@ -398,16 +334,14 @@ export async function getMissionControlOverview(params?: {
           messages: asNumber(entry.messages) ?? 0,
           cost: asNumber(entry.totals?.totalCost) ?? 0,
         }))
+        .slice()
         .toSorted((left, right) => right.messages - left.messages)
         .slice(0, 5)
     : [];
-
   const activeSessions = sessions.filter((row) => {
     const updatedAt = asNumber(row.updatedAt);
     return updatedAt !== null && Date.now() - updatedAt <= ACTIVE_WINDOW_MS;
   }).length;
-
-  const checkedAt = Date.now();
 
   return {
     health: {
@@ -442,22 +376,10 @@ export async function getMissionControlOverview(params?: {
   };
 }
 
-export async function getMissionControlRuns(params: {
-  search: string;
-  activeMinutes: number;
-  limit: number;
-}): Promise<MissionControlRunsSnapshot> {
-  const [rows, usage] = await Promise.all([
-    loadSessionsList({
-      limit: params.limit,
-      activeMinutes: params.activeMinutes,
-      search: params.search,
-      includeGlobal: true,
-      includeUnknown: true,
-    }),
-    loadSessionsUsage({ limit: params.limit }),
-  ]);
-
+export function buildRunsSnapshot(
+  rows: RawSessionRow[],
+  usage: SessionsUsagePayload,
+): MissionControlRunsSnapshot {
   const usageByKey = new Map(
     (Array.isArray(usage.sessions) ? usage.sessions : [])
       .map((entry) => {
@@ -466,22 +388,21 @@ export async function getMissionControlRuns(params: {
       })
       .filter((entry): entry is readonly [string, RawUsageSession] => Boolean(entry)),
   );
-
   const normalized = rows.map((row, index) => {
     const base = normalizeRun(row, index);
     const usageSession = usageByKey.get(base.key) ?? null;
+    const totalTokens = asNumber(usageSession?.usage?.totalTokens) ?? base.totalTokens;
     return {
       ...base,
-      totalTokens: asNumber(usageSession?.usage?.totalTokens) ?? base.totalTokens,
-      totalCostUsd: asNumber(usageSession?.usage?.totalCost) ?? undefined,
+      totalTokens,
       model: resolveRunModel(usageSession),
+      totalCostUsd: asNumber(usageSession?.usage?.totalCost) ?? undefined,
     };
   });
   const history = [...normalized].toSorted(
     (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
   );
   const live = normalized.filter((run) => run.status === "active" || run.status === "idle");
-
   return {
     live,
     history,
@@ -494,32 +415,17 @@ export async function getMissionControlRuns(params: {
   };
 }
 
-export async function getMissionControlRunDetail(
-  key: string,
-): Promise<MissionControlRunDetailSnapshot> {
-  const usage = await loadSessionsUsage({ key, limit: 1 });
-  const usageSession =
-    Array.isArray(usage.sessions) && usage.sessions.length > 0 ? usage.sessions[0] : null;
+export type PreviewItem = {
+  key?: string;
+  status?: string;
+  items?: Array<{ role?: string; text?: string; at?: number }>;
+};
 
-  const sessionRows = await loadSessionsList({
-    limit: 300,
-    search: key,
-    includeGlobal: true,
-    includeUnknown: true,
-  });
-  const matchedRow = sessionRows.find((row) => asString(row.key) === key) ?? sessionRows[0] ?? null;
-  const run = matchedRow ? normalizeRun(matchedRow, 0) : null;
-
-  const previewPayload = await callGateway<SessionsPreviewPayload>({
-    method: "sessions.preview",
-    params: {
-      keys: [key],
-      limit: 24,
-      maxChars: 240,
-    },
-  });
-
-  const preview = Array.isArray(previewPayload.previews) ? previewPayload.previews[0] : null;
+export function buildRunDetailSnapshot(
+  run: MissionControlRun | null,
+  usageSession: RawUsageSession | null,
+  preview: PreviewItem | null | undefined,
+): MissionControlRunDetailSnapshot {
   const items = Array.isArray(preview?.items)
     ? preview.items.map((item) => ({
         role: asString(item.role) ?? "unknown",
@@ -527,7 +433,6 @@ export async function getMissionControlRunDetail(
         at: asNumber(item.at),
       }))
     : [];
-
   return {
     run,
     preview: {
@@ -544,21 +449,11 @@ export async function getMissionControlRunDetail(
   };
 }
 
-export async function getMissionControlRoutingMatrix(params: {
-  windowDays: number;
-}): Promise<MissionControlRoutingMatrixSnapshot> {
-  const end = new Date();
-  const start = new Date(Date.now() - params.windowDays * 86_400_000);
-
-  const usage = await loadSessionsUsage({
-    limit: 400,
-    startDate: utcDateYmd(start),
-    endDate: utcDateYmd(end),
-  });
-
+export function buildRoutingMatrix(
+  usage: SessionsUsagePayload,
+): MissionControlRoutingMatrixSnapshot {
   const sessions = Array.isArray(usage.sessions) ? usage.sessions : [];
   const matrix = new Map<string, MissionControlRoutingMatrixSnapshot["rows"][number]>();
-
   for (const session of sessions) {
     const handler = asString(session.agentId) ?? "unknown";
     const channel = asString(session.channel) ?? asString(session.origin?.provider) ?? "unknown";
@@ -574,7 +469,6 @@ export async function getMissionControlRoutingMatrix(params: {
       successRate: 1,
       messages: 0,
     };
-
     row.totalRuns += 1;
     row.messages += messages;
     if (errors > 0) {
@@ -585,55 +479,39 @@ export async function getMissionControlRoutingMatrix(params: {
     row.successRate = row.totalRuns > 0 ? row.successRuns / row.totalRuns : 1;
     matrix.set(key, row);
   }
-
   const rows = Array.from(matrix.values()).toSorted(
     (left, right) => right.totalRuns - left.totalRuns,
   );
   const totals = rows.reduce(
-    (acc, row) => {
+    (
+      acc: {
+        totalRuns: number;
+        successRuns: number;
+        failedRuns: number;
+      },
+      row,
+    ) => {
       acc.totalRuns += row.totalRuns;
       acc.successRuns += row.successRuns;
       acc.failedRuns += row.failedRuns;
       return acc;
     },
-    {
-      totalRuns: 0,
-      successRuns: 0,
-      failedRuns: 0,
-    },
+    { totalRuns: 0, successRuns: 0, failedRuns: 0 },
   );
-
-  return {
-    rows,
-    totals,
-  };
+  return { rows, totals };
 }
 
-export async function getMissionControlIncidents(): Promise<MissionControlIncidentsSnapshot> {
-  const [logs, sessions] = await Promise.all([
-    callGateway<LogsTailPayload>({
-      method: "logs.tail",
-      params: {
-        limit: 300,
-        maxBytes: 512_000,
-      },
-    }),
-    loadSessionsList({
-      limit: 250,
-      includeUnknown: true,
-      includeGlobal: true,
-    }),
-  ]);
-
+export function buildIncidentsSnapshot(
+  logs: LogsTailPayload,
+  sessions: RawSessionRow[],
+): MissionControlIncidentsSnapshot {
   const lines = Array.isArray(logs.lines) ? logs.lines : [];
   const incidents = new Map<string, MissionControlIncidentRecord>();
-
   for (const line of lines) {
     const extracted = extractLogIncident(line);
     if (!extracted) {
       continue;
     }
-
     const id = `log-${extracted.title.slice(0, 48)}`;
     const existing = incidents.get(id);
     if (!existing) {
@@ -650,26 +528,24 @@ export async function getMissionControlIncidents(): Promise<MissionControlIncide
       });
       continue;
     }
-
     existing.count += 1;
     existing.lastSeenAt = Date.now();
   }
-
-  const rows = Array.from(incidents.values()).toSorted((left, right) => {
-    const weight: Record<MissionControlIncidentRecord["severity"], number> = {
-      critical: 4,
-      high: 3,
-      medium: 2,
-      low: 1,
-    };
-
-    const severityDelta = weight[right.severity] - weight[left.severity];
-    if (severityDelta !== 0) {
-      return severityDelta;
-    }
-    return right.count - left.count;
-  });
-
+  const rows = Array.from(incidents.values()).toSorted(
+    (left: MissionControlIncidentRecord, right: MissionControlIncidentRecord) => {
+      const weight: Record<MissionControlIncidentRecord["severity"], number> = {
+        critical: 4,
+        high: 3,
+        medium: 2,
+        low: 1,
+      };
+      const severityDelta = weight[right.severity] - weight[left.severity];
+      if (severityDelta !== 0) {
+        return severityDelta;
+      }
+      return right.count - left.count;
+    },
+  );
   const blockersFromRuns = sessions
     .filter((row) => row.abortedLastRun === true)
     .slice(0, 8)
@@ -684,16 +560,11 @@ export async function getMissionControlIncidents(): Promise<MissionControlIncide
       count: 1,
       owner: asString(row.agentId) ?? "unknown",
     }));
-
   const blockers = [
-    ...rows.filter((incident) => incident.status === "blocked"),
+    ...rows.filter((incident: MissionControlIncidentRecord) => incident.status === "blocked"),
     ...blockersFromRuns,
   ];
-
-  return {
-    incidents: rows,
-    blockers,
-  };
+  return { incidents: rows, blockers };
 }
 
 export function parseMissionControlRunsQuery(searchParams: URLSearchParams): {

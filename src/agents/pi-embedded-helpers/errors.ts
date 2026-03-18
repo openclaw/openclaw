@@ -125,6 +125,13 @@ const CONTEXT_OVERFLOW_HINT_RE =
 const RATE_LIMIT_HINT_RE =
   /rate limit|too many requests|requests per (?:minute|hour|day)|quota|throttl|429\b|tokens per day/i;
 
+const SESSION_LOCK_RE = /\bsession file locked\b/i;
+
+/** True when the error is a local session-file lock contention, not a model error. */
+export function isSessionLockError(message?: string): boolean {
+  return Boolean(message && SESSION_LOCK_RE.test(message));
+}
+
 export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -978,6 +985,10 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return null;
   }
   if (isImageSizeError(raw)) {
+    return null;
+  }
+  // Session lock errors are model-independent; do not trigger fallback.
+  if (isSessionLockError(raw)) {
     return null;
   }
   if (isCliSessionExpiredErrorMessage(raw)) {

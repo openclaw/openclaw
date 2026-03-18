@@ -6,7 +6,7 @@ import {
 import { optionalStringEnum } from "../schema/typebox.js";
 import { scheduleSessionsGraph } from "../sessions-schedule.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { SUBAGENT_SPAWN_MODES } from "../subagent-spawn.js";
+import { SUBAGENT_SPAWN_MODES } from "../subagent-spawn-modes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
@@ -11,6 +12,7 @@ import {
   resolveAgentExplicitModelPrimary,
   resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
+  resolveConfiguredAgentWorkspaceDir,
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
   resolveAgentRuntimeConfig,
@@ -449,6 +451,19 @@ describe("resolveAgentConfig", () => {
 
     const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
     expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
+  });
+
+  it("does not synthesize a fallback workspace for unconfigured agents when explicit config is required", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    };
+
+    expect(resolveConfiguredAgentWorkspaceDir(cfg, "helper")).toBeUndefined();
+    expect(resolveAgentWorkspaceDir(cfg, "helper")).toBe(
+      path.join(resolveStateDir(process.env), "workspace-helper"),
+    );
   });
 
   it("uses OPENCLAW_HOME for default agentDir", () => {

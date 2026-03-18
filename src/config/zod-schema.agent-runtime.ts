@@ -439,6 +439,7 @@ const ToolExecSafeBinProfileSchema = z
     minPositional: z.number().int().nonnegative().optional(),
     maxPositional: z.number().int().nonnegative().optional(),
     allowedValueFlags: z.array(z.string()).optional(),
+    allowedFirstPositionals: z.array(z.string()).optional(),
     deniedFlags: z.array(z.string()).optional(),
   })
   .strict();
@@ -473,6 +474,9 @@ const ToolExecSchema = z.object(ToolExecBaseShape).strict().optional();
 const ToolFsSchema = z
   .object({
     workspaceOnly: z.boolean().optional(),
+    readWorkspaceOnly: z.boolean().optional(),
+    writeWorkspaceOnly: z.boolean().optional(),
+    editWorkspaceOnly: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -820,6 +824,17 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
+    thinkingDefault: z
+      .union([
+        z.literal("off"),
+        z.literal("minimal"),
+        z.literal("low"),
+        z.literal("medium"),
+        z.literal("high"),
+        z.literal("xhigh"),
+        z.literal("adaptive"),
+      ])
+      .optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
   })
@@ -869,6 +884,7 @@ export const ToolsSchema = z
       .object({
         enabled: z.boolean().optional(),
         allow: z.array(z.string()).optional(),
+        sessionScope: z.union([z.literal("all"), z.literal("main_only")]).optional(),
       })
       .strict()
       .optional(),

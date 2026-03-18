@@ -9,7 +9,7 @@ import { processPendingReceipts } from "../operator-control/task-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
-import { handleMissionControlHttpRequest } from "./mission-control.js";
+import { handleOperatorHttpRequest } from "./operator-http.js";
 
 function createRequest(params: {
   method: string;
@@ -61,7 +61,7 @@ async function requestMissionControl(params: {
 }> {
   const req = createRequest(params);
   const res = createMockServerResponse();
-  const handled = await handleMissionControlHttpRequest(req, res);
+  const handled = await handleOperatorHttpRequest(req, res);
   expect(handled).toBe(true);
   return {
     statusCode: res.statusCode,
@@ -78,7 +78,7 @@ async function seedOperatorRegistryFixture(): Promise<void> {
       "operator_runtime:",
       "  transports:",
       "    delegated_http:",
-      "      global_default_alias: tonys-angels",
+      "      global_default_alias: angela",
       "agents:",
       "  - id: raekwon",
       "    name: Raekwon",
@@ -92,8 +92,8 @@ async function seedOperatorRegistryFixture(): Promise<void> {
       "    name: Jeffy",
       "    specialty: Kanban",
       "    triggers: [kanban, board_hygiene_packet]",
-      "  - id: tonys-angels",
-      "    name: Tony's Angels",
+      "  - id: angela",
+      "    name: Angela",
       "    specialty: Marketing",
       "    triggers: [marketing]",
       "  - id: bobby-digital",
@@ -114,11 +114,11 @@ async function seedOperatorRegistryFixture(): Promise<void> {
       "    dispatch_transport: deb-http",
       "  - id: marketing",
       "    name: Marketing",
-      "    lead: tonys-angels",
+      "    lead: angela",
       "    route_via_lead: true",
-      "    members: [tonys-angels]",
+      "    members: [angela]",
       "    dispatch_transport: delegated-http",
-      "    dispatch_default_alias: tonys-angels",
+      "    dispatch_default_alias: angela",
       "  - id: engineering",
       "    name: Engineering",
       "    lead: bobby-digital",
@@ -131,6 +131,13 @@ async function seedOperatorRegistryFixture(): Promise<void> {
     "utf8",
   );
   invalidateRegistryCache({ sourcePath });
+}
+
+async function withSeededOperatorRegistryEnv<T>(prefix: string, fn: () => Promise<T>): Promise<T> {
+  return await withStateDirEnv(prefix, async () => {
+    await seedOperatorRegistryFixture();
+    return await fn();
+  });
 }
 
 function getFetchMockCall(
@@ -158,7 +165,6 @@ describe.sequential("mission-control operator control routes", () => {
 
   beforeEach(async () => {
     vi.restoreAllMocks();
-    await seedOperatorRegistryFixture();
   });
 
   afterEach(() => {
@@ -166,7 +172,7 @@ describe.sequential("mission-control operator control routes", () => {
   });
 
   it("serves task lifecycle and verified memory promotion end-to-end", async () => {
-    await withStateDirEnv("openclaw-mc-operator-http-", async () => {
+    await withSeededOperatorRegistryEnv("openclaw-mc-operator-http-", async () => {
       const createTask = await requestMissionControl({
         method: "POST",
         url: "/mission-control/api/tasks",
@@ -282,8 +288,8 @@ describe.sequential("mission-control operator control routes", () => {
     });
   });
 
-  it("accepts delegated angela-http receipts on the shared operator callback route", async () => {
-    await withStateDirEnv("openclaw-mc-operator-angela-http-", async () => {
+  it("accepts delegated lead receipts on the shared operator callback route", async () => {
+    await withSeededOperatorRegistryEnv("openclaw-mc-operator-delegated-http-", async () => {
       const createTask = await requestMissionControl({
         method: "POST",
         url: "/mission-control/api/tasks",
@@ -314,7 +320,7 @@ describe.sequential("mission-control operator control routes", () => {
         url: "/mission-control/api/tasks/task-operator-angela-1",
         body: {
           state: "queued",
-          owner: "tonys-angels",
+          owner: "angela",
         },
       });
       expect(queueTask.statusCode).toBe(200);
@@ -323,7 +329,7 @@ describe.sequential("mission-control operator control routes", () => {
         method: "POST",
         url: "/mission-control/api/tasks/task-operator-angela-1/receipts",
         body: {
-          schema: "AngelaTaskReceiptV1",
+          schema: "DelegatedLeadReceiptV1",
           task_id: "task-operator-angela-1",
           run_id: createdPayload.task.receipt.run_id,
           state: "completed",
@@ -341,14 +347,14 @@ describe.sequential("mission-control operator control routes", () => {
       expect(JSON.parse(String(patchTask.body))).toMatchObject({
         receipt: {
           state: "completed",
-          owner: "tonys-angels",
+          owner: "angela",
         },
       });
     });
   });
 
   it("queues out-of-order receipts on the shared callback route and replays them later", async () => {
-    await withStateDirEnv("openclaw-mc-operator-pending-receipt-", async () => {
+    await withSeededOperatorRegistryEnv("openclaw-mc-operator-pending-receipt-", async () => {
       const createTask = await requestMissionControl({
         method: "POST",
         url: "/mission-control/api/tasks",
@@ -378,7 +384,7 @@ describe.sequential("mission-control operator control routes", () => {
         method: "POST",
         url: "/mission-control/api/tasks/task-operator-pending-1/receipts",
         body: {
-          schema: "AngelaTaskReceiptV1",
+          schema: "DelegatedLeadReceiptV1",
           task_id: "task-operator-pending-1",
           run_id: createdPayload.task.receipt.run_id,
           state: "started",
@@ -398,7 +404,7 @@ describe.sequential("mission-control operator control routes", () => {
         url: "/mission-control/api/tasks/task-operator-pending-1",
         body: {
           state: "queued",
-          owner: "tonys-angels",
+          owner: "angela",
         },
       });
       expect(queueTask.statusCode).toBe(200);
@@ -423,7 +429,7 @@ describe.sequential("mission-control operator control routes", () => {
   });
 
   it("forwards operator task lifecycle snapshots through the Tonya project-ops control plane when configured", async () => {
-    await withStateDirEnv("openclaw-mc-operator-deb-sync-", async () => {
+    await withSeededOperatorRegistryEnv("openclaw-mc-operator-deb-sync-", async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         status: 202,
@@ -467,6 +473,10 @@ describe.sequential("mission-control operator control routes", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const { url, init } = getFetchMockCall(fetchMock, 0);
+      expect(init).toBeDefined();
+      if (!init) {
+        return;
+      }
       expect(url).toBe(
         "http://tonya.internal:18789/mission-control/api/project-ops/operator/events",
       );
@@ -487,7 +497,7 @@ describe.sequential("mission-control operator control routes", () => {
   });
 
   it("proxies project-ops update calls to the internal Deb service", async () => {
-    await withStateDirEnv("openclaw-mc-project-ops-proxy-", async () => {
+    await withSeededOperatorRegistryEnv("openclaw-mc-project-ops-proxy-", async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -535,6 +545,10 @@ describe.sequential("mission-control operator control routes", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const { url, init } = getFetchMockCall(fetchMock, 0);
+      expect(init).toBeDefined();
+      if (!init) {
+        return;
+      }
       expect(url).toBe("http://deb.internal:3010/update");
       expect((init.headers as Record<string, string>).authorization).toBe(
         "Bearer deb-upstream-secret",
@@ -551,8 +565,89 @@ describe.sequential("mission-control operator control routes", () => {
     });
   });
 
+  it("rejects Paw and Order task payloads on the project-ops update route", async () => {
+    await withSeededOperatorRegistryEnv("openclaw-mc-project-ops-update-task-reject-", async () => {
+      const fetchMock = vi.fn();
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await withEnvAsync(
+        {
+          OPENCLAW_OPERATOR_DEB_URL: "http://deb.internal:3010",
+          OPENCLAW_OPERATOR_DEB_SHARED_SECRET: "deb-upstream-secret",
+          OPENCLAW_OPERATOR_CONTROL_PLANE_SHARED_SECRET: "tonya-control-secret",
+        },
+        async () => {
+          const response = await requestMissionControl({
+            method: "POST",
+            url: "/mission-control/api/project-ops/update",
+            body: {
+              schema: "PawAndOrderTaskV1",
+              task_id: "task-project-ops-1",
+              objective: "Normalize blockers",
+              capability: "kanban",
+            },
+            headers: {
+              authorization: "Bearer tonya-control-secret",
+            },
+          });
+
+          expect(response.statusCode).toBe(422);
+          expect(JSON.parse(String(response.body))).toMatchObject({
+            error: {
+              message: expect.stringContaining("/project-ops/task"),
+            },
+          });
+        },
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects lifecycle payloads on the project-ops update route", async () => {
+    await withSeededOperatorRegistryEnv(
+      "openclaw-mc-project-ops-update-lifecycle-reject-",
+      async () => {
+        const fetchMock = vi.fn();
+        globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+        await withEnvAsync(
+          {
+            OPENCLAW_OPERATOR_DEB_URL: "http://deb.internal:3010",
+            OPENCLAW_OPERATOR_DEB_SHARED_SECRET: "deb-upstream-secret",
+            OPENCLAW_OPERATOR_CONTROL_PLANE_SHARED_SECRET: "tonya-control-secret",
+          },
+          async () => {
+            const response = await requestMissionControl({
+              method: "POST",
+              url: "/mission-control/api/project-ops/update",
+              body: {
+                schema: "DebOperatorTaskSyncV1",
+                task_id: "task-project-ops-1",
+                run_id: "run-project-ops-1",
+                state: "accepted",
+              },
+              headers: {
+                authorization: "Bearer tonya-control-secret",
+              },
+            });
+
+            expect(response.statusCode).toBe(422);
+            expect(JSON.parse(String(response.body))).toMatchObject({
+              error: {
+                message: expect.stringContaining("/project-ops/operator/events"),
+              },
+            });
+          },
+        );
+
+        expect(fetchMock).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("routes project-ops Paw and Order tasks into Deb inside Tonya", async () => {
-    await withStateDirEnv("openclaw-mc-project-ops-task-", async () => {
+    await withSeededOperatorRegistryEnv("openclaw-mc-project-ops-task-", async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         status: 202,
@@ -620,6 +715,10 @@ describe.sequential("mission-control operator control routes", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const { url, init } = getFetchMockCall(fetchMock, 0);
+      expect(init).toBeDefined();
+      if (!init) {
+        return;
+      }
       expect(url).toBe("http://tonya.internal:18789/api/message");
       expect((init.headers as Record<string, string>).authorization).toBe(
         "Bearer tonya-internal-secret",
@@ -627,7 +726,7 @@ describe.sequential("mission-control operator control routes", () => {
       expect(
         JSON.parse(typeof init.body === "string" ? init.body : JSON.stringify(init.body)),
       ).toMatchObject({
-        schema: "AngelaTaskEnvelopeV1",
+        schema: "DelegatedLeadTaskEnvelopeV1",
         task_id: "task-project-ops-1",
         run_id: "run-project-ops-1",
         callback_url:
@@ -655,7 +754,7 @@ describe.sequential("mission-control operator control routes", () => {
   });
 
   it("rejects stale service-context writes with a client-visible error", async () => {
-    await withStateDirEnv("openclaw-mc-operator-http-stale-", async () => {
+    await withSeededOperatorRegistryEnv("openclaw-mc-operator-http-stale-", async () => {
       const first = await requestMissionControl({
         method: "POST",
         url: "/mission-control/api/memory/service-context",
@@ -693,7 +792,9 @@ describe.sequential("mission-control operator control routes", () => {
         },
       });
       expect(stale.statusCode).toBe(400);
-      const payload = JSON.parse(String(stale.body)) as { error: { message: string } };
+      const payload = JSON.parse(String(stale.body)) as {
+        error: { message: string };
+      };
       expect(payload.error.message).toContain("stale memory update rejected");
     });
   });

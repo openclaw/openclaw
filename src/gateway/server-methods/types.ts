@@ -38,6 +38,7 @@ export type GatewayRequestContext = {
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
+  getReadiness?: () => import("../server/readiness.js").ReadinessResult;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
   incrementPresenceVersion: () => number;

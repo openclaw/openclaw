@@ -20,14 +20,9 @@ import {
   ACP_SPAWN_STREAM_TARGETS,
   spawnAcpDirect,
   type SpawnAcpContext,
-  type SpawnAcpMode,
 } from "./acp-spawn.js";
-import {
-  SUBAGENT_SPAWN_MODES,
-  spawnSubagentDirect,
-  type SpawnSubagentContext,
-  type SpawnSubagentMode,
-} from "./subagent-spawn.js";
+import { SUBAGENT_SPAWN_MODES, type SpawnSubagentMode } from "./subagent-spawn-modes.js";
+import { spawnSubagentDirect, type SpawnSubagentContext } from "./subagent-spawn.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 export type SessionsScheduleRuntime = "subagent" | "acp";

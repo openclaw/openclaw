@@ -119,6 +119,11 @@ const coreEntries: CoreCliEntry[] = [
         hasSubcommands: false,
       },
       {
+        name: "sync",
+        description: "Manually mirror local truth into a target home or mounted share root",
+        hasSubcommands: false,
+      },
+      {
         name: "reset",
         description: "Reset local config/state (keeps the CLI installed)",
         hasSubcommands: false,

@@ -275,6 +275,87 @@ describe("session_status tool", () => {
     );
   });
 
+  it("allows requester-owned Scout sessions for session_status", async () => {
+    resetSessionStore({
+      "agent:scout:subagent:owned": {
+        sessionId: "s-scout-owned",
+        updatedAt: 15,
+      },
+    });
+    mockSpawnedSessionList((spawnedBy) =>
+      spawnedBy === "agent:main:main" ? [{ key: "agent:scout:subagent:owned" }] : [],
+    );
+
+    const tool = getSessionStatusTool("agent:main:main");
+    const result = await tool.execute("call-scout-status", {
+      sessionKey: "agent:scout:subagent:owned",
+    });
+
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:scout:subagent:owned");
+  });
+
+  it("blocks non-owned Scout sessions even when general cross-agent access is open", async () => {
+    resetSessionStore({
+      "agent:scout:subagent:not-owned": {
+        sessionId: "s-scout-blocked",
+        updatedAt: 15,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {},
+        },
+      },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+    };
+    mockSpawnedSessionList(() => []);
+
+    const tool = getSessionStatusTool("agent:main:main");
+    await expect(
+      tool.execute("call-scout-status-blocked", {
+        sessionKey: "agent:scout:subagent:not-owned",
+      }),
+    ).rejects.toThrow("Scout session access");
+  });
+
+  it("blocks cross-agent non-main session_status when sessionScope=main_only", async () => {
+    resetSessionStore({
+      "agent:martina:subagent:margaret": {
+        sessionId: "s-margaret",
+        updatedAt: 15,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {},
+        },
+      },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["main", "martina"], sessionScope: "main_only" },
+      },
+    };
+
+    const tool = getSessionStatusTool("agent:main:main");
+
+    await expect(
+      tool.execute("call-main-only-status", {
+        sessionKey: "agent:martina:subagent:margaret",
+      }),
+    ).rejects.toThrow("sessionScope=main_only");
+  });
+
   it("blocks sandboxed child session_status access outside its tree before store lookup", async () => {
     resetSessionStore({
       "agent:main:subagent:child": {

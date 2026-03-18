@@ -2,6 +2,7 @@ export type SafeBinProfile = {
   minPositional?: number;
   maxPositional?: number;
   allowedValueFlags?: ReadonlySet<string>;
+  allowedFirstPositionals?: ReadonlySet<string>;
   deniedFlags?: ReadonlySet<string>;
   // Precomputed long-option metadata for GNU abbreviation resolution.
   knownLongFlags?: readonly string[];
@@ -13,6 +14,7 @@ export type SafeBinProfileFixture = {
   minPositional?: number;
   maxPositional?: number;
   allowedValueFlags?: readonly string[];
+  allowedFirstPositionals?: readonly string[];
   deniedFlags?: readonly string[];
 };
 
@@ -70,12 +72,14 @@ export function buildLongFlagPrefixMap(
 
 function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
+  const allowedFirstPositionals = toFlagSet(fixture.allowedFirstPositionals);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
   const knownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags);
   return {
     minPositional: fixture.minPositional,
     maxPositional: fixture.maxPositional,
     allowedValueFlags,
+    allowedFirstPositionals,
     deniedFlags,
     knownLongFlags,
     knownLongFlagsSet: new Set(knownLongFlags),
@@ -257,6 +261,7 @@ function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBin
     minPositional,
     maxPositional,
     allowedValueFlags: normalizeFixtureFlags(fixture.allowedValueFlags),
+    allowedFirstPositionals: normalizeFixtureFlags(fixture.allowedFirstPositionals),
     deniedFlags: normalizeFixtureFlags(fixture.deniedFlags),
   };
 }

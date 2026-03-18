@@ -324,6 +324,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables the agent_to_agent tool surface so one agent can invoke another agent at runtime. Keep off in simple deployments and enable only when orchestration value outweighs complexity.",
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
+  "tools.agentToAgent.sessionScope":
+    'Optional cross-agent session-target restriction for session tools: "all" preserves current behavior, while "main_only" limits cross-agent access to each allowed agent\'s main session only.',
   "tools.elevated":
     "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
   "tools.elevated.enabled":
@@ -650,8 +652,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
+  "tools.fs.readWorkspaceOnly":
+    "Restrict only the read tool to the workspace directory. Use this when an agent needs broader read access than write/edit or vice versa.",
+  "tools.fs.writeWorkspaceOnly":
+    "Restrict only the write tool to the workspace directory. Use this when an agent may read broadly but should only create files in its own workspace.",
+  "tools.fs.editWorkspaceOnly":
+    "Restrict only the edit tool to the workspace directory. Use this when an agent may read broadly but should only modify files in its own workspace.",
   "tools.sessions.visibility":
-    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent and may be further limited by tools.agentToAgent.sessionScope).',
   "tools.message.allowCrossContextSend":
     "Legacy override: allow cross-context sends across all providers.",
   "tools.message.crossContext.allowWithinProvider":

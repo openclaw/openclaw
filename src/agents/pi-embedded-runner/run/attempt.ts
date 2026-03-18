@@ -92,7 +92,7 @@ import {
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist, type ToolCallIdMode } from "../../tool-call-id.js";
-import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
+import { resolveEffectiveToolFsReadWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
@@ -1298,7 +1298,7 @@ export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
 }): boolean {
-  return resolveEffectiveToolFsWorkspaceOnly({
+  return resolveEffectiveToolFsReadWorkspaceOnly({
     cfg: params.config,
     agentId: params.sessionAgentId,
   });

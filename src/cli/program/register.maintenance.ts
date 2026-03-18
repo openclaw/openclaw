@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { dashboardCommand } from "../../commands/dashboard.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import { resetCommand } from "../../commands/reset.js";
+import { syncCommand } from "../../commands/sync.js";
 import { uninstallCommand } from "../../commands/uninstall.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -53,6 +54,31 @@ export function registerMaintenanceCommands(program: Command) {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await dashboardCommand(defaultRuntime, {
           noOpen: opts.open === false,
+        });
+      });
+    });
+
+  program
+    .command("sync")
+    .description("Manually mirror local truth into a target home or mounted share root")
+    .requiredOption(
+      "--target-home <path>",
+      "Target home directory or mounted Azure File Share root",
+    )
+    .option("--repo-source <path>", "Repo source directory (default: current working directory)")
+    .option("--repo-dest <path>", "Relative repo destination under the target home")
+    .option("--apply", "Write add/update operations and managed setting additions", false)
+    .option("--settings-only", "Only add managed settings for ~/agents + Deb envs", false)
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await syncCommand(defaultRuntime, {
+          targetHome: opts.targetHome as string,
+          repoSource: opts.repoSource as string | undefined,
+          repoDest: opts.repoDest as string | undefined,
+          apply: Boolean(opts.apply),
+          settingsOnly: Boolean(opts.settingsOnly),
+          json: Boolean(opts.json),
         });
       });
     });

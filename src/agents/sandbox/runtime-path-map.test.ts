@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   __loadRuntimePathMapEntriesFromDocumentForTests,
   collectTranslatedSandboxBindSourceRoots,
+  isRuntimePathMapped,
   translateContainerPathToHostPath,
   translateSandboxBindSpecToHostPath,
   translateSandboxDockerConfigToHost,
@@ -9,19 +10,19 @@ import {
 
 const ENTRIES = __loadRuntimePathMapEntriesFromDocumentForTests({
   container_host_roots: [
-    { container: "/shared-workspace", host: "/Users/franco/.openclaw/workspace" },
-    { container: "/agent-homes/tony", host: "/Users/franco/.openclaw/workspace-tony" },
-    { container: "/home/node/.openclaw", host: "/Users/franco/.openclaw" },
+    { container: "/shared-workspace", host: "workspace" },
+    { container: "/agent-homes/tony", host: "workspace-tony" },
+    { container: "/home/node/.openclaw", host: "." },
   ],
 });
 
 describe("runtime path map", () => {
   it("translates container-native workspace paths back to host bind sources", () => {
     expect(translateContainerPathToHostPath("/shared-workspace/projects/openclaw", ENTRIES)).toBe(
-      "/Users/franco/.openclaw/workspace/projects/openclaw",
+      "/Users/test/.openclaw/workspace/projects/openclaw",
     );
     expect(translateContainerPathToHostPath("/agent-homes/tony/memory/active", ENTRIES)).toBe(
-      "/Users/franco/.openclaw/workspace-tony/memory/active",
+      "/Users/test/.openclaw/workspace-tony/memory/active",
     );
   });
 
@@ -29,10 +30,16 @@ describe("runtime path map", () => {
     expect(translateContainerPathToHostPath("/tmp/something", ENTRIES)).toBe("/tmp/something");
   });
 
+  it("reports whether container-native paths are backed by the runtime path map", () => {
+    expect(isRuntimePathMapped("/agent-homes/tony/subagents/research", ENTRIES)).toBe(true);
+    expect(isRuntimePathMapped("/agent-homes/scout/subagents/research", ENTRIES)).toBe(false);
+    expect(isRuntimePathMapped("/tmp/local-workspace", ENTRIES)).toBe(true);
+  });
+
   it("translates sandbox bind specs using the mapped host source", () => {
     expect(
       translateSandboxBindSpecToHostPath("/shared-workspace:/shared-workspace:ro", ENTRIES),
-    ).toBe("/Users/franco/.openclaw/workspace:/shared-workspace:ro");
+    ).toBe("/Users/test/.openclaw/workspace:/shared-workspace:ro");
   });
 
   it("translates docker config bind arrays without mutating unrelated fields", () => {
@@ -52,7 +59,7 @@ describe("runtime path map", () => {
         ENTRIES,
       ),
     ).toMatchObject({
-      binds: ["/Users/franco/.openclaw/workspace:/shared-workspace:ro"],
+      binds: ["/Users/test/.openclaw/workspace:/shared-workspace:ro"],
       image: "openclaw-sandbox:tony",
       workdir: "/workspace",
     });
@@ -75,7 +82,7 @@ describe("runtime path map", () => {
         ENTRIES,
       ),
     ).toMatchObject({
-      allowedSourceRoots: ["/Users/franco/.openclaw/workspace", "/tmp/local-only"],
+      allowedSourceRoots: ["/Users/test/.openclaw/workspace", "/tmp/local-only"],
     });
   });
 
@@ -89,6 +96,6 @@ describe("runtime path map", () => {
         ],
         ENTRIES,
       ),
-    ).toEqual(["/Users/franco/.openclaw/workspace", "/Users/franco/.openclaw/workspace-tony"]);
+    ).toEqual(["/Users/test/.openclaw/workspace", "/Users/test/.openclaw/workspace-tony"]);
   });
 });

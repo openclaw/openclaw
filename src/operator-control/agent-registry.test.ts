@@ -54,12 +54,6 @@ describe("compileOperatorAgentRegistry", () => {
             "    dispatch_path: /update",
             "    dispatch_auth_scheme: bearer",
             "    dispatch_auth_env: OPENCLAW_OPERATOR_DEB_SHARED_SECRET",
-            "skill_ownership:",
-            "  - skill: /workspace/skills/acpx-orchestration/SKILL.md",
-            "    owner: tonya",
-            "    status: active-standalone",
-            "pipeline_order:",
-            "  - tonya",
             "k8s_cluster:",
             "  - id: tonya",
             "    name: Tonya",
@@ -83,7 +77,7 @@ describe("compileOperatorAgentRegistry", () => {
         expect(compiled.schema).toBe("OperatorAgentRegistryV1");
         expect(compiled.agentCount).toBe(2);
         expect(compiled.teamCount).toBe(2);
-        expect(compiled.operatorRuntime.transports.angelaHttp.globalDefaultAlias).toBe("tonya");
+        expect(compiled.operatorRuntime.transports.delegatedHttp.globalDefaultAlias).toBe("tonya");
         expect(compiled.agents[0]).toMatchObject({
           id: "tonya",
           name: "Tonya",
@@ -92,6 +86,12 @@ describe("compileOperatorAgentRegistry", () => {
           triggers: ["operator", "orchestration"],
           teams: ["control-plane"],
           maxConcurrentSessions: 3,
+        });
+        expect(compiled.agents[1]).toMatchObject({
+          id: "deb",
+          name: "Deb",
+          role: "Project board",
+          specialty: "Project board",
         });
         expect(compiled.teams[1]).toMatchObject({
           id: "project-ops",
@@ -107,7 +107,6 @@ describe("compileOperatorAgentRegistry", () => {
           dispatchAuthEnv: "OPENCLAW_OPERATOR_DEB_SHARED_SECRET",
           ancestorTeamIds: ["control-plane"],
         });
-        expect(compiled.pipelineOrder).toEqual(["tonya"]);
         expect(compiled.identities).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -140,31 +139,6 @@ describe("compileOperatorAgentRegistry", () => {
         };
         expect(artifact.sourceHash).toBe(compiled.sourceHash);
         expect(Array.isArray(artifact.identities)).toBe(true);
-      });
-    });
-  });
-
-  it("rejects unknown skill owners referenced by skill_ownership", async () => {
-    await withStateDirEnv("operator-registry-invalid-", async () => {
-      await withTempDir("operator-registry-invalid-workspace-", async (dir) => {
-        const sourcePath = path.join(dir, "agents.yaml");
-        await fs.writeFile(
-          sourcePath,
-          [
-            "agents:",
-            "  - id: tonya",
-            "    name: Tonya",
-            "skill_ownership:",
-            "  - skill: /workspace/skills/acpx-orchestration/SKILL.md",
-            "    owner: ghostface",
-            "",
-          ].join("\n"),
-          "utf8",
-        );
-
-        expect(() => compileOperatorAgentRegistry({ sourcePath })).toThrow(
-          "skill_ownership references unknown owner: ghostface",
-        );
       });
     });
   });

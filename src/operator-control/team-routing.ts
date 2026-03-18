@@ -48,6 +48,7 @@ export function resolveOperatorTaskEnvelope(input: unknown): OperatorTaskEnvelop
   if (!team) {
     throw new Error(`unknown operator team: ${teamId}`);
   }
+  const requestedInternalOwner = parsed.target.alias?.trim() || null;
 
   const next: OperatorTaskEnvelope = {
     ...parsed,
@@ -61,12 +62,21 @@ export function resolveOperatorTaskEnvelope(input: unknown): OperatorTaskEnvelop
       ...parsed.execution,
       transport: canonicalizeOperatorExecutionTransport(parsed.execution.transport),
     },
+    inputs:
+      team.routeViaLead &&
+      requestedInternalOwner &&
+      (!team.lead || requestedInternalOwner.toLowerCase() !== team.lead.toLowerCase())
+        ? {
+            ...parsed.inputs,
+            requested_internal_owner: requestedInternalOwner,
+          }
+        : parsed.inputs,
   };
 
   next.target.alias = resolveSpecialistTarget({
     teamId: team.id,
     capability: next.target.capability,
-    explicitAlias: next.target.alias ?? null,
+    explicitAlias: team.routeViaLead ? null : (next.target.alias ?? null),
     role,
     runtimePreference:
       next.execution.runtime === "subagent"

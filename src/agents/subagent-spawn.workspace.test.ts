@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gateway.js";
@@ -48,6 +49,13 @@ vi.mock("./subagent-announce.js", () => ({
   buildSubagentSystemPrompt: () => "system-prompt",
 }));
 
+vi.mock("./subagent-target-readiness.js", () => ({
+  resolveSubagentTargetReadiness: () => ({
+    status: "ready",
+    reasons: [],
+  }),
+}));
+
 vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
@@ -77,6 +85,8 @@ vi.mock("./tools/sessions-helpers.js", () => ({
 vi.mock("./agent-scope.js", () => ({
   resolveAgentConfig: (cfg: TestConfig, agentId: string) =>
     cfg.agents?.list?.find((entry) => entry.id === agentId),
+  resolveConfiguredAgentWorkspaceDir: (cfg: TestConfig, agentId: string) =>
+    cfg.agents?.list?.find((entry) => entry.id === agentId)?.workspace,
   resolveAgentWorkspaceDir: (cfg: TestConfig, agentId: string) =>
     cfg.agents?.list?.find((entry) => entry.id === agentId)?.workspace ??
     `/tmp/workspace-${agentId}`,
@@ -137,6 +147,10 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     hoisted.registerSubagentRunMock.mockClear();
     hoisted.configOverride = createConfigOverride();
     setupGatewayMock();
+    fs.mkdirSync("/tmp/workspace-main", { recursive: true });
+    fs.writeFileSync("/tmp/workspace-main/AGENTS.md", "# main\n", "utf8");
+    fs.mkdirSync("/tmp/workspace-ops", { recursive: true });
+    fs.writeFileSync("/tmp/workspace-ops/AGENTS.md", "# ops\n", "utf8");
   });
 
   it("uses the target agent workspace for cross-agent spawns", async () => {

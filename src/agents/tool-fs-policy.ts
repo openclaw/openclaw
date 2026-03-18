@@ -2,30 +2,72 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ToolFsPolicy = {
-  workspaceOnly: boolean;
+  readWorkspaceOnly: boolean;
+  writeWorkspaceOnly: boolean;
+  editWorkspaceOnly: boolean;
 };
 
-export function createToolFsPolicy(params: { workspaceOnly?: boolean }): ToolFsPolicy {
+export function createToolFsPolicy(params: {
+  workspaceOnly?: boolean;
+  readWorkspaceOnly?: boolean;
+  writeWorkspaceOnly?: boolean;
+  editWorkspaceOnly?: boolean;
+}): ToolFsPolicy {
   return {
-    workspaceOnly: params.workspaceOnly === true,
+    readWorkspaceOnly: params.readWorkspaceOnly ?? params.workspaceOnly ?? false,
+    writeWorkspaceOnly: params.writeWorkspaceOnly ?? params.workspaceOnly ?? false,
+    editWorkspaceOnly: params.editWorkspaceOnly ?? params.workspaceOnly ?? false,
   };
 }
 
 export function resolveToolFsConfig(params: { cfg?: OpenClawConfig; agentId?: string }): {
   workspaceOnly?: boolean;
+  readWorkspaceOnly?: boolean;
+  writeWorkspaceOnly?: boolean;
+  editWorkspaceOnly?: boolean;
 } {
   const cfg = params.cfg;
   const globalFs = cfg?.tools?.fs;
   const agentFs =
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.fs : undefined;
+  const workspaceOnly = agentFs?.workspaceOnly ?? globalFs?.workspaceOnly;
   return {
-    workspaceOnly: agentFs?.workspaceOnly ?? globalFs?.workspaceOnly,
+    workspaceOnly,
+    readWorkspaceOnly:
+      agentFs?.readWorkspaceOnly ??
+      agentFs?.workspaceOnly ??
+      globalFs?.readWorkspaceOnly ??
+      workspaceOnly,
+    writeWorkspaceOnly:
+      agentFs?.writeWorkspaceOnly ??
+      agentFs?.workspaceOnly ??
+      globalFs?.writeWorkspaceOnly ??
+      workspaceOnly,
+    editWorkspaceOnly:
+      agentFs?.editWorkspaceOnly ??
+      agentFs?.workspaceOnly ??
+      globalFs?.editWorkspaceOnly ??
+      workspaceOnly,
   };
 }
 
-export function resolveEffectiveToolFsWorkspaceOnly(params: {
+export function resolveEffectiveToolFsReadWorkspaceOnly(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
 }): boolean {
-  return resolveToolFsConfig(params).workspaceOnly === true;
+  return resolveToolFsConfig(params).readWorkspaceOnly === true;
+}
+
+export function resolveEffectiveToolFsWriteWorkspaceOnly(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): boolean {
+  return resolveToolFsConfig(params).writeWorkspaceOnly === true;
+}
+
+export function resolveEffectiveToolFsEditWorkspaceOnly(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): boolean {
+  return resolveToolFsConfig(params).editWorkspaceOnly === true;
 }

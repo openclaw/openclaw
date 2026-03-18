@@ -1,7 +1,6 @@
 packages:
   - .
   - ui
-  - mission-control-ui
   - packages/*
   - extensions/*
 

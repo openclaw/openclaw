@@ -3,11 +3,11 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resetMissionControlDebStoreForTests } from "./mission-control-deb.js";
-import { handleMissionControlHttpRequest } from "./mission-control.js";
+import { handleOperatorHttpRequest } from "./operator-http.js";
 
 async function withMissionControlServer<T>(fn: (baseUrl: string) => Promise<T>): Promise<T> {
   const server = createServer((req, res) => {
-    void handleMissionControlHttpRequest(req, res)
+    void handleOperatorHttpRequest(req, res)
       .then((handled) => {
         if (handled) {
           return;

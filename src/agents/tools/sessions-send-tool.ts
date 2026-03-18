@@ -10,6 +10,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import { isUniversalSubagentTarget } from "../universal-targets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -19,6 +20,7 @@ import {
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveUniversalTargetSessionAccess,
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
@@ -115,7 +117,12 @@ export function createSessionsSendTool(opts?: {
           ? normalizeAgentId(labelAgentIdParam)
           : undefined;
 
-        if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        if (
+          restrictToSpawned &&
+          requestedAgentId &&
+          requestedAgentId !== requesterAgentId &&
+          !isUniversalSubagentTarget(requestedAgentId)
+        ) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
@@ -123,7 +130,12 @@ export function createSessionsSendTool(opts?: {
           });
         }
 
-        if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
+        if (
+          requesterAgentId &&
+          requestedAgentId &&
+          requestedAgentId !== requesterAgentId &&
+          !isUniversalSubagentTarget(requestedAgentId)
+        ) {
           if (!a2aPolicy.enabled) {
             return jsonResult({
               runId: crypto.randomUUID(),
@@ -225,6 +237,20 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+      const universalAccess = await resolveUniversalTargetSessionAccess({
+        requesterSessionKey: effectiveRequesterKey,
+        targetSessionKey: resolvedKey,
+      });
+      if (universalAccess) {
+        if (!universalAccess.allowed) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: universalAccess.status,
+            error: universalAccess.error,
+            sessionKey: displayKey,
+          });
+        }
+      }
       const timeoutSeconds =
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
@@ -233,20 +259,23 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
-      const visibilityGuard = await createSessionVisibilityGuard({
-        action: "send",
-        requesterSessionKey: effectiveRequesterKey,
-        visibility: sessionVisibility,
-        a2aPolicy,
-      });
-      const access = visibilityGuard.check(resolvedKey);
-      if (!access.allowed) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: access.status,
-          error: access.error,
-          sessionKey: displayKey,
+      if (!universalAccess) {
+        const visibilityGuard = await createSessionVisibilityGuard({
+          action: "send",
+          requesterSessionKey: effectiveRequesterKey,
+          visibility: sessionVisibility,
+          a2aPolicy,
+          mainKey,
         });
+        const access = visibilityGuard.check(resolvedKey);
+        if (!access.allowed) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: access.status,
+            error: access.error,
+            sessionKey: displayKey,
+          });
+        }
       }
 
       const agentMessageContext = buildAgentToAgentMessageContext({

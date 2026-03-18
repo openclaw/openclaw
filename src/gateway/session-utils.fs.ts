@@ -30,6 +30,12 @@ type SessionTitleFieldsCacheEntry = SessionTitleFields & {
 const sessionTitleFieldsCache = new Map<string, SessionTitleFieldsCacheEntry>();
 const MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES = 5000;
 
+function shouldIncludeLegacySessionTranscriptFallback(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return !(env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim());
+}
+
 function readSessionTitleFieldsCacheKey(
   filePath: string,
   opts?: { includeInterSession?: boolean },
@@ -156,9 +162,11 @@ export function resolveSessionTranscriptCandidates(
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
   }
 
-  const home = resolveRequiredHomeDir(process.env, os.homedir);
-  const legacyDir = path.join(home, ".openclaw", "sessions");
-  pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
+  if (shouldIncludeLegacySessionTranscriptFallback(process.env)) {
+    const home = resolveRequiredHomeDir(process.env, os.homedir);
+    const legacyDir = path.join(home, ".openclaw", "sessions");
+    pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
+  }
 
   return Array.from(new Set(candidates));
 }

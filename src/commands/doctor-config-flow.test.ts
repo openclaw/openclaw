@@ -160,6 +160,30 @@ describe("doctor config flow", () => {
     ).toBe(true);
   });
 
+  it("warns when subagent allowlist entries are not runtime-ready", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      agents: {
+        list: [
+          {
+            id: "tony",
+            workspace: "/tmp/openclaw-tony",
+            subagents: {
+              allowAgents: ["deb"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(
+      doctorWarnings.some(
+        (line) =>
+          line.includes('agents.list.tony.subagents.allowAgents includes "deb"') &&
+          line.includes("stale"),
+      ),
+    ).toBe(true);
+  });
+
   it("drops unknown keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,

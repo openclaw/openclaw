@@ -86,6 +86,7 @@ describe("registerPreActionHooks", () => {
       .option("--json")
       .action(() => {});
     program.command("doctor").action(() => {});
+    program.command("sync").action(() => {});
     program.command("completion").action(() => {});
     program.command("secrets").action(() => {});
     program.command("agents").action(() => {});
@@ -252,6 +253,15 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["config", "set"],
     });
+  });
+
+  it("bypasses config guard for sync", async () => {
+    await runPreAction({
+      parseArgv: ["sync"],
+      processArgv: ["node", "openclaw", "sync", "--target-home", "/tmp/agents-home"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
   it("bypasses config guard for config validate", async () => {

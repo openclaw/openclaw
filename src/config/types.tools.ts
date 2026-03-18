@@ -166,6 +166,7 @@ export type ToolLoopDetectionConfig = {
 };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
+export type AgentToAgentSessionScope = "all" | "main_only";
 
 export type ToolPolicyConfig = {
   allow?: string[];
@@ -280,6 +281,21 @@ export type FsToolsConfig = {
    * Default: false (unrestricted, matches legacy behavior).
    */
   workspaceOnly?: boolean;
+  /**
+   * Restrict the read tool to the agent workspace directory.
+   * Falls back to workspaceOnly when unset.
+   */
+  readWorkspaceOnly?: boolean;
+  /**
+   * Restrict the write tool to the agent workspace directory.
+   * Falls back to workspaceOnly when unset.
+   */
+  writeWorkspaceOnly?: boolean;
+  /**
+   * Restrict the edit tool to the agent workspace directory.
+   * Falls back to workspaceOnly when unset.
+   */
+  editWorkspaceOnly?: boolean;
 };
 
 export type AgentToolsConfig = {
@@ -581,6 +597,12 @@ export type ToolsConfig = {
     enabled?: boolean;
     /** Allowlist of agent ids or patterns (implementation-defined). */
     allow?: string[];
+    /**
+     * Restrict which cross-agent session targets are reachable when agent-to-agent access is enabled.
+     *
+     * Default: "all" for compatibility.
+     */
+    sessionScope?: AgentToAgentSessionScope;
   };
   /**
    * Session tool visibility controls which sessions can be targeted by session tools

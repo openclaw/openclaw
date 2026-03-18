@@ -8,6 +8,7 @@ import {
 } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isUniversalSubagentTarget } from "../universal-targets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
@@ -15,6 +16,7 @@ import {
   createAgentToAgentPolicy,
   classifySessionKind,
   deriveChannel,
+  listOwnedUniversalTargetSessionKeys,
   resolveDisplaySessionKey,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
@@ -101,7 +103,22 @@ export function createSessionsListTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
+        mainKey,
       });
+      const requesterScopedAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
+      const hasCrossAgentUniversalTargets = sessions.some((entry) => {
+        const key = typeof entry?.key === "string" ? entry.key.trim() : "";
+        if (!key) {
+          return false;
+        }
+        const targetAgentId = resolveAgentIdFromSessionKey(key);
+        return targetAgentId !== requesterScopedAgentId && isUniversalSubagentTarget(targetAgentId);
+      });
+      const ownedUniversalTargetKeys = hasCrossAgentUniversalTargets
+        ? await listOwnedUniversalTargetSessionKeys({
+            requesterSessionKey: effectiveRequesterKey,
+          })
+        : null;
       const rows: SessionListRow[] = [];
       const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
 
@@ -113,9 +130,18 @@ export function createSessionsListTool(opts?: {
         if (!key) {
           continue;
         }
-        const access = visibilityGuard.check(key);
-        if (!access.allowed) {
-          continue;
+        const targetAgentId = resolveAgentIdFromSessionKey(key);
+        const isCrossAgentUniversalTarget =
+          targetAgentId !== requesterScopedAgentId && isUniversalSubagentTarget(targetAgentId);
+        if (isCrossAgentUniversalTarget) {
+          if (!ownedUniversalTargetKeys?.has(key)) {
+            continue;
+          }
+        } else {
+          const access = visibilityGuard.check(key);
+          if (!access.allowed) {
+            continue;
+          }
         }
 
         if (key === "unknown") {

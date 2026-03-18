@@ -5,8 +5,11 @@ export type {
   SessionToolsVisibility,
 } from "./sessions-access.js";
 export {
+  a2aSessionScopeMessage,
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  listOwnedUniversalTargetSessionKeys,
+  resolveUniversalTargetSessionAccess,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
   resolveSandboxedSessionToolContext,

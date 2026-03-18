@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  classifyMissionControlRequest,
-  MISSION_CONTROL_BASE_PATH,
-} from "./mission-control-routing.js";
+import { classifyMissionControlRequest, MISSION_CONTROL_BASE_PATH } from "./operator-http.js";
 
 describe("classifyMissionControlRequest", () => {
   it("redirects base path to trailing slash", () => {

@@ -13,6 +13,7 @@ import {
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
+  isSessionLockError,
   isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
@@ -251,6 +252,36 @@ describe("isCloudflareOrHtmlErrorPage", () => {
   it("does not flag quoted HTML without a closing html tag", () => {
     const plainTextWithHtmlPrefix = "500 <!DOCTYPE html> upstream responded with partial HTML text";
     expect(isCloudflareOrHtmlErrorPage(plainTextWithHtmlPrefix)).toBe(false);
+  });
+});
+
+describe("isSessionLockError", () => {
+  it("matches session lock messages", () => {
+    const samples = [
+      "session file locked (timeout 10000ms)",
+      "Session file locked by another process",
+      "Error: session file locked",
+    ];
+    for (const sample of samples) {
+      expect(isSessionLockError(sample)).toBe(true);
+    }
+  });
+
+  it("rejects unrelated timeout messages", () => {
+    const samples = ["request timed out", "Connection timeout", "ETIMEDOUT"];
+    for (const sample of samples) {
+      expect(isSessionLockError(sample)).toBe(false);
+    }
+  });
+
+  it("returns false for empty or undefined", () => {
+    expect(isSessionLockError(undefined)).toBe(false);
+    expect(isSessionLockError("")).toBe(false);
+  });
+
+  it("session lock errors return null from classifyFailoverReason", () => {
+    expect(classifyFailoverReason("session file locked (timeout 10000ms)")).toBeNull();
+    expect(classifyFailoverReason("Session file locked by pid 24442")).toBeNull();
   });
 });
 

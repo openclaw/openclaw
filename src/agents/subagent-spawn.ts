@@ -31,17 +31,26 @@ import {
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import {
+  SUBAGENT_SPAWN_MODES,
+  SUBAGENT_SPAWN_SANDBOX_MODES,
+  type SpawnSubagentMode,
+  type SpawnSubagentSandboxMode,
+} from "./subagent-spawn-modes.js";
+import { resolveSubagentTargetReadiness } from "./subagent-target-readiness.js";
 import { readStringParam } from "./tools/common.js";
 import {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "./tools/sessions-helpers.js";
-
-export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
-export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
-export const SUBAGENT_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
-export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[number];
+import { resolveRequesterSubagentAllowlist } from "./universal-targets.js";
+export {
+  SUBAGENT_SPAWN_MODES,
+  SUBAGENT_SPAWN_SANDBOX_MODES,
+  type SpawnSubagentMode,
+  type SpawnSubagentSandboxMode,
+} from "./subagent-spawn-modes.js";
 
 export { decodeStrictBase64 };
 
@@ -415,19 +424,43 @@ export async function spawnSubagentDirect(
     }
   }
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
-    const allowAny = allowAgents.some((value) => value.trim() === "*");
+    const { allowAny, allowSet, explicitAllowSet } = resolveRequesterSubagentAllowlist({
+      cfg,
+      requesterAgentId,
+    });
     const normalizedTargetId = targetAgentId.toLowerCase();
-    const allowSet = new Set(
-      allowAgents
-        .filter((value) => value.trim() && value.trim() !== "*")
-        .map((value) => normalizeAgentId(value).toLowerCase()),
-    );
-    if (!allowAny && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
+    const normalizedAllowSet = new Set(Array.from(allowSet, (value) => value.toLowerCase()));
+    if (!allowAny && !normalizedAllowSet.has(normalizedTargetId)) {
+      const allowedText =
+        normalizedAllowSet.size > 0 ? Array.from(normalizedAllowSet).join(", ") : "none";
       return {
         status: "forbidden",
         error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
+      };
+    }
+    const readiness = resolveSubagentTargetReadiness({
+      cfg,
+      requesterAgentId,
+      targetAgentId,
+      classifyStaleAllowlist: explicitAllowSet.has(normalizedTargetId),
+    });
+    if (readiness.status !== "ready") {
+      const reason = readiness.reasons[0] ?? "target agent is not ready";
+      if (readiness.status === "missing_config") {
+        return {
+          status: "error",
+          error: `agentId "${targetAgentId}" is not configured as a runtime agent with an explicit workspace. ${reason}.`,
+        };
+      }
+      if (readiness.status === "missing_workspace") {
+        return {
+          status: "error",
+          error: `agentId "${targetAgentId}" is not workspace-backed for sessions_spawn. ${reason}.`,
+        };
+      }
+      return {
+        status: "error",
+        error: `agentId "${targetAgentId}" is a stale allowlist entry. ${reason}.`,
       };
     }
   }

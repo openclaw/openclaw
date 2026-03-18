@@ -83,6 +83,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.95
+      '@openclaw/gateway-transforms':
+        specifier: workspace:*
+        version: link:packages/gateway-transforms
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
@@ -607,8 +610,60 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  martina-ui:
+    dependencies:
+      '@openclaw/gateway-client':
+        specifier: workspace:*
+        version: link:../packages/gateway-client
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-react:
+        specifier: ^0.577.0
+        version: 0.577.0(react@19.2.4)
+      react:
+        specifier: ^19.1.1
+        version: 19.2.4
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.2.4(react@19.2.4)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.5.0
+    devDependencies:
+      '@tailwindcss/vite':
+        specifier: ^4.2.1
+        version: 4.2.1(vite@7.3.1(@types/node@24.12.0)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2))
+      '@types/node':
+        specifier: ^24.3.0
+        version: 24.12.0
+      '@types/react':
+        specifier: ^19.1.16
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.1.9
+        version: 19.2.3(@types/react@19.2.14)
+      '@vitejs/plugin-react':
+        specifier: ^5.0.2
+        version: 5.2.0(vite@7.3.1(@types/node@24.12.0)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2))
+      tailwindcss:
+        specifier: ^4.2.1
+        version: 4.2.1
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+      vite:
+        specifier: 7.3.1
+        version: 7.3.1(@types/node@24.12.0)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.2)
+
   mission-control-ui:
     dependencies:
+      '@openclaw/gateway-client':
+        specifier: workspace:*
+        version: link:../packages/gateway-client
+      '@openclaw/gateway-transforms':
+        specifier: workspace:*
+        version: link:../packages/gateway-transforms
       '@radix-ui/react-collapsible':
         specifier: ^1.1.12
         version: 1.1.12(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -715,6 +770,24 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  packages/gateway-client:
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.16
+        version: 19.2.14
+      react:
+        specifier: ^19.1.1
+        version: 19.2.4
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+
+  packages/gateway-transforms:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
 
   packages/moltbot:
     dependencies:

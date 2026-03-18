@@ -7,7 +7,47 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 
+export type HealthSnapshotPayload = {
+  live: boolean;
+  ready: boolean;
+  failing: string[];
+  uptimeMs: number | null;
+  checkedAt: number;
+};
+
 export const healthHandlers: GatewayRequestHandlers = {
+  "health.snapshot": async ({ respond, context }) => {
+    const getReadiness = context.getReadiness;
+    const checkedAt = Date.now();
+    if (!getReadiness) {
+      respond(true, {
+        live: true,
+        ready: true,
+        failing: [],
+        uptimeMs: null,
+        checkedAt,
+      } satisfies HealthSnapshotPayload);
+      return;
+    }
+    try {
+      const result = getReadiness();
+      respond(true, {
+        live: true,
+        ready: result.ready,
+        failing: result.failing ?? [],
+        uptimeMs: result.uptimeMs,
+        checkedAt,
+      } satisfies HealthSnapshotPayload);
+    } catch {
+      respond(true, {
+        live: true,
+        ready: false,
+        failing: ["internal"],
+        uptimeMs: 0,
+        checkedAt,
+      } satisfies HealthSnapshotPayload);
+    }
+  },
   health: async ({ respond, context, params }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
     const wantsProbe = params?.probe === true;

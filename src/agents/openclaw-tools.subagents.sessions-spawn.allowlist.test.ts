@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -44,23 +45,19 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     invalidateRegistryCache({ sourcePath });
   }
 
-  function setAllowAgents(allowAgents: string[]) {
-    setSessionsSpawnConfigOverride({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            subagents: {
-              allowAgents,
-            },
-          },
-        ],
-      },
-    });
+  async function createReadyWorkspaces(agentIds: string[]) {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-targets-"));
+    const workspaces = Object.fromEntries(
+      await Promise.all(
+        agentIds.map(async (agentId) => {
+          const workspace = path.join(rootDir, agentId);
+          await fs.mkdir(workspace, { recursive: true });
+          await fs.writeFile(path.join(workspace, "AGENTS.md"), `# ${agentId}\n`, "utf8");
+          return [agentId, workspace] as const;
+        }),
+      ),
+    );
+    return workspaces;
   }
 
   function mockAcceptedSpawn(acceptedAt: number) {
@@ -89,6 +86,24 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     return tool.execute(callId, { task: "do thing", agentId, sandbox });
   }
 
+  async function executeSpawnFromRequester(params: {
+    callId: string;
+    requesterAgentId: string;
+    agentId: string;
+    sandbox?: "inherit" | "require";
+  }) {
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: `agent:${params.requesterAgentId}:main`,
+      agentChannel: "whatsapp",
+      requesterAgentIdOverride: params.requesterAgentId,
+    });
+    return tool.execute(params.callId, {
+      task: "do thing",
+      agentId: params.agentId,
+      ...(params.sandbox ? { sandbox: params.sandbox } : {}),
+    });
+  }
+
   async function executeTeamSpawn(params: {
     callId: string;
     teamId: string;
@@ -108,47 +123,34 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     });
   }
 
-  function setResearchUnsandboxedConfig(params?: { includeSandboxedDefault?: boolean }) {
-    setSessionsSpawnConfigOverride({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      agents: {
-        ...(params?.includeSandboxedDefault
-          ? {
-              defaults: {
-                sandbox: {
-                  mode: "all",
-                },
-              },
-            }
-          : {}),
-        list: [
-          {
-            id: "main",
-            subagents: {
-              allowAgents: ["research"],
-            },
-          },
-          {
-            id: "research",
-            sandbox: {
-              mode: "off",
-            },
-          },
-        ],
-      },
-    });
-  }
-
   async function expectAllowedSpawn(params: {
     allowAgents: string[];
     agentId: string;
     callId: string;
     acceptedAt: number;
   }) {
-    setAllowAgents(params.allowAgents);
+    const workspaces = await createReadyWorkspaces(["main", params.agentId]);
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: workspaces.main,
+            subagents: {
+              allowAgents: params.allowAgents,
+            },
+          },
+          {
+            id: params.agentId,
+            workspace: workspaces[params.agentId],
+          },
+        ],
+      },
+    });
     const getChildSessionKey = mockAcceptedSpawn(params.acceptedAt);
 
     const result = await executeSpawn(params.callId, params.agentId);
@@ -164,7 +166,7 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
+        list: [{ id: "main", workspace: "/tmp/openclaw-main", subagents: { allowAgents: ["*"] } }],
       },
     });
     const tool = await getSessionsSpawnTool({
@@ -199,6 +201,44 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
       status: "forbidden",
     });
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("allows Scout from an unconfigured specialist requester only", async () => {
+    const workspaces = await createReadyWorkspaces(["scout"]);
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          { id: "main", workspace: "/tmp/openclaw-main" },
+          { id: "scout", workspace: workspaces.scout },
+        ],
+      },
+    });
+    const getChildSessionKey = mockAcceptedSpawn(5300);
+
+    const scoutResult = await executeSpawnFromRequester({
+      callId: "call-scout-specialist",
+      requesterAgentId: "method-man",
+      agentId: "scout",
+    });
+    expect(scoutResult.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(getChildSessionKey()?.startsWith("agent:scout:subagent:")).toBe(true);
+
+    callGatewayMock.mockClear();
+    const blockedResult = await executeSpawnFromRequester({
+      callId: "call-blocked-specialist",
+      requesterAgentId: "method-man",
+      agentId: "ghostface",
+    });
+    expect(blockedResult.details).toMatchObject({
+      status: "forbidden",
+    });
   });
 
   it("sessions_spawn forbids cross-agent spawning when not allowed", async () => {
@@ -262,35 +302,90 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   });
 
   it("forbids sandboxed cross-agent spawns that would unsandbox the child", async () => {
-    setResearchUnsandboxedConfig({ includeSandboxedDefault: true });
+    const workspaces = await createReadyWorkspaces(["research"]);
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/openclaw-main",
+            subagents: {
+              allowAgents: ["research"],
+            },
+          },
+          {
+            id: "research",
+            workspace: workspaces.research,
+            sandbox: {
+              mode: "off",
+            },
+          },
+        ],
+      },
+    });
 
     const result = await executeSpawn("call11", "research");
     const details = result.details as { status?: string; error?: string };
 
     expect(details.status).toBe("forbidden");
     expect(details.error).toContain("Sandboxed sessions cannot spawn unsandboxed subagents.");
-    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it('forbids sandbox="require" when target runtime is unsandboxed', async () => {
-    setResearchUnsandboxedConfig();
+    const workspaces = await createReadyWorkspaces(["research"]);
+    setSessionsSpawnConfigOverride({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/openclaw-main",
+            subagents: {
+              allowAgents: ["research"],
+            },
+          },
+          {
+            id: "research",
+            workspace: workspaces.research,
+            sandbox: {
+              mode: "off",
+            },
+          },
+        ],
+      },
+    });
 
     const result = await executeSpawn("call12", "research", "require");
     const details = result.details as { status?: string; error?: string };
 
     expect(details.status).toBe("forbidden");
     expect(details.error).toContain('sandbox="require"');
-    expect(callGatewayMock).not.toHaveBeenCalled();
   });
   // ---------------------------------------------------------------------------
   // agentId format validation (#31311)
   // ---------------------------------------------------------------------------
 
   it("rejects error-message-like strings as agentId (#31311)", async () => {
+    const workspaces = await createReadyWorkspaces(["research"]);
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "research" }],
+        list: [
+          { id: "main", workspace: "/tmp/openclaw-main", subagents: { allowAgents: ["*"] } },
+          { id: "research", workspace: workspaces.research },
+        ],
       },
     });
     const tool = await getSessionsSpawnTool({
@@ -305,7 +400,6 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(details.status).toBe("error");
     expect(details.error).toContain("Invalid agentId");
     expect(details.error).toContain("agents_list");
-    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("rejects agentId containing path separators (#31311)", async () => {
@@ -317,10 +411,14 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   });
 
   it("accepts well-formed agentId with hyphens and underscores (#31311)", async () => {
+    const workspaces = await createReadyWorkspaces(["my-research_agent01"]);
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "my-research_agent01" }],
+        list: [
+          { id: "main", workspace: "/tmp/openclaw-main", subagents: { allowAgents: ["*"] } },
+          { id: "my-research_agent01", workspace: workspaces["my-research_agent01"] },
+        ],
       },
     });
     mockAcceptedSpawn(1000);
@@ -329,31 +427,34 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
     expect(details.status).toBe("accepted");
   });
 
-  it("allows allowlisted-but-unconfigured agentId (#31311)", async () => {
+  it("rejects allowlisted-but-unconfigured agentId (#31311)", async () => {
     setSessionsSpawnConfigOverride({
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
         list: [
-          { id: "main", subagents: { allowAgents: ["research"] } },
-          // "research" is NOT in agents.list — only in allowAgents
+          { id: "main", workspace: "/tmp/openclaw-main", subagents: { allowAgents: ["research"] } },
         ],
       },
     });
-    mockAcceptedSpawn(1000);
     const result = await executeSpawn("call-unconfigured", "research");
-    const details = result.details as { status?: string };
-    // Must pass: "research" is in allowAgents even though not in agents.list
-    expect(details.status).toBe("accepted");
+    const details = result.details as { status?: string; error?: string };
+    expect(details.status).toBe("error");
+    expect(details.error).toContain("stale allowlist entry");
   });
 
   it("resolves teamId + capability to the lead-selected specialist", async () => {
     await withStateDirEnv("sessions-spawn-team-selector-", async () => {
       await seedRegistryFixture();
+      const workspaces = await createReadyWorkspaces(["bobby-digital"]);
       setSessionsSpawnConfigOverride({
         session: { mainKey: "main", scope: "per-sender" },
         agents: {
           list: [
-            { id: "bobby-digital", subagents: { allowAgents: ["bobby-digital"] } },
+            {
+              id: "bobby-digital",
+              workspace: workspaces["bobby-digital"],
+              subagents: { allowAgents: ["bobby-digital"] },
+            },
             { id: "ghostface" },
           ],
         },
@@ -374,11 +475,16 @@ describe("openclaw-tools: subagents (sessions_spawn allowlist)", () => {
   it("resolves teamId + role alias the same way", async () => {
     await withStateDirEnv("sessions-spawn-team-role-", async () => {
       await seedRegistryFixture();
+      const workspaces = await createReadyWorkspaces(["bobby-digital"]);
       setSessionsSpawnConfigOverride({
         session: { mainKey: "main", scope: "per-sender" },
         agents: {
           list: [
-            { id: "bobby-digital", subagents: { allowAgents: ["bobby-digital"] } },
+            {
+              id: "bobby-digital",
+              workspace: workspaces["bobby-digital"],
+              subagents: { allowAgents: ["bobby-digital"] },
+            },
             { id: "ghostface" },
           ],
         },

@@ -114,6 +114,7 @@ describe("createAgentToAgentPolicy", () => {
   it("denies cross-agent access when disabled", () => {
     const policy = createAgentToAgentPolicy({} as unknown as OpenClawConfig);
     expect(policy.enabled).toBe(false);
+    expect(policy.sessionScope).toBe("all");
     expect(policy.isAllowed("main", "main")).toBe(true);
     expect(policy.isAllowed("main", "ops")).toBe(false);
   });
@@ -131,6 +132,38 @@ describe("createAgentToAgentPolicy", () => {
     expect(policy.isAllowed("ops-a", "ops-b")).toBe(true);
     expect(policy.isAllowed("main", "ops-a")).toBe(true);
     expect(policy.isAllowed("guest", "ops-a")).toBe(false);
+  });
+
+  it("restricts cross-agent targets to main sessions when sessionScope=main_only", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main", "martina"],
+          sessionScope: "main_only",
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.sessionScope).toBe("main_only");
+    expect(
+      policy.isSessionTargetAllowed({
+        requesterAgentId: "main",
+        targetSessionKey: "agent:martina:main",
+      }),
+    ).toBe(true);
+    expect(
+      policy.isSessionTargetAllowed({
+        requesterAgentId: "main",
+        targetSessionKey: "agent:martina:subagent:maria",
+      }),
+    ).toBe(false);
+    expect(
+      policy.isSessionTargetAllowed({
+        requesterAgentId: "martina",
+        targetSessionKey: "agent:martina:subagent:maria",
+      }),
+    ).toBe(true);
   });
 });
 
@@ -166,5 +199,32 @@ describe("createSessionVisibilityGuard", () => {
       error:
         "Session history visibility is restricted to the current session (tools.sessions.visibility=self).",
     });
+  });
+
+  it("blocks cross-agent non-main sessions when sessionScope=main_only", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "agent:tony:main",
+      visibility: "all",
+      mainKey: "main",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["tony", "martina"],
+            sessionScope: "main_only",
+          },
+        },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:martina:main")).toEqual({ allowed: true });
+    expect(guard.check("agent:martina:subagent:maria")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Agent-to-agent messaging is restricted to main sessions by tools.agentToAgent.sessionScope=main_only.",
+    });
+    expect(guard.check("agent:tony:subagent:child")).toEqual({ allowed: true });
   });
 });

@@ -417,11 +417,15 @@ export function applyOperatorExternalReceipt(
     state: receipt.state,
     owner:
       receipt.owner ??
+      (typeof receipt.metadata?.resolved_internal_owner === "string" &&
+      receipt.metadata.resolved_internal_owner.trim()
+        ? receipt.metadata.resolved_internal_owner.trim()
+        : null) ??
       (typeof receipt.metadata?.targetAgentId === "string" && receipt.metadata.targetAgentId.trim()
         ? receipt.metadata.targetAgentId.trim()
         : null) ??
       current.receipt.owner ??
-      (receipt.schema === "AngelaTaskReceiptV1" ? "delegated-agent" : "2tony"),
+      (receipt.schema === "2TonyTaskReceiptV1" ? "2tony" : "delegated-lead"),
     attempt: receipt.attempt,
     queue_latency_ms: receipt.queue_latency_ms ?? current.receipt.queue_latency_ms ?? null,
     artifacts: receipt.artifacts.length > 0 ? receipt.artifacts : current.receipt.artifacts,

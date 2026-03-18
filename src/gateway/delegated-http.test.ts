@@ -5,12 +5,15 @@ import { withEnvAsync } from "../test-utils/env.js";
 const { readJsonBodyOrErrorMock } = vi.hoisted(() => ({
   readJsonBodyOrErrorMock: vi.fn(),
 }));
-const { getCompiledOperatorTeamMock, resolveOperatorDelegatedDefaultAliasMock } = vi.hoisted(
-  () => ({
-    getCompiledOperatorTeamMock: vi.fn(),
-    resolveOperatorDelegatedDefaultAliasMock: vi.fn(),
-  }),
-);
+const {
+  getCompiledOperatorTeamMock,
+  resolveOperatorDelegatedDefaultAliasMock,
+  resolveOperatorDelegatedLeadAliasMock,
+} = vi.hoisted(() => ({
+  getCompiledOperatorTeamMock: vi.fn(),
+  resolveOperatorDelegatedDefaultAliasMock: vi.fn(),
+  resolveOperatorDelegatedLeadAliasMock: vi.fn(),
+}));
 
 vi.mock("./http-common.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./http-common.js")>();
@@ -23,9 +26,10 @@ vi.mock("./http-common.js", async (importOriginal) => {
 vi.mock("../operator-control/agent-registry.js", () => ({
   getCompiledOperatorTeam: getCompiledOperatorTeamMock,
   resolveOperatorDelegatedDefaultAlias: resolveOperatorDelegatedDefaultAliasMock,
+  resolveOperatorDelegatedLeadAlias: resolveOperatorDelegatedLeadAliasMock,
 }));
 
-import { createDelegatedTaskRequestHandler, DELEGATED_MESSAGE_PATH } from "./angela-http.js";
+import { createDelegatedTaskRequestHandler, DELEGATED_MESSAGE_PATH } from "./delegated-http.js";
 import { createGatewayRequest } from "./hooks-test-helpers.js";
 
 function createRequest(): IncomingMessage {
@@ -76,8 +80,12 @@ describe("delegated task request handler", () => {
     readJsonBodyOrErrorMock.mockReset();
     getCompiledOperatorTeamMock.mockReset();
     resolveOperatorDelegatedDefaultAliasMock.mockReset();
-    getCompiledOperatorTeamMock.mockReturnValue({
-      id: "marketing",
+    resolveOperatorDelegatedLeadAliasMock.mockReset();
+    getCompiledOperatorTeamMock.mockImplementation((teamId?: string) => {
+      if (teamId === "engineering") {
+        return { id: "engineering", lead: "bobby-digital" };
+      }
+      return { id: "marketing", lead: "angela" };
     });
     resolveOperatorDelegatedDefaultAliasMock.mockImplementation(
       ({ explicitAlias, teamId }: { explicitAlias?: string | null; teamId?: string | null }) => {
@@ -88,9 +96,17 @@ describe("delegated task request handler", () => {
           return "bobby-digital";
         }
         if (teamId === "marketing") {
-          return "tonys-angels";
+          return "angela";
         }
-        return "tonys-angels";
+        return "angela";
+      },
+    );
+    resolveOperatorDelegatedLeadAliasMock.mockImplementation(
+      ({ teamId }: { teamId?: string | null }) => {
+        if (teamId === "engineering") {
+          return "bobby-digital";
+        }
+        return "angela";
       },
     );
   });
@@ -99,7 +115,7 @@ describe("delegated task request handler", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("accepts Angela task envelopes and emits started/completed receipts", async () => {
+  it("accepts delegated lead task envelopes and emits started/completed receipts", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -122,11 +138,11 @@ describe("delegated task request handler", () => {
     });
 
     readJsonBodyOrErrorMock.mockResolvedValue({
-      schema: "AngelaTaskEnvelopeV1",
+      schema: "DelegatedLeadTaskEnvelopeV1",
       task_id: "task-angela-1",
       run_id: "run-angela-upstream-1",
       callback_url: "http://tonya.internal/mission-control/api/tasks/task-angela-1/receipts",
-      receipt_schema: "AngelaTaskReceiptV1",
+      receipt_schema: "DelegatedLeadReceiptV1",
       objective: "Prepare investor narrative",
       capability: "marketing",
       team_id: "marketing",
@@ -167,9 +183,9 @@ describe("delegated task request handler", () => {
     expect(
       JSON.parse(typeof body0 === "string" ? body0 : JSON.stringify(body0 ?? "")),
     ).toMatchObject({
-      schema: "AngelaTaskReceiptV1",
+      schema: "DelegatedLeadReceiptV1",
       state: "started",
-      owner: "story-architect",
+      owner: "angela",
       task_id: "task-angela-1",
       run_id: "run-angela-upstream-1",
       delegated_run_id: "run-angela-1",
@@ -179,6 +195,9 @@ describe("delegated task request handler", () => {
         upstreamRunId: "run-angela-upstream-1",
       },
       metadata: {
+        team_id: "marketing",
+        resolved_internal_owner: "story-architect",
+        artifact_refs: [],
         delegatedRunId: "run-angela-1",
         upstreamRunId: "run-angela-upstream-1",
       },
@@ -187,9 +206,9 @@ describe("delegated task request handler", () => {
     expect(
       JSON.parse(typeof body1 === "string" ? body1 : JSON.stringify(body1 ?? "")),
     ).toMatchObject({
-      schema: "AngelaTaskReceiptV1",
+      schema: "DelegatedLeadReceiptV1",
       state: "completed",
-      owner: "story-architect",
+      owner: "angela",
       task_id: "task-angela-1",
       run_id: "run-angela-upstream-1",
       delegated_run_id: "run-angela-1",
@@ -200,6 +219,9 @@ describe("delegated task request handler", () => {
         upstreamRunId: "run-angela-upstream-1",
       },
       metadata: {
+        team_id: "marketing",
+        resolved_internal_owner: "story-architect",
+        artifact_refs: [],
         delegatedRunId: "run-angela-1",
         upstreamRunId: "run-angela-upstream-1",
       },
@@ -226,7 +248,7 @@ describe("delegated task request handler", () => {
     });
 
     readJsonBodyOrErrorMock.mockResolvedValue({
-      schema: "AngelaTaskEnvelopeV1",
+      schema: "DelegatedLeadTaskEnvelopeV1",
       task_id: "task-angela-2",
       run_id: "run-angela-upstream-2",
       callback_url: "http://tonya.internal/mission-control/api/tasks/task-angela-2/receipts",
@@ -254,10 +276,10 @@ describe("delegated task request handler", () => {
     expect(
       JSON.parse(typeof body0 === "string" ? body0 : JSON.stringify(body0 ?? "")),
     ).toMatchObject({
-      schema: "AngelaTaskReceiptV1",
+      schema: "DelegatedLeadReceiptV1",
       state: "blocked",
-      owner: "tonys-angels",
-      failure_code: "angela-task-skipped",
+      owner: "angela",
+      failure_code: "delegated-task-skipped",
     });
   });
 
@@ -268,7 +290,7 @@ describe("delegated task request handler", () => {
     });
 
     readJsonBodyOrErrorMock.mockResolvedValue({
-      schema: "AngelaTaskEnvelopeV1",
+      schema: "DelegatedLeadTaskEnvelopeV1",
       task_id: "task-angela-engineering-1",
       run_id: "run-angela-upstream-engineering-1",
       objective: "Prepare engineering execution plan",
@@ -285,7 +307,7 @@ describe("delegated task request handler", () => {
       },
     });
     getCompiledOperatorTeamMock.mockImplementation((teamId: string) =>
-      teamId === "engineering" ? { id: "engineering" } : null,
+      teamId === "engineering" ? { id: "engineering", lead: "bobby-digital" } : null,
     );
 
     const req = createRequest();
@@ -302,6 +324,9 @@ describe("delegated task request handler", () => {
       explicitAlias: null,
       teamId: "engineering",
     });
+    expect(resolveOperatorDelegatedLeadAliasMock).toHaveBeenCalledWith({
+      teamId: "engineering",
+    });
   });
 
   it("returns invalid_request when team fallback cannot be resolved", async () => {
@@ -311,7 +336,7 @@ describe("delegated task request handler", () => {
     });
 
     readJsonBodyOrErrorMock.mockResolvedValue({
-      schema: "AngelaTaskEnvelopeV1",
+      schema: "DelegatedLeadTaskEnvelopeV1",
       task_id: "task-angela-invalid-team",
       run_id: "run-angela-invalid-team",
       objective: "Prepare task",

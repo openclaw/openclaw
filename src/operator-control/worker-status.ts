@@ -78,7 +78,7 @@ export type OperatorWorkerStatusSnapshot = {
 export type OperatorDelegatedTransportStatusSnapshot = {
   dispatchTransport: typeof CANONICAL_DELEGATED_EXECUTION_TRANSPORT;
   transportAliases: [typeof LEGACY_DELEGATED_EXECUTION_TRANSPORT];
-  role: "delegated-first-class-agent-boundary";
+  role: "delegated-lead-boundary";
   configured: boolean;
   baseUrl: string | null;
   authScheme: "bearer" | null;
@@ -125,7 +125,7 @@ function resolveDelegatedTransportDomains(): Pick<
     new Set(teams.map((team) => team.lead?.trim()).filter((lead): lead is string => Boolean(lead))),
   ).toSorted((left, right) => left.localeCompare(right));
   return {
-    globalDefaultAlias: registry.operatorRuntime.transports.angelaHttp.globalDefaultAlias,
+    globalDefaultAlias: registry.operatorRuntime.transports.delegatedHttp.globalDefaultAlias,
     servedTeams: teams.map((team) => team.id),
     leadAliases,
     defaultAliasByTeam: Object.fromEntries(
@@ -187,7 +187,7 @@ export function getOperatorDelegatedTransportStatus(): OperatorDelegatedTranspor
   return {
     dispatchTransport: CANONICAL_DELEGATED_EXECUTION_TRANSPORT,
     transportAliases: [LEGACY_DELEGATED_EXECUTION_TRANSPORT],
-    role: "delegated-first-class-agent-boundary",
+    role: "delegated-lead-boundary",
     configured: Boolean(baseUrl),
     baseUrl,
     authScheme: "bearer",

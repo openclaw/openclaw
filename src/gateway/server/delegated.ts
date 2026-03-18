@@ -1,6 +1,6 @@
 import type { CliDeps } from "../../cli/deps.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import { createDelegatedTaskRequestHandler } from "../angela-http.js";
+import { createDelegatedTaskRequestHandler } from "../delegated-http.js";
 import { dispatchDetachedAgentTurn } from "./isolated-agent-dispatch.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;

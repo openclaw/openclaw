@@ -34,7 +34,7 @@ import {
   type HookClientIpConfig,
 } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
-import { createGatewayDelegatedTaskRequestHandler } from "./server/angela.js";
+import { createGatewayDelegatedTaskRequestHandler } from "./server/delegated.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import {

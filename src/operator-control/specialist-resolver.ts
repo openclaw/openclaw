@@ -100,15 +100,13 @@ function createRegistry(params?: {
         teamCount: 0,
         operatorRuntime: {
           transports: {
-            angelaHttp: {
+            delegatedHttp: {
               globalDefaultAlias: null,
             },
           },
         },
         agents: [],
         teams: [],
-        pipelineOrder: [],
-        skillOwnership: [],
         k8sCluster: [],
         identities: [],
       };

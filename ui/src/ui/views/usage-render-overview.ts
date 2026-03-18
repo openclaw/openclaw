@@ -381,6 +381,10 @@ function renderUsageInsights(
     ? Math.round(totals.totalTokens / aggregates.messages.total)
     : 0;
   const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
+  const assistantTurnsPerUser =
+    aggregates.messages.user > 0
+      ? aggregates.messages.assistant / aggregates.messages.user
+      : undefined;
   const cacheBase = totals.input + totals.cacheRead;
   const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
   const cacheHitLabel = cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : "—";
@@ -400,10 +404,15 @@ function renderUsageInsights(
   const cacheHint = "Cache hit rate = cache read / (input + cache read). Higher is better.";
   const errorHint = "Error rate = errors / total messages. Lower is better.";
   const throughputHint = "Throughput shows tokens per minute over active time. Higher is better.";
-  const tokensHint = "Average tokens per message in this range.";
+  const tokensHint =
+    "Average billed tokens per transcript message in this range. Includes replayed prompt context and extra assistant/tool turns.";
   const costHint = showCostHint
-    ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
-    : "Average cost per message when providers report costs.";
+    ? "Average billed cost per transcript message when providers report costs. Includes replayed prompt context and extra assistant/tool turns. Cost data is missing for some or all sessions in this range."
+    : "Average billed cost per transcript message when providers report costs. Includes replayed prompt context and extra assistant/tool turns.";
+  const avgTokensSub =
+    assistantTurnsPerUser !== undefined
+      ? `Across ${aggregates.messages.total || 0} msgs · ${assistantTurnsPerUser.toFixed(1)} turns/user`
+      : `Across ${aggregates.messages.total || 0} messages`;
 
   const errorDays = aggregates.daily
     .filter((day) => day.messages > 0 && day.errors > 0)
@@ -482,7 +491,7 @@ function renderUsageInsights(
             <span class="usage-summary-hint" title=${tokensHint}>?</span>
           </div>
           <div class="usage-summary-value">${formatTokens(avgTokens)}</div>
-          <div class="usage-summary-sub">Across ${aggregates.messages.total || 0} messages</div>
+          <div class="usage-summary-sub">${avgTokensSub}</div>
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
