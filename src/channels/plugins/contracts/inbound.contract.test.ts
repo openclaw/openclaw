@@ -1,41 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../../../extensions/slack/src/accounts.js";
 import type { SlackMessageEvent } from "../../../../extensions/slack/src/types.js";
-import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { inboundCtxCapture } from "./inbound-testkit.js";
 import { expectChannelInboundContextContract } from "./suites.js";
-
-const dispatchInboundMessageMock = vi.hoisted(() =>
-  vi.fn(
-    async (params: {
-      ctx: MsgContext;
-      replyOptions?: { onReplyStart?: () => void | Promise<void> };
-    }) => {
-      await Promise.resolve(params.replyOptions?.onReplyStart?.());
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-    },
-  ),
-);
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    dispatchInboundMessage: vi.fn(async (params: { ctx: MsgContext }) => {
-      inboundCtxCapture.ctx = params.ctx;
-      return await dispatchInboundMessageMock(params);
-    }),
-    dispatchInboundMessageWithDispatcher: vi.fn(async (params: { ctx: MsgContext }) => {
-      inboundCtxCapture.ctx = params.ctx;
-      return await dispatchInboundMessageMock(params);
-    }),
-    dispatchInboundMessageWithBufferedDispatcher: vi.fn(async (params: { ctx: MsgContext }) => {
-      inboundCtxCapture.ctx = params.ctx;
-      return await dispatchInboundMessageMock(params);
-    }),
-  };
-});
 
 vi.mock("../../../../extensions/signal/src/send.js", () => ({
   sendMessageSignal: vi.fn(),
@@ -61,7 +28,6 @@ vi.mock("../../../../extensions/whatsapp/src/auto-reply/monitor/last-route.js", 
 vi.mock("../../../../extensions/whatsapp/src/auto-reply/deliver-reply.js", () => ({
   deliverWebReply: vi.fn(async () => {}),
 }));
-
 function createSlackAccount(config: ResolvedSlackAccount["config"] = {}): ResolvedSlackAccount {
   return {
     accountId: "default",
@@ -88,11 +54,6 @@ function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessage
 }
 
 describe("channel inbound contract", () => {
-  beforeEach(() => {
-    inboundCtxCapture.ctx = undefined;
-    dispatchInboundMessageMock.mockClear();
-  });
-
   it("keeps Discord inbound context finalized", async () => {
     const { processDiscordMessage } =
       await import("../../../../extensions/discord/src/monitor/message-handler.process.js");
@@ -106,6 +67,7 @@ describe("channel inbound contract", () => {
 
     await processDiscordMessage(messageCtx);
 
+    const { inboundCtxCapture } = await import("./inbound-testkit.js");
     expect(inboundCtxCapture.ctx).toBeTruthy();
     expectChannelInboundContextContract(inboundCtxCapture.ctx!);
   });
