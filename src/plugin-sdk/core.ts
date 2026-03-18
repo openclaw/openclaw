@@ -73,6 +73,12 @@ export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
+  channelTargetSchema,
+  channelTargetsSchema,
+  optionalStringEnum,
+  stringEnum,
+} from "../agents/schema/typebox.js";
+export {
   DEFAULT_SECRET_FILE_MAX_BYTES,
   loadSecretFileSync,
   readSecretFileSync,

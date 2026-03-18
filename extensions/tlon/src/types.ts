@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 
 export type TlonResolvedAccount = {
   accountId: string;

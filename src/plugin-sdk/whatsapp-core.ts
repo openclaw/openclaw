@@ -23,5 +23,5 @@ export {
   readStringParam,
 } from "../agents/tools/common.js";
 export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";
-export { normalizeE164 } from "../utils.js";
 export { resolveWhatsAppOutboundTarget } from "../whatsapp/resolve-outbound-target.js";
+export { normalizeE164 } from "../utils.js";
