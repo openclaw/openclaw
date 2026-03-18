@@ -14,6 +14,12 @@ export {
   type ChannelPlugin,
   type IMessageAccountConfig,
 } from "openclaw/plugin-sdk/imessage";
+// Re-export outbound send-dep helpers so that lazy-loaded channel runtime
+// files can import them via a relative path ("./runtime-api.js") rather
+// than the bare "openclaw" package specifier, which may not be resolvable
+// when the runtime file is loaded outside the bundled context (e.g. in
+// a pnpm workspace that installs openclaw as a dependency).
+export { resolveOutboundSendDep, type OutboundSendDeps } from "openclaw/plugin-sdk/channel-runtime";
 export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
