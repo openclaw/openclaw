@@ -8,6 +8,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture, routeLogsToStderr } from "../logging.js";
 import {
   getCommandPathWithRootOptions,
+  getCommandPositionalsWithRootOptions,
   hasHelpOrVersion,
   isRootHelpInvocation,
 } from "./argv.js";
@@ -127,14 +128,34 @@ export async function runCli(argv: string[] = process.argv) {
 
     const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
 
-    // Determine primary command first, so ACP protocol-safe routing happens before registration side-effects.
-    const [routePathPrimary, routePathSecondary] = getCommandPathWithRootOptions(parseArgv, 2);
+    // Determine primary command first, so ACP protocol-safe routing happens before
+    // registration side-effects.
+    const [routePathPrimary] = getCommandPathWithRootOptions(parseArgv, 2);
     const primary = routePathPrimary ?? null;
+
+    const acpCommandArgs =
+      primary === "acp"
+        ? getCommandPositionalsWithRootOptions(parseArgv, {
+          commandPath: ["acp"],
+          booleanFlags: ["--require-existing", "--reset-session", "--no-prefix-cwd", "--verbose", "-v"],
+          valueFlags: [
+            "--url",
+            "--token",
+            "--token-file",
+            "--password",
+            "--password-file",
+            "--session",
+            "--session-label",
+            "--provenance",
+          ],
+        })
+        : null;
+    const isAcpClient = acpCommandArgs?.[0] === "client";
 
     // Route logs to stderr for ACP bridge mode before registration side-effects,
     // so stdout remains clean for protocol clients when running `openclaw acp`
     // (including `--url`, `--token`, etc. variants).
-    if (routePathPrimary === "acp" && routePathSecondary !== "client") {
+    if (routePathPrimary === "acp" && !isAcpClient) {
       routeLogsToStderr();
     }
 
