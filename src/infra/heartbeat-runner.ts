@@ -124,13 +124,10 @@ function hasHeartbeatDefaults(cfg: OpenClawConfig) {
 
 function isConfiguredAgentId(cfg: OpenClawConfig, agentId: string) {
   const resolvedAgentId = normalizeAgentId(agentId);
-  const list = cfg.agents?.list ?? [];
-  if (list.length === 0) {
-    return Boolean(resolvedAgentId);
-  }
   if (resolvedAgentId === resolveDefaultAgentId(cfg)) {
     return true;
   }
+  const list = cfg.agents?.list ?? [];
   return list.some((entry) => normalizeAgentId(entry?.id ?? "") === resolvedAgentId);
 }
 
