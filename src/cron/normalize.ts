@@ -20,7 +20,7 @@ const DEFAULT_OPTIONS: NormalizeOptions = {
 };
 
 function coerceSchedule(schedule: UnknownRecord) {
-  const next: UnknownRecord = { ...schedule };
+  const next: UnknownRecord = structuredClone(schedule);
   const rawKind = typeof schedule.kind === "string" ? schedule.kind.trim().toLowerCase() : "";
   const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
   const exprRaw = typeof schedule.expr === "string" ? schedule.expr.trim() : "";
@@ -83,7 +83,7 @@ function coerceSchedule(schedule: UnknownRecord) {
 }
 
 function coercePayload(payload: UnknownRecord) {
-  const next: UnknownRecord = { ...payload };
+  const next: UnknownRecord = structuredClone(payload);
   // Back-compat: older configs used `provider` for delivery channel.
   migrateLegacyCronPayload(next);
   const kindRaw = typeof next.kind === "string" ? next.kind.trim().toLowerCase() : "";
@@ -164,7 +164,7 @@ function coercePayload(payload: UnknownRecord) {
 }
 
 function coerceDelivery(delivery: UnknownRecord) {
-  const next: UnknownRecord = { ...delivery };
+  const next: UnknownRecord = structuredClone(delivery);
   if (typeof delivery.mode === "string") {
     const mode = delivery.mode.trim().toLowerCase();
     if (mode === "deliver") {
@@ -321,7 +321,7 @@ export function normalizeCronJobInput(
     return null;
   }
   const base = unwrapJob(raw);
-  const next: UnknownRecord = { ...base };
+  const next: UnknownRecord = structuredClone(base);
 
   if ("agentId" in base) {
     const agentId = base.agentId;

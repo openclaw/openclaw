@@ -450,6 +450,96 @@ describe("normalizeCronJobCreate", () => {
 
     expect(normalized.sessionTarget).toBe("session:MySessionID");
   });
+
+  it("preserves nested object properties in payload", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "nested-payload",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hello",
+        options: { model: "gpt-4", temperature: 0.5 },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toBe("hello");
+    const options = payload.options as Record<string, unknown>;
+    expect(options).toEqual({ model: "gpt-4", temperature: 0.5 });
+  });
+
+  it("does not mutate the original input object (deep clone)", () => {
+    const input = {
+      name: "mutation-check",
+      schedule: { kind: "cron" as const, expr: "* * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: {
+        kind: "agentTurn" as const,
+        message: "  hello  ",
+        options: { nested: { deep: true } },
+      },
+    };
+    const inputCopy = structuredClone(input);
+    normalizeCronJobCreate(input);
+    // The original input must remain untouched
+    expect(input).toEqual(inputCopy);
+  });
+
+  it("preserves nested objects in delivery config", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "delivery-nested",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hi" },
+      delivery: {
+        mode: "webhook",
+        to: "https://example.invalid/hook",
+        headers: { Authorization: "Bearer abc", "X-Custom": "value" },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.mode).toBe("webhook");
+    expect(delivery.headers).toEqual({
+      Authorization: "Bearer abc",
+      "X-Custom": "value",
+    });
+  });
+
+  it("preserves deeply nested structures (3+ levels) through normalization", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "deep-nesting",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+        config: {
+          level1: {
+            level2: {
+              level3: { value: 42, tags: ["a", "b"] },
+            },
+          },
+        },
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    const config = payload.config as Record<string, unknown>;
+    expect(config).toEqual({
+      level1: {
+        level2: {
+          level3: { value: 42, tags: ["a", "b"] },
+        },
+      },
+    });
+  });
 });
 
 describe("normalizeCronJobPatch", () => {
