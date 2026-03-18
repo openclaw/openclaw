@@ -195,4 +195,25 @@ describe("session lock manager selection", () => {
     expect(resolveAcpSessionLockTtlMs({ OPENCLAW_ACP_SESSION_LOCK_TTL_MS: "nope" })).toBe(120_000);
     expect(resolveAcpSessionLockTtlMs({ OPENCLAW_ACP_SESSION_LOCK_TTL_MS: "2000" })).toBe(2_000);
   });
+
+  // C-3: REDIS_URL fallback removed — generic REDIS_URL must not activate Redis-backed locking
+  it("does not activate Redis backend when only REDIS_URL is set", () => {
+    const manager = getAcpSessionLockManager({ REDIS_URL: "redis://localhost:6379" });
+    expect(manager).toBeInstanceOf(LocalSessionLockManager);
+  });
+
+  it("activates Redis backend only when OPENCLAW_ACP_SESSION_LOCK_REDIS_URL is set", () => {
+    const manager = getAcpSessionLockManager({
+      REDIS_URL: "redis://localhost:6379",
+      OPENCLAW_ACP_SESSION_LOCK_REDIS_URL: "http://redis.example",
+    });
+    // init will fail (bad scheme) but it must not fall back to local — must be fail-closed
+    expect(manager).not.toBeInstanceOf(LocalSessionLockManager);
+  });
 });
+
+// C-1: sendCommand per-command timeout lives inside RedisSocketConnection, which is private
+// and only reachable via createRedisCommandRunner (real TCP path). That path is not exercised
+// in unit tests because RedisSessionLockManager accepts a runRedisCommand injection that
+// bypasses socket I/O entirely. The Promise.race timeout is covered by code inspection; a
+// network-level integration test would require a real (or mock) TCP server.

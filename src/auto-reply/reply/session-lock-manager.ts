@@ -63,7 +63,7 @@ class RedisSocketConnection {
     });
   }
 
-  async sendCommand(args: string[]): Promise<RedisReply> {
+  async sendCommand(args: string[], timeoutMs = 10_000): Promise<RedisReply> {
     if (this.pending) {
       throw new Error("Redis command pipelining is not supported by this connection.");
     }
@@ -77,9 +77,17 @@ class RedisSocketConnection {
       }
       return parsed.value;
     }
-    return await new Promise<RedisReply>((resolve, reject) => {
-      this.pending = { resolve, reject };
-    });
+    return await Promise.race([
+      new Promise<RedisReply>((resolve, reject) => {
+        this.pending = { resolve, reject };
+      }),
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`Redis command timed out after ${timeoutMs}ms.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
   }
 
   close(): void {
@@ -458,14 +466,8 @@ export function resolveAcpSessionLockTtlMs(env: NodeJS.ProcessEnv = process.env)
 }
 
 function resolveRedisLockUrl(env: NodeJS.ProcessEnv = process.env): string | null {
-  const candidates = [env.OPENCLAW_ACP_SESSION_LOCK_REDIS_URL, env.REDIS_URL];
-  for (const candidate of candidates) {
-    const normalized = candidate?.trim();
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return null;
+  const normalized = env.OPENCLAW_ACP_SESSION_LOCK_REDIS_URL?.trim();
+  return normalized || null;
 }
 
 let ACP_SESSION_LOCK_MANAGER_SINGLETON: SessionLockManager | null = null;
