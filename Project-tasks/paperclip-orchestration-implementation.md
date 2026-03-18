@@ -481,7 +481,7 @@ Build the persistent task system with identifier generation, status workflow, ag
 - [x] 2.7 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
 - [x] 2.8 UI task board — `/tasks` page (secondary; primary task surface is org view agent side panel 6.10); list view with status/workspace filters, create dialog
 - [ ] 2.9 UI task detail — `/tasks/:id` with status transitions, assignee picker, comment thread (secondary)
-- [ ] 2.10 Tests — store tests (identifier gen, transitions, comments) + handler tests
+- [x] 2.10 Tests — store tests (identifier gen, transitions, comments) + handler tests
 
 ### Task 3: Phase 3 — Goal Hierarchy
 
@@ -497,7 +497,7 @@ Build goal hierarchy: vision to objective to key_result to task. Tasks reference
 - [x] 3.6 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
 - [x] 3.7 Task-goal linking — extend task create/update to accept goalId, show goal ancestry on task detail
 - [x] 3.8 UI goals page — `/goals` with indented tree view by level, create dialog, progress bars
-- [ ] 3.9 Tests — store tests (tree operations, progress) + handler tests
+- [x] 3.9 Tests — store tests (tree operations, progress) + handler tests
 
 ### Task 4: Phase 4 — Cost Budgets and Enforcement
 
@@ -516,7 +516,7 @@ Cost event recording, budget policies, enforcement, and incident tracking. Hooks
 - [x] 4.9 Registration — add to server-methods.ts, server-methods-list.ts, method-scopes.ts
 - [x] 4.10 Gateway events — emit `budget.warning` and `budget.exceeded` for real-time UI notifications
 - [x] 4.11 UI cost dashboard — `/budgets` with spend charts, policy CRUD, incident list, alert badges
-- [ ] 4.12 Tests — cost recording, budget enforcement (warn/block), reconciliation, handler tests
+- [x] 4.12 Tests — cost recording, budget enforcement (warn/block), reconciliation, handler tests
 
 ### Task 5: Phase 5 — Governance and Approvals
 
@@ -536,7 +536,7 @@ Organizational approval workflow + activity audit log + agent config revision tr
 - [x] 5.10 Gateway events — emit `approval.requested` and `approval.resolved` for real-time notification
 - [x] 5.11 UI approval inbox — `/approvals` with pending list, approve/reject/revise buttons
 - [x] 5.12 UI activity feed — `/activity` with filterable, paginated timeline
-- [ ] 5.13 Tests — approval transitions, activity log, config revisions, handler tests
+- [x] 5.13 Tests — approval transitions, activity log, config revisions, handler tests
 
 ### Task 6: Phase 6 — Agent Lifecycle and Integration
 
@@ -557,7 +557,7 @@ Workspace-aware agent status, performance metrics, department budget aggregation
 - [x] 6.11 UI org chart — department legend augmentation: add budget % bar per department in the legend using `budgets.department.summary`; color-coded to warn/exceeded thresholds
 - [x] 6.12 UI org chart — workspace assignment actions: add assign/remove workspace buttons to node hover action bar (calling `workspaces.assignAgent` / `workspaces.removeAgent`); show agent status toggle (active/inactive/paused) via `workspaces.updateAgentStatus`
 - [x] 6.13 UI secondary pages — task board (`/tasks`), goals tree (`/goals`), approvals inbox (`/approvals`), activity feed (`/activity`), workspaces (`/workspaces`); sidebar Orchestration nav group
-- [ ] 6.14 Tests — session binding, workspace attribution, metrics computation, department aggregation tests
+- [x] 6.14 Tests — session binding, workspace attribution, metrics computation, department aggregation tests
 
 > **Data flows for org view augmentation:**
 >
