@@ -14,7 +14,6 @@ import {
   withTrustedWebToolsEndpoint,
   wrapWebContent,
   writeCache,
-  type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
 
 const XAI_WEB_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
