@@ -61,14 +61,21 @@ function logDeviceTokenRotationDenied(params: {
   deviceId: string;
   role: string;
   reason:
-    | RotateDeviceTokenDenyReason
-    | "caller-missing-scope"
-    | "unknown-device-or-role"
-    | "SCOPE_ESCALATION_DETECTED";
+function logDeviceTokenRotationDenied(params: {
+  log: { warn: (message: string) => void };
+  deviceId: string;
+  role: string;
+  reason: RotateDeviceTokenDenyReason | "caller-missing-scope" | "unknown-device-or-role" | "SCOPE_ESCALATION_DETECTED";
   scope?: string | null;
   message?: string;
   details?: Record<string, unknown>;
 }) {
+  const suffix = params.scope ? ` scope=${params.scope}` : "";
+  const detailsSuffix = params.details ? ` details=${JSON.stringify(params.details)}` : "";
+  params.log.warn(
+    `device token rotation denied device=${params.deviceId} role=${params.role} reason=${params.reason}${suffix}${detailsSuffix}`,
+  );
+}
   const suffix = params.scope ? ` scope=${params.scope}` : "";
   const detailsSuffix = params.details ? ` details=${JSON.stringify(params.details)}` : "";
   params.log.warn(
