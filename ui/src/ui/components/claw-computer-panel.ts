@@ -100,31 +100,26 @@ export class ClawComputerPanel extends LitElement {
     // 默认居中时，screenTop = (hostHeight - screenHeight) / 2
     // maxUp = -screenTop (移动到最顶部)
     // maxDown = screenTop (移动到最底部)
-    const centerTop = (hostHeight - screenHeight) / 2;
+    // 注意：这里的 hostHeight 实际上是 screen-container 的 content-box 高度（因为有 padding）
+    // 但 offsetHeight 返回的是包含 padding 的高度。
+    // 不过，我们这里的逻辑主要是为了限制偏移量。
 
-    // 允许的偏移范围是 [-centerTop, centerTop]
-    // 但如果 screenHeight > hostHeight，centerTop 是负数
-    // 此时 screenTop 是负数，说明 screen 顶部在 host 顶部上方
-    // 此时允许的偏移量应该让 screen 能够覆盖 host
-    // 但我们的 UI 逻辑是 screen 应该包含在 host 内（通过 max-height: 100%）
-    // 所以理论上 screenHeight <= hostHeight
+    // 由于我们给容器加了 padding-top: 50px，Flex 居中是相对于剩余空间（Content Box）的。
+    // 只要我们限制 screen 不超出 Content Box，就自然避开了工具栏。
+
+    // 获取容器的实际可用高度（减去 padding）
+    const style = getComputedStyle(this.shadowRoot.querySelector(".screen-container")!);
+    const paddingTop = parseFloat(style.paddingTop) || 0;
+    const contentHeight = hostHeight - paddingTop;
+
+    // 计算在 Content Box 内的居中位置的顶部距离
+    const centerTop = (contentHeight - screenHeight) / 2;
 
     const maxOffset = Math.max(0, centerTop);
 
     // 如果当前偏移量超出了允许范围，进行钳制
     if (Math.abs(this.dockedOffsetY) > maxOffset) {
-      // 这里的逻辑是：
-      // 如果 dockedOffsetY > maxOffset，说明向下偏移太多，需要减少到 maxOffset
-      // 如果 dockedOffsetY < -maxOffset，说明向上偏移太多，需要增加到 -maxOffset
-
-      // 我们需要使用 this.TOOLBAR_SPACE 来限制 maxUpOffset
-      const maxUpOffset = this.TOOLBAR_SPACE - centerTop; // 负值，如果 TOOLBAR_SPACE < centerTop
-
-      // 注意：dockedOffsetY 是正数表示向下偏移，负数表示向上偏移
-      // 所以我们希望 dockedOffsetY >= maxUpOffset
-      // 同时 dockedOffsetY <= centerTop (maxDownOffset)
-
-      this.dockedOffsetY = Math.max(maxUpOffset, Math.min(centerTop, this.dockedOffsetY));
+      this.dockedOffsetY = Math.max(-maxOffset, Math.min(maxOffset, this.dockedOffsetY));
     }
   }
 
@@ -191,6 +186,9 @@ export class ClawComputerPanel extends LitElement {
       display: flex;
       align-items: center;
       justify-content: center;
+      /* Reserve space for top toolbar */
+      padding-top: 50px;
+      box-sizing: border-box;
     }
 
     .screen {
@@ -700,12 +698,18 @@ export class ClawComputerPanel extends LitElement {
       const screenHeight = screen?.offsetHeight || 0;
 
       // 计算最高和最低不能超过多少
-      // 当 screen 居中时，初始顶部位置是 (hostHeight - screenHeight) / 2
-      const centerTop = (hostHeight - screenHeight) / 2;
+      // 获取容器的实际可用高度（减去 padding）
+      const container = this.shadowRoot?.querySelector(".screen-container");
+      const style = container ? getComputedStyle(container) : null;
+      const paddingTop = style ? parseFloat(style.paddingTop) || 0 : 50;
+      const contentHeight = hostHeight - paddingTop;
 
-      // 允许的最上偏移量 (offset = TOOLBAR_SPACE - centerTop)
-      // 必须使用 this.TOOLBAR_SPACE
-      const maxUpOffset = this.TOOLBAR_SPACE - centerTop;
+      // 当 screen 居中时，初始顶部位置是 (contentHeight - screenHeight) / 2
+      const centerTop = (contentHeight - screenHeight) / 2;
+
+      // 允许的最上偏移量 (offset = -centerTop)
+      // 目标位置是 PADDING_TOP
+      const maxUpOffset = -centerTop;
 
       // 允许的最下偏移量 (offset = centerTop)
       // 保持原来的逻辑，底部贴合容器底部
