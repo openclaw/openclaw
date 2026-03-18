@@ -1,0 +1,362 @@
+[
+  {
+    "file": "extensions/brave/src/brave-web-search-provider.ts",
+    "line": 2,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/common.js",
+    "resolvedPath": "src/agents/tools/common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/brave/src/brave-web-search-provider.ts",
+    "line": 3,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/brave/src/brave-web-search-provider.ts",
+    "line": 19,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/brave/src/brave-web-search-provider.ts",
+    "line": 23,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/brave/src/brave-web-search-provider.ts",
+    "line": 24,
+    "kind": "import",
+    "specifier": "../../../src/cli/command-format.js",
+    "resolvedPath": "src/cli/command-format.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/brave/src/brave-web-search-provider.ts",
+    "line": 25,
+    "kind": "import",
+    "specifier": "../../../src/config/config.js",
+    "resolvedPath": "src/config/config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/brave/src/brave-web-search-provider.ts",
+    "line": 29,
+    "kind": "import",
+    "specifier": "../../../src/plugins/types.js",
+    "resolvedPath": "src/plugins/types.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/brave/src/brave-web-search-provider.ts",
+    "line": 30,
+    "kind": "import",
+    "specifier": "../../../src/security/external-content.js",
+    "resolvedPath": "src/security/external-content.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/discord/src/runtime-api.ts",
+    "line": 38,
+    "kind": "export",
+    "specifier": "../../../src/agents/date-time.js",
+    "resolvedPath": "src/agents/date-time.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/discord/src/runtime-api.ts",
+    "line": 39,
+    "kind": "export",
+    "specifier": "../../../src/agents/sandbox-paths.js",
+    "resolvedPath": "src/agents/sandbox-paths.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/discord/src/runtime-api.ts",
+    "line": 41,
+    "kind": "export",
+    "specifier": "../../../src/polls.js",
+    "resolvedPath": "src/polls.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/discord/src/runtime-api.ts",
+    "line": 42,
+    "kind": "export",
+    "specifier": "../../../src/config/types.js",
+    "resolvedPath": "src/config/types.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/discord/src/runtime-api.ts",
+    "line": 47,
+    "kind": "export",
+    "specifier": "../../../src/config/types.secrets.js",
+    "resolvedPath": "src/config/types.secrets.js",
+    "reason": "re-exports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/firecrawl/src/firecrawl-search-provider.ts",
+    "line": 5,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/firecrawl/src/firecrawl-search-provider.ts",
+    "line": 6,
+    "kind": "import",
+    "specifier": "../../../src/plugins/enable.js",
+    "resolvedPath": "src/plugins/enable.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/firecrawl/src/firecrawl-search-provider.ts",
+    "line": 7,
+    "kind": "import",
+    "specifier": "../../../src/plugins/types.js",
+    "resolvedPath": "src/plugins/types.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/google/src/gemini-web-search-provider.ts",
+    "line": 2,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/common.js",
+    "resolvedPath": "src/agents/tools/common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/google/src/gemini-web-search-provider.ts",
+    "line": 3,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-citation-redirect.js",
+    "resolvedPath": "src/agents/tools/web-search-citation-redirect.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/google/src/gemini-web-search-provider.ts",
+    "line": 4,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/google/src/gemini-web-search-provider.ts",
+    "line": 17,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/google/src/gemini-web-search-provider.ts",
+    "line": 21,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/google/src/gemini-web-search-provider.ts",
+    "line": 22,
+    "kind": "import",
+    "specifier": "../../../src/config/config.js",
+    "resolvedPath": "src/config/config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/google/src/gemini-web-search-provider.ts",
+    "line": 26,
+    "kind": "import",
+    "specifier": "../../../src/plugins/types.js",
+    "resolvedPath": "src/plugins/types.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/google/src/gemini-web-search-provider.ts",
+    "line": 27,
+    "kind": "import",
+    "specifier": "../../../src/security/external-content.js",
+    "resolvedPath": "src/security/external-content.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
+    "line": 2,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/common.js",
+    "resolvedPath": "src/agents/tools/common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
+    "line": 3,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
+    "line": 16,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
+    "line": 20,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
+    "line": 21,
+    "kind": "import",
+    "specifier": "../../../src/config/config.js",
+    "resolvedPath": "src/config/config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
+    "line": 25,
+    "kind": "import",
+    "specifier": "../../../src/plugins/types.js",
+    "resolvedPath": "src/plugins/types.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/moonshot/src/kimi-web-search-provider.ts",
+    "line": 26,
+    "kind": "import",
+    "specifier": "../../../src/security/external-content.js",
+    "resolvedPath": "src/security/external-content.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
+    "line": 6,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/common.js",
+    "resolvedPath": "src/agents/tools/common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
+    "line": 7,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
+    "line": 25,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
+    "line": 29,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
+    "line": 30,
+    "kind": "import",
+    "specifier": "../../../src/config/config.js",
+    "resolvedPath": "src/config/config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
+    "line": 35,
+    "kind": "import",
+    "specifier": "../../../src/plugins/types.js",
+    "resolvedPath": "src/plugins/types.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/perplexity/src/perplexity-web-search-provider.ts",
+    "line": 36,
+    "kind": "import",
+    "specifier": "../../../src/security/external-content.js",
+    "resolvedPath": "src/security/external-content.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/xai/src/grok-web-search-provider.ts",
+    "line": 2,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/common.js",
+    "resolvedPath": "src/agents/tools/common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/xai/src/grok-web-search-provider.ts",
+    "line": 3,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/xai/src/grok-web-search-provider.ts",
+    "line": 16,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-common.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-common.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/xai/src/grok-web-search-provider.ts",
+    "line": 20,
+    "kind": "import",
+    "specifier": "../../../src/agents/tools/web-search-provider-config.js",
+    "resolvedPath": "src/agents/tools/web-search-provider-config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/xai/src/grok-web-search-provider.ts",
+    "line": 21,
+    "kind": "import",
+    "specifier": "../../../src/config/config.js",
+    "resolvedPath": "src/config/config.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/xai/src/grok-web-search-provider.ts",
+    "line": 25,
+    "kind": "import",
+    "specifier": "../../../src/plugins/types.js",
+    "resolvedPath": "src/plugins/types.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  },
+  {
+    "file": "extensions/xai/src/grok-web-search-provider.ts",
+    "line": 26,
+    "kind": "import",
+    "specifier": "../../../src/security/external-content.js",
+    "resolvedPath": "src/security/external-content.js",
+    "reason": "imports core src path outside plugin-sdk from an extension"
+  }
+]
