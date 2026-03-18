@@ -16,7 +16,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal";
+} from "./runtime-api.js";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { markdownToSignalTextChunks } from "./format.js";
 import {

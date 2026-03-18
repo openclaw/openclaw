@@ -1,2 +1,1 @@
-export * from "./src/index.js";
-export type { SignalAccountConfig } from "openclaw/plugin-sdk/signal";
+export * from "./src/runtime-api.js";
