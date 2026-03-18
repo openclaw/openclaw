@@ -11,7 +11,9 @@ struct TranscriptTextView: NSViewRepresentable {
     var onEndEditing: () -> Void
     var onSend: () -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = TranscriptNSTextView()
@@ -77,7 +79,9 @@ struct TranscriptTextView: NSViewRepresentable {
         var parent: TranscriptTextView
         var isProgrammaticUpdate = false
 
-        init(_ parent: TranscriptTextView) { self.parent = parent }
+        init(_ parent: TranscriptTextView) {
+            self.parent = parent
+        }
 
         func textDidBeginEditing(_ notification: Notification) {
             self.parent.onBeginEditing()
@@ -147,7 +151,9 @@ private final class ClickCatcher: NSView {
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
@@ -177,6 +183,11 @@ private final class TranscriptNSTextView: NSTextView {
         let isEscape = event.keyCode == 53
         if isEscape {
             self.onEscape?()
+            return
+        }
+        // Keep IME candidate confirmation behavior: Return should commit marked text first.
+        if isReturn, self.hasMarkedText() {
+            super.keyDown(with: event)
             return
         }
         if isReturn, event.modifierFlags.contains(.command) {

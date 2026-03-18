@@ -18,63 +18,16 @@ This endpoint is **disabled by default**. Enable it in config first.
 Under the hood, requests are executed as a normal Gateway agent run (same codepath as
 `openclaw agent`), so routing/permissions/config match your Gateway.
 
-## Authentication
+## Authentication, security, and routing
 
-Uses the Gateway auth configuration. Send a bearer token:
+Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api):
 
-- `Authorization: Bearer <token>`
+- use `Authorization: Bearer <token>` with the normal Gateway auth config
+- treat the endpoint as full operator access for the gateway instance
+- select agents with `model: "openclaw:<agentId>"`, `model: "agent:<agentId>"`, or `x-openclaw-agent-id`
+- use `x-openclaw-session-key` for explicit session routing
 
-Notes:
-
-- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
-- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
-
-## Choosing an agent
-
-No custom headers required: encode the agent id in the OpenResponses `model` field:
-
-- `model: "openclaw:<agentId>"` (example: `"openclaw:main"`, `"openclaw:beta"`)
-- `model: "agent:<agentId>"` (alias)
-
-Or target a specific OpenClaw agent by header:
-
-- `x-openclaw-agent-id: <agentId>` (default: `main`)
-
-Advanced:
-
-- `x-openclaw-session-key: <sessionKey>` to fully control session routing.
-
-## Enabling the endpoint
-
-Set `gateway.http.endpoints.responses.enabled` to `true`:
-
-```json5
-{
-  gateway: {
-    http: {
-      endpoints: {
-        responses: { enabled: true },
-      },
-    },
-  },
-}
-```
-
-## Disabling the endpoint
-
-Set `gateway.http.endpoints.responses.enabled` to `false`:
-
-```json5
-{
-  gateway: {
-    http: {
-      endpoints: {
-        responses: { enabled: false },
-      },
-    },
-  },
-}
-```
+Enable or disable this endpoint with `gateway.http.endpoints.responses.enabled`.
 
 ## Session behavior
 
@@ -148,7 +101,7 @@ Supports base64 or URL sources:
 }
 ```
 
-Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `image/heic`, `image/heif`.
 Max size (current): 10MB.
 
 ## Files (`input_file`)
@@ -186,7 +139,13 @@ URL fetch defaults:
 
 - `files.allowUrl`: `true`
 - `images.allowUrl`: `true`
+- `maxUrlParts`: `8` (total URL-based `input_file` + `input_image` parts per request)
 - Requests are guarded (DNS resolution, private IP blocking, redirect caps, timeouts).
+- Optional hostname allowlists are supported per input type (`files.urlAllowlist`, `images.urlAllowlist`).
+  - Exact host: `"cdn.example.com"`
+  - Wildcard subdomains: `"*.assets.example.com"` (does not match apex)
+  - Empty or omitted allowlists mean no hostname allowlist restriction.
+- To disable URL-based fetches entirely, set `files.allowUrl: false` and/or `images.allowUrl: false`.
 
 ## File + image limits (config)
 
@@ -200,8 +159,10 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
         responses: {
           enabled: true,
           maxBodyBytes: 20000000,
+          maxUrlParts: 8,
           files: {
             allowUrl: true,
+            urlAllowlist: ["cdn.example.com", "*.assets.example.com"],
             allowedMimes: [
               "text/plain",
               "text/markdown",
@@ -222,7 +183,15 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
           },
           images: {
             allowUrl: true,
-            allowedMimes: ["image/jpeg", "image/png", "image/gif", "image/webp"],
+            urlAllowlist: ["images.example.com"],
+            allowedMimes: [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+            ],
             maxBytes: 10485760,
             maxRedirects: 3,
             timeoutMs: 10000,
@@ -237,6 +206,7 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
 Defaults when omitted:
 
 - `maxBodyBytes`: 20MB
+- `maxUrlParts`: 8
 - `files.maxBytes`: 5MB
 - `files.maxChars`: 200k
 - `files.maxRedirects`: 3
@@ -247,6 +217,14 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
+- HEIC/HEIF `input_image` sources are accepted and normalized to JPEG before provider delivery.
+
+Security note:
+
+- URL allowlists are enforced before fetch and on redirect hops.
+- Allowlisting a hostname does not bypass private/internal IP blocking.
+- For internet-exposed gateways, apply network egress controls in addition to app-level guards.
+  See [Security](/gateway/security).
 
 ## Streaming (SSE)
 

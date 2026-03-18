@@ -1,64 +1,55 @@
 import { describe, expect, it } from "vitest";
-import type { OutboundDeliveryJson } from "./format.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { buildOutboundResultEnvelope } from "./envelope.js";
+import type { OutboundDeliveryJson } from "./format.js";
 
 describe("buildOutboundResultEnvelope", () => {
-  it("flattens delivery-only payloads by default", () => {
-    const delivery: OutboundDeliveryJson = {
-      provider: "whatsapp",
-      via: "gateway",
-      to: "+1",
-      messageId: "m1",
-      mediaUrl: null,
-    };
+  const delivery: OutboundDeliveryJson = {
+    channel: "telegram",
+    via: "direct",
+    to: "123",
+    messageId: "m1",
+    mediaUrl: null,
+    chatId: "c1",
+  };
+
+  it("flattens delivery by default when nothing else is present", () => {
     expect(buildOutboundResultEnvelope({ delivery })).toEqual(delivery);
   });
 
-  it("keeps payloads and meta in the envelope", () => {
-    const envelope = buildOutboundResultEnvelope({
-      payloads: [{ text: "hi", mediaUrl: null, mediaUrls: undefined }],
-      meta: { foo: "bar" },
-    });
-    expect(envelope).toEqual({
-      payloads: [{ text: "hi", mediaUrl: null, mediaUrls: undefined }],
-      meta: { foo: "bar" },
-    });
-  });
+  it("keeps pre-normalized payload JSON entries but clones the array", () => {
+    const payloads = [{ text: "hi", mediaUrl: null, mediaUrls: undefined }];
 
-  it("includes delivery when payloads are present", () => {
-    const delivery: OutboundDeliveryJson = {
-      provider: "telegram",
-      via: "direct",
-      to: "123",
-      messageId: "m2",
-      mediaUrl: null,
-      chatId: "c1",
-    };
     const envelope = buildOutboundResultEnvelope({
-      payloads: [],
-      delivery,
+      payloads,
       meta: { ok: true },
     });
+
     expect(envelope).toEqual({
-      payloads: [],
+      payloads: [{ text: "hi", mediaUrl: null, mediaUrls: undefined }],
       meta: { ok: true },
-      delivery,
     });
+    expect((envelope as { payloads: unknown[] }).payloads).not.toBe(payloads);
   });
 
-  it("can keep delivery wrapped when requested", () => {
-    const delivery: OutboundDeliveryJson = {
-      provider: "discord",
-      via: "gateway",
-      to: "channel:C1",
-      messageId: "m3",
-      mediaUrl: null,
-      channelId: "C1",
-    };
-    const envelope = buildOutboundResultEnvelope({
+  it("normalizes reply payloads and keeps wrapped delivery when flattening is disabled", () => {
+    const payloads: ReplyPayload[] = [{ text: "hello" }];
+
+    expect(
+      buildOutboundResultEnvelope({
+        payloads,
+        delivery,
+        flattenDelivery: false,
+      }),
+    ).toEqual({
+      payloads: [
+        {
+          text: "hello",
+          mediaUrl: null,
+          channelData: undefined,
+        },
+      ],
       delivery,
-      flattenDelivery: false,
     });
-    expect(envelope).toEqual({ delivery });
   });
 });

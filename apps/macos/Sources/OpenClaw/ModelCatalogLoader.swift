@@ -2,7 +2,10 @@ import Foundation
 import JavaScriptCore
 
 enum ModelCatalogLoader {
-    static var defaultPath: String { self.resolveDefaultPath() }
+    static var defaultPath: String {
+        self.resolveDefaultPath()
+    }
+
     private static let logger = Logger(subsystem: "ai.openclaw", category: "models")
     private nonisolated static let appSupportDir: URL = {
         let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!

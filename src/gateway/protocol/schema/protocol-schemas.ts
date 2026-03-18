@@ -34,9 +34,16 @@ import {
   SkillsInstallParamsSchema,
   SkillsStatusParamsSchema,
   SkillsUpdateParamsSchema,
+  ToolCatalogEntrySchema,
+  ToolCatalogGroupSchema,
+  ToolCatalogProfileSchema,
+  ToolsCatalogParamsSchema,
+  ToolsCatalogResultSchema,
 } from "./agents-models-skills.js";
 import {
   ChannelsLogoutParamsSchema,
+  TalkConfigParamsSchema,
+  TalkConfigResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   TalkModeParamsSchema,
@@ -47,6 +54,8 @@ import {
   ConfigApplyParamsSchema,
   ConfigGetParamsSchema,
   ConfigPatchParamsSchema,
+  ConfigSchemaLookupParamsSchema,
+  ConfigSchemaLookupResultSchema,
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSetParamsSchema,
@@ -66,6 +75,7 @@ import {
 import {
   DevicePairApproveParamsSchema,
   DevicePairListParamsSchema,
+  DevicePairRemoveParamsSchema,
   DevicePairRejectParamsSchema,
   DevicePairRequestedEventSchema,
   DevicePairResolvedEventSchema,
@@ -104,10 +114,15 @@ import {
 import {
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
+  NodePendingDrainParamsSchema,
+  NodePendingDrainResultSchema,
+  NodePendingEnqueueParamsSchema,
+  NodePendingEnqueueResultSchema,
   NodeInvokeParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeInvokeRequestEventSchema,
   NodeListParamsSchema,
+  NodePendingAckParamsSchema,
   NodePairApproveParamsSchema,
   NodePairListParamsSchema,
   NodePairRejectParamsSchema,
@@ -115,6 +130,13 @@ import {
   NodePairVerifyParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
+import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
+import {
+  SecretsReloadParamsSchema,
+  SecretsResolveAssignmentSchema,
+  SecretsResolveParamsSchema,
+  SecretsResolveResultSchema,
+} from "./secrets.js";
 import {
   SessionsCompactParamsSchema,
   SessionsDeleteParamsSchema,
@@ -137,7 +159,7 @@ import {
   WizardStepSchema,
 } from "./wizard.js";
 
-export const ProtocolSchemas: Record<string, TSchema> = {
+export const ProtocolSchemas = {
   ConnectParams: ConnectParamsSchema,
   HelloOk: HelloOkSchema,
   RequestFrame: RequestFrameSchema,
@@ -163,11 +185,22 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodePairVerifyParams: NodePairVerifyParamsSchema,
   NodeRenameParams: NodeRenameParamsSchema,
   NodeListParams: NodeListParamsSchema,
+  NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
   NodeInvokeParams: NodeInvokeParamsSchema,
   NodeInvokeResultParams: NodeInvokeResultParamsSchema,
   NodeEventParams: NodeEventParamsSchema,
+  NodePendingDrainParams: NodePendingDrainParamsSchema,
+  NodePendingDrainResult: NodePendingDrainResultSchema,
+  NodePendingEnqueueParams: NodePendingEnqueueParamsSchema,
+  NodePendingEnqueueResult: NodePendingEnqueueResultSchema,
   NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
+  PushTestParams: PushTestParamsSchema,
+  PushTestResult: PushTestResultSchema,
+  SecretsReloadParams: SecretsReloadParamsSchema,
+  SecretsResolveParams: SecretsResolveParamsSchema,
+  SecretsResolveAssignment: SecretsResolveAssignmentSchema,
+  SecretsResolveResult: SecretsResolveResultSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
@@ -181,7 +214,9 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ConfigApplyParams: ConfigApplyParamsSchema,
   ConfigPatchParams: ConfigPatchParamsSchema,
   ConfigSchemaParams: ConfigSchemaParamsSchema,
+  ConfigSchemaLookupParams: ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponse: ConfigSchemaResponseSchema,
+  ConfigSchemaLookupResult: ConfigSchemaLookupResultSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,
@@ -191,6 +226,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   WizardStartResult: WizardStartResultSchema,
   WizardStatusResult: WizardStatusResultSchema,
   TalkModeParams: TalkModeParamsSchema,
+  TalkConfigParams: TalkConfigParamsSchema,
+  TalkConfigResult: TalkConfigResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
@@ -216,6 +253,11 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,
   SkillsStatusParams: SkillsStatusParamsSchema,
+  ToolsCatalogParams: ToolsCatalogParamsSchema,
+  ToolCatalogProfile: ToolCatalogProfileSchema,
+  ToolCatalogEntry: ToolCatalogEntrySchema,
+  ToolCatalogGroup: ToolCatalogGroupSchema,
+  ToolsCatalogResult: ToolsCatalogResultSchema,
   SkillsBinsParams: SkillsBinsParamsSchema,
   SkillsBinsResult: SkillsBinsResultSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
@@ -241,6 +283,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,
+  DevicePairRemoveParams: DevicePairRemoveParamsSchema,
   DeviceTokenRotateParams: DeviceTokenRotateParamsSchema,
   DeviceTokenRevokeParams: DeviceTokenRevokeParamsSchema,
   DevicePairRequestedEvent: DevicePairRequestedEventSchema,
@@ -253,6 +296,6 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
-};
+} satisfies Record<string, TSchema>;
 
 export const PROTOCOL_VERSION = 3 as const;

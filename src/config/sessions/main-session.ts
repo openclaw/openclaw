@@ -1,12 +1,15 @@
-import type { SessionScope } from "./types.js";
 import {
-  buildAgentMainSessionKey,
-  DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { loadConfig } from "../config.js";
+import type { SessionScope } from "./types.js";
+
+const FALLBACK_DEFAULT_AGENT_ID = "main";
+
+function buildMainSessionKey(agentId: string, mainKey?: string): string {
+  return `agent:${normalizeAgentId(agentId)}:${normalizeMainKey(mainKey)}`;
+}
 
 export function resolveMainSessionKey(cfg?: {
   session?: { scope?: SessionScope; mainKey?: string };
@@ -17,14 +20,8 @@ export function resolveMainSessionKey(cfg?: {
   }
   const agents = cfg?.agents?.list ?? [];
   const defaultAgentId =
-    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? DEFAULT_AGENT_ID;
-  const agentId = normalizeAgentId(defaultAgentId);
-  const mainKey = normalizeMainKey(cfg?.session?.mainKey);
-  return buildAgentMainSessionKey({ agentId, mainKey });
-}
-
-export function resolveMainSessionKeyFromConfig(): string {
-  return resolveMainSessionKey(loadConfig());
+    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? FALLBACK_DEFAULT_AGENT_ID;
+  return buildMainSessionKey(defaultAgentId, cfg?.session?.mainKey);
 }
 
 export { resolveAgentIdFromSessionKey };
@@ -33,8 +30,7 @@ export function resolveAgentMainSessionKey(params: {
   cfg?: { session?: { mainKey?: string } };
   agentId: string;
 }): string {
-  const mainKey = normalizeMainKey(params.cfg?.session?.mainKey);
-  return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
+  return buildMainSessionKey(params.agentId, params.cfg?.session?.mainKey);
 }
 
 export function resolveExplicitAgentSessionKey(params: {
@@ -60,11 +56,8 @@ export function canonicalizeMainSessionAlias(params: {
 
   const agentId = normalizeAgentId(params.agentId);
   const mainKey = normalizeMainKey(params.cfg?.session?.mainKey);
-  const agentMainSessionKey = buildAgentMainSessionKey({ agentId, mainKey });
-  const agentMainAliasKey = buildAgentMainSessionKey({
-    agentId,
-    mainKey: "main",
-  });
+  const agentMainSessionKey = buildMainSessionKey(agentId, mainKey);
+  const agentMainAliasKey = buildMainSessionKey(agentId, "main");
 
   const isMainAlias =
     raw === "main" || raw === mainKey || raw === agentMainSessionKey || raw === agentMainAliasKey;

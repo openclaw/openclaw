@@ -1,4 +1,8 @@
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import {
+  definePluginEntry,
+  type ProviderAuthContext,
+  type ProviderAuthResult,
+} from "openclaw/plugin-sdk/copilot-proxy";
 
 const DEFAULT_BASE_URL = "http://localhost:3000/v1";
 const DEFAULT_API_KEY = "n/a";
@@ -57,20 +61,19 @@ function buildModelDefinition(modelId: string) {
   return {
     id: modelId,
     name: modelId,
-    api: "openai-completions",
+    api: "openai-completions" as const,
     reasoning: false,
-    input: ["text", "image"],
+    input: ["text", "image"] as Array<"text" | "image">,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MAX_TOKENS,
   };
 }
 
-const copilotProxyPlugin = {
+export default definePluginEntry({
   id: "copilot-proxy",
   name: "Copilot Proxy",
   description: "Local Copilot Proxy (VS Code LM) provider plugin",
-  configSchema: emptyPluginConfigSchema(),
   register(api) {
     api.registerProvider({
       id: "copilot-proxy",
@@ -82,7 +85,7 @@ const copilotProxyPlugin = {
           label: "Local proxy",
           hint: "Configure base URL + models for the Copilot Proxy server",
           kind: "custom",
-          run: async (ctx) => {
+          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             const baseUrlInput = await ctx.prompter.text({
               message: "Copilot Proxy base URL",
               initialValue: DEFAULT_BASE_URL,
@@ -92,7 +95,7 @@ const copilotProxyPlugin = {
             const modelInput = await ctx.prompter.text({
               message: "Model IDs (comma-separated)",
               initialValue: DEFAULT_MODEL_IDS.join(", "),
-              validate: (value) =>
+              validate: (value: string) =>
                 parseModelIds(value).length > 0 ? undefined : "Enter at least one model id",
             });
 
@@ -142,8 +145,14 @@ const copilotProxyPlugin = {
           },
         },
       ],
+      wizard: {
+        setup: {
+          choiceId: "copilot-proxy",
+          choiceLabel: "Copilot Proxy",
+          choiceHint: "Configure base URL + model ids",
+          methodId: "local",
+        },
+      },
     });
   },
-};
-
-export default copilotProxyPlugin;
+});

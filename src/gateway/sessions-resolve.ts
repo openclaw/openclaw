@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore } from "../config/sessions.js";
+import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   ErrorCodes,
@@ -10,15 +10,16 @@ import {
 import {
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
+  migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
 
-export function resolveSessionKeyFromResolveParams(params: {
+export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
-}): SessionsResolveResult {
+}): Promise<SessionsResolveResult> {
   const { cfg, p } = params;
 
   const key = typeof p.key === "string" ? p.key.trim() : "";
@@ -46,13 +47,22 @@ export function resolveSessionKeyFromResolveParams(params: {
   if (hasKey) {
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const store = loadSessionStore(target.storePath);
-    const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-    if (!existingKey) {
+    if (store[target.canonicalKey]) {
+      return { ok: true, key: target.canonicalKey };
+    }
+    const legacyKey = target.storeKeys.find((candidate) => store[candidate]);
+    if (!legacyKey) {
       return {
         ok: false,
         error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${key}`),
       };
     }
+    await updateSessionStore(target.storePath, (s) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
+      if (!s[primaryKey] && s[legacyKey]) {
+        s[primaryKey] = s[legacyKey];
+      }
+    });
     return { ok: true, key: target.canonicalKey };
   }
 

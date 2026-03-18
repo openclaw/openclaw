@@ -1,3 +1,4 @@
+import type { BaseProbeResult } from "openclaw/plugin-sdk/feishu";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,
@@ -13,8 +14,15 @@ export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
 export type FeishuDomain = "feishu" | "lark" | (string & {});
 export type FeishuConnectionMode = "websocket" | "webhook";
 
+export type FeishuDefaultAccountSelectionSource =
+  | "explicit-default"
+  | "mapped-default"
+  | "fallback";
+export type FeishuAccountSelectionSource = "explicit" | FeishuDefaultAccountSelectionSource;
+
 export type ResolvedFeishuAccount = {
   accountId: string;
+  selectionSource: FeishuAccountSelectionSource;
   enabled: boolean;
   configured: boolean;
   name?: string;
@@ -35,16 +43,16 @@ export type FeishuMessageContext = {
   senderId: string;
   senderOpenId: string;
   senderName?: string;
-  chatType: "p2p" | "group";
+  chatType: "p2p" | "group" | "private";
   mentionedBot: boolean;
+  hasAnyMention?: boolean;
   rootId?: string;
   parentId?: string;
+  threadId?: string;
   content: string;
   contentType: string;
   /** Mention forward targets (excluding the bot itself) */
   mentionTargets?: MentionTarget[];
-  /** Extracted message body (after removing @ placeholders) */
-  mentionMessageBody?: string;
 };
 
 export type FeishuSendResult = {
@@ -52,9 +60,23 @@ export type FeishuSendResult = {
   chatId: string;
 };
 
-export type FeishuProbeResult = {
-  ok: boolean;
-  error?: string;
+export type FeishuChatType = "p2p" | "group" | "private";
+
+export type FeishuMessageInfo = {
+  messageId: string;
+  chatId: string;
+  chatType?: FeishuChatType;
+  senderId?: string;
+  senderOpenId?: string;
+  senderType?: string;
+  content: string;
+  contentType: string;
+  createTime?: number;
+  /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
+  threadId?: string;
+};
+
+export type FeishuProbeResult = BaseProbeResult<string> & {
   appId?: string;
   botName?: string;
   botOpenId?: string;
@@ -68,8 +90,16 @@ export type FeishuMediaInfo = {
 
 export type FeishuToolsConfig = {
   doc?: boolean;
+  chat?: boolean;
   wiki?: boolean;
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+};
+
+export type DynamicAgentCreationConfig = {
+  enabled?: boolean;
+  workspaceTemplate?: string;
+  agentDirTemplate?: string;
+  maxAgents?: number;
 };

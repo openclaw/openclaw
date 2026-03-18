@@ -28,6 +28,7 @@ Behavior:
 - When backgrounded (explicit or timeout), the tool returns `status: "running"` + `sessionId` and a short tail.
 - Output is kept in memory until the session is polled or cleared.
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
+- Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
 
 ## Child process bridging
 
@@ -46,6 +47,7 @@ Config (preferred):
 - `tools.exec.timeoutSec` (default 1800)
 - `tools.exec.cleanupMs` (default 1800000)
 - `tools.exec.notifyOnExit` (default true): enqueue a system event + request heartbeat when a backgrounded exec exits.
+- `tools.exec.notifyOnExitEmptySuccess` (default false): when true, also enqueue completion events for successful backgrounded runs that produced no output.
 
 ## process tool
 
@@ -66,7 +68,9 @@ Notes:
 - Session logs are only saved to chat history if you run `process poll/log` and the tool result is recorded.
 - `process` is scoped per agent; it only sees sessions started by that agent.
 - `process list` includes a derived `name` (command verb + target) for quick scans.
-- `process log` uses line-based `offset`/`limit` (omit `offset` to grab the last N lines).
+- `process log` uses line-based `offset`/`limit`.
+- When both `offset` and `limit` are omitted, it returns the last 200 lines and includes a paging hint.
+- When `offset` is provided and `limit` is omitted, it returns from `offset` to the end (not capped to 200).
 
 ## Examples
 

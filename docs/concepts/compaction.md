@@ -21,7 +21,38 @@ Compaction **persists** in the session’s JSONL history.
 
 ## Configuration
 
-See [Compaction config & modes](/concepts/compaction) for the `agents.defaults.compaction` settings.
+Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
+Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). You can override this with `identifierPolicy: "off"` or provide custom text with `identifierPolicy: "custom"` and `identifierInstructions`.
+
+You can optionally specify a different model for compaction summarization via `agents.defaults.compaction.model`. This is useful when your primary model is a local or small model and you want compaction summaries produced by a more capable model. The override accepts any `provider/model-id` string:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "openrouter/anthropic/claude-sonnet-4-5"
+      }
+    }
+  }
+}
+```
+
+This also works with local models, for example a second Ollama model dedicated to summarization or a fine-tuned compaction specialist:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "ollama/llama3.1:8b"
+      }
+    }
+  }
+}
+```
+
+When unset, compaction uses the agent's primary model.
 
 ## Auto-compaction (default on)
 
@@ -53,6 +84,29 @@ Context window is model-specific. OpenClaw uses the model definition from the co
 - **Session pruning**: trims old **tool results** only, **in-memory**, per request.
 
 See [/concepts/session-pruning](/concepts/session-pruning) for pruning details.
+
+## OpenAI server-side compaction
+
+OpenClaw also supports OpenAI Responses server-side compaction hints for
+compatible direct OpenAI models. This is separate from local OpenClaw
+compaction and can run alongside it.
+
+- Local compaction: OpenClaw summarizes and persists into session JSONL.
+- Server-side compaction: OpenAI compacts context on the provider side when
+  `store` + `context_management` are enabled.
+
+See [OpenAI provider](/providers/openai) for model params and overrides.
+
+## Custom context engines
+
+Compaction behavior is owned by the active
+[context engine](/concepts/context-engine). The legacy engine uses the built-in
+summarization described above. Plugin engines (selected via
+`plugins.slots.contextEngine`) can implement any compaction strategy — DAG
+summaries, vector retrieval, incremental condensation, etc.
+
+When a plugin engine sets `ownsCompaction: true`, OpenClaw delegates all
+compaction decisions to the engine and does not run built-in auto-compaction.
 
 ## Tips
 

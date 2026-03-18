@@ -8,6 +8,7 @@ import {
 } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
 import type { NostrProfile } from "./config-schema.js";
+import { DEFAULT_RELAYS } from "./default-relays.js";
 import {
   createMetrics,
   createNoopMetrics,
@@ -24,8 +25,6 @@ import {
   writeNostrProfileState,
 } from "./nostr-state-store.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
-
-export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 
 // ============================================================================
 // Constants
@@ -488,24 +487,28 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
   }
 
-  const sub = pool.subscribeMany(relays, [{ kinds: [4], "#p": [pk], since }], {
-    onevent: handleEvent,
-    oneose: () => {
-      // EOSE handler - called when all stored events have been received
-      for (const relay of relays) {
-        metrics.emit("relay.message.eose", 1, { relay });
-      }
-      onEose?.(relays.join(", "));
+  const sub = pool.subscribeMany(
+    relays,
+    [{ kinds: [4], "#p": [pk], since }] as unknown as Parameters<typeof pool.subscribeMany>[1],
+    {
+      onevent: handleEvent,
+      oneose: () => {
+        // EOSE handler - called when all stored events have been received
+        for (const relay of relays) {
+          metrics.emit("relay.message.eose", 1, { relay });
+        }
+        onEose?.(relays.join(", "));
+      },
+      onclose: (reason) => {
+        // Handle subscription close
+        for (const relay of relays) {
+          metrics.emit("relay.message.closed", 1, { relay });
+          options.onDisconnect?.(relay);
+        }
+        onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
+      },
     },
-    onclose: (reason) => {
-      // Handle subscription close
-      for (const relay of relays) {
-        metrics.emit("relay.message.closed", 1, { relay });
-        options.onDisconnect?.(relay);
-      }
-      onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
-    },
-  });
+  );
 
   // Public sendDm function
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
@@ -693,7 +696,7 @@ export function normalizePubkey(input: string): string {
       throw new Error("Invalid npub key");
     }
     // Convert Uint8Array to hex string
-    return Array.from(decoded.data)
+    return Array.from(decoded.data as unknown as Uint8Array)
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   }

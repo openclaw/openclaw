@@ -1,12 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
+import {
+  createDiscordMessageToolComponentsSchema,
+  createMessageToolButtonsSchema,
+  createSlackMessageToolBlocksSchema,
+  createTelegramPollExtraToolSchemas,
+} from "../../channels/plugins/message-tool-schema.js";
+import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createMessageTool } from "./message-tool.js";
+type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
+type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
+type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
+
+let createMessageTool: CreateMessageTool;
+let setActivePluginRegistry: SetActivePluginRegistry;
+let createTestRegistry: CreateTestRegistry;
 
 const mocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(),
+  loadConfig: vi.fn(() => ({})),
+  resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+  })),
 }));
 
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
@@ -19,17 +35,162 @@ vi.mock("../../infra/outbound/message-action-runner.js", async () => {
   };
 });
 
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: mocks.loadConfig,
+  };
+});
+
+vi.mock("../../cli/command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
+}));
+
+function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
+  mocks.runMessageAction.mockClear();
+  mocks.runMessageAction.mockResolvedValue({
+    kind: "send",
+    action: "send",
+    channel: overrides.channel ?? "telegram",
+    to: overrides.to ?? "telegram:123",
+    handledBy: "plugin",
+    payload: {},
+    dryRun: true,
+  } satisfies MessageActionRunResult);
+}
+
+function getToolProperties(tool: ReturnType<CreateMessageTool>) {
+  return (tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
+}
+
+function getActionEnum(properties: Record<string, unknown>) {
+  return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
+}
+
+beforeEach(async () => {
+  vi.resetModules();
+  mocks.runMessageAction.mockReset();
+  mocks.loadConfig.mockReset().mockReturnValue({});
+  mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+  }));
+  ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+  ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
+  ({ createMessageTool } = await import("./message-tool.js"));
+});
+
+function createChannelPlugin(params: {
+  id: string;
+  label: string;
+  docsPath: string;
+  blurb: string;
+  aliases?: string[];
+  actions?: ChannelMessageActionName[];
+  listActions?: NonNullable<NonNullable<ChannelPlugin["actions"]>["listActions"]>;
+  capabilities?: readonly ChannelMessageCapability[];
+  toolSchema?: NonNullable<NonNullable<ChannelPlugin["actions"]>["getToolSchema"]>;
+  messaging?: ChannelPlugin["messaging"];
+}): ChannelPlugin {
+  const actionCapabilities = params.capabilities;
+  return {
+    id: params.id as ChannelPlugin["id"],
+    meta: {
+      id: params.id as ChannelPlugin["id"],
+      label: params.label,
+      selectionLabel: params.label,
+      docsPath: params.docsPath,
+      blurb: params.blurb,
+      aliases: params.aliases,
+    },
+    capabilities: { chatTypes: ["direct", "group"], media: true },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({}),
+    },
+    ...(params.messaging ? { messaging: params.messaging } : {}),
+    actions: {
+      listActions:
+        params.listActions ??
+        (() => {
+          return (params.actions ?? []) as never;
+        }),
+      ...(actionCapabilities
+        ? { getCapabilities: (_params: { cfg: unknown }) => actionCapabilities }
+        : {}),
+      ...(params.toolSchema ? { getToolSchema: params.toolSchema } : {}),
+    },
+  };
+}
+
+async function executeSend(params: {
+  action: Record<string, unknown>;
+  toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
+}) {
+  const tool = createMessageTool({
+    config: {} as never,
+    ...params.toolOptions,
+  });
+  await tool.execute("1", {
+    action: "send",
+    ...params.action,
+  });
+  return mocks.runMessageAction.mock.calls[0]?.[0] as
+    | {
+        params?: Record<string, unknown>;
+        sandboxRoot?: string;
+        requesterSenderId?: string;
+      }
+    | undefined;
+}
+
+describe("message tool secret scoping", () => {
+  it("scopes command-time secret resolution to the selected channel/account", async () => {
+    mockSendResult({ channel: "discord", to: "discord:123" });
+    mocks.loadConfig.mockReturnValue({
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
+          accounts: {
+            ops: { token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" } },
+            chat: { token: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" } },
+          },
+        },
+        slack: {
+          botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+        },
+      },
+    });
+
+    const tool = createMessageTool({
+      currentChannelProvider: "discord",
+      agentAccountId: "ops",
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "channel:123",
+      message: "hi",
+    });
+
+    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
+      targetIds?: Set<string>;
+      allowedPaths?: Set<string>;
+    };
+    expect(secretResolveCall.targetIds).toBeInstanceOf(Set);
+    expect(
+      [...(secretResolveCall.targetIds ?? [])].every((id) => id.startsWith("channels.discord.")),
+    ).toBe(true);
+    expect(secretResolveCall.allowedPaths).toEqual(
+      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
+    );
+  });
+});
+
 describe("message tool agent routing", () => {
   it("derives agentId from the session key", async () => {
-    mocks.runMessageAction.mockClear();
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      handledBy: "plugin",
-      payload: {},
-      dryRun: true,
-    } satisfies MessageActionRunResult);
+    mockSendResult();
 
     const tool = createMessageTool({
       agentSessionKey: "agent:alpha:main",
@@ -44,82 +205,373 @@ describe("message tool agent routing", () => {
 
     const call = mocks.runMessageAction.mock.calls[0]?.[0];
     expect(call?.agentId).toBe("alpha");
-    expect(call?.sessionKey).toBeUndefined();
+    expect(call?.sessionKey).toBe("agent:alpha:main");
   });
 });
 
 describe("message tool path passthrough", () => {
-  it("does not convert path to media for send", async () => {
-    mocks.runMessageAction.mockClear();
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      to: "telegram:123",
-      handledBy: "plugin",
-      payload: {},
-      dryRun: true,
-    } satisfies MessageActionRunResult);
+  it.each([
+    { field: "path", value: "~/Downloads/voice.ogg" },
+    { field: "filePath", value: "./tmp/note.m4a" },
+  ])("does not convert $field to media for send", async ({ field, value }) => {
+    mockSendResult({ to: "telegram:123" });
 
-    const tool = createMessageTool({
-      config: {} as never,
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        [field]: value,
+        message: "",
+      },
     });
 
-    await tool.execute("1", {
-      action: "send",
-      target: "telegram:123",
-      path: "~/Downloads/voice.ogg",
-      message: "",
-    });
-
-    const call = mocks.runMessageAction.mock.calls[0]?.[0];
-    expect(call?.params?.path).toBe("~/Downloads/voice.ogg");
-    expect(call?.params?.media).toBeUndefined();
-  });
-
-  it("does not convert filePath to media for send", async () => {
-    mocks.runMessageAction.mockClear();
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      to: "telegram:123",
-      handledBy: "plugin",
-      payload: {},
-      dryRun: true,
-    } satisfies MessageActionRunResult);
-
-    const tool = createMessageTool({
-      config: {} as never,
-    });
-
-    await tool.execute("1", {
-      action: "send",
-      target: "telegram:123",
-      filePath: "./tmp/note.m4a",
-      message: "",
-    });
-
-    const call = mocks.runMessageAction.mock.calls[0]?.[0];
-    expect(call?.params?.filePath).toBe("./tmp/note.m4a");
+    expect(call?.params?.[field]).toBe(value);
     expect(call?.params?.media).toBeUndefined();
   });
 });
 
-describe("message tool description", () => {
-  const bluebubblesPlugin: ChannelPlugin = {
-    id: "bluebubbles",
-    meta: {
-      id: "bluebubbles",
-      label: "BlueBubbles",
-      selectionLabel: "BlueBubbles",
-      docsPath: "/channels/bluebubbles",
-      blurb: "BlueBubbles test plugin.",
+describe("message tool schema scoping", () => {
+  const telegramPlugin = createChannelPlugin({
+    id: "telegram",
+    label: "Telegram",
+    docsPath: "/channels/telegram",
+    blurb: "Telegram test plugin.",
+    actions: ["send", "react", "poll"],
+    capabilities: ["interactive", "buttons"],
+    toolSchema: () => [
+      {
+        properties: {
+          buttons: createMessageToolButtonsSchema(),
+        },
+      },
+      {
+        properties: createTelegramPollExtraToolSchemas(),
+        visibility: "all-configured",
+      },
+    ],
+  });
+
+  const discordPlugin = createChannelPlugin({
+    id: "discord",
+    label: "Discord",
+    docsPath: "/channels/discord",
+    blurb: "Discord test plugin.",
+    actions: ["send", "poll", "poll-vote"],
+    capabilities: ["interactive", "components"],
+    toolSchema: () => ({
+      properties: {
+        components: createDiscordMessageToolComponentsSchema(),
+      },
+    }),
+  });
+
+  const slackPlugin = createChannelPlugin({
+    id: "slack",
+    label: "Slack",
+    docsPath: "/channels/slack",
+    blurb: "Slack test plugin.",
+    actions: ["send", "react"],
+    capabilities: ["interactive", "blocks"],
+    toolSchema: () => ({
+      properties: {
+        blocks: createSlackMessageToolBlocksSchema(),
+      },
+    }),
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it.each([
+    {
+      provider: "telegram",
+      expectComponents: false,
+      expectBlocks: false,
+      expectButtons: true,
+      expectButtonStyle: true,
+      expectTelegramPollExtras: true,
+      expectedActions: ["send", "react", "poll", "poll-vote"],
     },
-    capabilities: { chatTypes: ["direct", "group"], media: true },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
+    {
+      provider: "discord",
+      expectComponents: true,
+      expectBlocks: false,
+      expectButtons: false,
+      expectButtonStyle: false,
+      expectTelegramPollExtras: true,
+      expectedActions: ["send", "poll", "poll-vote", "react"],
+    },
+    {
+      provider: "slack",
+      expectComponents: false,
+      expectBlocks: true,
+      expectButtons: false,
+      expectButtonStyle: false,
+      expectTelegramPollExtras: true,
+      expectedActions: ["send", "react", "poll", "poll-vote"],
+    },
+  ])(
+    "scopes schema fields for $provider",
+    ({
+      provider,
+      expectComponents,
+      expectBlocks,
+      expectButtons,
+      expectButtonStyle,
+      expectTelegramPollExtras,
+      expectedActions,
+    }) => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+          { pluginId: "discord", source: "test", plugin: discordPlugin },
+          { pluginId: "slack", source: "test", plugin: slackPlugin },
+        ]),
+      );
+
+      const tool = createMessageTool({
+        config: {} as never,
+        currentChannelProvider: provider,
+      });
+      const properties = getToolProperties(tool);
+      const actionEnum = getActionEnum(properties);
+
+      if (expectComponents) {
+        expect(properties.components).toBeDefined();
+      } else {
+        expect(properties.components).toBeUndefined();
+      }
+      if (expectBlocks) {
+        expect(properties.blocks).toBeDefined();
+      } else {
+        expect(properties.blocks).toBeUndefined();
+      }
+      if (expectButtons) {
+        expect(properties.buttons).toBeDefined();
+      } else {
+        expect(properties.buttons).toBeUndefined();
+      }
+      if (expectButtonStyle) {
+        const buttonItemProps =
+          (
+            properties.buttons as {
+              items?: { items?: { properties?: Record<string, unknown> } };
+            }
+          )?.items?.items?.properties ?? {};
+        expect(buttonItemProps.style).toBeDefined();
+      }
+      for (const action of expectedActions) {
+        expect(actionEnum).toContain(action);
+      }
+      if (expectTelegramPollExtras) {
+        expect(properties.pollDurationSeconds).toBeDefined();
+        expect(properties.pollAnonymous).toBeDefined();
+        expect(properties.pollPublic).toBeDefined();
+      } else {
+        expect(properties.pollDurationSeconds).toBeUndefined();
+        expect(properties.pollAnonymous).toBeUndefined();
+        expect(properties.pollPublic).toBeUndefined();
+      }
+      expect(properties.pollId).toBeDefined();
+      expect(properties.pollOptionIndex).toBeDefined();
+      expect(properties.pollOptionId).toBeDefined();
+    },
+  );
+
+  it("includes poll in the action enum when the current channel supports poll actions", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const actionEnum = getActionEnum(getToolProperties(tool));
+
+    expect(actionEnum).toContain("poll");
+  });
+
+  it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
+    const telegramPluginWithConfig = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      listActions: ({ cfg }) => {
+        const telegramCfg = (cfg as { channels?: { telegram?: { actions?: { poll?: boolean } } } })
+          .channels?.telegram;
+        return telegramCfg?.actions?.poll === false ? ["send", "react"] : ["send", "react", "poll"];
+      },
+      capabilities: ["interactive", "buttons"],
+      toolSchema: ({ cfg }) => {
+        const telegramCfg = (cfg as { channels?: { telegram?: { actions?: { poll?: boolean } } } })
+          .channels?.telegram;
+        return [
+          {
+            properties: {
+              buttons: createMessageToolButtonsSchema(),
+            },
+          },
+          ...(telegramCfg?.actions?.poll === false
+            ? []
+            : [
+                {
+                  properties: createTelegramPollExtraToolSchemas(),
+                  visibility: "all-configured" as const,
+                },
+              ]),
+        ];
+      },
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: telegramPluginWithConfig },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {
+        channels: {
+          telegram: {
+            actions: {
+              poll: false,
+            },
+          },
+        },
+      } as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+    const actionEnum = getActionEnum(properties);
+
+    expect(actionEnum).not.toContain("poll");
+    expect(properties.pollDurationSeconds).toBeUndefined();
+    expect(properties.pollAnonymous).toBeUndefined();
+    expect(properties.pollPublic).toBeUndefined();
+  });
+
+  it("uses discovery account scope for capability-gated shared fields", () => {
+    const scopedInteractivePlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      actions: ["send"],
+      toolSchema: () => null,
+    });
+    scopedInteractivePlugin.actions = {
+      ...scopedInteractivePlugin.actions,
+      getCapabilities: ({ accountId }) => (accountId === "ops" ? ["interactive"] : []),
+    };
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: scopedInteractivePlugin },
+      ]),
+    );
+
+    const scopedTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+      agentAccountId: "ops",
+    });
+    const unscopedTool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+
+    expect(getToolProperties(scopedTool).interactive).toBeDefined();
+    expect(getToolProperties(unscopedTool).interactive).toBeUndefined();
+  });
+
+  it("routes full discovery context into plugin action discovery", () => {
+    const seenContexts: Record<string, unknown>[] = [];
+    const contextPlugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord context plugin.",
+      listActions: (ctx) => {
+        seenContexts.push({ phase: "listActions", ...ctx });
+        return ["send", "react"];
+      },
+      toolSchema: (ctx) => {
+        seenContexts.push({ phase: "getToolSchema", ...ctx });
+        return null;
+      },
+    });
+    contextPlugin.actions = {
+      ...contextPlugin.actions,
+      getCapabilities: (ctx) => {
+        seenContexts.push({ phase: "getCapabilities", ...ctx });
+        return ["interactive"];
+      },
+    };
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "discord", source: "test", plugin: contextPlugin }]),
+    );
+
+    createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+      currentChannelId: "channel:123",
+      currentThreadTs: "thread-456",
+      currentMessageId: "msg-789",
+      agentAccountId: "ops",
+      agentSessionKey: "agent:alpha:main",
+      sessionId: "session-123",
+      requesterSenderId: "user-42",
+    });
+
+    expect(seenContexts).toContainEqual(
+      expect.objectContaining({
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+        currentThreadTs: "thread-456",
+        currentMessageId: "msg-789",
+        accountId: "ops",
+        sessionKey: "agent:alpha:main",
+        sessionId: "session-123",
+        agentId: "alpha",
+        requesterSenderId: "user-42",
+      }),
+    );
+  });
+});
+
+describe("message tool description", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  const bluebubblesPlugin = createChannelPlugin({
+    id: "bluebubbles",
+    label: "BlueBubbles",
+    docsPath: "/channels/bluebubbles",
+    blurb: "BlueBubbles test plugin.",
+    listActions: ({ currentChannelId }) => {
+      const all: ChannelMessageActionName[] = [
+        "react",
+        "renameGroup",
+        "addParticipant",
+        "removeParticipant",
+        "leaveGroup",
+      ];
+      const lowered = currentChannelId?.toLowerCase() ?? "";
+      const isDmTarget =
+        lowered.includes("chat_guid:imessage;-;") || lowered.includes("chat_guid:sms;-;");
+      return isDmTarget
+        ? all.filter(
+            (action) =>
+              action !== "renameGroup" &&
+              action !== "addParticipant" &&
+              action !== "removeParticipant" &&
+              action !== "leaveGroup",
+          )
+        : all;
     },
     messaging: {
       normalizeTarget: (raw) => {
@@ -136,11 +588,7 @@ describe("message tool description", () => {
         return trimmed;
       },
     },
-    actions: {
-      listActions: () =>
-        ["react", "renameGroup", "addParticipant", "removeParticipant", "leaveGroup"] as const,
-    },
-  };
+  });
 
   it("hides BlueBubbles group actions for DM targets", () => {
     setActivePluginRegistry(
@@ -157,62 +605,156 @@ describe("message tool description", () => {
     expect(tool.description).not.toContain("addParticipant");
     expect(tool.description).not.toContain("removeParticipant");
     expect(tool.description).not.toContain("leaveGroup");
+  });
 
-    setActivePluginRegistry(createTestRegistry([]));
+  it("includes other configured channels when currentChannel is set", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      actions: ["send", "react"],
+    });
+
+    const telegramPluginFull = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      actions: ["send", "react", "delete", "edit", "topic-create"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "signal", source: "test", plugin: signalPlugin },
+        { pluginId: "telegram", source: "test", plugin: telegramPluginFull },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "signal",
+    });
+
+    // Current channel actions are listed
+    expect(tool.description).toContain("Current channel (signal) supports: react, send.");
+    // Other configured channels are also listed
+    expect(tool.description).toContain("Other configured channels:");
+    expect(tool.description).toContain("telegram (delete, edit, react, send, topic-create)");
+  });
+
+  it("normalizes channel aliases before building the current channel description", () => {
+    const signalPlugin = createChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      docsPath: "/channels/signal",
+      blurb: "Signal test plugin.",
+      aliases: ["sig"],
+      actions: ["send", "react"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "sig",
+    });
+
+    expect(tool.description).toContain("Current channel (signal) supports: react, send.");
+  });
+
+  it("does not include 'Other configured channels' when only one channel is configured", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "bluebubbles",
+    });
+
+    expect(tool.description).toContain("Current channel (bluebubbles) supports:");
+    expect(tool.description).not.toContain("Other configured channels");
   });
 });
 
+describe("message tool reasoning tag sanitization", () => {
+  it.each([
+    {
+      field: "text",
+      input: "<think>internal reasoning</think>Hello!",
+      expected: "Hello!",
+      target: "signal:+15551234567",
+      channel: "signal",
+    },
+    {
+      field: "content",
+      input: "<think>reasoning here</think>Reply text",
+      expected: "Reply text",
+      target: "discord:123",
+      channel: "discord",
+    },
+    {
+      field: "text",
+      input: "Normal message without any tags",
+      expected: "Normal message without any tags",
+      target: "signal:+15551234567",
+      channel: "signal",
+    },
+  ])(
+    "sanitizes reasoning tags in $field before sending",
+    async ({ channel, target, field, input, expected }) => {
+      mockSendResult({ channel, to: target });
+
+      const call = await executeSend({
+        action: {
+          target,
+          [field]: input,
+        },
+      });
+      expect(call?.params?.[field]).toBe(expected);
+    },
+  );
+});
+
 describe("message tool sandbox passthrough", () => {
-  it("forwards sandboxRoot to runMessageAction", async () => {
-    mocks.runMessageAction.mockClear();
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      to: "telegram:123",
-      handledBy: "plugin",
-      payload: {},
-      dryRun: true,
-    } satisfies MessageActionRunResult);
+  it.each([
+    {
+      name: "forwards sandboxRoot to runMessageAction",
+      toolOptions: { sandboxRoot: "/tmp/sandbox" },
+      expected: "/tmp/sandbox",
+    },
+    {
+      name: "omits sandboxRoot when not configured",
+      toolOptions: {},
+      expected: undefined,
+    },
+  ])("$name", async ({ toolOptions, expected }) => {
+    mockSendResult({ to: "telegram:123" });
 
-    const tool = createMessageTool({
-      config: {} as never,
-      sandboxRoot: "/tmp/sandbox",
+    const call = await executeSend({
+      toolOptions,
+      action: {
+        target: "telegram:123",
+        message: "",
+      },
     });
-
-    await tool.execute("1", {
-      action: "send",
-      target: "telegram:123",
-      message: "",
-    });
-
-    const call = mocks.runMessageAction.mock.calls[0]?.[0];
-    expect(call?.sandboxRoot).toBe("/tmp/sandbox");
+    expect(call?.sandboxRoot).toBe(expected);
   });
 
-  it("omits sandboxRoot when not configured", async () => {
-    mocks.runMessageAction.mockClear();
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      to: "telegram:123",
-      handledBy: "plugin",
-      payload: {},
-      dryRun: true,
-    } satisfies MessageActionRunResult);
+  it("forwards trusted requesterSenderId to runMessageAction", async () => {
+    mockSendResult({ to: "discord:123" });
 
-    const tool = createMessageTool({
-      config: {} as never,
+    const call = await executeSend({
+      toolOptions: { requesterSenderId: "1234567890" },
+      action: {
+        target: "discord:123",
+        message: "hi",
+      },
     });
 
-    await tool.execute("1", {
-      action: "send",
-      target: "telegram:123",
-      message: "",
-    });
-
-    const call = mocks.runMessageAction.mock.calls[0]?.[0];
-    expect(call?.sandboxRoot).toBeUndefined();
+    expect(call?.requesterSenderId).toBe("1234567890");
   });
 });

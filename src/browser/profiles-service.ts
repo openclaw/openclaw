@@ -1,12 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
-import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
-import { DEFAULT_BROWSER_DEFAULT_PROFILE_NAME } from "./constants.js";
+import {
+  BrowserConflictError,
+  BrowserProfileNotFoundError,
+  BrowserResourceExhaustedError,
+  BrowserValidationError,
+} from "./errors.js";
+import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import {
   allocateCdpPort,
   allocateColor,
@@ -14,20 +20,24 @@ import {
   getUsedPorts,
   isValidProfileName,
 } from "./profiles.js";
+import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
 export type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
-  driver?: "openclaw" | "extension";
+  userDataDir?: string;
+  driver?: "openclaw" | "existing-session";
 };
 
 export type CreateProfileResult = {
   ok: true;
   profile: string;
-  cdpPort: number;
-  cdpUrl: string;
+  transport: "cdp" | "chrome-mcp";
+  cdpPort: number | null;
+  cdpUrl: string | null;
+  userDataDir: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -40,6 +50,30 @@ export type DeleteProfileResult = {
 
 const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
 
+const cdpPortRange = (resolved: {
+  controlPort: number;
+  cdpPortRangeStart?: number;
+  cdpPortRangeEnd?: number;
+}): { start: number; end: number } => {
+  const start = resolved.cdpPortRangeStart;
+  const end = resolved.cdpPortRangeEnd;
+  if (
+    typeof start === "number" &&
+    Number.isFinite(start) &&
+    Number.isInteger(start) &&
+    typeof end === "number" &&
+    Number.isFinite(end) &&
+    Number.isInteger(end) &&
+    start > 0 &&
+    end >= start &&
+    end <= 65535
+  ) {
+    return { start, end };
+  }
+
+  return deriveDefaultBrowserCdpPortRange(resolved.controlPort);
+};
+
 export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const listProfiles = async (): Promise<ProfileStatus[]> => {
     return await ctx.listProfiles();
@@ -48,22 +82,26 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
-    const driver = params.driver === "extension" ? "extension" : undefined;
+    const rawUserDataDir = params.userDataDir?.trim() || undefined;
+    const normalizedUserDataDir = rawUserDataDir ? resolveUserPath(rawUserDataDir) : undefined;
+    const driver = params.driver === "existing-session" ? "existing-session" : undefined;
 
     if (!isValidProfileName(name)) {
-      throw new Error("invalid profile name: use lowercase letters, numbers, and hyphens only");
+      throw new BrowserValidationError(
+        "invalid profile name: use lowercase letters, numbers, and hyphens only",
+      );
     }
 
     const state = ctx.state();
     const resolvedProfiles = state.resolved.profiles;
     if (name in resolvedProfiles) {
-      throw new Error(`profile "${name}" already exists`);
+      throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
     const cfg = loadConfig();
     const rawProfiles = cfg.browser?.profiles ?? {};
     if (name in rawProfiles) {
-      throw new Error(`profile "${name}" already exists`);
+      throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
     const usedColors = getUsedColors(resolvedProfiles);
@@ -71,25 +109,56 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       params.color && HEX_COLOR_RE.test(params.color) ? params.color : allocateColor(usedColors);
 
     let profileConfig: BrowserProfileConfig;
+    if (normalizedUserDataDir && driver !== "existing-session") {
+      throw new BrowserValidationError(
+        "driver=existing-session is required when userDataDir is provided",
+      );
+    }
+    if (normalizedUserDataDir && !fs.existsSync(normalizedUserDataDir)) {
+      throw new BrowserValidationError(
+        `browser user data directory not found: ${normalizedUserDataDir}`,
+      );
+    }
+
     if (rawCdpUrl) {
-      const parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
+      let parsed: ReturnType<typeof parseHttpUrl>;
+      try {
+        parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
+      } catch (err) {
+        throw new BrowserValidationError(String(err));
+      }
+      if (driver === "existing-session") {
+        throw new BrowserValidationError(
+          "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
+        );
+      }
       profileConfig = {
         cdpUrl: parsed.normalized,
         ...(driver ? { driver } : {}),
         color: profileColor,
       };
     } else {
-      const usedPorts = getUsedPorts(resolvedProfiles);
-      const range = deriveDefaultBrowserCdpPortRange(state.resolved.controlPort);
-      const cdpPort = allocateCdpPort(usedPorts, range);
-      if (cdpPort === null) {
-        throw new Error("no available CDP ports in range");
+      if (driver === "existing-session") {
+        // existing-session uses Chrome MCP auto-connect; no CDP port needed
+        profileConfig = {
+          driver,
+          attachOnly: true,
+          ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
+          color: profileColor,
+        };
+      } else {
+        const usedPorts = getUsedPorts(resolvedProfiles);
+        const range = cdpPortRange(state.resolved);
+        const cdpPort = allocateCdpPort(usedPorts, range);
+        if (cdpPort === null) {
+          throw new BrowserResourceExhaustedError("no available CDP ports in range");
+        }
+        profileConfig = {
+          cdpPort,
+          ...(driver ? { driver } : {}),
+          color: profileColor,
+        };
       }
-      profileConfig = {
-        cdpPort,
-        ...(driver ? { driver } : {}),
-        color: profileColor,
-      };
     }
 
     const nextConfig: OpenClawConfig = {
@@ -108,14 +177,17 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     state.resolved.profiles[name] = profileConfig;
     const resolved = resolveProfile(state.resolved, name);
     if (!resolved) {
-      throw new Error(`profile "${name}" not found after creation`);
+      throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
     }
+    const capabilities = getBrowserProfileCapabilities(resolved);
 
     return {
       ok: true,
       profile: name,
-      cdpPort: resolved.cdpPort,
-      cdpUrl: resolved.cdpUrl,
+      transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+      cdpPort: capabilities.usesChromeMcp ? null : resolved.cdpPort,
+      cdpUrl: capabilities.usesChromeMcp ? null : resolved.cdpUrl,
+      userDataDir: resolved.userDataDir ?? null,
       color: resolved.color,
       isRemote: !resolved.cdpIsLoopback,
     };
@@ -124,30 +196,29 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const deleteProfile = async (nameRaw: string): Promise<DeleteProfileResult> => {
     const name = nameRaw.trim();
     if (!name) {
-      throw new Error("profile name is required");
+      throw new BrowserValidationError("profile name is required");
     }
     if (!isValidProfileName(name)) {
-      throw new Error("invalid profile name");
+      throw new BrowserValidationError("invalid profile name");
     }
 
+    const state = ctx.state();
     const cfg = loadConfig();
     const profiles = cfg.browser?.profiles ?? {};
-    if (!(name in profiles)) {
-      throw new Error(`profile "${name}" not found`);
-    }
-
-    const defaultProfile = cfg.browser?.defaultProfile ?? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME;
+    const defaultProfile = cfg.browser?.defaultProfile ?? state.resolved.defaultProfile;
     if (name === defaultProfile) {
-      throw new Error(
+      throw new BrowserValidationError(
         `cannot delete the default profile "${name}"; change browser.defaultProfile first`,
       );
     }
+    if (!(name in profiles)) {
+      throw new BrowserProfileNotFoundError(`profile "${name}" not found`);
+    }
 
     let deleted = false;
-    const state = ctx.state();
     const resolved = resolveProfile(state.resolved, name);
 
-    if (resolved?.cdpIsLoopback) {
+    if (resolved?.cdpIsLoopback && resolved.driver === "openclaw") {
       try {
         await ctx.forProfile(name).stopRunningBrowser();
       } catch {

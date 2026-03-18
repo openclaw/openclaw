@@ -9,6 +9,32 @@ import {
   mergeMissing,
 } from "./legacy.shared.js";
 
+function applyLegacyAudioTranscriptionModel(params: {
+  raw: Record<string, unknown>;
+  source: unknown;
+  changes: string[];
+  movedMessage: string;
+  alreadySetMessage: string;
+  invalidMessage: string;
+}) {
+  const mapped = mapLegacyAudioTranscription(params.source);
+  if (!mapped) {
+    params.changes.push(params.invalidMessage);
+    return;
+  }
+  const tools = ensureRecord(params.raw, "tools");
+  const media = ensureRecord(tools, "media");
+  const mediaAudio = ensureRecord(media, "audio");
+  const models = Array.isArray(mediaAudio.models) ? (mediaAudio.models as unknown[]) : [];
+  if (models.length === 0) {
+    mediaAudio.enabled = true;
+    mediaAudio.models = [mapped];
+    params.changes.push(params.movedMessage);
+    return;
+  }
+  params.changes.push(params.alreadySetMessage);
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
   {
     id: "agent.model-config-v2",
@@ -355,59 +381,45 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
       }
 
       if (routing.transcribeAudio !== undefined) {
-        const mapped = mapLegacyAudioTranscription(routing.transcribeAudio);
-        if (mapped) {
-          const tools = ensureRecord(raw, "tools");
-          const media = ensureRecord(tools, "media");
-          const mediaAudio = ensureRecord(media, "audio");
-          const models = Array.isArray(mediaAudio.models) ? (mediaAudio.models as unknown[]) : [];
-          if (models.length === 0) {
-            mediaAudio.enabled = true;
-            mediaAudio.models = [mapped];
-            changes.push("Moved routing.transcribeAudio → tools.media.audio.models.");
-          } else {
-            changes.push("Removed routing.transcribeAudio (tools.media.audio.models already set).");
-          }
-        } else {
-          changes.push("Removed routing.transcribeAudio (unsupported transcription CLI).");
-        }
+        applyLegacyAudioTranscriptionModel({
+          raw,
+          source: routing.transcribeAudio,
+          changes,
+          movedMessage: "Moved routing.transcribeAudio → tools.media.audio.models.",
+          alreadySetMessage:
+            "Removed routing.transcribeAudio (tools.media.audio.models already set).",
+          invalidMessage: "Removed routing.transcribeAudio (invalid or empty command).",
+        });
         delete routing.transcribeAudio;
-      }
-
-      const audio = getRecord(raw.audio);
-      if (audio?.transcription !== undefined) {
-        const mapped = mapLegacyAudioTranscription(audio.transcription);
-        if (mapped) {
-          const tools = ensureRecord(raw, "tools");
-          const media = ensureRecord(tools, "media");
-          const mediaAudio = ensureRecord(media, "audio");
-          const models = Array.isArray(mediaAudio.models) ? (mediaAudio.models as unknown[]) : [];
-          if (models.length === 0) {
-            mediaAudio.enabled = true;
-            mediaAudio.models = [mapped];
-            changes.push("Moved audio.transcription → tools.media.audio.models.");
-          } else {
-            changes.push("Removed audio.transcription (tools.media.audio.models already set).");
-          }
-          delete audio.transcription;
-          if (Object.keys(audio).length === 0) {
-            delete raw.audio;
-          } else {
-            raw.audio = audio;
-          }
-        } else {
-          delete audio.transcription;
-          changes.push("Removed audio.transcription (unsupported transcription CLI).");
-          if (Object.keys(audio).length === 0) {
-            delete raw.audio;
-          } else {
-            raw.audio = audio;
-          }
-        }
       }
 
       if (Object.keys(routing).length === 0) {
         delete raw.routing;
+      }
+    },
+  },
+  {
+    id: "audio.transcription-v2",
+    describe: "Move audio.transcription to tools.media.audio.models",
+    apply: (raw, changes) => {
+      const audio = getRecord(raw.audio);
+      if (audio?.transcription === undefined) {
+        return;
+      }
+
+      applyLegacyAudioTranscriptionModel({
+        raw,
+        source: audio.transcription,
+        changes,
+        movedMessage: "Moved audio.transcription → tools.media.audio.models.",
+        alreadySetMessage: "Removed audio.transcription (tools.media.audio.models already set).",
+        invalidMessage: "Removed audio.transcription (invalid or empty command).",
+      });
+      delete audio.transcription;
+      if (Object.keys(audio).length === 0) {
+        delete raw.audio;
+      } else {
+        raw.audio = audio;
       }
     },
   },

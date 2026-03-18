@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathExists } from "../utils.js";
+import { applyPathPrepend } from "./path-prepend.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
@@ -12,14 +14,114 @@ export type CommandRunner = (
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
+export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
+const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
+const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
+  "--omit=optional",
+  ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
+] as const;
 
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
+function normalizePackageTarget(value: string): string {
+  return value.trim();
+}
+
+export function isMainPackageTarget(value: string): boolean {
+  return normalizePackageTarget(value).toLowerCase() === "main";
+}
+
+export function isExplicitPackageInstallSpec(value: string): boolean {
+  const trimmed = normalizePackageTarget(value);
+  if (!trimmed) {
     return false;
   }
+  return (
+    trimmed.includes("://") ||
+    trimmed.includes("#") ||
+    /^(?:file|github|git\+ssh|git\+https|git\+http|git\+file|npm):/i.test(trimmed)
+  );
+}
+
+export function canResolveRegistryVersionForPackageTarget(value: string): boolean {
+  const trimmed = normalizePackageTarget(value);
+  if (!trimmed) {
+    return true;
+  }
+  return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
+}
+
+async function resolvePortableGitPathPrepend(
+  env: NodeJS.ProcessEnv | undefined,
+): Promise<string[]> {
+  if (process.platform !== "win32") {
+    return [];
+  }
+  const localAppData = env?.LOCALAPPDATA?.trim() || process.env.LOCALAPPDATA?.trim();
+  if (!localAppData) {
+    return [];
+  }
+  const portableGitRoot = path.join(localAppData, "OpenClaw", "deps", "portable-git");
+  const candidates = [
+    path.join(portableGitRoot, "mingw64", "bin"),
+    path.join(portableGitRoot, "usr", "bin"),
+    path.join(portableGitRoot, "cmd"),
+    path.join(portableGitRoot, "bin"),
+  ];
+  const existing: string[] = [];
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      existing.push(candidate);
+    }
+  }
+  return existing;
+}
+
+function applyWindowsPackageInstallEnv(env: Record<string, string>) {
+  if (process.platform !== "win32") {
+    return;
+  }
+  env.NPM_CONFIG_UPDATE_NOTIFIER = "false";
+  env.NPM_CONFIG_FUND = "false";
+  env.NPM_CONFIG_AUDIT = "false";
+  env.NPM_CONFIG_SCRIPT_SHELL = "cmd.exe";
+  env.NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1";
+}
+
+export function resolveGlobalInstallSpec(params: {
+  packageName: string;
+  tag: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  const override =
+    params.env?.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim() ||
+    process.env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim();
+  if (override) {
+    return override;
+  }
+  const target = normalizePackageTarget(params.tag);
+  if (isMainPackageTarget(target)) {
+    return OPENCLAW_MAIN_PACKAGE_SPEC;
+  }
+  if (isExplicitPackageInstallSpec(target)) {
+    return target;
+  }
+  return `${params.packageName}@${target}`;
+}
+
+export async function createGlobalInstallEnv(
+  env?: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv | undefined> {
+  const pathPrepend = await resolvePortableGitPathPrepend(env);
+  if (pathPrepend.length === 0 && process.platform !== "win32") {
+    return env;
+  }
+  const merged = Object.fromEntries(
+    Object.entries(env ?? process.env)
+      .filter(([, value]) => value != null)
+      .map(([key, value]) => [key, String(value)]),
+  ) as Record<string, string>;
+  applyPathPrepend(merged, pathPrepend);
+  applyWindowsPackageInstallEnv(merged);
+  return merged;
 }
 
 async function tryRealpath(targetPath: string): Promise<string> {
@@ -91,7 +193,8 @@ export async function detectGlobalInstallManagerForRoot(
     const globalReal = await tryRealpath(globalRoot);
     for (const name of ALL_PACKAGE_NAMES) {
       const expected = path.join(globalReal, name);
-      if (path.resolve(expected) === path.resolve(pkgReal)) {
+      const expectedReal = await tryRealpath(expected);
+      if (path.resolve(expectedReal) === path.resolve(pkgReal)) {
         return manager;
       }
     }
@@ -101,7 +204,8 @@ export async function detectGlobalInstallManagerForRoot(
   const bunGlobalReal = await tryRealpath(bunGlobalRoot);
   for (const name of ALL_PACKAGE_NAMES) {
     const bunExpected = path.join(bunGlobalReal, name);
-    if (path.resolve(bunExpected) === path.resolve(pkgReal)) {
+    const bunExpectedReal = await tryRealpath(bunExpected);
+    if (path.resolve(bunExpectedReal) === path.resolve(pkgReal)) {
       return "bun";
     }
   }
@@ -141,7 +245,17 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
   if (manager === "bun") {
     return ["bun", "add", "-g", spec];
   }
-  return ["npm", "i", "-g", spec];
+  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
+}
+
+export function globalInstallFallbackArgs(
+  manager: GlobalInstallManager,
+  spec: string,
+): string[] | null {
+  if (manager !== "npm") {
+    return null;
+  }
+  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
 }
 
 export async function cleanupGlobalRenameDirs(params: {

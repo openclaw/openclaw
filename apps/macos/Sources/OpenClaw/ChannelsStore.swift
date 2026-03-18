@@ -1,6 +1,6 @@
-import OpenClawProtocol
 import Foundation
 import Observation
+import OpenClawProtocol
 
 struct ChannelsStatusSnapshot: Codable {
     struct WhatsAppSelf: Codable {

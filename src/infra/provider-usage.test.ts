@@ -1,14 +1,60 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
   formatUsageReportLines,
   formatUsageSummaryLine,
   loadProviderUsageSummary,
   type UsageSummary,
 } from "./provider-usage.js";
+import { loadUsageWithAuth, usageNow } from "./provider-usage.test-support.js";
+
+const minimaxRemainsEndpoint = "api.minimaxi.com/v1/api/openplatform/coding_plan/remains";
+
+function expectSingleAnthropicProvider(summary: UsageSummary) {
+  expect(summary.providers).toHaveLength(1);
+  const claude = summary.providers[0];
+  expect(claude?.provider).toBe("anthropic");
+  return claude;
+}
+
+function createMinimaxOnlyFetch(payload: unknown) {
+  return createProviderUsageFetch(async (url) => {
+    if (url.includes(minimaxRemainsEndpoint)) {
+      return makeResponse(200, payload);
+    }
+    return makeResponse(404, "not found");
+  });
+}
+
+async function expectMinimaxUsage(
+  payload: unknown,
+  expected: {
+    usedPercent: number;
+    plan?: string;
+    label?: string;
+  },
+) {
+  const mockFetch = createMinimaxOnlyFetch(payload);
+
+  const summary = await loadUsageWithAuth(
+    loadProviderUsageSummary,
+    [{ provider: "minimax", token: "token-1b" }],
+    mockFetch,
+  );
+
+  const minimax = summary.providers.find((p) => p.provider === "minimax");
+  expect(minimax?.windows[0]?.usedPercent).toBe(expected.usedPercent);
+  expect(minimax?.windows[0]?.label).toBe(expected.label ?? "5h");
+  if (expected.plan !== undefined) {
+    expect(minimax?.plan).toBe(expected.plan);
+  }
+  expect(mockFetch).toHaveBeenCalled();
+}
 
 describe("provider usage formatting", () => {
   it("returns null when no usage is available", () => {
@@ -71,15 +117,7 @@ describe("provider usage formatting", () => {
 
 describe("provider usage loading", () => {
   it("loads usage snapshots with injected auth", async () => {
-    const makeResponse = (status: number, body: unknown): Response => {
-      const payload = typeof body === "string" ? body : JSON.stringify(body);
-      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-      return new Response(payload, { status, headers });
-    };
-
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.anthropic.com")) {
         return makeResponse(200, {
           five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
@@ -103,7 +141,7 @@ describe("provider usage loading", () => {
           },
         });
       }
-      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
+      if (url.includes(minimaxRemainsEndpoint)) {
         return makeResponse(200, {
           base_resp: { status_code: 0, status_msg: "ok" },
           data: {
@@ -117,15 +155,15 @@ describe("provider usage loading", () => {
       return makeResponse(404, "not found");
     });
 
-    const summary = await loadProviderUsageSummary({
-      now: Date.UTC(2026, 0, 7, 0, 0, 0),
-      auth: [
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [
         { provider: "anthropic", token: "token-1" },
         { provider: "minimax", token: "token-1b" },
         { provider: "zai", token: "token-2" },
       ],
-      fetch: mockFetch,
-    });
+      mockFetch,
+    );
 
     expect(summary.providers).toHaveLength(3);
     const claude = summary.providers.find((p) => p.provider === "anthropic");
@@ -137,116 +175,69 @@ describe("provider usage loading", () => {
     expect(mockFetch).toHaveBeenCalled();
   });
 
-  it("handles nested MiniMax usage payloads", async () => {
-    const makeResponse = (status: number, body: unknown): Response => {
-      const payload = typeof body === "string" ? body : JSON.stringify(body);
-      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-      return new Response(payload, { status, headers });
-    };
-
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
-        return makeResponse(200, {
-          base_resp: { status_code: 0, status_msg: "ok" },
-          data: {
-            plan_name: "Coding Plan",
-            usage: {
-              prompt_limit: 200,
-              prompt_remain: 50,
-              next_reset_time: "2026-01-07T05:00:00Z",
-            },
-          },
-        });
-      }
-      return makeResponse(404, "not found");
-    });
-
-    const summary = await loadProviderUsageSummary({
-      now: Date.UTC(2026, 0, 7, 0, 0, 0),
-      auth: [{ provider: "minimax", token: "token-1b" }],
-      fetch: mockFetch,
-    });
-
-    const minimax = summary.providers.find((p) => p.provider === "minimax");
-    expect(minimax?.windows[0]?.usedPercent).toBe(75);
-    expect(minimax?.plan).toBe("Coding Plan");
-    expect(mockFetch).toHaveBeenCalled();
-  });
-
-  it("prefers MiniMax count-based usage when percent looks inverted", async () => {
-    const makeResponse = (status: number, body: unknown): Response => {
-      const payload = typeof body === "string" ? body : JSON.stringify(body);
-      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-      return new Response(payload, { status, headers });
-    };
-
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
-        return makeResponse(200, {
-          base_resp: { status_code: 0, status_msg: "ok" },
-          data: {
+  it.each([
+    {
+      name: "handles nested MiniMax usage payloads",
+      payload: {
+        base_resp: { status_code: 0, status_msg: "ok" },
+        data: {
+          plan_name: "Coding Plan",
+          usage: {
             prompt_limit: 200,
-            prompt_remain: 150,
-            usage_percent: 75,
+            prompt_remain: 50,
             next_reset_time: "2026-01-07T05:00:00Z",
           },
-        });
-      }
-      return makeResponse(404, "not found");
-    });
-
-    const summary = await loadProviderUsageSummary({
-      now: Date.UTC(2026, 0, 7, 0, 0, 0),
-      auth: [{ provider: "minimax", token: "token-1b" }],
-      fetch: mockFetch,
-    });
-
-    const minimax = summary.providers.find((p) => p.provider === "minimax");
-    expect(minimax?.windows[0]?.usedPercent).toBe(25);
-    expect(mockFetch).toHaveBeenCalled();
-  });
-
-  it("handles MiniMax model_remains usage payloads", async () => {
-    const makeResponse = (status: number, body: unknown): Response => {
-      const payload = typeof body === "string" ? body : JSON.stringify(body);
-      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-      return new Response(payload, { status, headers });
-    };
-
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (url.includes("api.minimaxi.com/v1/api/openplatform/coding_plan/remains")) {
-        return makeResponse(200, {
-          base_resp: { status_code: 0, status_msg: "ok" },
-          model_remains: [
-            {
-              start_time: 1736217600,
-              end_time: 1736235600,
-              remains_time: 600,
-              current_interval_total_count: 120,
-              current_interval_usage_count: 30,
-              model_name: "MiniMax-M2.1",
-            },
-          ],
-        });
-      }
-      return makeResponse(404, "not found");
-    });
-
-    const summary = await loadProviderUsageSummary({
-      now: Date.UTC(2026, 0, 7, 0, 0, 0),
-      auth: [{ provider: "minimax", token: "token-1b" }],
-      fetch: mockFetch,
-    });
-
-    const minimax = summary.providers.find((p) => p.provider === "minimax");
-    expect(minimax?.windows[0]?.usedPercent).toBe(25);
-    expect(mockFetch).toHaveBeenCalled();
+        },
+      },
+      expected: { usedPercent: 75, plan: "Coding Plan" },
+    },
+    {
+      name: "prefers MiniMax count-based usage when percent looks inverted",
+      payload: {
+        base_resp: { status_code: 0, status_msg: "ok" },
+        data: {
+          prompt_limit: 200,
+          prompt_remain: 150,
+          usage_percent: 75,
+          next_reset_time: "2026-01-07T05:00:00Z",
+        },
+      },
+      expected: { usedPercent: 25 },
+    },
+    {
+      name: "handles MiniMax model_remains usage payloads",
+      payload: {
+        base_resp: { status_code: 0, status_msg: "ok" },
+        model_remains: [
+          {
+            start_time: 1736217600,
+            end_time: 1736235600,
+            remains_time: 600,
+            current_interval_total_count: 120,
+            current_interval_usage_count: 30,
+            model_name: "MiniMax-M2.5",
+          },
+        ],
+      },
+      expected: { usedPercent: 25 },
+    },
+    {
+      name: "keeps payload-level MiniMax plan metadata when the usage candidate is nested",
+      payload: {
+        base_resp: { status_code: 0, status_msg: "ok" },
+        data: {
+          plan_name: "Payload Plan",
+          nested: {
+            usage_ratio: "0.4",
+            window_hours: 2,
+            next_reset_time: "2026-01-07T05:00:00Z",
+          },
+        },
+      },
+      expected: { usedPercent: 40, plan: "Payload Plan", label: "2h" },
+    },
+  ])("$name", async ({ payload, expected }) => {
+    await expectMinimaxUsage(payload, expected);
   });
 
   it("discovers Claude usage from token auth profiles", async () => {
@@ -284,45 +275,28 @@ describe("provider usage loading", () => {
         });
         expect(listProfilesForProvider(store, "anthropic")).toContain("anthropic:default");
 
-        const makeResponse = (status: number, body: unknown): Response => {
-          const payload = typeof body === "string" ? body : JSON.stringify(body);
-          const headers =
-            typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-          return new Response(payload, { status, headers });
-        };
-
-        const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
-          async (input, init) => {
-            const url =
-              typeof input === "string"
-                ? input
-                : input instanceof URL
-                  ? input.toString()
-                  : input.url;
-            if (url.includes("api.anthropic.com/api/oauth/usage")) {
-              const headers = (init?.headers ?? {}) as Record<string, string>;
-              expect(headers.Authorization).toBe("Bearer token-1");
-              return makeResponse(200, {
-                five_hour: {
-                  utilization: 20,
-                  resets_at: "2026-01-07T01:00:00Z",
-                },
-              });
-            }
-            return makeResponse(404, "not found");
-          },
-        );
-
-        const summary = await loadProviderUsageSummary({
-          now: Date.UTC(2026, 0, 7, 0, 0, 0),
-          providers: ["anthropic"],
-          agentDir,
-          fetch: mockFetch,
+        const mockFetch = createProviderUsageFetch(async (url, init) => {
+          if (url.includes("api.anthropic.com/api/oauth/usage")) {
+            const headers = (init?.headers ?? {}) as Record<string, string>;
+            expect(headers.Authorization).toBe("Bearer token-1");
+            return makeResponse(200, {
+              five_hour: {
+                utilization: 20,
+                resets_at: "2026-01-07T01:00:00Z",
+              },
+            });
+          }
+          return makeResponse(404, "not found");
         });
 
-        expect(summary.providers).toHaveLength(1);
-        const claude = summary.providers[0];
-        expect(claude?.provider).toBe("anthropic");
+        const summary = await loadProviderUsageSummary({
+          now: usageNow,
+          providers: ["anthropic"],
+          agentDir,
+          fetch: mockFetch as unknown as typeof fetch,
+        });
+
+        const claude = expectSingleAnthropicProvider(summary);
         expect(claude?.windows[0]?.label).toBe("5h");
         expect(mockFetch).toHaveBeenCalled();
       },
@@ -336,19 +310,8 @@ describe("provider usage loading", () => {
   });
 
   it("falls back to claude.ai web usage when OAuth scope is missing", async () => {
-    const cookieSnapshot = process.env.CLAUDE_AI_SESSION_KEY;
-    process.env.CLAUDE_AI_SESSION_KEY = "sk-ant-web-1";
-    try {
-      const makeResponse = (status: number, body: unknown): Response => {
-        const payload = typeof body === "string" ? body : JSON.stringify(body);
-        const headers =
-          typeof body === "string" ? undefined : { "Content-Type": "application/json" };
-        return new Response(payload, { status, headers });
-      };
-
-      const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    await withEnvAsync({ CLAUDE_AI_SESSION_KEY: "sk-ant-web-1" }, async () => {
+      const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("api.anthropic.com/api/oauth/usage")) {
           return makeResponse(403, {
             type: "error",
@@ -371,23 +334,15 @@ describe("provider usage loading", () => {
         return makeResponse(404, "not found");
       });
 
-      const summary = await loadProviderUsageSummary({
-        now: Date.UTC(2026, 0, 7, 0, 0, 0),
-        auth: [{ provider: "anthropic", token: "sk-ant-oauth-1" }],
-        fetch: mockFetch,
-      });
+      const summary = await loadUsageWithAuth(
+        loadProviderUsageSummary,
+        [{ provider: "anthropic", token: "sk-ant-oauth-1" }],
+        mockFetch,
+      );
 
-      expect(summary.providers).toHaveLength(1);
-      const claude = summary.providers[0];
-      expect(claude?.provider).toBe("anthropic");
+      const claude = expectSingleAnthropicProvider(summary);
       expect(claude?.windows.some((w) => w.label === "5h")).toBe(true);
       expect(claude?.windows.some((w) => w.label === "Week")).toBe(true);
-    } finally {
-      if (cookieSnapshot === undefined) {
-        delete process.env.CLAUDE_AI_SESSION_KEY;
-      } else {
-        process.env.CLAUDE_AI_SESSION_KEY = cookieSnapshot;
-      }
-    }
+    });
   });
 });

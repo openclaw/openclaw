@@ -1,7 +1,16 @@
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
+import {
+  hasConfiguredUnavailableCredentialStatus,
+  hasResolvedCredentialValue,
+} from "../../channels/account-snapshot-fields.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
-import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
+import {
+  buildChannelAccountSnapshot,
+  buildReadOnlySourceChannelAccountSnapshot,
+} from "../../channels/plugins/status.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { withProgress } from "../../cli/progress.js";
 import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
@@ -10,7 +19,11 @@ import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { type ChatChannel, formatChannelAccountLabel, requireValidConfig } from "./shared.js";
+import {
+  type ChatChannel,
+  formatChannelAccountLabel,
+  requireValidConfigSnapshot,
+} from "./shared.js";
 
 export type ChannelsStatusOptions = {
   json?: boolean;
@@ -18,21 +31,76 @@ export type ChannelsStatusOptions = {
   timeout?: string;
 };
 
+function appendEnabledConfiguredLinkedBits(bits: string[], account: Record<string, unknown>) {
+  if (typeof account.enabled === "boolean") {
+    bits.push(account.enabled ? "enabled" : "disabled");
+  }
+  if (typeof account.configured === "boolean") {
+    if (account.configured) {
+      bits.push("configured");
+      if (hasConfiguredUnavailableCredentialStatus(account)) {
+        bits.push("secret unavailable in this command path");
+      }
+    } else {
+      bits.push("not configured");
+    }
+  }
+  if (typeof account.linked === "boolean") {
+    bits.push(account.linked ? "linked" : "not linked");
+  }
+}
+
+function appendModeBit(bits: string[], account: Record<string, unknown>) {
+  if (typeof account.mode === "string" && account.mode.length > 0) {
+    bits.push(`mode:${account.mode}`);
+  }
+}
+
+function appendTokenSourceBits(bits: string[], account: Record<string, unknown>) {
+  const appendSourceBit = (label: string, sourceKey: string, statusKey: string) => {
+    const source = account[sourceKey];
+    if (typeof source !== "string" || !source || source === "none") {
+      return;
+    }
+    const status = account[statusKey];
+    const unavailable = status === "configured_unavailable" ? " (unavailable)" : "";
+    bits.push(`${label}:${source}${unavailable}`);
+  };
+
+  appendSourceBit("token", "tokenSource", "tokenStatus");
+  appendSourceBit("bot", "botTokenSource", "botTokenStatus");
+  appendSourceBit("app", "appTokenSource", "appTokenStatus");
+  appendSourceBit("signing", "signingSecretSource", "signingSecretStatus");
+}
+
+function appendBaseUrlBit(bits: string[], account: Record<string, unknown>) {
+  if (typeof account.baseUrl === "string" && account.baseUrl) {
+    bits.push(`url:${account.baseUrl}`);
+  }
+}
+
+function buildChannelAccountLine(
+  provider: ChatChannel,
+  account: Record<string, unknown>,
+  bits: string[],
+): string {
+  const accountId = typeof account.accountId === "string" ? account.accountId : "default";
+  const name = typeof account.name === "string" ? account.name.trim() : "";
+  const labelText = formatChannelAccountLabel({
+    channel: provider,
+    accountId,
+    name: name || undefined,
+  });
+  return `- ${labelText}: ${bits.join(", ")}`;
+}
+
 export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
   const lines: string[] = [];
   lines.push(theme.success("Gateway reachable."));
   const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
     accounts.map((account) => {
       const bits: string[] = [];
-      if (typeof account.enabled === "boolean") {
-        bits.push(account.enabled ? "enabled" : "disabled");
-      }
-      if (typeof account.configured === "boolean") {
-        bits.push(account.configured ? "configured" : "not configured");
-      }
-      if (typeof account.linked === "boolean") {
-        bits.push(account.linked ? "linked" : "not linked");
-      }
+      appendEnabledConfiguredLinkedBits(bits, account);
       if (typeof account.running === "boolean") {
         bits.push(account.running ? "running" : "stopped");
       }
@@ -53,9 +121,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (outboundAt) {
         bits.push(`out:${formatTimeAgo(Date.now() - outboundAt)}`);
       }
-      if (typeof account.mode === "string" && account.mode.length > 0) {
-        bits.push(`mode:${account.mode}`);
-      }
+      appendModeBit(bits, account);
       const botUsername = (() => {
         const bot = account.bot as { username?: string | null } | undefined;
         const probeBot = (account.probe as { bot?: { username?: string | null } } | undefined)?.bot;
@@ -78,15 +144,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (Array.isArray(account.allowFrom) && account.allowFrom.length > 0) {
         bits.push(`allow:${account.allowFrom.slice(0, 2).join(",")}`);
       }
-      if (typeof account.tokenSource === "string" && account.tokenSource) {
-        bits.push(`token:${account.tokenSource}`);
-      }
-      if (typeof account.botTokenSource === "string" && account.botTokenSource) {
-        bits.push(`bot:${account.botTokenSource}`);
-      }
-      if (typeof account.appTokenSource === "string" && account.appTokenSource) {
-        bits.push(`app:${account.appTokenSource}`);
-      }
+      appendTokenSourceBits(bits, account);
       const application = account.application as
         | { intents?: { messageContent?: string } }
         | undefined;
@@ -101,9 +159,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (account.allowUnmentionedGroups === true) {
         bits.push("groups:unmentioned");
       }
-      if (typeof account.baseUrl === "string" && account.baseUrl) {
-        bits.push(`url:${account.baseUrl}`);
-      }
+      appendBaseUrlBit(bits, account);
       const probe = account.probe as { ok?: boolean } | undefined;
       if (probe && typeof probe.ok === "boolean") {
         bits.push(probe.ok ? "works" : "probe failed");
@@ -115,14 +171,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (typeof account.lastError === "string" && account.lastError) {
         bits.push(`error:${account.lastError}`);
       }
-      const accountId = typeof account.accountId === "string" ? account.accountId : "default";
-      const name = typeof account.name === "string" ? account.name.trim() : "";
-      const labelText = formatChannelAccountLabel({
-        channel: provider,
-        accountId,
-        name: name || undefined,
-      });
-      return `- ${labelText}: ${bits.join(", ")}`;
+      return buildChannelAccountLine(provider, account, bits);
     });
 
   const plugins = listChannelPlugins();
@@ -160,9 +209,10 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   return lines;
 }
 
-async function formatConfigChannelsStatusLines(
+export async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
   meta: { path?: string; mode?: "local" | "remote" },
+  opts?: { sourceConfig?: OpenClawConfig },
 ): Promise<string[]> {
   const lines: string[] = [];
   lines.push(theme.warn("Gateway not reachable; showing config-only status."));
@@ -179,41 +229,15 @@ async function formatConfigChannelsStatusLines(
   const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
     accounts.map((account) => {
       const bits: string[] = [];
-      if (typeof account.enabled === "boolean") {
-        bits.push(account.enabled ? "enabled" : "disabled");
-      }
-      if (typeof account.configured === "boolean") {
-        bits.push(account.configured ? "configured" : "not configured");
-      }
-      if (typeof account.linked === "boolean") {
-        bits.push(account.linked ? "linked" : "not linked");
-      }
-      if (typeof account.mode === "string" && account.mode.length > 0) {
-        bits.push(`mode:${account.mode}`);
-      }
-      if (typeof account.tokenSource === "string" && account.tokenSource) {
-        bits.push(`token:${account.tokenSource}`);
-      }
-      if (typeof account.botTokenSource === "string" && account.botTokenSource) {
-        bits.push(`bot:${account.botTokenSource}`);
-      }
-      if (typeof account.appTokenSource === "string" && account.appTokenSource) {
-        bits.push(`app:${account.appTokenSource}`);
-      }
-      if (typeof account.baseUrl === "string" && account.baseUrl) {
-        bits.push(`url:${account.baseUrl}`);
-      }
-      const accountId = typeof account.accountId === "string" ? account.accountId : "default";
-      const name = typeof account.name === "string" ? account.name.trim() : "";
-      const labelText = formatChannelAccountLabel({
-        channel: provider,
-        accountId,
-        name: name || undefined,
-      });
-      return `- ${labelText}: ${bits.join(", ")}`;
+      appendEnabledConfiguredLinkedBits(bits, account);
+      appendModeBit(bits, account);
+      appendTokenSourceBits(bits, account);
+      appendBaseUrlBit(bits, account);
+      return buildChannelAccountLine(provider, account, bits);
     });
 
   const plugins = listChannelPlugins();
+  const sourceConfig = opts?.sourceConfig ?? cfg;
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(cfg);
     if (!accountIds.length) {
@@ -221,12 +245,24 @@ async function formatConfigChannelsStatusLines(
     }
     const snapshots: ChannelAccountSnapshot[] = [];
     for (const accountId of accountIds) {
-      const snapshot = await buildChannelAccountSnapshot({
+      const sourceSnapshot = await buildReadOnlySourceChannelAccountSnapshot({
+        plugin,
+        cfg: sourceConfig,
+        accountId,
+      });
+      const resolvedSnapshot = await buildChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,
       });
-      snapshots.push(snapshot);
+      snapshots.push(
+        sourceSnapshot &&
+          hasConfiguredUnavailableCredentialStatus(sourceSnapshot) &&
+          (!hasResolvedCredentialValue(resolvedSnapshot) ||
+            (sourceSnapshot.configured === true && resolvedSnapshot.configured === false))
+          ? sourceSnapshot
+          : resolvedSnapshot,
+      );
     }
     if (snapshots.length > 0) {
       lines.push(...accountLines(plugin.id, snapshots));
@@ -271,18 +307,31 @@ export async function channelsStatusCommand(
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
     runtime.error(`Gateway not reachable: ${String(err)}`);
-    const cfg = await requireValidConfig(runtime);
+    const cfg = await requireValidConfigSnapshot(runtime);
     if (!cfg) {
       return;
+    }
+    const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+      config: cfg,
+      commandName: "channels status",
+      targetIds: getChannelsCommandSecretTargetIds(),
+      mode: "read_only_status",
+    });
+    for (const entry of diagnostics) {
+      runtime.log(`[secrets] ${entry}`);
     }
     const snapshot = await readConfigFileSnapshot();
     const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
     runtime.log(
       (
-        await formatConfigChannelsStatusLines(cfg, {
-          path: snapshot.path,
-          mode,
-        })
+        await formatConfigChannelsStatusLines(
+          resolvedConfig,
+          {
+            path: snapshot.path,
+            mode,
+          },
+          { sourceConfig: cfg },
+        )
       ).join("\n"),
     );
   }

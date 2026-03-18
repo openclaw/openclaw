@@ -1,117 +1,152 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
+import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
+import {
+  prepareProviderDynamicModel,
+  resolveProviderRuntimePlugin,
+  runProviderDynamicModel,
+  normalizeProviderResolvedModelWithPlugin,
+} from "../../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { buildModelAliasLines } from "../model-alias-lines.js";
+import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { normalizeModelCompat } from "../model-compat.js";
-import { normalizeProviderId } from "../model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
-  discoverAuthStorage,
-  discoverModels,
-  type AuthStorage,
-  type ModelRegistry,
-} from "../pi-model-discovery.js";
+  buildSuppressedBuiltInModelError,
+  shouldSuppressBuiltInModel,
+} from "../model-suppression.js";
+import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
-type InlineModelEntry = ModelDefinitionConfig & { provider: string; baseUrl?: string };
+type InlineModelEntry = ModelDefinitionConfig & {
+  provider: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+};
 type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
+  headers?: unknown;
 };
 
-const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-
-const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
-
-// pi-ai's built-in Anthropic catalog can lag behind OpenClaw's defaults/docs.
-// Add forward-compat fallbacks for known-new IDs by cloning an older template model.
-const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
-const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
-const ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS = ["claude-opus-4-5", "claude-opus-4.5"] as const;
-
-function resolveOpenAICodexGpt53FallbackModel(
-  provider: string,
-  modelId: string,
-  modelRegistry: ModelRegistry,
-): Model<Api> | undefined {
-  const normalizedProvider = normalizeProviderId(provider);
-  const trimmedModelId = modelId.trim();
-  if (normalizedProvider !== "openai-codex") {
+function sanitizeModelHeaders(
+  headers: unknown,
+  opts?: { stripSecretRefMarkers?: boolean },
+): Record<string, string> | undefined {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
     return undefined;
   }
-  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
-    return undefined;
-  }
-
-  for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
-    if (!template) {
+  const next: Record<string, string> = {};
+  for (const [headerName, headerValue] of Object.entries(headers)) {
+    if (typeof headerValue !== "string") {
       continue;
     }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-    } as Model<Api>);
+    if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
+      continue;
+    }
+    next[headerName] = headerValue;
   }
-
-  return normalizeModelCompat({
-    id: trimmedModelId,
-    name: trimmedModelId,
-    api: "openai-codex-responses",
-    provider: normalizedProvider,
-    baseUrl: "https://chatgpt.com/backend-api",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
-  } as Model<Api>);
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
-function resolveAnthropicOpus46ForwardCompatModel(
+function normalizeResolvedModel(params: {
+  provider: string;
+  model: Model<Api>;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Model<Api> {
+  const pluginNormalized = normalizeProviderResolvedModelWithPlugin({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: params.model.id,
+      model: params.model,
+    },
+  });
+  if (pluginNormalized) {
+    return normalizeModelCompat(pluginNormalized);
+  }
+  return normalizeResolvedProviderModel(params);
+}
+
+export { buildModelAliasLines };
+
+function resolveConfiguredProviderConfig(
+  cfg: OpenClawConfig | undefined,
   provider: string,
-  modelId: string,
-  modelRegistry: ModelRegistry,
-): Model<Api> | undefined {
-  const normalizedProvider = normalizeProviderId(provider);
-  if (normalizedProvider !== "anthropic") {
+): InlineProviderConfig | undefined {
+  const configuredProviders = cfg?.models?.providers;
+  if (!configuredProviders) {
     return undefined;
   }
-
-  const trimmedModelId = modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
-  const isOpus46 =
-    lower === ANTHROPIC_OPUS_46_MODEL_ID ||
-    lower === ANTHROPIC_OPUS_46_DOT_MODEL_ID ||
-    lower.startsWith(`${ANTHROPIC_OPUS_46_MODEL_ID}-`) ||
-    lower.startsWith(`${ANTHROPIC_OPUS_46_DOT_MODEL_ID}-`);
-  if (!isOpus46) {
-    return undefined;
+  const exactProviderConfig = configuredProviders[provider];
+  if (exactProviderConfig) {
+    return exactProviderConfig;
   }
+  return findNormalizedProviderValue(configuredProviders, provider);
+}
 
-  const templateIds: string[] = [];
-  if (lower.startsWith(ANTHROPIC_OPUS_46_MODEL_ID)) {
-    templateIds.push(lower.replace(ANTHROPIC_OPUS_46_MODEL_ID, "claude-opus-4-5"));
+function applyConfiguredProviderOverrides(params: {
+  discoveredModel: Model<Api>;
+  providerConfig?: InlineProviderConfig;
+  modelId: string;
+}): Model<Api> {
+  const { discoveredModel, providerConfig, modelId } = params;
+  if (!providerConfig) {
+    return {
+      ...discoveredModel,
+      // Discovered models originate from models.json and may contain persistence markers.
+      headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
+    };
   }
-  if (lower.startsWith(ANTHROPIC_OPUS_46_DOT_MODEL_ID)) {
-    templateIds.push(lower.replace(ANTHROPIC_OPUS_46_DOT_MODEL_ID, "claude-opus-4.5"));
+  const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
+  const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerHeaders) {
+    return {
+      ...discoveredModel,
+      headers: discoveredHeaders,
+    };
   }
-  templateIds.push(...ANTHROPIC_OPUS_TEMPLATE_MODEL_IDS);
+  const resolvedInput = configuredModel?.input ?? discoveredModel.input;
+  const normalizedInput =
+    Array.isArray(resolvedInput) && resolvedInput.length > 0
+      ? resolvedInput.filter((item) => item === "text" || item === "image")
+      : (["text"] as Array<"text" | "image">);
 
-  for (const templateId of [...new Set(templateIds)].filter(Boolean)) {
-    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-    } as Model<Api>);
-  }
-
-  return undefined;
+  return {
+    ...discoveredModel,
+    api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
+    baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+    reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
+    input: normalizedInput,
+    cost: configuredModel?.cost ?? discoveredModel.cost,
+    contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
+    maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
+    headers:
+      discoveredHeaders || providerHeaders || configuredHeaders
+        ? {
+            ...discoveredHeaders,
+            ...providerHeaders,
+            ...configuredHeaders,
+          }
+        : undefined,
+    compat: configuredModel?.compat ?? discoveredModel.compat,
+  };
 }
 
 export function buildInlineProviderModels(
@@ -122,32 +157,155 @@ export function buildInlineProviderModels(
     if (!trimmed) {
       return [];
     }
+    const providerHeaders = sanitizeModelHeaders(entry?.headers, {
+      stripSecretRefMarkers: true,
+    });
     return (entry?.models ?? []).map((model) => ({
       ...model,
       provider: trimmed,
       baseUrl: entry?.baseUrl,
       api: model.api ?? entry?.api,
+      headers: (() => {
+        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+          stripSecretRefMarkers: true,
+        });
+        if (!providerHeaders && !modelHeaders) {
+          return undefined;
+        }
+        return {
+          ...providerHeaders,
+          ...modelHeaders,
+        };
+      })(),
     }));
   });
 }
 
-export function buildModelAliasLines(cfg?: OpenClawConfig) {
-  const models = cfg?.agents?.defaults?.models ?? {};
-  const entries: Array<{ alias: string; model: string }> = [];
-  for (const [keyRaw, entryRaw] of Object.entries(models)) {
-    const model = String(keyRaw ?? "").trim();
-    if (!model) {
-      continue;
-    }
-    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) {
-      continue;
-    }
-    entries.push({ alias, model });
+function resolveExplicitModelWithRegistry(params: {
+  provider: string;
+  modelId: string;
+  modelRegistry: ModelRegistry;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
+  const { provider, modelId, modelRegistry, cfg, agentDir } = params;
+  if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
+    return { kind: "suppressed" };
   }
-  return entries
-    .toSorted((a, b) => a.alias.localeCompare(b.alias))
-    .map((entry) => `- ${entry.alias}: ${entry.model}`);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+
+  if (model) {
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        cfg,
+        agentDir,
+        model: applyConfiguredProviderOverrides({
+          discoveredModel: model,
+          providerConfig,
+          modelId,
+        }),
+      }),
+    };
+  }
+
+  const providers = cfg?.models?.providers ?? {};
+  const inlineModels = buildInlineProviderModels(providers);
+  const normalizedProvider = normalizeProviderId(provider);
+  const inlineMatch = inlineModels.find(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+  );
+  if (inlineMatch?.api) {
+    return {
+      kind: "resolved",
+      model: normalizeResolvedModel({
+        provider,
+        cfg,
+        agentDir,
+        model: inlineMatch as Model<Api>,
+      }),
+    };
+  }
+
+  return undefined;
+}
+
+export function resolveModelWithRegistry(params: {
+  provider: string;
+  modelId: string;
+  modelRegistry: ModelRegistry;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): Model<Api> | undefined {
+  const explicitModel = resolveExplicitModelWithRegistry(params);
+  if (explicitModel?.kind === "suppressed") {
+    return undefined;
+  }
+  if (explicitModel?.kind === "resolved") {
+    return explicitModel.model;
+  }
+
+  const { provider, modelId, cfg, modelRegistry, agentDir } = params;
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const pluginDynamicModel = runProviderDynamicModel({
+    provider,
+    config: cfg,
+    context: {
+      config: cfg,
+      agentDir,
+      provider,
+      modelId,
+      modelRegistry,
+      providerConfig,
+    },
+  });
+  if (pluginDynamicModel) {
+    return normalizeResolvedModel({
+      provider,
+      cfg,
+      agentDir,
+      model: pluginDynamicModel,
+    });
+  }
+
+  const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  if (providerConfig || modelId.startsWith("mock-")) {
+    return normalizeResolvedModel({
+      provider,
+      cfg,
+      agentDir,
+      model: {
+        id: modelId,
+        name: modelId,
+        api: providerConfig?.api ?? "openai-responses",
+        provider,
+        baseUrl: providerConfig?.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        headers:
+          providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
+      } as Model<Api>,
+    });
+  }
+
+  return undefined;
 }
 
 export function resolveModel(
@@ -164,62 +322,121 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
-  if (!model) {
-    const providers = cfg?.models?.providers ?? {};
-    const inlineModels = buildInlineProviderModels(providers);
-    const normalizedProvider = normalizeProviderId(provider);
-    const inlineMatch = inlineModels.find(
-      (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
-    );
-    if (inlineMatch) {
-      const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
-      return {
-        model: normalized,
-        authStorage,
-        modelRegistry,
-      };
-    }
-    // Codex gpt-5.3 forward-compat fallback must be checked BEFORE the generic providerCfg fallback.
-    // Otherwise, if cfg.models.providers["openai-codex"] is configured, the generic fallback fires
-    // with api: "openai-responses" instead of the correct "openai-codex-responses".
-    const codexForwardCompat = resolveOpenAICodexGpt53FallbackModel(
-      provider,
-      modelId,
-      modelRegistry,
-    );
-    if (codexForwardCompat) {
-      return { model: codexForwardCompat, authStorage, modelRegistry };
-    }
-    const anthropicForwardCompat = resolveAnthropicOpus46ForwardCompatModel(
-      provider,
-      modelId,
-      modelRegistry,
-    );
-    if (anthropicForwardCompat) {
-      return { model: anthropicForwardCompat, authStorage, modelRegistry };
-    }
-    const providerCfg = providers[provider];
-    if (providerCfg || modelId.startsWith("mock-")) {
-      const fallbackModel: Model<Api> = normalizeModelCompat({
-        id: modelId,
-        name: modelId,
-        api: providerCfg?.api ?? "openai-responses",
-        provider,
-        baseUrl: providerCfg?.baseUrl,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: providerCfg?.models?.[0]?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-        maxTokens: providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-      } as Model<Api>);
-      return { model: fallbackModel, authStorage, modelRegistry };
-    }
+  const model = resolveModelWithRegistry({
+    provider,
+    modelId,
+    modelRegistry,
+    cfg,
+    agentDir: resolvedAgentDir,
+  });
+  if (model) {
+    return { model, authStorage, modelRegistry };
+  }
+
+  return {
+    error: buildUnknownModelError(provider, modelId),
+    authStorage,
+    modelRegistry,
+  };
+}
+
+export async function resolveModelAsync(
+  provider: string,
+  modelId: string,
+  agentDir?: string,
+  cfg?: OpenClawConfig,
+): Promise<{
+  model?: Model<Api>;
+  error?: string;
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+}> {
+  const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+  const authStorage = discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
+  const explicitModel = resolveExplicitModelWithRegistry({
+    provider,
+    modelId,
+    modelRegistry,
+    cfg,
+    agentDir: resolvedAgentDir,
+  });
+  if (explicitModel?.kind === "suppressed") {
     return {
-      error: `Unknown model: ${provider}/${modelId}`,
+      error: buildUnknownModelError(provider, modelId),
       authStorage,
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  if (!explicitModel) {
+    const providerPlugin = resolveProviderRuntimePlugin({
+      provider,
+      config: cfg,
+    });
+    if (providerPlugin?.prepareDynamicModel) {
+      await prepareProviderDynamicModel({
+        provider,
+        config: cfg,
+        context: {
+          config: cfg,
+          agentDir: resolvedAgentDir,
+          provider,
+          modelId,
+          modelRegistry,
+          providerConfig: resolveConfiguredProviderConfig(cfg, provider),
+        },
+      });
+    }
+  }
+  const model =
+    explicitModel?.kind === "resolved"
+      ? explicitModel.model
+      : resolveModelWithRegistry({
+          provider,
+          modelId,
+          modelRegistry,
+          cfg,
+          agentDir: resolvedAgentDir,
+        });
+  if (model) {
+    return { model, authStorage, modelRegistry };
+  }
+
+  return {
+    error: buildUnknownModelError(provider, modelId),
+    authStorage,
+    modelRegistry,
+  };
+}
+
+/**
+ * Build a more helpful error when the model is not found.
+ *
+ * Local providers (ollama, vllm) need a dummy API key to be registered.
+ * Users often configure `agents.defaults.model.primary: "ollama/…"` but
+ * forget to set `OLLAMA_API_KEY`, resulting in a confusing "Unknown model"
+ * error.  This detects known providers that require opt-in auth and adds
+ * a hint.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/17328
+ */
+const LOCAL_PROVIDER_HINTS: Record<string, string> = {
+  ollama:
+    "Ollama requires authentication to be registered as a provider. " +
+    'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +
+    "See: https://docs.openclaw.ai/providers/ollama",
+  vllm:
+    "vLLM requires authentication to be registered as a provider. " +
+    'Set VLLM_API_KEY (any value works) or run "openclaw configure". ' +
+    "See: https://docs.openclaw.ai/providers/vllm",
+};
+
+function buildUnknownModelError(provider: string, modelId: string): string {
+  const suppressed = buildSuppressedBuiltInModelError({ provider, id: modelId });
+  if (suppressed) {
+    return suppressed;
+  }
+  const base = `Unknown model: ${provider}/${modelId}`;
+  const hint = LOCAL_PROVIDER_HINTS[provider.toLowerCase()];
+  return hint ? `${base}. ${hint}` : base;
 }

@@ -18,6 +18,8 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=500]
       - id: check-merge-conflict
+      - id: detect-private-key
+        exclude: '(^|/)(\.secrets\.baseline$|\.detect-secrets\.cfg$|\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)'
 
   # Secret detection (same as CI)
   - repo: https://github.com/Yelp/detect-secrets
@@ -28,7 +30,7 @@ repos:
           - --baseline
           - .secrets.baseline
           - --exclude-files
-          - '(^|/)(dist/|vendor/|pnpm-lock\.yaml$|\.detect-secrets\.cfg$)'
+          - '(^|/)pnpm-lock\.yaml$'
           - --exclude-lines
           - 'key_content\.include\?\("BEGIN PRIVATE KEY"\)'
           - --exclude-lines
@@ -45,7 +47,32 @@ repos:
           - '=== "string"'
           - --exclude-lines
           - 'typeof remote\?\.password === "string"'
-
+          - --exclude-lines
+          - "OPENCLAW_DOCKER_GPG_FINGERPRINT="
+          - --exclude-lines
+          - '"secretShape": "(secret_input|sibling_ref)"'
+          - --exclude-lines
+          - 'API key rotation \(provider-specific\): set `\*_API_KEYS`'
+          - --exclude-lines
+          - 'password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway\.auth\.password` -> `gateway\.remote\.password`'
+          - --exclude-lines
+          - 'password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway\.remote\.password` -> `gateway\.auth\.password`'
+          - --exclude-files
+          - '^src/gateway/client\.watchdog\.test\.ts$'
+          - --exclude-lines
+          - 'export CUSTOM_API_K[E]Y="your-key"'
+          - --exclude-lines
+          - 'grep -q ''N[O]DE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache'' ~/.bashrc \|\| cat >> ~/.bashrc <<''EOF'''
+          - --exclude-lines
+          - 'env: \{ MISTRAL_API_K[E]Y: "sk-\.\.\." \},'
+          - --exclude-lines
+          - '"ap[i]Key": "xxxxx"(,)?'
+          - --exclude-lines
+          - 'ap[i]Key: "A[I]za\.\.\.",'
+          - --exclude-lines
+          - '"ap[i]Key": "(resolved|normalized|legacy)-key"(,)?'
+          - --exclude-lines
+          - 'sparkle:edSignature="[A-Za-z0-9+/=]+"'
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
@@ -69,9 +96,34 @@ repos:
         args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
         exclude: "^(vendor/|Swabble/)"
 
+  # Python checks for skills scripts
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.1
+    hooks:
+      - id: ruff
+        files: "^skills/.*\\.py$"
+        args: [--config, pyproject.toml]
+
+  - repo: local
+    hooks:
+      - id: skills-python-tests
+        name: skills python tests
+        entry: pytest -q skills
+        language: python
+        additional_dependencies: [pytest>=8, <9]
+        pass_filenames: false
+        files: "^skills/.*\\.py$"
+
   # Project checks (same commands as CI)
   - repo: local
     hooks:
+      # pnpm audit --prod --audit-level=high
+      - id: pnpm-audit-prod
+        name: pnpm-audit-prod
+        entry: pnpm audit --prod --audit-level=high
+        language: system
+        pass_filenames: false
+
       # oxlint --type-aware src test
       - id: oxlint
         name: oxlint
