@@ -1,9 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
-import { resolveProviderAuths, type ProviderAuth } from "./provider-usage.auth.js";
+
+const resolveProviderUsageAuthWithPluginMock = vi.fn(async () => null);
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderUsageAuthWithPlugin: (...args: unknown[]) =>
+    resolveProviderUsageAuthWithPluginMock(...args),
+}));
+
+let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+type ProviderAuth = import("./provider-usage.auth.js").ProviderAuth;
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
@@ -18,12 +27,18 @@ describe("resolveProviderAuths key normalization", () => {
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-suite-"));
+    ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
   });
 
   afterAll(async () => {
     await fs.rm(suiteRoot, { recursive: true, force: true });
     suiteRoot = "";
     suiteCase = 0;
+  });
+
+  beforeEach(() => {
+    resolveProviderUsageAuthWithPluginMock.mockReset();
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
 
   async function withSuiteHome<T>(
