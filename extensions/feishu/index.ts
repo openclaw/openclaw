@@ -5,6 +5,19 @@ import {
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import { registerFeishuSubagentHooks } from "./subagent-hooks-api.js";
 
+export {
+  buildMentionedCardContent,
+  buildMentionedMessage,
+  extractMentionTargets,
+  extractMessageBody,
+  formatMentionAllForCard,
+  formatMentionAllForText,
+  formatMentionForCard,
+  formatMentionForText,
+  isMentionForwardRequest,
+  type MentionTarget,
+} from "./src/mention.js";
+
 function registerFeishuDocTools(api: OpenClawPluginApi) {
   const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
     specifier: "./api.js",
