@@ -247,7 +247,7 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
-  const { model, authProfileId } = await resolveRuntimeModel({
+  const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
@@ -262,6 +262,7 @@ export async function runBtwSideQuestion(
     model,
     cfg: params.cfg,
     profileId: authProfileId,
+    allowGoogleVertexAdcFallbackForExplicitProfile: authProfileIdSource !== "user",
     agentDir: params.agentDir,
   });
   const apiKey = requireApiKey(apiKeyInfo, model.provider);

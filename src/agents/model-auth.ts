@@ -284,6 +284,7 @@ export async function resolveApiKeyForProvider(params: {
   cfg?: OpenClawConfig;
   profileId?: string;
   preferredProfile?: string;
+  allowGoogleVertexAdcFallbackForExplicitProfile?: boolean;
   store?: AuthProfileStore;
   agentDir?: string;
 }): Promise<ResolvedProviderAuth> {
@@ -301,7 +302,10 @@ export async function resolveApiKeyForProvider(params: {
     });
     if (!resolved) {
       explicitProfileError = new Error(`No credentials found for profile "${profileId}".`);
-      if (normalized !== "google-vertex") {
+      if (
+        normalized !== "google-vertex" ||
+        !params.allowGoogleVertexAdcFallbackForExplicitProfile
+      ) {
         throw explicitProfileError;
       }
     } else {
@@ -555,6 +559,7 @@ export async function getApiKeyForModel(params: {
   cfg?: OpenClawConfig;
   profileId?: string;
   preferredProfile?: string;
+  allowGoogleVertexAdcFallbackForExplicitProfile?: boolean;
   store?: AuthProfileStore;
   agentDir?: string;
 }): Promise<ResolvedProviderAuth> {
@@ -563,6 +568,8 @@ export async function getApiKeyForModel(params: {
     cfg: params.cfg,
     profileId: params.profileId,
     preferredProfile: params.preferredProfile,
+    allowGoogleVertexAdcFallbackForExplicitProfile:
+      params.allowGoogleVertexAdcFallbackForExplicitProfile,
     store: params.store,
     agentDir: params.agentDir,
   });

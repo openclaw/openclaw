@@ -246,6 +246,7 @@ describe("getApiKeyForModel", () => {
           const resolved = await resolveApiKeyForProvider({
             provider: "google-vertex",
             profileId: "google-vertex:default",
+            allowGoogleVertexAdcFallbackForExplicitProfile: true,
             store: {
               version: 1,
               profiles: {
@@ -283,6 +284,7 @@ describe("getApiKeyForModel", () => {
           resolveApiKeyForProvider({
             provider: "google-vertex",
             profileId: "google-vertex:default",
+            allowGoogleVertexAdcFallbackForExplicitProfile: true,
             store: {
               version: 1,
               profiles: {
@@ -298,6 +300,45 @@ describe("getApiKeyForModel", () => {
         ).rejects.toThrow('No credentials found for profile "google-vertex:default".');
       },
     );
+  });
+
+  it("keeps explicit google-vertex profile locks strict by default", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-locked-"));
+    const adcPath = path.join(tempDir, "application_default_credentials.json");
+    await fs.writeFile(adcPath, "{}\n", "utf8");
+
+    try {
+      await withEnvAsync(
+        {
+          GOOGLE_APPLICATION_CREDENTIALS: adcPath,
+          GOOGLE_CLOUD_PROJECT: "vertex-test-project",
+          GCLOUD_PROJECT: undefined,
+          GOOGLE_CLOUD_LOCATION: "global",
+          GOOGLE_CLOUD_API_KEY: undefined,
+        },
+        async () => {
+          await expect(
+            resolveApiKeyForProvider({
+              provider: "google-vertex",
+              profileId: "google-vertex:default",
+              store: {
+                version: 1,
+                profiles: {
+                  "google-vertex:default": {
+                    type: "token",
+                    provider: "google-vertex",
+                    token: "stale-token",
+                    expires: Date.now() - 60_000,
+                  },
+                },
+              },
+            }),
+          ).rejects.toThrow('No credentials found for profile "google-vertex:default".');
+        },
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps explicit profile failures strict for non-google-vertex providers", async () => {

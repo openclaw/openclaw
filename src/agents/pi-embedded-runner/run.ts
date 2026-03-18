@@ -647,6 +647,7 @@ export async function runEmbeddedPiAgent(
           model: runtimeModel,
           cfg: params.config,
           profileId: candidate,
+          allowGoogleVertexAdcFallbackForExplicitProfile: !lockedProfileId,
           store: authStore,
           agentDir,
         });
