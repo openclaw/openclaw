@@ -471,6 +471,17 @@ describe("resolveModel", () => {
       "X-Provider": "provider",
       "X-Model": "special",
     });
+
+    const uppercasePrefixResult = resolveModel("polza", "POLZA/gpt-4o-mini", "/tmp/agent", cfg);
+
+    expect(uppercasePrefixResult.error).toBeUndefined();
+    expect(uppercasePrefixResult.model).toMatchObject({
+      provider: "polza",
+      id: "gpt-4o-mini",
+      reasoning: true,
+      contextWindow: 123456,
+      maxTokens: 4096,
+    });
   });
 
   it("keeps OpenRouter native ids qualified when fallback config uses bare ids", () => {

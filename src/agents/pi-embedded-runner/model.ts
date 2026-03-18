@@ -239,7 +239,13 @@ function stripSameProviderPrefix(params: { provider: string; modelId: string }):
     return modelId;
   }
   const prefix = `${providerId}/`;
-  return modelId.toLowerCase().startsWith(prefix) ? modelId.slice(prefix.length) : modelId;
+  const separatorIndex = modelId.indexOf("/");
+  if (separatorIndex < 0) {
+    return modelId;
+  }
+  return modelId.slice(0, separatorIndex + 1).toLowerCase() === prefix
+    ? modelId.slice(separatorIndex + 1)
+    : modelId;
 }
 
 function resolveSameProviderModelIds(params: { provider: string; modelId: string }) {
