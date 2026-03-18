@@ -235,6 +235,17 @@ We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and bundled
 plugins should import their own local runtime code directly from their
 extension-owned modules.
 
+For polls specifically, there are two execution paths:
+
+- `outbound.sendPoll` is the shared baseline for channels that fit the common
+  poll model
+- `actions.handleAction("poll")` is the preferred path for channel-specific
+  poll semantics or extra poll parameters
+
+Core now defers shared poll parsing until after plugin poll dispatch declines
+the action, so plugin-owned poll handlers can accept channel-specific poll
+fields without being blocked by the generic poll parser first.
+
 ## Capability ownership model
 
 OpenClaw treats a native plugin as the ownership boundary for a **company** or a
