@@ -63,7 +63,17 @@ function truncateErrorReason(error: string): string {
       .find((l) => l.length > 0) ?? "";
   // Strip internal tool-context prefixes (e.g. "agent=… node=… gateway=… action=…: ")
   // to avoid leaking implementation details into user-facing warnings (#46592).
-  const cleaned = firstLine.replace(/^(?:\w+=\S+\s+)*\w+=\S+:\s*/, "");
+  let cleaned = firstLine.replace(/^(?:\w+=\S+\s+)*\w+=\S+:\s*/, "");
+  // Scrub absolute filesystem paths to avoid leaking sandbox/host directory
+  // structure in non-verbose mode (P2 review thread on #46592).
+  cleaned = cleaned.replace(/\/(?:home|tmp|var|root|Users)\/\S+/g, "<path>");
+  // Scrub session keys that may embed channel-specific PII such as phone
+  // numbers or chat IDs (e.g. "agent:main:whatsapp:direct:+15555550123").
+  // P2 review thread on #46592.
+  cleaned = cleaned.replace(
+    /\b(?:agent|session):[a-zA-Z0-9_-]+(?::[a-zA-Z0-9_.+@-]+){2,}/g,
+    "<session>",
+  );
   const line = cleaned || firstLine;
   if (line.length <= FAILURE_REASON_MAX_LENGTH) {
     return line;

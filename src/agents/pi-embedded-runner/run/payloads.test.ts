@@ -119,6 +119,39 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("scrubs filesystem paths from non-verbose error reasons", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "write",
+        error:
+          "Sandbox path escapes allowed mounts; cannot write: /home/openclaw/.sandbox/agent/file.txt",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Write",
+      detail: "<path>",
+      absentDetail: "/home/openclaw",
+    });
+  });
+
+  it("scrubs session keys from non-verbose error reasons", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "session_status",
+        error: "Session not found: agent:main:whatsapp:direct:+15555550123",
+      },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Session_status",
+      detail: "<session>",
+      absentDetail: "+15555550123",
+    });
+  });
+
   it("uses colon separator in verbose mode for full error details", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "edit", error: "Could not find exact text match" },
