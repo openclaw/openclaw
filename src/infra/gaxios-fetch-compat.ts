@@ -1,8 +1,7 @@
 import { createRequire } from "node:module";
 import type { ConnectionOptions } from "node:tls";
 import { pathToFileURL } from "node:url";
-import type { Dispatcher } from "undici";
-import { Agent as UndiciAgent, ProxyAgent } from "undici";
+import { Agent as UndiciAgent, ProxyAgent, type Dispatcher } from "./net/undici-runtime.js";
 
 type ProxyRule = RegExp | URL | string;
 type TlsCert = ConnectionOptions["cert"];

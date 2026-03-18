@@ -61,7 +61,13 @@ export {
 export { resolveWhatsAppHeartbeatRecipients } from "../channels/plugins/whatsapp-heartbeat.js";
 export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";
 
-export { createActionGate, readStringParam } from "../agents/tools/common.js";
+export {
+  ToolAuthorizationError,
+  createActionGate,
+  jsonResult,
+  readReactionParams,
+  readStringParam,
+} from "../agents/tools/common.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
 export { normalizeE164 } from "../utils.js";
 

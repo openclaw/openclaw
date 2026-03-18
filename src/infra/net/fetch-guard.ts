@@ -1,4 +1,3 @@
-import { EnvHttpProxyAgent, type Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { bindAbortRelay } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
@@ -11,6 +10,7 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { EnvHttpProxyAgent, type Dispatcher } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 

@@ -1,5 +1,8 @@
-import type { Dispatcher, RequestInit as UndiciRequestInit } from "undici";
-import { ProxyAgent, fetch as undiciFetch } from "undici";
+import type {
+  Dispatcher,
+  RequestInit as UndiciRequestInit,
+} from "../../../src/infra/net/undici-runtime.js";
+import { ProxyAgent, fetch as undiciFetch } from "../../../src/infra/net/undici-runtime.js";
 import type { ZaloFetch } from "./api.js";
 
 const proxyCache = new Map<string, ZaloFetch>();

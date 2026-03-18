@@ -7,7 +7,12 @@ import {
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import {
+  Agent,
+  EnvHttpProxyAgent,
+  ProxyAgent,
+  fetch as undiciFetch,
+} from "../../../src/infra/net/undici-runtime.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,

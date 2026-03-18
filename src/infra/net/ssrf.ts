@@ -1,6 +1,5 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { Agent, EnvHttpProxyAgent, ProxyAgent, type Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -13,6 +12,7 @@ import {
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
 import { normalizeHostname } from "./hostname.js";
+import { Agent, EnvHttpProxyAgent, ProxyAgent, type Dispatcher } from "./undici-runtime.js";
 
 type LookupCallback = (
   err: NodeJS.ErrnoException | null,

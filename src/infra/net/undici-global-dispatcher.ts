@@ -1,6 +1,11 @@
 import * as net from "node:net";
-import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
+import {
+  Agent,
+  EnvHttpProxyAgent,
+  getGlobalDispatcher,
+  setGlobalDispatcher,
+} from "./undici-runtime.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 

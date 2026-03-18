@@ -48,6 +48,7 @@ export {
   withNormalizedTimestamp,
 } from "openclaw/plugin-sdk/discord-core";
 export type { DiscordAccountConfig, DiscordActionConfig } from "openclaw/plugin-sdk/discord";
+export type { DiscordConfig } from "../../../src/config/types.discord.js";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
