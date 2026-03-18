@@ -171,6 +171,28 @@ describe("slackPlugin outbound", () => {
   });
 });
 
+describe("slackPlugin directory", () => {
+  it("lists configured peers without throwing a ReferenceError", async () => {
+    const listPeers = slackPlugin.directory?.listPeers;
+    expect(listPeers).toBeDefined();
+
+    await expect(
+      listPeers!({
+        cfg: {
+          channels: {
+            slack: {
+              dms: {
+                U123: {},
+              },
+            },
+          },
+        },
+        runtime: undefined,
+      }),
+    ).resolves.toEqual([{ id: "user:u123", kind: "user" }]);
+  });
+});
+
 describe("slackPlugin agentPrompt", () => {
   it("tells agents interactive replies are disabled by default", () => {
     const hints = slackPlugin.agentPrompt?.messageToolHints?.({
