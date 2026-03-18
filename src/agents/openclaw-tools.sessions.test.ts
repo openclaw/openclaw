@@ -633,9 +633,9 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "discord",
         inputProvenance: { kind: "inter_session" },
       });
+      expect((call.params as { channel?: string }).channel).toBeUndefined();
     }
     expect(
       agentCalls.some(
@@ -813,9 +813,9 @@ describe("sessions tools", () => {
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
-        channel: "discord",
         inputProvenance: { kind: "inter_session" },
       });
+      expect((call.params as { channel?: string }).channel).toBeUndefined();
     }
 
     const replySteps = calls.filter(
@@ -834,7 +834,7 @@ describe("sessions tools", () => {
     });
   });
 
-  it("sessions_send falls back to webchat when no requester channel is available", async () => {
+  it("sessions_send does not force a channel override", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
@@ -868,11 +868,11 @@ describe("sessions tools", () => {
     });
     const agentCall = calls.find((call) => call.method === "agent");
     expect(agentCall?.params).toMatchObject({
-      channel: "webchat",
       inputProvenance: {
         sourceChannel: undefined,
       },
     });
+    expect((agentCall?.params as { channel?: string } | undefined)?.channel).toBeUndefined();
   });
 
   it("subagents lists active and recent runs", async () => {
