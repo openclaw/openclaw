@@ -1304,7 +1304,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
       title: "Open groupPolicy with elevated tools enabled",
       detail:
         `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
-        "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
+        "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident. Mention gates reduce noise, but they are not a trust boundary.",
       remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
     });
   }
