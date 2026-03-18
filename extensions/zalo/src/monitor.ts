@@ -113,8 +113,8 @@ function trimNonEmptyString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-export function resolveInboundZaloPhotoUrl(message: ZaloMessage): string | undefined {
-  return trimNonEmptyString(message.photo_url) ?? trimNonEmptyString(message.photo);
+export function resolveInboundZaloPhotoUrl(photo_url: unknown, photo: unknown): string | undefined {
+  return trimNonEmptyString(photo_url) ?? trimNonEmptyString(photo);
 }
 
 function formatZaloError(error: unknown): string {
@@ -302,8 +302,8 @@ async function handleTextMessage(
 
 async function handleImageMessage(params: ZaloImageMessageParams): Promise<void> {
   const { message, mediaMaxMb, account, core, runtime } = params;
-  const { caption } = message;
-  const photoUrl = resolveInboundZaloPhotoUrl(message);
+  const { photo_url, photo, caption } = message;
+  const photoUrl = resolveInboundZaloPhotoUrl(photo_url, photo);
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
