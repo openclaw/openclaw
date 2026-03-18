@@ -1,8 +1,12 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
+import {
+  loadSessionStoreForTests,
+  recordSessionMetaFromInboundForTests,
+  updateLastRouteForTests,
+  updateSessionStoreForTests,
+} from "./test-session-store-mocks.js";
 
 // Use globalThis to store the mock config so it survives vi.mock hoisting
 const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
@@ -32,95 +36,50 @@ export function resetLoadConfigMock() {
   (globalThis as Record<symbol, unknown>)[CONFIG_KEY] = () => DEFAULT_CONFIG;
 }
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  const mockModule = Object.create(null) as Record<string, unknown>;
-  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
-  Object.defineProperties(mockModule, {
-    loadConfig: {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: () => {
-        const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
-        if (typeof getter === "function") {
-          return getter();
-        }
-        return DEFAULT_CONFIG;
-      },
-    },
-    updateLastRoute: {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: async (params: {
-        storePath: string;
-        sessionKey: string;
-        deliveryContext: { channel: string; to: string; accountId?: string };
-      }) => {
-        const raw = await fs.readFile(params.storePath, "utf8").catch(() => "{}");
-        const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-        const current = store[params.sessionKey] ?? {};
-        store[params.sessionKey] = {
-          ...current,
-          lastChannel: params.deliveryContext.channel,
-          lastTo: params.deliveryContext.to,
-          lastAccountId: params.deliveryContext.accountId,
-        };
-        await fs.writeFile(params.storePath, JSON.stringify(store));
-      },
-    },
-    loadSessionStore: {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: (storePath: string) => {
-        try {
-          return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, unknown>;
-        } catch {
-          return {};
-        }
-      },
-    },
-    recordSessionMetaFromInbound: {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: async () => undefined,
-    },
-    resolveStorePath: {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: actual.resolveStorePath,
-    },
-  });
-  return mockModule;
-});
-
-// Some web modules live under `src/web/auto-reply/*` and import config via a different
-// relative path (`../../config/config.js`). Mock both specifiers so tests stay stable
-// across refactors that move files between folders.
-vi.mock("../../config/config.js", async (importOriginal) => {
-  // `../../config/config.js` is correct for modules under `src/web/auto-reply/*`.
-  // For typing in this file (which lives in `src/web/*`), refer to the same module
-  // via the local relative path.
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  const mockModule = Object.create(null) as Record<string, unknown>;
-  Object.defineProperties(mockModule, Object.getOwnPropertyDescriptors(actual));
-  Object.defineProperty(mockModule, "loadConfig", {
-    configurable: true,
-    enumerable: true,
-    writable: true,
-    value: () => {
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    loadSessionStore: loadSessionStoreForTests,
+    recordSessionMetaFromInbound: recordSessionMetaFromInboundForTests,
+    updateLastRoute: updateLastRouteForTests,
+    updateSessionStore: updateSessionStoreForTests,
+    loadConfig: () => {
       const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
       if (typeof getter === "function") {
         return getter();
       }
       return DEFAULT_CONFIG;
     },
-  });
-  return mockModule;
+  };
+});
+
+// Some web modules live under `src/web/auto-reply/*` and import config via a different
+// relative path (`../../config/config.js`). Mock both specifiers so tests stay stable
+// across refactors that move files between folders.
+vi.mock("../../config/config.js", async () => {
+  // `../../config/config.js` is correct for modules under `src/web/auto-reply/*`.
+  // For typing in this file (which lives in `src/web/*`), refer to the same module
+  // via the local relative path.
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
+  return {
+    ...actual,
+    loadSessionStore: loadSessionStoreForTests,
+    recordSessionMetaFromInbound: recordSessionMetaFromInboundForTests,
+    updateLastRoute: updateLastRouteForTests,
+    updateSessionStore: updateSessionStoreForTests,
+    loadConfig: () => {
+      const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
+      if (typeof getter === "function") {
+        return getter();
+      }
+      return DEFAULT_CONFIG;
+    },
+  };
 });
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {

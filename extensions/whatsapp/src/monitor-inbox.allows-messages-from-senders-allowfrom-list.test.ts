@@ -9,6 +9,7 @@ import {
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   upsertPairingRequestMock,
+  waitForInboxTurn,
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
@@ -36,19 +37,6 @@ async function openInboxMonitor(onMessage = vi.fn()) {
     onMessage,
   });
   return { onMessage, listener, sock: getSock() };
-}
-
-async function settleInboundWork() {
-  await new Promise((resolve) => setTimeout(resolve, 25));
-}
-
-async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
-  await vi.waitFor(
-    () => {
-      expect(onMessage).toHaveBeenCalledTimes(count);
-    },
-    { timeout: 2_000, interval: 5 },
-  );
 }
 
 async function expectOutboundDmSkipsPairing(params: {
@@ -90,7 +78,7 @@ async function expectOutboundDmSkipsPairing(params: {
         },
       ],
     });
-    await settleInboundWork();
+    await waitForInboxTurn();
 
     expect(onMessage).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
@@ -124,7 +112,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboxTurn();
 
     // Should call onMessage for authorized senders
     expect(onMessage).toHaveBeenCalledWith(
@@ -158,7 +146,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboxTurn();
 
     // Should allow self-messages even if not in allowFrom
     expect(onMessage).toHaveBeenCalledWith(
@@ -194,12 +182,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsertBlocked);
-    await vi.waitFor(
-      () => {
-        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 2_000, interval: 5 },
-    );
+    await waitForInboxTurn();
     expect(onMessage).not.toHaveBeenCalled();
     expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
@@ -219,7 +202,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsertBlockedAgain);
-    await settleInboundWork();
+    await waitForInboxTurn();
     expect(onMessage).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
 
@@ -240,7 +223,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsertSelf);
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboxTurn();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
@@ -291,19 +274,17 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await vi.waitFor(
-      () => {
-        expect(sock.readMessages).toHaveBeenCalledWith([
-          {
-            remoteJid: "999@s.whatsapp.net",
-            id: "history1",
-            participant: undefined,
-            fromMe: false,
-          },
-        ]);
+    await waitForInboxTurn();
+
+    // Verify it WAS marked as read
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid: "999@s.whatsapp.net",
+        id: "history1",
+        participant: undefined,
+        fromMe: false,
       },
-      { timeout: 2_000, interval: 5 },
-    );
+    ]);
 
     // Verify it WAS NOT passed to onMessage
     expect(onMessage).not.toHaveBeenCalled();

@@ -8,19 +8,15 @@ import {
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
+  waitForInboxTurn,
 } from "./monitor-inbox.test-harness.js";
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
   type InboxOnMessage = NonNullable<Parameters<typeof monitorWebInbox>[0]["onMessage"]>;
 
-  async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
-    await vi.waitFor(
-      () => {
-        expect(onMessage).toHaveBeenCalledTimes(count);
-      },
-      { timeout: 2_000, interval: 5 },
-    );
+  async function tick() {
+    await waitForInboxTurn();
   }
 
   async function startInboxMonitor(onMessage: InboxOnMessage) {
@@ -87,7 +83,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await tick();
 
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -120,7 +116,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await tick();
 
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
@@ -158,7 +154,7 @@ describe("web monitor inbox", () => {
 
     sock.ev.emit("messages.upsert", upsert);
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await tick();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
 
@@ -182,7 +178,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await tick();
 
     expect(getPNForLID).toHaveBeenCalledWith("999@lid");
     expect(onMessage).toHaveBeenCalledWith(
@@ -212,7 +208,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await tick();
 
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({ body: "ping", from: "+1555", to: "+123" }),
@@ -239,7 +235,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
+    await tick();
 
     expect(getPNForLID).toHaveBeenCalledWith("444@lid");
     expect(onMessage).toHaveBeenCalledWith(
@@ -282,7 +278,7 @@ describe("web monitor inbox", () => {
     };
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 2);
+    await tick();
 
     expect(onMessage).toHaveBeenCalledTimes(2);
 

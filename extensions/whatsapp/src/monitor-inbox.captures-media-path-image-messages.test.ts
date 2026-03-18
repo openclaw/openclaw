@@ -12,6 +12,7 @@ import {
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
+  waitForInboxTurn,
 } from "./monitor-inbox.test-harness.js";
 
 describe("web monitor inbox", () => {
@@ -31,7 +32,7 @@ describe("web monitor inbox", () => {
     const listener = await openMonitor(onMessage);
     const sock = getSock();
     sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForInboxTurn();
     return { onMessage, listener, sock };
   }
 

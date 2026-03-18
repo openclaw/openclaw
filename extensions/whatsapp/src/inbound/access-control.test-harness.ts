@@ -1,4 +1,10 @@
 import { beforeEach, vi } from "vitest";
+import {
+  loadSessionStoreForTests,
+  recordSessionMetaFromInboundForTests,
+  updateLastRouteForTests,
+  updateSessionStoreForTests,
+} from "../test-session-store-mocks.js";
 
 type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
   (...args: TArgs): Promise<TResult>;
@@ -33,33 +39,27 @@ export function setupAccessControlTestHarness(): void {
   });
 }
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
+  );
   return {
     ...actual,
+    loadSessionStore: loadSessionStoreForTests,
+    recordSessionMetaFromInbound: recordSessionMetaFromInboundForTests,
+    updateLastRoute: updateLastRouteForTests,
+    updateSessionStore: updateSessionStoreForTests,
     loadConfig: () => config,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
   return {
     ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
-  return {
-    ...actual,
-    readStoreAllowFromForDmPolicy: async (
-      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
-    ) =>
-      await actual.readStoreAllowFromForDmPolicy({
-        ...params,
-        readStore: async (provider, accountId) =>
-          (await readAllowFromStoreMock(provider, accountId)) as string[],
-      }),
   };
 });
