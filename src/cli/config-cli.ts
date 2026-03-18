@@ -22,6 +22,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
   secretRefKey,
@@ -815,6 +816,66 @@ async function collectDryRunResolvabilityErrors(params: {
   return failures;
 }
 
+function collectDryRunStaticErrorsForSkippedExecRefs(params: {
+  refs: SecretRef[];
+  config: OpenClawConfig;
+}): ConfigSetDryRunError[] {
+  const failures: ConfigSetDryRunError[] = [];
+  for (const ref of params.refs) {
+    const id = ref.id.trim();
+    const refLabel = `${ref.source}:${ref.provider}:${id}`;
+    if (!id) {
+      failures.push({
+        kind: "resolvability",
+        message: "Error: Secret reference id is empty.",
+        ref: refLabel,
+      });
+      continue;
+    }
+    if (!isValidExecSecretRefId(id)) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`,
+        ref: refLabel,
+      });
+      continue;
+    }
+    const providerConfig = params.config.secrets?.providers?.[ref.provider];
+    if (!providerConfig) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`,
+        ref: refLabel,
+      });
+      continue;
+    }
+    if (providerConfig.source !== ref.source) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
+        ref: refLabel,
+      });
+    }
+  }
+  return failures;
+}
+
+function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInDryRun: boolean }): {
+  refsToResolve: SecretRef[];
+  skippedExecRefs: SecretRef[];
+} {
+  const refsToResolve: SecretRef[] = [];
+  const skippedExecRefs: SecretRef[] = [];
+  for (const ref of params.refs) {
+    if (ref.source === "exec" && !params.allowExecInDryRun) {
+      skippedExecRefs.push(ref);
+      continue;
+    }
+    refsToResolve.push(ref);
+  }
+  return { refsToResolve, skippedExecRefs };
+}
+
 function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRaw(config);
   if (validated.ok) {
@@ -826,7 +887,11 @@ function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError
   }));
 }
 
-function formatDryRunFailureMessage(errors: ConfigSetDryRunError[]): string {
+function formatDryRunFailureMessage(params: {
+  errors: ConfigSetDryRunError[];
+  skippedExecRefs: number;
+}): string {
+  const { errors, skippedExecRefs } = params;
   const schemaErrors = errors.filter((error) => error.kind === "schema");
   const resolveErrors = errors.filter((error) => error.kind === "resolvability");
   const lines: string[] = [];
@@ -846,6 +911,11 @@ function formatDryRunFailureMessage(errors: ConfigSetDryRunError[]): string {
     if (resolveErrors.length > 5) {
       lines.push(`- ... ${resolveErrors.length - 5} more`);
     }
+  }
+  if (skippedExecRefs > 0) {
+    lines.push(
+      `Dry run note: skipped ${skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+    );
   }
   return lines.join("\n");
 }
@@ -867,6 +937,9 @@ export async function runConfigSet(opts: {
     });
     if (!modeResolution.ok) {
       throw modeError(modeResolution.error);
+    }
+    if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
+      throw modeError("--allow-exec requires --dry-run.");
     }
 
     const batchEntries = parseBatchSource(opts.cliOptions);
@@ -903,14 +976,24 @@ export async function runConfigSet(opts: {
               operations,
             })
           : [];
+      const selectedDryRunRefs = selectDryRunRefsForResolution({
+        refs,
+        allowExecInDryRun: Boolean(opts.cliOptions.allowExec),
+      });
       const errors: ConfigSetDryRunError[] = [];
       if (hasJsonMode) {
         errors.push(...collectDryRunSchemaErrors(nextConfig));
       }
       if (hasJsonMode || hasBuilderMode) {
         errors.push(
+          ...collectDryRunStaticErrorsForSkippedExecRefs({
+            refs: selectedDryRunRefs.skippedExecRefs,
+            config: nextConfig,
+          }),
+        );
+        errors.push(
           ...(await collectDryRunResolvabilityErrors({
-            refs,
+            refs: selectedDryRunRefs.refsToResolve,
             config: nextConfig,
           })),
         );
@@ -923,15 +1006,23 @@ export async function runConfigSet(opts: {
         checks: {
           schema: hasJsonMode,
           resolvability: hasJsonMode || hasBuilderMode,
+          resolvabilityComplete:
+            (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
         },
-        refsChecked: refs.length,
+        refsChecked: selectedDryRunRefs.refsToResolve.length,
+        skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
         ...(errors.length > 0 ? { errors } : {}),
       };
       if (errors.length > 0) {
         if (opts.cliOptions.json) {
           throw new ConfigSetDryRunValidationError(dryRunResult);
         }
-        throw new Error(formatDryRunFailureMessage(errors));
+        throw new Error(
+          formatDryRunFailureMessage({
+            errors,
+            skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
+          }),
+        );
       }
       if (opts.cliOptions.json) {
         runtime.log(JSON.stringify(dryRunResult, null, 2));
@@ -940,6 +1031,13 @@ export async function runConfigSet(opts: {
           runtime.log(
             info(
               "Dry run note: value mode does not run schema/resolvability checks. Use --strict-json, builder flags, or batch mode to enable validation checks.",
+            ),
+          );
+        }
+        if (dryRunResult.skippedExecRefs > 0) {
+          runtime.log(
+            info(
+              `Dry run note: skipped ${dryRunResult.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
             ),
           );
         }
@@ -1133,7 +1231,12 @@ export function registerConfigCli(program: Command) {
     .option("--json", "Legacy alias for --strict-json", false)
     .option(
       "--dry-run",
-      "Validate changes without writing openclaw.json (checks run in builder/json/batch modes)",
+      "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",
+      false,
+    )
+    .option(
+      "--allow-exec",
+      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
       false,
     )
     .option("--ref-provider <alias>", "SecretRef builder: provider alias")

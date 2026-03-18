@@ -5,6 +5,7 @@ export type ConfigSetOptions = {
   strictJson?: boolean;
   json?: boolean;
   dryRun?: boolean;
+  allowExec?: boolean;
   refProvider?: string;
   refSource?: string;
   refId?: string;

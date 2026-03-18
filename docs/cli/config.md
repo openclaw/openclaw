@@ -176,19 +176,31 @@ openclaw config set channels.discord.token \
   --ref-id DISCORD_BOT_TOKEN \
   --dry-run \
   --json
+
+openclaw config set channels.discord.token \
+  --ref-provider vault \
+  --ref-source exec \
+  --ref-id discord/token \
+  --dry-run \
+  --allow-exec
 ```
 
 Dry-run behavior:
 
-- Builder mode: requires full SecretRef resolvability for changed refs/providers.
-- JSON mode (`--strict-json`, `--json`, or batch mode): requires full resolvability and schema validation.
+- Builder mode: runs SecretRef resolvability checks for changed refs/providers.
+- JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
+- Exec SecretRef checks are skipped by default during dry-run to avoid command side effects.
+- Use `--allow-exec` with `--dry-run` to opt in to exec SecretRef checks (this may execute provider commands).
+- `--allow-exec` is dry-run only and errors if used without `--dry-run`.
 
 `--dry-run --json` prints a machine-readable report:
 
 - `ok`: whether dry-run passed
 - `operations`: number of assignments evaluated
 - `checks`: whether schema/resolvability checks ran
-- `refsChecked`: number of refs resolved during dry-run
+- `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
+- `refsChecked`: number of refs actually resolved during dry-run
+- `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
 - `errors`: structured schema/resolvability failures when `ok=false`
 
 ### JSON Output Shape
@@ -202,8 +214,10 @@ Dry-run behavior:
   checks: {
     schema: boolean,
     resolvability: boolean,
+    resolvabilityComplete: boolean,
   },
   refsChecked: number,
+  skippedExecRefs: number,
   errors?: [
     {
       kind: "schema" | "resolvability",
@@ -224,9 +238,11 @@ Success example:
   "inputModes": ["builder"],
   "checks": {
     "schema": false,
-    "resolvability": true
+    "resolvability": true,
+    "resolvabilityComplete": true
   },
-  "refsChecked": 1
+  "refsChecked": 1,
+  "skippedExecRefs": 0
 }
 ```
 
@@ -240,9 +256,11 @@ Failure example:
   "inputModes": ["builder"],
   "checks": {
     "schema": false,
-    "resolvability": true
+    "resolvability": true,
+    "resolvabilityComplete": true
   },
   "refsChecked": 1,
+  "skippedExecRefs": 0,
   "errors": [
     {
       "kind": "resolvability",
@@ -257,6 +275,7 @@ If dry-run fails:
 
 - `config schema validation failed`: your post-change config shape is invalid; fix path/value or provider/ref object shape.
 - `SecretRef assignment(s) could not be resolved`: referenced provider/ref currently cannot resolve (missing env var, invalid file pointer, exec provider failure, or provider/source mismatch).
+- `Dry run note: skipped <n> exec SecretRef resolvability check(s)`: dry-run skipped exec refs; rerun with `--allow-exec` if you need exec resolvability validation.
 - For batch mode, fix failing entries and rerun `--dry-run` before writing.
 
 ## Subcommands
