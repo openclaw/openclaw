@@ -85,7 +85,12 @@ export function readSessionMessages(
   // NOTE: This is on the Gateway hot path (chat.history). Reading + splitting an entire transcript
   // file can freeze the UI when a session grows large (or when a single JSONL record is huge).
   // We therefore tail-read large files and apply a per-line size guard.
-  const MAX_TAIL_BYTES = 2 * 1024 * 1024; // 2MB tail is plenty for the last ~100-1000 messages
+  //
+  // MAX_TAIL_BYTES must exceed the chat.history response budget (6 MB) with enough headroom
+  // that the file-read layer never drops records that would fit in the response. Set to 3×
+  // the 6 MB response budget so truncation always happens at the response-cap layer in
+  // chat.ts (which the caller can observe), never silently here.
+  const MAX_TAIL_BYTES = 18 * 1024 * 1024; // 3× the 6 MB chat.history response budget
   // 200KB per line: a normal assistant reply is well under 50KB. Anything larger is a runaway
   // prompt/response that would only stall JSON.parse and bloat the UI — skip it entirely.
   // (The confirmed 447KB line causing Gateway freezes is caught by this threshold.)
