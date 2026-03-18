@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,6 +46,9 @@ import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileWarning
 import ai.openclaw.app.ui.mobileWarningSoft
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import java.util.Locale
 
 private data class ChatBubbleStyle(
@@ -70,7 +74,20 @@ fun ChatMessageBubble(message: ChatMessage) {
 
   if (displayableContent.isEmpty()) return
 
-  ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
+  // Extract text content for copying
+  val textToCopy = displayableContent
+    .filter { it.type == "text" }
+    .mapNotNull { it.text }
+    .joinToString("\n")
+
+  val context = LocalContext.current
+
+  ChatBubbleContainer(
+    style = style,
+    roleLabel = roleLabel(role),
+    textToCopy = textToCopy,
+    context = context,
+  ) {
     ChatMessageBody(content = displayableContent, textColor = mobileText)
   }
 }
@@ -79,9 +96,13 @@ fun ChatMessageBubble(message: ChatMessage) {
 private fun ChatBubbleContainer(
   style: ChatBubbleStyle,
   roleLabel: String,
+  textToCopy: String = "",
+  context: Context? = null,
   modifier: Modifier = Modifier,
   content: @Composable () -> Unit,
 ) {
+  val hasTextToCopy = textToCopy.isNotBlank() && context != null
+
   Row(
     modifier = modifier.fillMaxWidth(),
     horizontalArrangement = if (style.alignEnd) Arrangement.End else Arrangement.Start,
@@ -92,7 +113,20 @@ private fun ChatBubbleContainer(
       color = style.containerColor,
       tonalElevation = 0.dp,
       shadowElevation = 0.dp,
-      modifier = Modifier.fillMaxWidth(0.90f),
+      modifier = Modifier
+        .fillMaxWidth(0.90f)
+        .then(
+          if (hasTextToCopy) {
+            Modifier.combinedClickable(
+              onClick = {},
+              onLongClick = {
+                val clipboard = context!!.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("Chat message", textToCopy)
+                clipboard.setPrimaryClip(clip)
+              }
+            )
+          } else Modifier
+        ),
     ) {
       Column(
         modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
@@ -188,9 +222,13 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
 
 @Composable
 fun ChatStreamingAssistantBubble(text: String) {
+  val context = LocalContext.current
+
   ChatBubbleContainer(
     style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
     roleLabel = "OpenClaw · Live",
+    textToCopy = text,
+    context = context,
   ) {
     ChatMarkdown(text = text, textColor = mobileText)
   }
