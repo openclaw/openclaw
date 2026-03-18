@@ -16,17 +16,10 @@ const pnpm = "pnpm";
 const behaviorManifest = loadTestRunnerBehavior();
 const existingFiles = (entries) =>
   entries.map((entry) => entry.file).filter((file) => fs.existsSync(file));
-const unitBehaviorIsolatedFiles = existingFiles(behaviorManifest.unit.isolated);
-const unitSingletonIsolatedFiles = existingFiles(behaviorManifest.unit.singletonIsolated);
-const unitThreadSingletonFiles = existingFiles(behaviorManifest.unit.threadSingleton);
-const unitVmForkSingletonFiles = existingFiles(behaviorManifest.unit.vmForkSingleton);
-const unitBehaviorOverrideSet = new Set([
-  ...unitBehaviorIsolatedFiles,
-  ...unitSingletonIsolatedFiles,
-  ...unitThreadSingletonFiles,
-  ...unitVmForkSingletonFiles,
-]);
-const channelSingletonFiles = [];
+const rawUnitBehaviorIsolatedFiles = existingFiles(behaviorManifest.unit.isolated);
+const rawUnitSingletonIsolatedFiles = existingFiles(behaviorManifest.unit.singletonIsolated);
+const rawUnitThreadSingletonFiles = existingFiles(behaviorManifest.unit.threadSingleton);
+const rawUnitVmForkSingletonFiles = existingFiles(behaviorManifest.unit.vmForkSingleton);
 
 const children = new Set();
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -173,6 +166,30 @@ const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
 });
 const baseConfigPrefixes = ["src/agents/", "src/auto-reply/", "src/commands/", "test/", "ui/"];
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
+const inferOwner = (fileFilter) => {
+  if (fileFilter.endsWith(".live.test.ts")) {
+    return "live";
+  }
+  if (fileFilter.endsWith(".e2e.test.ts")) {
+    return "e2e";
+  }
+  if (channelTestPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
+    return "channels";
+  }
+  if (fileFilter.startsWith("extensions/")) {
+    return "extensions";
+  }
+  if (fileFilter.startsWith("src/gateway/")) {
+    return "gateway";
+  }
+  if (baseConfigPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
+    return "base";
+  }
+  if (fileFilter.startsWith("src/")) {
+    return "unit";
+  }
+  return "base";
+};
 const walkTestFiles = (rootDir) => {
   if (!fs.existsSync(rootDir)) {
     return [];
@@ -206,37 +223,38 @@ const allKnownTestFiles = [
     ...walkTestFiles(path.join("ui", "src", "ui")),
   ]),
 ];
+// Keep the unit-specific behavior lanes aligned with vitest.unit.config.ts. If the
+// manifest accidentally points at a file owned by another config (for example an
+// extension test), we should not count it toward unit sharding.
+const unitBehaviorIsolatedFiles = rawUnitBehaviorIsolatedFiles.filter(
+  (file) => inferOwner(file) === "unit",
+);
+const unitSingletonIsolatedFiles = rawUnitSingletonIsolatedFiles.filter(
+  (file) => inferOwner(file) === "unit",
+);
+const unitThreadSingletonFiles = rawUnitThreadSingletonFiles.filter(
+  (file) => inferOwner(file) === "unit",
+);
+const unitVmForkSingletonFiles = rawUnitVmForkSingletonFiles.filter(
+  (file) => inferOwner(file) === "unit",
+);
+const unitBehaviorOverrideSet = new Set([
+  ...unitBehaviorIsolatedFiles,
+  ...unitSingletonIsolatedFiles,
+  ...unitThreadSingletonFiles,
+  ...unitVmForkSingletonFiles,
+]);
+const channelSingletonFiles = [];
 const inferTarget = (fileFilter) => {
   const isolated = unitBehaviorIsolatedFiles.includes(fileFilter);
-  if (fileFilter.endsWith(".live.test.ts")) {
-    return { owner: "live", isolated };
-  }
-  if (fileFilter.endsWith(".e2e.test.ts")) {
-    return { owner: "e2e", isolated };
-  }
-  if (channelTestPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
-    return { owner: "channels", isolated };
-  }
-  if (fileFilter.startsWith("extensions/")) {
-    return { owner: "extensions", isolated };
-  }
-  if (fileFilter.startsWith("src/gateway/")) {
-    return { owner: "gateway", isolated };
-  }
-  if (baseConfigPrefixes.some((prefix) => fileFilter.startsWith(prefix))) {
-    return { owner: "base", isolated };
-  }
-  if (fileFilter.startsWith("src/")) {
-    return { owner: "unit", isolated };
-  }
-  return { owner: "base", isolated };
+  return { owner: inferOwner(fileFilter), isolated };
 };
 const unitTimingManifest = loadUnitTimingManifest();
 const parseEnvNumber = (name, fallback) => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
-const allKnownUnitFiles = allKnownTestFiles.filter((file) => inferTarget(file).owner === "unit");
+const allKnownUnitFiles = allKnownTestFiles.filter((file) => inferOwner(file) === "unit");
 const defaultHeavyUnitFileLimit =
   testProfile === "serial" ? 0 : testProfile === "low" ? 8 : highMemLocalHost ? 24 : 16;
 const defaultHeavyUnitLaneCount =
