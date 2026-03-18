@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { resolveDiscordAccount, resolveDiscordMaxLinesPerMessage } from "./accounts.js";
 
 describe("resolveDiscordAccount allowFrom precedence", () => {
-  it("prefers accounts.default.allowFrom over top-level for default account", () => {
+  it("merges top-level and account-scoped allowFrom for default account", () => {
     const resolved = resolveDiscordAccount({
       cfg: {
         channels: {
@@ -17,7 +17,29 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
       accountId: "default",
     });
 
-    expect(resolved.config.allowFrom).toEqual(["default"]);
+    expect(resolved.config.allowFrom).toEqual(expect.arrayContaining(["top", "default"]));
+    expect(resolved.config.allowFrom).toHaveLength(2);
+  });
+
+  it("deduplicates merged allowFrom entries", () => {
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            allowFrom: ["shared-id", "top-only"],
+            accounts: {
+              default: { allowFrom: ["shared-id", "account-only"], token: "token-default" },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.allowFrom).toEqual(
+      expect.arrayContaining(["shared-id", "top-only", "account-only"]),
+    );
+    expect(resolved.config.allowFrom).toHaveLength(3);
   });
 
   it("falls back to top-level allowFrom for named account without override", () => {
@@ -36,6 +58,23 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
     });
 
     expect(resolved.config.allowFrom).toEqual(["top"]);
+  });
+
+  it("uses only account allowFrom when top-level is absent", () => {
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              work: { allowFrom: ["work-user"], token: "token-work" },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.allowFrom).toEqual(["work-user"]);
   });
 
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {

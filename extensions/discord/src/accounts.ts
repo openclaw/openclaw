@@ -36,7 +36,17 @@ export function mergeDiscordAccountConfig(
     accounts?: unknown;
   };
   const account = resolveDiscordAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  const merged = { ...base, ...account };
+
+  // Merge allowFrom arrays instead of overriding — a user ID in the global
+  // list should still be allowed even when the account defines its own list.
+  const baseAllowFrom = base.allowFrom;
+  const accountAllowFrom = account.allowFrom;
+  if (baseAllowFrom && accountAllowFrom) {
+    merged.allowFrom = [...new Set([...baseAllowFrom, ...accountAllowFrom])];
+  }
+
+  return merged;
 }
 
 export function createDiscordActionGate(params: {
