@@ -3609,6 +3609,22 @@ description: test skill
         },
       },
       {
+        name: "includes the exact workspaceOnly config command in open-group remediation",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+          },
+        } satisfies OpenClawConfig,
+        assert: (res: SecurityAuditReport) => {
+          const finding = res.findings.find(
+            (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+          );
+          expect(finding?.remediation).toContain("openclaw config set tools.fs.workspaceOnly true");
+        },
+      },
+      {
         name: "warns when config heuristics suggest a likely multi-user setup",
         cfg: {
           channels: {

@@ -1321,7 +1321,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
         `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
         "Prompt injection in open groups can trigger command/file actions in these contexts.",
       remediation:
-        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
+        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), run `openclaw config set tools.fs.workspaceOnly true`, and use agents.defaults.sandbox.mode="all" for exposed agents.',
     });
   }
 
