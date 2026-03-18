@@ -1,6 +1,11 @@
 // Narrow plugin-sdk surface for the bundled twitch plugin.
 // Keep this list additive and scoped to symbols used under extensions/twitch.
 
+import {
+  createOptionalChannelSetupAdapter,
+  createOptionalChannelSetupWizard,
+} from "./optional-channel-setup.js";
+
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export type {
@@ -33,7 +38,15 @@ export type { OpenClawPluginApi } from "../plugins/types.js";
 export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export {
-  twitchSetupAdapter,
-  twitchSetupWizard,
-} from "../../extensions/twitch/src/setup-surface.js";
+
+export const twitchSetupAdapter = createOptionalChannelSetupAdapter({
+  channel: "twitch",
+  label: "Twitch",
+  npmSpec: "@openclaw/twitch",
+});
+
+export const twitchSetupWizard = createOptionalChannelSetupWizard({
+  channel: "twitch",
+  label: "Twitch",
+  npmSpec: "@openclaw/twitch",
+});
