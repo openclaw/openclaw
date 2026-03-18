@@ -7,6 +7,40 @@ import {
 import type { GroupPolicy } from "../../config/types.base.js";
 
 type GroupPolicyWarningCollector = (groupPolicy: GroupPolicy) => string[];
+type AccountGroupPolicyWarningCollector<ResolvedAccount> = (params: {
+  account: ResolvedAccount;
+  cfg: OpenClawConfig;
+}) => string[];
+type ConfigGroupPolicyWarningCollector<Params extends { cfg: OpenClawConfig }> = (
+  params: Params,
+) => string[];
+type WarningCollector<Params> = (params: Params) => string[];
+
+export function composeWarningCollectors<Params>(
+  ...collectors: Array<WarningCollector<Params> | null | undefined>
+): WarningCollector<Params> {
+  return (params) => collectors.flatMap((collector) => collector?.(params) ?? []);
+}
+
+export function projectWarningCollector<Params, Projected>(
+  project: (params: Params) => Projected,
+  collector: WarningCollector<Projected>,
+): WarningCollector<Params> {
+  return (params) => collector(project(params));
+}
+
+export function createConditionalWarningCollector<Params>(
+  ...collectors: Array<(params: Params) => string | string[] | null | undefined | false>
+): WarningCollector<Params> {
+  return (params) =>
+    collectors.flatMap((collector) => {
+      const next = collector(params);
+      if (!next) {
+        return [];
+      }
+      return Array.isArray(next) ? next : [next];
+    });
+}
 
 export function buildOpenGroupPolicyWarning(params: {
   surface: string;
@@ -96,6 +130,50 @@ export function collectAllowlistProviderRestrictSendersWarnings(
   });
 }
 
+/** Build an account-aware allowlist-provider warning collector for sender-restricted groups. */
+export function createAllowlistProviderRestrictSendersWarningCollector<ResolvedAccount>(
+  params: {
+    providerConfigPresent: (cfg: OpenClawConfig) => boolean;
+    resolveGroupPolicy: (account: ResolvedAccount) => GroupPolicy | null | undefined;
+  } & Omit<
+    Parameters<typeof collectAllowlistProviderRestrictSendersWarnings>[0],
+    "cfg" | "providerConfigPresent" | "configuredGroupPolicy"
+  >,
+): AccountGroupPolicyWarningCollector<ResolvedAccount> {
+  return createAllowlistProviderGroupPolicyWarningCollector({
+    providerConfigPresent: params.providerConfigPresent,
+    resolveGroupPolicy: ({ account }: { account: ResolvedAccount; cfg: OpenClawConfig }) =>
+      params.resolveGroupPolicy(account),
+    collect: ({ groupPolicy }) =>
+      collectOpenGroupPolicyRestrictSendersWarnings({
+        groupPolicy,
+        surface: params.surface,
+        openScope: params.openScope,
+        groupPolicyPath: params.groupPolicyPath,
+        groupAllowFromPath: params.groupAllowFromPath,
+        mentionGated: params.mentionGated,
+      }),
+  });
+}
+
+/** Build a direct account-aware warning collector when the policy already lives on the account. */
+export function createOpenGroupPolicyRestrictSendersWarningCollector<ResolvedAccount>(
+  params: {
+    resolveGroupPolicy: (account: ResolvedAccount) => GroupPolicy | null | undefined;
+    defaultGroupPolicy?: GroupPolicy;
+  } & Omit<Parameters<typeof collectOpenGroupPolicyRestrictSendersWarnings>[0], "groupPolicy">,
+): (account: ResolvedAccount) => string[] {
+  return (account) =>
+    collectOpenGroupPolicyRestrictSendersWarnings({
+      groupPolicy: params.resolveGroupPolicy(account) ?? params.defaultGroupPolicy ?? "allowlist",
+      surface: params.surface,
+      openScope: params.openScope,
+      groupPolicyPath: params.groupPolicyPath,
+      groupAllowFromPath: params.groupAllowFromPath,
+      mentionGated: params.mentionGated,
+    });
+}
+
 export function collectAllowlistProviderGroupPolicyWarnings(params: {
   cfg: OpenClawConfig;
   providerConfigPresent: boolean;
@@ -109,6 +187,23 @@ export function collectAllowlistProviderGroupPolicyWarnings(params: {
     defaultGroupPolicy,
   });
   return params.collect(groupPolicy);
+}
+
+/** Build a config-aware allowlist-provider warning collector from an arbitrary policy resolver. */
+export function createAllowlistProviderGroupPolicyWarningCollector<
+  Params extends { cfg: OpenClawConfig },
+>(params: {
+  providerConfigPresent: (cfg: OpenClawConfig) => boolean;
+  resolveGroupPolicy: (params: Params) => GroupPolicy | null | undefined;
+  collect: (params: Params & { groupPolicy: GroupPolicy }) => string[];
+}): ConfigGroupPolicyWarningCollector<Params> {
+  return (runtime) =>
+    collectAllowlistProviderGroupPolicyWarnings({
+      cfg: runtime.cfg,
+      providerConfigPresent: params.providerConfigPresent(runtime.cfg),
+      configuredGroupPolicy: params.resolveGroupPolicy(runtime),
+      collect: (groupPolicy) => params.collect({ ...runtime, groupPolicy }),
+    });
 }
 
 export function collectOpenProviderGroupPolicyWarnings(params: {
@@ -126,6 +221,38 @@ export function collectOpenProviderGroupPolicyWarnings(params: {
   return params.collect(groupPolicy);
 }
 
+/** Build a config-aware open-provider warning collector from an arbitrary policy resolver. */
+export function createOpenProviderGroupPolicyWarningCollector<
+  Params extends { cfg: OpenClawConfig },
+>(params: {
+  providerConfigPresent: (cfg: OpenClawConfig) => boolean;
+  resolveGroupPolicy: (params: Params) => GroupPolicy | null | undefined;
+  collect: (params: Params & { groupPolicy: GroupPolicy }) => string[];
+}): ConfigGroupPolicyWarningCollector<Params> {
+  return (runtime) =>
+    collectOpenProviderGroupPolicyWarnings({
+      cfg: runtime.cfg,
+      providerConfigPresent: params.providerConfigPresent(runtime.cfg),
+      configuredGroupPolicy: params.resolveGroupPolicy(runtime),
+      collect: (groupPolicy) => params.collect({ ...runtime, groupPolicy }),
+    });
+}
+
+/** Build an account-aware allowlist-provider warning collector for simple open-policy warnings. */
+export function createAllowlistProviderOpenWarningCollector<ResolvedAccount>(params: {
+  providerConfigPresent: (cfg: OpenClawConfig) => boolean;
+  resolveGroupPolicy: (account: ResolvedAccount) => GroupPolicy | null | undefined;
+  buildOpenWarning: Parameters<typeof buildOpenGroupPolicyWarning>[0];
+}): AccountGroupPolicyWarningCollector<ResolvedAccount> {
+  return createAllowlistProviderGroupPolicyWarningCollector({
+    providerConfigPresent: params.providerConfigPresent,
+    resolveGroupPolicy: ({ account }: { account: ResolvedAccount; cfg: OpenClawConfig }) =>
+      params.resolveGroupPolicy(account),
+    collect: ({ groupPolicy }) =>
+      groupPolicy === "open" ? [buildOpenGroupPolicyWarning(params.buildOpenWarning)] : [],
+  });
+}
+
 export function collectOpenGroupPolicyRouteAllowlistWarnings(params: {
   groupPolicy: "open" | "allowlist" | "disabled";
   routeAllowlistConfigured: boolean;
@@ -141,6 +268,28 @@ export function collectOpenGroupPolicyRouteAllowlistWarnings(params: {
   return [buildOpenGroupPolicyNoRouteAllowlistWarning(params.noRouteAllowlist)];
 }
 
+/** Build an account-aware allowlist-provider warning collector for route-allowlisted groups. */
+export function createAllowlistProviderRouteAllowlistWarningCollector<ResolvedAccount>(params: {
+  providerConfigPresent: (cfg: OpenClawConfig) => boolean;
+  resolveGroupPolicy: (account: ResolvedAccount) => GroupPolicy | null | undefined;
+  resolveRouteAllowlistConfigured: (account: ResolvedAccount) => boolean;
+  restrictSenders: Parameters<typeof buildOpenGroupPolicyRestrictSendersWarning>[0];
+  noRouteAllowlist: Parameters<typeof buildOpenGroupPolicyNoRouteAllowlistWarning>[0];
+}): AccountGroupPolicyWarningCollector<ResolvedAccount> {
+  return createAllowlistProviderGroupPolicyWarningCollector({
+    providerConfigPresent: params.providerConfigPresent,
+    resolveGroupPolicy: ({ account }: { account: ResolvedAccount; cfg: OpenClawConfig }) =>
+      params.resolveGroupPolicy(account),
+    collect: ({ account, groupPolicy }) =>
+      collectOpenGroupPolicyRouteAllowlistWarnings({
+        groupPolicy,
+        routeAllowlistConfigured: params.resolveRouteAllowlistConfigured(account),
+        restrictSenders: params.restrictSenders,
+        noRouteAllowlist: params.noRouteAllowlist,
+      }),
+  });
+}
+
 export function collectOpenGroupPolicyConfiguredRouteWarnings(params: {
   groupPolicy: "open" | "allowlist" | "disabled";
   routeAllowlistConfigured: boolean;
@@ -154,4 +303,26 @@ export function collectOpenGroupPolicyConfiguredRouteWarnings(params: {
     return [buildOpenGroupPolicyConfigureRouteAllowlistWarning(params.configureRouteAllowlist)];
   }
   return [buildOpenGroupPolicyWarning(params.missingRouteAllowlist)];
+}
+
+/** Build an account-aware open-provider warning collector for configured-route channels. */
+export function createOpenProviderConfiguredRouteWarningCollector<ResolvedAccount>(params: {
+  providerConfigPresent: (cfg: OpenClawConfig) => boolean;
+  resolveGroupPolicy: (account: ResolvedAccount) => GroupPolicy | null | undefined;
+  resolveRouteAllowlistConfigured: (account: ResolvedAccount) => boolean;
+  configureRouteAllowlist: Parameters<typeof buildOpenGroupPolicyConfigureRouteAllowlistWarning>[0];
+  missingRouteAllowlist: Parameters<typeof buildOpenGroupPolicyWarning>[0];
+}): AccountGroupPolicyWarningCollector<ResolvedAccount> {
+  return createOpenProviderGroupPolicyWarningCollector({
+    providerConfigPresent: params.providerConfigPresent,
+    resolveGroupPolicy: ({ account }: { account: ResolvedAccount; cfg: OpenClawConfig }) =>
+      params.resolveGroupPolicy(account),
+    collect: ({ account, groupPolicy }) =>
+      collectOpenGroupPolicyConfiguredRouteWarnings({
+        groupPolicy,
+        routeAllowlistConfigured: params.resolveRouteAllowlistConfigured(account),
+        configureRouteAllowlist: params.configureRouteAllowlist,
+        missingRouteAllowlist: params.missingRouteAllowlist,
+      }),
+  });
 }

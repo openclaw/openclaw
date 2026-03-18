@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
   ZaloApiError,
@@ -32,15 +33,14 @@ import {
   createTypingCallbacks,
   createScopedPairingAccess,
   createReplyPrefixOptions,
+  deliverTextOrMediaReply,
   issuePairingChallenge,
-  logTypingFailure,
-  resolveDirectDmAuthorizationOutcome,
-  resolveSenderCommandAuthorizationWithRuntime,
-  resolveOutboundMediaUrls,
-  resolveDefaultGroupPolicy,
-  resolveInboundRouteEnvelopeBuilderWithRuntime,
-  sendMediaWithLeadingCaption,
   resolveWebhookPath,
+  logTypingFailure,
+  resolveDefaultGroupPolicy,
+  resolveDirectDmAuthorizationOutcome,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
+  resolveSenderCommandAuthorizationWithRuntime,
   waitForAbortSignal,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "./runtime-api.js";
@@ -580,34 +580,31 @@ async function deliverZaloReply(params: {
 }): Promise<void> {
   const { payload, token, chatId, runtime, core, config, accountId, statusSink, fetcher } = params;
   const tableMode = params.tableMode ?? "code";
-  const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
-  const sentMedia = await sendMediaWithLeadingCaption({
-    mediaUrls: resolveOutboundMediaUrls(payload),
-    caption: text,
-    send: async ({ mediaUrl, caption }) => {
-      await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
-      statusSink?.({ lastOutboundAt: Date.now() });
-    },
-    onError: (error) => {
-      runtime.error?.(`Zalo photo send failed: ${String(error)}`);
-    },
+  const reply = resolveSendableOutboundReplyParts(payload, {
+    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
   });
-  if (sentMedia) {
-    return;
-  }
-
-  if (text) {
-    const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
-    const chunks = core.channel.text.chunkMarkdownTextWithMode(text, ZALO_TEXT_LIMIT, chunkMode);
-    for (const chunk of chunks) {
+  const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
+  await deliverTextOrMediaReply({
+    payload,
+    text: reply.text,
+    chunkText: (value) =>
+      core.channel.text.chunkMarkdownTextWithMode(value, ZALO_TEXT_LIMIT, chunkMode),
+    sendText: async (chunk) => {
       try {
         await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher);
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
         runtime.error?.(`Zalo message send failed: ${String(err)}`);
       }
-    }
-  }
+    },
+    sendMedia: async ({ mediaUrl, caption }) => {
+      await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
+      statusSink?.({ lastOutboundAt: Date.now() });
+    },
+    onMediaError: (error) => {
+      runtime.error?.(`Zalo photo send failed: ${String(error)}`);
+    },
+  });
 }
 
 export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<void> {
