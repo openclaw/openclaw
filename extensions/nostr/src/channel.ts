@@ -18,6 +18,7 @@ import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
 import { getNostrRuntime } from "./runtime.js";
+import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 import { nostrSetupAdapter, nostrSetupWizard } from "./setup-surface.js";
 import {
   listNostrAccountIds,
@@ -138,6 +139,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       },
       hint: "<npub|hex pubkey|nostr:npub...>",
     },
+    resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
   },
 
   outbound: {
