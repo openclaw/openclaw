@@ -8,7 +8,7 @@ import {
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
-import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
+import { cleanStaleLockFiles, clearSelfOwnedLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -50,6 +50,14 @@ export async function startGatewaySidecars(params: {
     const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);
     for (const sessionsDir of sessionDirs) {
+      // First, remove any lock files that reference our own PID but are not
+      // tracked in memory. These are orphans from a previous incarnation of
+      // this process (same PID reused) that cleanStaleLockFiles would skip
+      // because isPidAlive(process.pid) is always true. See #49603.
+      await clearSelfOwnedLockFiles({
+        sessionsDir,
+        log: { warn: (message) => params.log.warn(message) },
+      });
       await cleanStaleLockFiles({
         sessionsDir,
         staleMs: SESSION_LOCK_STALE_MS,

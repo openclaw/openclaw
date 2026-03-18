@@ -18,6 +18,7 @@ import {
   __testing,
   acquireSessionWriteLock,
   cleanStaleLockFiles,
+  clearSelfOwnedLockFiles,
   resolveSessionLockMaxHoldFromTimeout,
 } from "./session-write-lock.js";
 
@@ -396,5 +397,71 @@ describe("acquireSessionWriteLock", () => {
 
     expect(process.listeners("SIGINT")).toContain(keepAlive);
     process.off("SIGINT", keepAlive);
+  });
+});
+
+describe("clearSelfOwnedLockFiles", () => {
+  it("removes lock files owned by current PID that are not held in memory", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-self-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    try {
+      const lockPath = path.join(sessionsDir, "test-session.jsonl.lock");
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+        "utf8",
+      );
+
+      const removed = await clearSelfOwnedLockFiles({ sessionsDir });
+      expect(removed).toBe(1);
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not remove lock files owned by a different PID", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-self-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    try {
+      const lockPath = path.join(sessionsDir, "other.jsonl.lock");
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ pid: 999999, createdAt: new Date().toISOString() }),
+        "utf8",
+      );
+
+      const removed = await clearSelfOwnedLockFiles({ sessionsDir });
+      expect(removed).toBe(0);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not remove lock files that are actively held in memory", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-self-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    try {
+      const sessionFile = path.join(sessionsDir, "active.jsonl");
+      // Acquire a real lock so it's tracked in HELD_LOCKS
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+      const removed = await clearSelfOwnedLockFiles({ sessionsDir });
+      expect(removed).toBe(0);
+      await lock.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 0 for non-existent sessions directory", async () => {
+    const removed = await clearSelfOwnedLockFiles({
+      sessionsDir: "/tmp/openclaw-nonexistent-dir-" + Date.now(),
+    });
+    expect(removed).toBe(0);
   });
 });

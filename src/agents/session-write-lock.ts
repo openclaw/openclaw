@@ -384,6 +384,71 @@ function shouldTreatAsOrphanSelfLock(params: {
   return !HELD_LOCKS.has(params.normalizedSessionFile);
 }
 
+/**
+ * Remove lock files owned by the current PID that are not tracked in HELD_LOCKS.
+ *
+ * On gateway boot the process has no in-memory lock state, but lock files from
+ * a previous incarnation of the same PID may still exist on disk. Because the
+ * PID is alive, `cleanStaleLockFiles` will not treat them as stale, causing
+ * every subsequent session acquire to spin until timeout. Calling this function
+ * early in startup sweeps those orphans before the lock manager is initialised.
+ */
+export async function clearSelfOwnedLockFiles(params: {
+  sessionsDir: string;
+  log?: { warn?: (message: string) => void };
+}): Promise<number> {
+  const sessionsDir = path.resolve(params.sessionsDir);
+
+  let entries: fsSync.Dirent[] = [];
+  try {
+    entries = await fs.readdir(sessionsDir, { withFileTypes: true });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") {
+      return 0;
+    }
+    throw err;
+  }
+
+  const lockEntries = entries.filter((entry) => entry.name.endsWith(".jsonl.lock"));
+  let removed = 0;
+
+  for (const entry of lockEntries) {
+    const lockPath = path.join(sessionsDir, entry.name);
+    const payload = await readLockPayload(lockPath);
+    const pid = isValidLockNumber(payload?.pid) && payload.pid > 0 ? payload.pid : null;
+    if (pid !== process.pid) {
+      continue;
+    }
+
+    // The lock references our PID but we have no in-memory record of it,
+    // so it must be left over from a previous run of this process.
+    // Resolve through realpath to match the key used by acquireSessionWriteLock.
+    const sessionFileName = entry.name.replace(/\.lock$/, "");
+    let normalizedSessionFile = path.join(sessionsDir, sessionFileName);
+    try {
+      const realDir = await fs.realpath(path.dirname(normalizedSessionFile));
+      normalizedSessionFile = path.join(realDir, path.basename(normalizedSessionFile));
+    } catch {
+      // Fall back to resolved path if realpath fails.
+    }
+    if (HELD_LOCKS.has(normalizedSessionFile)) {
+      continue;
+    }
+
+    try {
+      await fs.rm(lockPath, { force: true });
+      removed += 1;
+      params.log?.warn?.(`removed self-owned orphan lock on boot: ${lockPath}`);
+    } catch {
+      // Best-effort removal; if it fails the normal stale-lock path may
+      // still reclaim it later.
+    }
+  }
+
+  return removed;
+}
+
 export async function cleanStaleLockFiles(params: {
   sessionsDir: string;
   staleMs?: number;
