@@ -62,4 +62,19 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("ws://[::1]:*");
     expect(csp).toContain("wss://[::1]:*");
   });
+
+  it("rejects Host header with CSP injection payload", () => {
+    const csp = buildControlUiCspHeader(fakeReq({ host: "evil.com; script-src 'unsafe-inline'" }));
+    expect(csp).not.toContain("evil.com");
+    expect(csp).not.toContain("script-src 'unsafe-inline'");
+    expect(csp).toContain("ws://localhost:*");
+  });
+
+  it("rejects X-Forwarded-Host with CSP injection payload", () => {
+    const csp = buildControlUiCspHeader(
+      fakeReq({ "x-forwarded-host": "x; script-src *", host: "safe.local:18789" }),
+    );
+    expect(csp).not.toContain("script-src *");
+    expect(csp).toContain("ws://localhost:*");
+  });
 });

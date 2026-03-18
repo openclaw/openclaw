@@ -11,7 +11,13 @@ function deriveWsHost(req?: IncomingMessage): string {
     req?.headers?.host ??
     "localhost";
   // Strip port (including IPv6 bracket form like [::1]:1234)
-  return raw.replace(/:\d+$/, "");
+  const host = raw.replace(/:\d+$/, "");
+  // Reject hosts with CSP-dangerous characters (semicolons, spaces, quotes)
+  // to prevent CSP header injection via crafted Host / X-Forwarded-Host.
+  if (!/^[\w.[\]:%-]+$/.test(host)) {
+    return "localhost";
+  }
+  return host;
 }
 
 export function buildControlUiCspHeader(req?: IncomingMessage): string {
