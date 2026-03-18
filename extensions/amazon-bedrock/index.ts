@@ -1,4 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-models";
 import {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
@@ -17,15 +18,21 @@ export default definePluginEntry({
       label: "Amazon Bedrock",
       docsPath: "/providers/models",
       auth: [],
-      wrapStreamFn: ({ modelId, config, provider, streamFn }) => {
-        // Look up model name from provider config for inference profile detection
+      wrapStreamFn: ({ modelId, config, streamFn }) => {
+        // Look up model name from provider config for inference profile detection.
+        // Use normalized key matching so aliases like "bedrock" / "aws-bedrock" are found.
         let modelName: string | undefined;
-        const providerConfig = config?.models?.providers?.[provider];
-        if (providerConfig?.models) {
-          const modelDef = (providerConfig.models as Array<{ id?: string; name?: string }>).find(
-            (m) => m.id === modelId,
-          );
-          modelName = modelDef?.name;
+        const providers = config?.models?.providers;
+        if (providers) {
+          for (const [key, value] of Object.entries(providers)) {
+            if (normalizeProviderId(key) !== PROVIDER_ID) continue;
+            const models = (value as { models?: Array<{ id?: string; name?: string }> })?.models;
+            const modelDef = models?.find((m) => m.id === modelId);
+            if (modelDef?.name) {
+              modelName = modelDef.name;
+              break;
+            }
+          }
         }
         return isAnthropicBedrockModel(modelId, modelName)
           ? streamFn

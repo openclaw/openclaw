@@ -44,6 +44,30 @@ describe("amazon-bedrock provider plugin", () => {
     expect(result).toBe(baseFn);
   });
 
+  it("enables prompt caching for inference profile when config uses provider alias", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+    const baseFn = (_model: never, _context: never, options: Record<string, unknown>) => options;
+    const arn =
+      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+    const result = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: arn,
+      config: {
+        models: {
+          providers: {
+            bedrock: {
+              models: [{ id: arn, name: "Claude Sonnet 4.6 via Inference Profile" }],
+            },
+          },
+        },
+      },
+      streamFn: baseFn,
+    } as never);
+
+    // Should return the original streamFn even when config key is "bedrock" alias
+    expect(result).toBe(baseFn);
+  });
+
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
     const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
     const wrapped = provider.wrapStreamFn?.({
