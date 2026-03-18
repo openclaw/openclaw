@@ -13,6 +13,12 @@ vi.mock("../../../src/infra/backoff.js", async (importOriginal) => {
 describe("createTelegramSendChatActionHandler", () => {
   const make401Error = () => new Error("401 Unauthorized");
   const make500Error = () => new Error("500 Internal Server Error");
+  const makeNetworkError = () =>
+    Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
 
   it("calls sendChatActionFn on success", async () => {
     const fn = vi.fn().mockResolvedValue(true);
@@ -141,5 +147,65 @@ describe("createTelegramSendChatActionHandler", () => {
     // Suspended for all chats
     await handler.sendChatAction(444, "typing");
     expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("signals recoverable network failures after the configured threshold", async () => {
+    const fn = vi.fn().mockRejectedValue(makeNetworkError());
+    const logger = vi.fn();
+    const onRecoverableNetworkFailure = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutiveNetworkFailures: 2,
+      onRecoverableNetworkFailure,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    expect(onRecoverableNetworkFailure).not.toHaveBeenCalled();
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    expect(onRecoverableNetworkFailure).toHaveBeenCalledTimes(1);
+    expect(onRecoverableNetworkFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        consecutiveFailures: 2,
+      }),
+    );
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    expect(onRecoverableNetworkFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets the recoverable network failure signal after a success", async () => {
+    let callCount = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 2 || callCount === 3 || callCount === 5 || callCount === 6) {
+        throw makeNetworkError();
+      }
+      return true;
+    });
+    const logger = vi.fn();
+    const onRecoverableNetworkFailure = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      maxConsecutiveNetworkFailures: 2,
+      onRecoverableNetworkFailure,
+    });
+
+    await handler.sendChatAction(123, "typing");
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    expect(onRecoverableNetworkFailure).not.toHaveBeenCalled();
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    expect(onRecoverableNetworkFailure).toHaveBeenCalledTimes(1);
+
+    await handler.sendChatAction(123, "typing");
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    expect(onRecoverableNetworkFailure).toHaveBeenCalledTimes(1);
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    expect(onRecoverableNetworkFailure).toHaveBeenCalledTimes(2);
   });
 });
