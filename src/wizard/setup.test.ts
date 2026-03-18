@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
@@ -88,7 +89,9 @@ const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: tru
 const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
-const buildPluginCompatibilityNotices = vi.hoisted(() => vi.fn(() => []));
+const buildPluginCompatibilityNotices = vi.hoisted(() =>
+  vi.fn((): PluginCompatibilityNotice[] => []),
+);
 
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
@@ -456,7 +459,12 @@ describe("runSetupWizard", () => {
 
     const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.some((call) => call?.[1] === "Plugin compatibility")).toBe(true);
-    expect(calls.some((call) => String(call?.[0] ?? "").includes("legacy-plugin"))).toBe(true);
+    expect(
+      calls.some((call) => {
+        const body = call?.[0];
+        return typeof body === "string" && body.includes("legacy-plugin");
+      }),
+    ).toBe(true);
   });
 
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
