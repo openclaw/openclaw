@@ -109,5 +109,6 @@
   "web-media",
   "speech",
   "state-paths",
-  "tool-send"
+  "tool-send",
+  "secret-input-schema"
 ]
