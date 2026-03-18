@@ -35,7 +35,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct", "channel"] },
       config: createAlwaysConfiguredPluginConfig(),
       actions: {
-        listActions: () => ["pin", "list-pins", "member-info"],
+        describeMessageTool: () => ({ actions: ["pin", "list-pins", "member-info"] }),
         supportsAction: ({ action }) =>
           action === "pin" || action === "list-pins" || action === "member-info",
         handleAction,
@@ -240,7 +240,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig(),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -332,7 +332,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       },
       actions: {
-        listActions: () => ["poll"],
+        describeMessageTool: () => ({ actions: ["poll"] }),
         supportsAction: ({ action }) => action === "poll",
         handleAction,
       },
@@ -439,6 +439,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       },
       actions: {
+        describeMessageTool: () => ({ actions: ["poll"] }),
         supportsAction: ({ action }) => action === "poll",
         handleAction,
       },
@@ -521,7 +522,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig({}),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -603,7 +604,7 @@ describe("runMessageAction plugin dispatch", () => {
         resolveAccount: () => ({}),
       },
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         handleAction,
       },
     };

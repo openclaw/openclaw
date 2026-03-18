@@ -67,10 +67,10 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
 ]);
 
 export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg, currentChannelId }) => {
+  describeMessageTool: ({ cfg, currentChannelId }) => {
     const account = resolveBlueBubblesAccount({ cfg: cfg });
     if (!account.enabled || !account.configured) {
-      return [];
+      return null;
     }
     const gate = createActionGate(cfg.channels?.bluebubbles?.actions);
     const actions = new Set<ChannelMessageActionName>();
@@ -107,7 +107,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         }
       }
     }
-    return Array.from(actions);
+    return { actions: Array.from(actions) };
   },
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),

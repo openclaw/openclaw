@@ -32,7 +32,7 @@ function makeMattermostPlugin(): ChannelPlugin {
       isEnabled: () => true,
     },
     actions: {
-      listActions: () => ["send"],
+      describeMessageTool: () => ({ actions: ["send"] }),
     },
   };
 }

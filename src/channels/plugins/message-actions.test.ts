@@ -41,8 +41,10 @@ function createMessageActionsPlugin(params: {
       ...(params.aliases ? { aliases: params.aliases } : {}),
     },
     actions: {
-      listActions: () => ["send"],
-      getCapabilities: () => params.capabilities,
+      describeMessageTool: () => ({
+        actions: ["send"],
+        capabilities: params.capabilities,
+      }),
     },
   };
 }
@@ -161,16 +163,7 @@ describe("message action capability checks", () => {
     ).toEqual(["cards"]);
   });
 
-  it("prefers unified message tool discovery over legacy discovery methods", () => {
-    const legacyListActions = vi.fn(() => {
-      throw new Error("legacy listActions should not run");
-    });
-    const legacyCapabilities = vi.fn(() => {
-      throw new Error("legacy getCapabilities should not run");
-    });
-    const legacySchema = vi.fn(() => {
-      throw new Error("legacy getToolSchema should not run");
-    });
+  it("uses unified message tool discovery for actions, capabilities, and schema", () => {
     const unifiedPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
         id: "discord",
@@ -190,9 +183,6 @@ describe("message action capability checks", () => {
             },
           },
         }),
-        listActions: legacyListActions,
-        getCapabilities: legacyCapabilities,
-        getToolSchema: legacySchema,
       },
     };
     setActivePluginRegistry(
@@ -207,9 +197,6 @@ describe("message action capability checks", () => {
         channel: "discord",
       }),
     ).toHaveProperty("components");
-    expect(legacyListActions).not.toHaveBeenCalled();
-    expect(legacyCapabilities).not.toHaveBeenCalled();
-    expect(legacySchema).not.toHaveBeenCalled();
   });
 
   it("skips crashing action/capability discovery paths and logs once", () => {
@@ -223,10 +210,7 @@ describe("message action capability checks", () => {
         },
       }),
       actions: {
-        listActions: () => {
-          throw new Error("boom");
-        },
-        getCapabilities: () => {
+        describeMessageTool: () => {
           throw new Error("boom");
         },
       },
@@ -237,10 +221,10 @@ describe("message action capability checks", () => {
 
     expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
     expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
-    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
 
     expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast"]);
     expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual([]);
-    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 });

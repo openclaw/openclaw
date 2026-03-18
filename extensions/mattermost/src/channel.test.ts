@@ -173,7 +173,7 @@ describe("mattermostPlugin", () => {
       expect(actions).toContain("send");
     });
 
-    it("respects per-account actions.reactions in listActions", () => {
+    it("respects per-account actions.reactions in message discovery", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {

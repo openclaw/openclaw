@@ -98,7 +98,7 @@ const resolveGoogleChatDmPolicy = createScopedDmSecurityResolver<ResolvedGoogleC
 });
 
 const googlechatActions: ChannelMessageActionAdapter = {
-  listActions: (ctx) => googlechatMessageActions.listActions?.(ctx) ?? [],
+  describeMessageTool: (ctx) => googlechatMessageActions.describeMessageTool?.(ctx) ?? null,
   extractToolSend: (ctx) => googlechatMessageActions.extractToolSend?.(ctx) ?? null,
   handleAction: async (ctx) => {
     if (!googlechatMessageActions.handleAction) {
