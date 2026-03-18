@@ -1,4 +1,4 @@
-import { createHybridChannelConfigBase } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -39,7 +39,7 @@ const tlonSetupWizardProxy = createTlonSetupWizardBase({
     ).tlonSetupWizard.finalize!(params),
 }) satisfies NonNullable<ChannelPlugin["setupWizard"]>;
 
-const tlonConfigBase = createHybridChannelConfigBase({
+const tlonConfigAdapter = createHybridChannelConfigAdapter({
   sectionKey: TLON_CHANNEL_ID,
   listAccountIds: (cfg: OpenClawConfig) => listTlonAccountIds(cfg),
   resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
@@ -47,6 +47,9 @@ const tlonConfigBase = createHybridChannelConfigBase({
   defaultAccountId: () => "default",
   clearBaseFields: ["ship", "code", "url", "name"],
   preserveSectionOnDefaultDelete: true,
+  resolveAllowFrom: (account) => account.dmAllowlist,
+  formatAllowFrom: (allowFrom) =>
+    allowFrom.map((entry) => normalizeShip(String(entry))).filter(Boolean),
 });
 
 export const tlonPlugin: ChannelPlugin = {
@@ -72,7 +75,7 @@ export const tlonPlugin: ChannelPlugin = {
   reload: { configPrefixes: ["channels.tlon"] },
   configSchema: tlonChannelConfigSchema,
   config: {
-    ...tlonConfigBase,
+    ...tlonConfigAdapter,
     isConfigured: (account) => account.configured,
     describeAccount: (account) => ({
       accountId: account.accountId,

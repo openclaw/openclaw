@@ -44,7 +44,7 @@ import { slackSetupWizard } from "./setup-surface.js";
 import {
   createSlackPluginBase,
   isSlackPluginAccountConfigured,
-  slackConfigAccessors,
+  slackConfigAdapter,
   SLACK_CHANNEL,
 } from "./shared.js";
 import { parseSlackTarget } from "./targets.js";
@@ -352,7 +352,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
       channelId: "slack",
       normalize: ({ cfg, accountId, values }) =>
-        slackConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+        slackConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolvePaths: resolveLegacyDmAllowlistConfigPaths,
     }),
   },

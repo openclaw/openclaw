@@ -8,8 +8,7 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  createScopedChannelConfigAdapter,
   buildChannelConfigSchema,
   DiscordConfigSchema,
   getChatChannelMeta,
@@ -27,20 +26,16 @@ export const discordSetupWizard = createDiscordSetupWizardProxy(
   async () => (await loadDiscordChannelRuntime()).discordSetupWizard,
 );
 
-export const discordConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
-  resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
-});
-
-export const discordConfigBase = createScopedChannelConfigBase<ResolvedDiscordAccount>({
+export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDiscordAccount>({
   sectionKey: DISCORD_CHANNEL,
   listAccountIds: listDiscordAccountIds,
   resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
   inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
+  resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
+  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
 });
 
 export function createDiscordPluginBase(params: {
@@ -75,7 +70,7 @@ export function createDiscordPluginBase(params: {
     reload: { configPrefixes: ["channels.discord"] },
     configSchema: buildChannelConfigSchema(DiscordConfigSchema),
     config: {
-      ...discordConfigBase,
+      ...discordConfigAdapter,
       isConfigured: (account) => Boolean(account.token?.trim()),
       describeAccount: (account) => ({
         accountId: account.accountId,
@@ -84,7 +79,6 @@ export function createDiscordPluginBase(params: {
         configured: Boolean(account.token?.trim()),
         tokenSource: account.tokenSource,
       }),
-      ...discordConfigAccessors,
     },
     setup: params.setup,
   }) as Pick<
