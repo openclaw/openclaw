@@ -84,6 +84,10 @@
       - any-glob-to-any-file:
           - "extensions/twitch/**"
           - "docs/channels/twitch.md"
+"channel: twilio-sms":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/twilio-sms/**"
 "channel: voice-call":
   - changed-files:
       - any-glob-to-any-file:

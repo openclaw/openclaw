@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/twilio-sms",
+  "version": "2026.3.17",
+  "description": "OpenClaw Twilio SMS inbound extension",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "zod": "^4.3.6"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "_authored": "cc (Claude Code) | 2026-03-17"
+}

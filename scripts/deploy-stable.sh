@@ -65,7 +65,20 @@ else
   log "Skipping tests (OPENCLAW_DEPLOY_SKIP_TESTS=1)"
 fi
 
-# ── 4. Promote dist/ to stable worktree ───────────────────────────────────────
+# ── 4a. Sync stable worktree src/ to current HEAD ─────────────────────────────
+# The gateway's plugin loader uses jiti to load src/plugins/runtime/*.ts at
+# runtime. If the worktree's checkout is stale, the source files won't match
+# the compiled dist/ and plugin runtime features (e.g. runtime.agent) break.
+CURRENT_HEAD="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+STABLE_HEAD="$(git -C "${STABLE_DIR}" rev-parse HEAD 2>/dev/null || echo "none")"
+if [[ "${CURRENT_HEAD}" != "${STABLE_HEAD}" ]]; then
+  log "Updating stable worktree: ${STABLE_HEAD:0:12} → ${CURRENT_HEAD:0:12}"
+  git -C "${STABLE_DIR}" checkout --detach "${CURRENT_HEAD}" --quiet
+else
+  log "Stable worktree already at ${CURRENT_HEAD:0:12}"
+fi
+
+# ── 4b. Promote dist/ to stable worktree ──────────────────────────────────────
 log "Promoting dist/ → ${DIST_DEST}..."
 mkdir -p "${DIST_DEST}"
 rsync -a --delete "${DIST_SRC}/" "${DIST_DEST}/"
