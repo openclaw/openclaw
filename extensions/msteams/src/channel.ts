@@ -1,8 +1,5 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import {
-  createScopedAccountConfigAccessors,
-  createTopLevelChannelConfigBase,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
 import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
 import type {
@@ -31,6 +28,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 import { msteamsSetupAdapter } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
@@ -72,20 +70,20 @@ const resolveMSTeamsChannelConfig = (cfg: OpenClawConfig) => ({
   defaultTo: cfg.channels?.msteams?.defaultTo,
 });
 
-const msteamsConfigBase = createTopLevelChannelConfigBase<ResolvedMSTeamsAccount>({
+const msteamsConfigAdapter = createTopLevelChannelConfigAdapter<
+  ResolvedMSTeamsAccount,
+  {
+    allowFrom?: Array<string | number>;
+    defaultTo?: string;
+  }
+>({
   sectionKey: "msteams",
   resolveAccount: (cfg) => ({
     accountId: DEFAULT_ACCOUNT_ID,
     enabled: cfg.channels?.msteams?.enabled !== false,
     configured: Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
   }),
-});
-
-const msteamsConfigAccessors = createScopedAccountConfigAccessors<{
-  allowFrom?: Array<string | number>;
-  defaultTo?: string;
-}>({
-  resolveAccount: ({ cfg }) => resolveMSTeamsChannelConfig(cfg),
+  resolveAccessorAccount: ({ cfg }) => resolveMSTeamsChannelConfig(cfg),
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account) => account.defaultTo,
@@ -156,14 +154,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   reload: { configPrefixes: ["channels.msteams"] },
   configSchema: buildChannelConfigSchema(MSTeamsConfigSchema),
   config: {
-    ...msteamsConfigBase,
+    ...msteamsConfigAdapter,
     isConfigured: (_account, cfg) => Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
     describeAccount: (account) => ({
       accountId: account.accountId,
       enabled: account.enabled,
       configured: account.configured,
     }),
-    ...msteamsConfigAccessors,
   },
   security: {
     collectWarnings: ({ cfg }) => {
@@ -181,6 +178,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   setup: msteamsSetupAdapter,
   messaging: {
     normalizeTarget: normalizeMSTeamsMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: (raw) => {
         const trimmed = raw.trim();

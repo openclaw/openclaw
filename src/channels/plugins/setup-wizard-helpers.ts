@@ -16,7 +16,7 @@ import type {
   PromptAccountId,
   PromptAccountIdParams,
 } from "./setup-wizard-types.js";
-import type { ChannelSetupWizard } from "./setup-wizard.js";
+import type { ChannelSetupWizard, ChannelSetupWizardAllowFromEntry } from "./setup-wizard.js";
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   const existingIds = params.listAccountIds(params.cfg);
@@ -1051,9 +1051,8 @@ export async function promptSingleChannelSecretInput(params: {
 
 type ParsedAllowFromResult = { entries: string[]; error?: string };
 
-export async function promptParsedAllowFromForScopedChannel(params: {
-  cfg: OpenClawConfig;
-  channel: "imessage" | "signal";
+export async function promptParsedAllowFromForAccount<TConfig extends OpenClawConfig>(params: {
+  cfg: TConfig;
   accountId?: string;
   defaultAccountId: string;
   prompter: Pick<WizardPrompter, "note" | "text">;
@@ -1062,11 +1061,14 @@ export async function promptParsedAllowFromForScopedChannel(params: {
   message: string;
   placeholder: string;
   parseEntries: (raw: string) => ParsedAllowFromResult;
-  getExistingAllowFrom: (params: {
-    cfg: OpenClawConfig;
+  getExistingAllowFrom: (params: { cfg: TConfig; accountId: string }) => Array<string | number>;
+  mergeEntries?: (params: { existing: Array<string | number>; parsed: string[] }) => string[];
+  applyAllowFrom: (params: {
+    cfg: TConfig;
     accountId: string;
-  }) => Array<string | number>;
-}): Promise<OpenClawConfig> {
+    allowFrom: string[];
+  }) => TConfig | Promise<TConfig>;
+}): Promise<TConfig> {
   const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: params.defaultAccountId,
@@ -1089,13 +1091,95 @@ export async function promptParsedAllowFromForScopedChannel(params: {
     },
   });
   const parsed = params.parseEntries(String(entry));
-  const unique = mergeAllowFromEntries(undefined, parsed.entries);
-  return setAccountAllowFromForChannel({
+  const unique =
+    params.mergeEntries?.({
+      existing,
+      parsed: parsed.entries,
+    }) ?? mergeAllowFromEntries(undefined, parsed.entries);
+  return await params.applyAllowFrom({
     cfg: params.cfg,
-    channel: params.channel,
     accountId,
     allowFrom: unique,
   });
+}
+
+export async function promptParsedAllowFromForScopedChannel(params: {
+  cfg: OpenClawConfig;
+  channel: "imessage" | "signal";
+  accountId?: string;
+  defaultAccountId: string;
+  prompter: Pick<WizardPrompter, "note" | "text">;
+  noteTitle: string;
+  noteLines: string[];
+  message: string;
+  placeholder: string;
+  parseEntries: (raw: string) => ParsedAllowFromResult;
+  getExistingAllowFrom: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+  }) => Array<string | number>;
+}): Promise<OpenClawConfig> {
+  return await promptParsedAllowFromForAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    defaultAccountId: params.defaultAccountId,
+    prompter: params.prompter,
+    noteTitle: params.noteTitle,
+    noteLines: params.noteLines,
+    message: params.message,
+    placeholder: params.placeholder,
+    parseEntries: params.parseEntries,
+    getExistingAllowFrom: params.getExistingAllowFrom,
+    applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+      setAccountAllowFromForChannel({
+        cfg,
+        channel: params.channel,
+        accountId,
+        allowFrom,
+      }),
+  });
+}
+
+export function resolveParsedAllowFromEntries(params: {
+  entries: string[];
+  parseId: (raw: string) => string | null;
+}): ChannelSetupWizardAllowFromEntry[] {
+  return params.entries.map((entry) => {
+    const id = params.parseId(entry);
+    return {
+      input: entry,
+      resolved: Boolean(id),
+      id,
+    };
+  });
+}
+
+export function createAllowFromSection(params: {
+  helpTitle?: string;
+  helpLines?: string[];
+  credentialInputKey?: NonNullable<ChannelSetupWizard["allowFrom"]>["credentialInputKey"];
+  message: string;
+  placeholder: string;
+  invalidWithoutCredentialNote: string;
+  parseInputs?: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["parseInputs"]>;
+  parseId: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["parseId"]>;
+  resolveEntries?: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]>;
+  apply: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["apply"]>;
+}): NonNullable<ChannelSetupWizard["allowFrom"]> {
+  return {
+    ...(params.helpTitle ? { helpTitle: params.helpTitle } : {}),
+    ...(params.helpLines ? { helpLines: params.helpLines } : {}),
+    ...(params.credentialInputKey ? { credentialInputKey: params.credentialInputKey } : {}),
+    message: params.message,
+    placeholder: params.placeholder,
+    invalidWithoutCredentialNote: params.invalidWithoutCredentialNote,
+    ...(params.parseInputs ? { parseInputs: params.parseInputs } : {}),
+    parseId: params.parseId,
+    resolveEntries:
+      params.resolveEntries ??
+      (async ({ entries }) => resolveParsedAllowFromEntries({ entries, parseId: params.parseId })),
+    apply: params.apply,
+  };
 }
 
 export async function noteChannelLookupSummary(params: {

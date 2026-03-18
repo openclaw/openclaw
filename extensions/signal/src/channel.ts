@@ -1,8 +1,4 @@
 import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
-import {
-  collectAllowlistProviderRestrictSendersWarnings,
-  createScopedDmSecurityResolver,
-} from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
@@ -33,15 +29,13 @@ import { signalMessageActions } from "./message-actions.js";
 import type { SignalProbe } from "./probe.js";
 import { getSignalRuntime } from "./runtime.js";
 import { signalSetupAdapter } from "./setup-core.js";
-import { createSignalPluginBase, signalConfigAccessors, signalSetupWizard } from "./shared.js";
-
-const resolveSignalDmPolicy = createScopedDmSecurityResolver<ResolvedSignalAccount>({
-  channelKey: "signal",
-  resolvePolicy: (account) => account.config.dmPolicy,
-  resolveAllowFrom: (account) => account.config.allowFrom,
-  policyPathSuffix: "dmPolicy",
-  normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
-});
+import {
+  collectSignalSecurityWarnings,
+  signalConfigAdapter,
+  createSignalPluginBase,
+  signalResolveDmPolicy,
+  signalSetupWizard,
+} from "./shared.js";
 type SignalSendFn = ReturnType<typeof getSignalRuntime>["channel"]["signal"]["sendMessageSignal"];
 
 function resolveSignalSendContext(params: {
@@ -296,7 +290,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
       channelId: "signal",
       normalize: ({ cfg, accountId, values }) =>
-        signalConfigAccessors.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
+        signalConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
       resolvePaths: (scope) => ({
         readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
         writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
@@ -304,19 +298,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     }),
   },
   security: {
-    resolveDmPolicy: resolveSignalDmPolicy,
-    collectWarnings: ({ account, cfg }) => {
-      return collectAllowlistProviderRestrictSendersWarnings({
-        cfg,
-        providerConfigPresent: cfg.channels?.signal !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        surface: "Signal groups",
-        openScope: "any member",
-        groupPolicyPath: "channels.signal.groupPolicy",
-        groupAllowFromPath: "channels.signal.groupAllowFrom",
-        mentionGated: false,
-      });
-    },
+    resolveDmPolicy: signalResolveDmPolicy,
+    collectWarnings: collectSignalSecurityWarnings,
   },
   messaging: {
     normalizeTarget: normalizeSignalMessagingTarget,

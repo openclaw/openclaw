@@ -248,15 +248,16 @@ export const baseConfig = (): OpenClawConfig =>
     channels: {
       discord: {
         accounts: {
-          default: {},
+          default: {
+            token: "MTIz.abc.def",
+          },
         },
       },
     },
   }) as OpenClawConfig;
 
-vi.mock("@buape/carbon", () => {
-  class Command {}
-  class ReadyListener {}
+vi.mock("@buape/carbon", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@buape/carbon")>();
   class RateLimitError extends Error {
     status = 429;
     discordCode?: number;
@@ -293,7 +294,7 @@ vi.mock("@buape/carbon", () => {
       return clientGetPluginMock(name);
     }
   }
-  return { Client, Command, RateLimitError, ReadyListener };
+  return { ...actual, Client, RateLimitError };
 });
 
 vi.mock("@buape/carbon/gateway", () => ({
@@ -463,7 +464,9 @@ vi.mock("../../../extensions/discord/src/monitor/provider.lifecycle.js", () => (
 }));
 
 vi.mock("../../../extensions/discord/src/monitor/rest-fetch.js", () => ({
-  resolveDiscordRestFetch: () => async () => undefined,
+  resolveDiscordRestFetch: () => async () => {
+    throw new Error("offline");
+  },
 }));
 
 vi.mock("../../../extensions/discord/src/monitor/thread-bindings.js", () => ({
