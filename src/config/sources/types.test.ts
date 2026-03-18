@@ -1,5 +1,4 @@
-// src/config/sources/types.test.ts
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ConfigSource, ConfigSourceKind } from "./types.js";
 
 describe("ConfigSource types", () => {

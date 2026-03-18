@@ -7,25 +7,25 @@
 import crypto from "node:crypto";
 import JSON5 from "json5";
 import {
-  applyTalkApiKey,
-  applyTalkConfigNormalization,
-  applyModelDefaults,
+  applyAgentDefaults,
   applyCompactionDefaults,
   applyContextPruningDefaults,
-  applyAgentDefaults,
-  applySessionDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
+  applyModelDefaults,
+  applySessionDefaults,
+  applyTalkApiKey,
+  applyTalkConfigNormalization,
 } from "../defaults.js";
 import { applyConfigEnvVars } from "../env-vars.js";
 import type { EnvSubstitutionWarning } from "../env-substitution.js";
 import { resolveConfigEnvVars } from "../env-substitution.js";
+import { parseConfigJson5 } from "../io.js";
 import { findLegacyConfigIssues } from "../legacy.js";
 import { normalizeConfigPaths } from "../normalize-paths.js";
 import { normalizeExecSafeBinProfilesInConfig } from "../normalize-exec-safe-bin.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "../types.js";
 import { validateConfigObjectWithPlugins } from "../validation.js";
-import { parseConfigJson5 } from "../io.js";
 
 function hashConfigRaw(raw: string | null): string {
   return crypto.createHash("sha256").update(raw ?? "").digest("hex");

@@ -1,5 +1,5 @@
-import type { ConfigSource } from "./types.js";
 import { createConfigIO } from "../io.js";
+import type { ConfigSource } from "./types.js";
 
 export function createFileConfigSource(opts: {
   configPath: string;

@@ -2,10 +2,10 @@
  * Nacos config source adapter: ConfigSource backed by Nacos config API.
  */
 
-import type { ConfigSource } from "./types.js";
 import type { NacosConfigClient } from "./nacos-client.js";
 import { createNacosConfigClient } from "./nacos-client.js";
 import { buildSnapshotFromRaw } from "./snapshot-from-raw.js";
+import type { ConfigSource } from "./types.js";
 
 export type CreateNacosConfigSourceOptions = {
   serverAddr: string;
