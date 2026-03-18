@@ -13,6 +13,7 @@ import {
 type ToolResultContent = {
   type?: string;
   text?: string;
+  data?: string; // base64 image data (when upstream doesn't strip it)
   mimeType?: string;
   bytes?: number;
   omitted?: boolean;
@@ -44,10 +45,14 @@ function formatArgs(toolName: string, args: unknown): string {
 }
 
 /**
- * Process tool result content blocks in a single pass:
- * - Extract MEDIA: paths from text blocks and load images from disk
- * - Build both raw text and media-stripped text simultaneously
- * Avoids calling splitMediaFromOutput twice per block.
+ * Process tool result content blocks in a single sequential pass.
+ *
+ * Tools emit images as [TEXT with MEDIA:path, IMAGE with base64] pairs.
+ * When a MEDIA text block is rendered from file, `lastMediaRenderedFromFile`
+ * is set so the immediately following IMAGE block (base64 duplicate) is
+ * skipped. Orphan IMAGE blocks (no preceding MEDIA) render from base64.
+ * This dedup approach comes from the old PR #36740 and avoids index-space
+ * mismatches when MEDIA paths and image blocks are interleaved.
  */
 function processResult(
   result?: ToolResult,
@@ -62,9 +67,11 @@ function processResult(
   const seenPaths = new Set<string>();
   const rawLines: string[] = [];
   const strippedLines: string[] = [];
+  let lastMediaRenderedFromFile = false;
 
   for (const entry of result.content) {
     if (entry.type === "text" && entry.text) {
+      lastMediaRenderedFromFile = false;
       rawLines.push(sanitizeRenderableText(entry.text));
 
       if (canRender) {
@@ -85,17 +92,31 @@ function processResult(
                 component: createInlineImage(loaded.data, loaded.mimeType, { filename }),
                 filename,
               });
+              lastMediaRenderedFromFile = true;
             }
           }
         }
       }
     } else if (entry.type === "image") {
-      if (!canRender) {
+      if (canRender) {
+        if (lastMediaRenderedFromFile) {
+          // Already rendered from file; skip the base64 duplicate.
+          lastMediaRenderedFromFile = false;
+          continue;
+        }
+        // Orphan image block (no preceding MEDIA) - render from base64 if available
+        if (entry.data && entry.mimeType && !entry.omitted) {
+          images.push({
+            component: createInlineImage(entry.data, entry.mimeType),
+          });
+        }
+      } else {
         const mime = entry.mimeType ?? "image";
         const size = entry.bytes ? ` ${Math.round(entry.bytes / 1024)}kb` : "";
         const omitted = entry.omitted ? " (omitted)" : "";
         rawLines.push(`[${mime}${size}${omitted}]`);
       }
+      lastMediaRenderedFromFile = false;
     }
   }
 
@@ -158,7 +179,8 @@ export class ToolExecutionComponent extends Container {
     this.isError = Boolean(opts?.isError);
 
     // All I/O happens here, NOT in refresh(). Single-pass processes text and
-    // images together to avoid calling splitMediaFromOutput twice per block.
+    // images together, with sequential dedup: when a MEDIA text block is
+    // rendered from file, the next image block (base64 duplicate) is skipped.
     this.detachImages();
     const processed = processResult(result, canRenderInlineImages());
     this.cachedImages = processed.images;
