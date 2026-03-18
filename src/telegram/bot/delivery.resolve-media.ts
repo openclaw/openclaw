@@ -128,13 +128,13 @@ async function downloadAndSaveTelegramFile(params: {
   const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({
     url,
-    // Telegram file URLs are already constrained to api.telegram.org by policy below.
-    // Keep the transport-owned fetch so proxy routing and sticky IPv4 fallback survive.
-    fetchImpl: params.transport.fetch,
+    // Run file downloads through the guarded source fetch so DNS pinning binds the
+    // actual socket connect to the IPs validated for api.telegram.org.
+    fetchImpl: params.transport.sourceFetch,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
-    pinDns: false,
+    dispatcherPolicy: params.transport.pinnedDispatcherPolicy,
     ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
