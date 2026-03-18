@@ -108,7 +108,11 @@ beforeAll(async () => {
   sendChatActionSpyRef = harness.sendChatActionSpy;
   const botModule = await import("./bot.js");
   botModule.setTelegramBotRuntimeForTest(harness.telegramBotRuntimeForTest);
-  ({ createTelegramBot: createTelegramBotRef } = botModule);
+  createTelegramBotRef = (opts) =>
+    botModule.createTelegramBot({
+      ...opts,
+      telegramDeps: harness.telegramBotDepsForTest,
+    });
   const replyModule = await import("openclaw/plugin-sdk/reply-runtime");
   replySpyRef = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
 }, TELEGRAM_BOT_IMPORT_TIMEOUT_MS);
