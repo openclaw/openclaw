@@ -253,17 +253,18 @@ const PATTERNS: Record<string, PatternRule> = {
       // Redirect writes - use non-greedy match, exclude command separators
       />\s*[^;|&\n]*clawdbot\.json/i,
       />\s*[^;|&\n]*openclaw\.json/i,
-      // Match .clawdbot/ and .openclaw/ config paths but EXCLUDE workspace/ subtree
+      // Match .clawdbot/ and .openclaw/ config paths but EXCLUDE workspace/ and media/ subtrees
       // The workspace/ directory is the agent's working area (projects, scripts, etc.)
-      />\s*[^;|&\n]*\.clawdbot\/(?!workspace\/)[^;|&\n]*[^/\s]/i,
-      />\s*[^;|&\n]*\.openclaw\/(?!workspace\/)[^;|&\n]*[^/\s]/i,
+      // The media/ directory is used for inbound/outbound file delivery
+      />\s*[^;|&\n]*\.clawdbot\/(?!workspace\/|media\/)[^;|&\n]*[^/\s]/i,
+      />\s*[^;|&\n]*\.openclaw\/(?!workspace\/|media\/)[^;|&\n]*[^/\s]/i,
       /(echo|cat|printf)[^;|&\n]*>\s*[^;|&\n]*SOUL\.md/i,
       /(echo|cat|printf)[^;|&\n]*>\s*[^;|&\n]*AGENTS\.md/i,
-      // cp/mv/tee/install to config paths (exclude workspace/)
+      // cp/mv/tee/install to config paths (exclude workspace/ and media/)
       /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*clawdbot\.json/i,
       /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*openclaw\.json/i,
-      /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*\.clawdbot\/(?!workspace\/)[^;|&\n]*[^/\s]/i,
-      /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*\.openclaw\/(?!workspace\/)[^;|&\n]*[^/\s]/i,
+      /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*\.clawdbot\/(?!workspace\/|media\/)[^;|&\n]*[^/\s]/i,
+      /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*\.openclaw\/(?!workspace\/|media\/)[^;|&\n]*[^/\s]/i,
       /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*SOUL\.md/i,
       /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*AGENTS\.md/i,
       /tee\s+[^;|&\n]*SOUL\.md/i,
