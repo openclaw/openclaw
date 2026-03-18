@@ -3,6 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import {
   connectOk,
   installGatewayTestHooks,
   rpcReq,
@@ -85,6 +96,42 @@ describe("gateway config methods", () => {
     expect(res.ok).toBe(true);
     expect(res.payload?.path).toBe(createConfigIO().configPath);
     expect(res.payload?.config).toBeTruthy();
+  });
+
+  it("does not replace the live plugin runtime when reading config schema", async () => {
+    const previousRegistry = getActivePluginRegistry();
+    const previousRegistryKey = getActivePluginRegistryKey();
+    const previousHookRegistry = getGlobalPluginRegistry();
+    const liveRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(liveRegistry, "live-registry");
+    initializeGlobalHookRunner(liveRegistry);
+
+    try {
+      const current = await rpcReq<{ ok?: boolean }>(requireWs(), "config.get", {});
+      expect(current.ok).toBe(true);
+      expect(getActivePluginRegistry()).toBe(liveRegistry);
+      expect(getActivePluginRegistryKey()).toBe("live-registry");
+      expect(getGlobalPluginRegistry()).toBe(liveRegistry);
+
+      const lookup = await rpcReq<{ ok?: boolean }>(requireWs(), "config.schema.lookup", {
+        path: "gateway.auth",
+      });
+      expect(lookup.ok).toBe(true);
+      expect(getActivePluginRegistry()).toBe(liveRegistry);
+      expect(getActivePluginRegistryKey()).toBe("live-registry");
+      expect(getGlobalPluginRegistry()).toBe(liveRegistry);
+    } finally {
+      setActivePluginRegistry(
+        previousRegistry ?? createEmptyPluginRegistry(),
+        previousRegistryKey ?? undefined,
+      );
+      if (previousHookRegistry) {
+        initializeGlobalHookRunner(previousHookRegistry);
+      } else {
+        resetGlobalHookRunner();
+      }
+    }
   });
 
   it("returns config.set validation details in the top-level error message", async () => {

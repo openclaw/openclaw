@@ -247,7 +247,10 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const pluginRegistry = loadOpenClawPlugins({
     config: cfg,
-    cache: true,
+    // Config schema reads need a snapshot registry only; they must not replace the
+    // live gateway plugin runtime while the process is serving channel traffic.
+    cache: false,
+    activate: false,
     workspaceDir,
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
