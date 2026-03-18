@@ -52,6 +52,12 @@ export type ChannelMessageToolSchemaContribution = {
   visibility?: "current-channel" | "all-configured";
 };
 
+export type ChannelMessageToolDiscovery = {
+  actions?: readonly ChannelMessageActionName[] | null;
+  capabilities?: readonly ChannelMessageCapability[] | null;
+  schema?: ChannelMessageToolSchemaContribution | ChannelMessageToolSchemaContribution[] | null;
+};
+
 export type ChannelSetupInput = {
   name?: string;
   token?: string;
@@ -478,7 +484,16 @@ export type ChannelToolSend = {
 
 export type ChannelMessageActionAdapter = {
   /**
+   * Preferred unified discovery surface for the shared `message` tool.
+   * When provided, this is authoritative and should return the scoped actions,
+   * capabilities, and schema fragments together so they cannot drift.
+   */
+  describeMessageTool?: (
+    params: ChannelMessageActionDiscoveryContext,
+  ) => ChannelMessageToolDiscovery | null | undefined;
+  /**
    * Advertise agent-discoverable actions for this channel.
+   * Legacy fallback used when `describeMessageTool` is not implemented.
    * Keep this aligned with any gated capability checks. Poll discovery is
    * not inferred from `outbound.sendPoll`, so channels that want agents to
    * create polls should include `"poll"` here when enabled.
@@ -490,6 +505,7 @@ export type ChannelMessageActionAdapter = {
   ) => readonly ChannelMessageCapability[];
   /**
    * Extend the shared `message` tool schema with channel-owned fields.
+   * Legacy fallback used when `describeMessageTool` is not implemented.
    * Keep this aligned with `listActions` and `getCapabilities` so the exposed
    * schema matches what the channel can actually execute in the current scope.
    */
