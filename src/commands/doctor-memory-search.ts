@@ -48,7 +48,11 @@ export async function noteMemorySearchHealth(
         // Model path looks valid (explicit file, hf: URL, or default model).
         // If a gateway probe is available and reports not-ready, warn anyway —
         // the model download or node-llama-cpp setup may have failed at runtime.
-        if (opts?.gatewayMemoryProbe?.checked && !opts.gatewayMemoryProbe.ready) {
+        if (
+          opts?.gatewayMemoryProbe?.checked &&
+          !opts.gatewayMemoryProbe.ready &&
+          !isTransientGatewayMemoryProbeUnavailable(opts.gatewayMemoryProbe)
+        ) {
           const detail = opts.gatewayMemoryProbe.error?.trim();
           note(
             [
@@ -230,4 +234,17 @@ function buildGatewayProbeWarning(
   return detail
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
+}
+
+function isTransientGatewayMemoryProbeUnavailable(
+  probe:
+    | {
+        checked: boolean;
+        ready: boolean;
+        error?: string;
+      }
+    | undefined,
+): boolean {
+  const detail = probe?.error?.trim();
+  return Boolean(detail && /^gateway memory probe unavailable:/i.test(detail));
 }
