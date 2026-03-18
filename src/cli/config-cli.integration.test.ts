@@ -23,6 +23,39 @@ function createTestRuntime() {
   };
 }
 
+function createExecDryRunBatch(params: { markerPath: string }) {
+  const response = JSON.stringify({
+    protocolVersion: 1,
+    values: {
+      dryrun_id: "ok",
+    },
+  });
+  const script = [
+    'const fs = require("node:fs");',
+    `fs.writeFileSync(${JSON.stringify(params.markerPath)}, "dryrun\\n", "utf8");`,
+    `process.stdout.write(${JSON.stringify(response)});`,
+  ].join("");
+  return [
+    {
+      path: "secrets.providers.runner",
+      provider: {
+        source: "exec",
+        command: process.execPath,
+        args: ["-e", script],
+        allowInsecurePath: true,
+      },
+    },
+    {
+      path: "channels.discord.token",
+      ref: {
+        source: "exec",
+        provider: "runner",
+        id: "dryrun_id",
+      },
+    },
+  ];
+}
+
 describe("config cli integration", () => {
   it("supports batch-file dry-run and then writes real config changes", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-int-"));
@@ -176,6 +209,117 @@ describe("config cli integration", () => {
       expect(payload.errors?.some((entry) => entry.ref?.includes("MISSING_TEST_SECRET"))).toBe(
         true,
       );
+    } finally {
+      envSnapshot.restore();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips exec provider execution during dry-run by default", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-int-exec-skip-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    const batchPath = path.join(tempDir, "batch.json");
+    const markerPath = path.join(tempDir, "marker.txt");
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+    try {
+      fs.writeFileSync(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { port: 18789 },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        batchPath,
+        `${JSON.stringify(createExecDryRunBatch({ markerPath }), null, 2)}\n`,
+        "utf8",
+      );
+
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+
+      const runtime = createTestRuntime();
+      const before = fs.readFileSync(configPath, "utf8");
+      await runConfigSet({
+        cliOptions: {
+          batchFile: batchPath,
+          dryRun: true,
+        },
+        runtime: runtime.runtime,
+      });
+      const after = fs.readFileSync(configPath, "utf8");
+
+      expect(after).toBe(before);
+      expect(fs.existsSync(markerPath)).toBe(false);
+      expect(
+        runtime.logs.some((line) =>
+          line.includes("Dry run note: skipped 1 exec SecretRef resolvability check(s)."),
+        ),
+      ).toBe(true);
+    } finally {
+      envSnapshot.restore();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("executes exec providers during dry-run when --allow-exec is set", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-int-exec-allow-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    const batchPath = path.join(tempDir, "batch.json");
+    const markerPath = path.join(tempDir, "marker.txt");
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+    try {
+      fs.writeFileSync(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { port: 18789 },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      fs.writeFileSync(
+        batchPath,
+        `${JSON.stringify(createExecDryRunBatch({ markerPath }), null, 2)}\n`,
+        "utf8",
+      );
+
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+
+      const runtime = createTestRuntime();
+      const before = fs.readFileSync(configPath, "utf8");
+      await runConfigSet({
+        cliOptions: {
+          batchFile: batchPath,
+          dryRun: true,
+          allowExec: true,
+        },
+        runtime: runtime.runtime,
+      });
+      const after = fs.readFileSync(configPath, "utf8");
+
+      expect(after).toBe(before);
+      expect(fs.existsSync(markerPath)).toBe(true);
+      expect(
+        runtime.logs.some((line) =>
+          line.includes("Dry run note: skipped 1 exec SecretRef resolvability check(s)."),
+        ),
+      ).toBe(false);
     } finally {
       envSnapshot.restore();
       clearConfigCache();

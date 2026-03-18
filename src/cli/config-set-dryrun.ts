@@ -16,5 +16,6 @@ export type ConfigSetDryRunResult = {
     resolvability: boolean;
   };
   refsChecked: number;
+  skippedExecRefs: number;
   errors?: ConfigSetDryRunError[];
 };
