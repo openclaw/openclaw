@@ -28,4 +28,13 @@ describe("resolveZaloImageUrl", () => {
   it("returns undefined when neither field is present", () => {
     expect(resolveZaloImageUrl({})).toBeUndefined();
   });
+
+  it("falls back to photo when photo_url is an empty string", () => {
+    expect(
+      resolveZaloImageUrl({
+        photo: "https://example.com/img.jpg",
+        photo_url: "",
+      }),
+    ).toBe("https://example.com/img.jpg");
+  });
 });

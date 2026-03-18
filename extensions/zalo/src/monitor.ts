@@ -286,8 +286,8 @@ async function handleTextMessage(
 
 async function handleImageMessage(params: ZaloImageMessageParams): Promise<void> {
   const { message, mediaMaxMb, account, core, runtime } = params;
-  const { photo, photo_url, caption } = message;
-  const imageUrl = photo_url ?? photo;
+  const { caption } = message;
+  const imageUrl = resolveZaloImageUrl(message);
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
@@ -766,7 +766,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 }
 
 function resolveZaloImageUrl(message: { photo?: string; photo_url?: string }): string | undefined {
-  return message.photo_url ?? message.photo;
+  // Use || so blank strings from webhook payloads fall through to the photo fallback
+  return message.photo_url || message.photo;
 }
 
 export const __testing = {
