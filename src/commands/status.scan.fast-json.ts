@@ -5,6 +5,7 @@ import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import { buildPluginCompatibilityNotices } from "../plugins/status.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
@@ -185,6 +186,7 @@ export async function scanStatusJsonFast(
     : null;
   const memoryPlugin = resolveMemoryPluginStatus(cfg);
   const memory = await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
+  const pluginCompatibility = buildPluginCompatibilityNotices({ config: cfg });
 
   return {
     cfg,
@@ -209,5 +211,6 @@ export async function scanStatusJsonFast(
     summary,
     memory,
     memoryPlugin,
+    pluginCompatibility,
   };
 }

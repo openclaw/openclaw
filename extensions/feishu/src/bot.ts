@@ -22,6 +22,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
+import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
@@ -39,150 +40,13 @@ import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
-import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
+import type { FeishuMessageContext, FeishuMediaInfo } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
-
-// --- Permission error extraction ---
-// Extract permission grant URL from Feishu API error response.
-type PermissionError = {
-  code: number;
-  message: string;
-  grantUrl?: string;
-};
-
-const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
-
-// Feishu API sometimes returns incorrect scope names in permission error
-// responses (e.g. "contact:contact.base:readonly" instead of the valid
-// "contact:user.base:readonly"). This map corrects known mismatches.
-const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
-  "contact:contact.base:readonly": "contact:user.base:readonly",
-};
-
-function correctFeishuScopeInUrl(url: string): string {
-  let corrected = url;
-  for (const [wrong, right] of Object.entries(FEISHU_SCOPE_CORRECTIONS)) {
-    corrected = corrected.replaceAll(encodeURIComponent(wrong), encodeURIComponent(right));
-    corrected = corrected.replaceAll(wrong, right);
-  }
-  return corrected;
-}
-
-function shouldSuppressPermissionErrorNotice(permissionError: PermissionError): boolean {
-  const message = permissionError.message.toLowerCase();
-  return IGNORED_PERMISSION_SCOPE_TOKENS.some((token) => message.includes(token));
-}
-
-function extractPermissionError(err: unknown): PermissionError | null {
-  if (!err || typeof err !== "object") return null;
-
-  // Axios error structure: err.response.data contains the Feishu error
-  const axiosErr = err as { response?: { data?: unknown } };
-  const data = axiosErr.response?.data;
-  if (!data || typeof data !== "object") return null;
-
-  const feishuErr = data as {
-    code?: number;
-    msg?: string;
-    error?: { permission_violations?: Array<{ uri?: string }> };
-  };
-
-  // Feishu permission error code: 99991672
-  if (feishuErr.code !== 99991672) return null;
-
-  // Extract the grant URL from the error message (contains the direct link)
-  const msg = feishuErr.msg ?? "";
-  const urlMatch = msg.match(/https:\/\/[^\s,]+\/app\/[^\s,]+/);
-  const grantUrl = urlMatch?.[0] ? correctFeishuScopeInUrl(urlMatch[0]) : undefined;
-
-  return {
-    code: feishuErr.code,
-    message: msg,
-    grantUrl,
-  };
-}
-
-// --- Sender name resolution (so the agent can distinguish who is speaking in group chats) ---
-// Cache display names by sender id (open_id/user_id) to avoid an API call on every message.
-const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
-const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-
-type SenderNameResult = {
-  name?: string;
-  permissionError?: PermissionError;
-};
-
-function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
-  const trimmed = senderId.trim();
-  if (trimmed.startsWith("ou_")) {
-    return "open_id";
-  }
-  if (trimmed.startsWith("on_")) {
-    return "union_id";
-  }
-  return "user_id";
-}
-
-async function resolveFeishuSenderName(params: {
-  account: ResolvedFeishuAccount;
-  senderId: string;
-  log: (...args: any[]) => void;
-}): Promise<SenderNameResult> {
-  const { account, senderId, log } = params;
-  if (!account.configured) return {};
-
-  const normalizedSenderId = senderId.trim();
-  if (!normalizedSenderId) return {};
-
-  const cached = senderNameCache.get(normalizedSenderId);
-  const now = Date.now();
-  if (cached && cached.expireAt > now) return { name: cached.name };
-
-  try {
-    const client = createFeishuClient(account);
-    const userIdType = resolveSenderLookupIdType(normalizedSenderId);
-
-    // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
-    const res: any = await client.contact.user.get({
-      path: { user_id: normalizedSenderId },
-      params: { user_id_type: userIdType },
-    });
-
-    const name: string | undefined =
-      res?.data?.user?.name ||
-      res?.data?.user?.display_name ||
-      res?.data?.user?.nickname ||
-      res?.data?.user?.en_name;
-
-    if (name && typeof name === "string") {
-      senderNameCache.set(normalizedSenderId, { name, expireAt: now + SENDER_NAME_TTL_MS });
-      return { name };
-    }
-
-    return {};
-  } catch (err) {
-    // Check if this is a permission error
-    const permErr = extractPermissionError(err);
-    if (permErr) {
-      if (shouldSuppressPermissionErrorNotice(permErr)) {
-        log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
-        return {};
-      }
-      log(`feishu: permission error resolving sender name: code=${permErr.code}`);
-      return { permissionError: permErr };
-    }
-
-    // Best-effort. Don't fail message handling if name lookup fails.
-    log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);
-    return {};
-  }
-}
-
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -848,7 +712,7 @@ export function buildFeishuAgentBody(params: {
     "content" | "senderName" | "senderOpenId" | "mentionTargets" | "messageId" | "hasAnyMention"
   >;
   quotedContent?: string;
-  permissionErrorForAgent?: PermissionError;
+  permissionErrorForAgent?: FeishuPermissionError;
   botOpenId?: string;
 }): string {
   const { ctx, quotedContent, permissionErrorForAgent, botOpenId } = params;
@@ -967,7 +831,7 @@ export async function handleFeishuMessage(params: {
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   // Optimization: skip if disabled to save API quota (Feishu free tier limit).
-  let permissionErrorForAgent: PermissionError | undefined;
+  let permissionErrorForAgent: FeishuPermissionError | undefined;
   if (feishuCfg?.resolveSenderNames ?? true) {
     const senderResult = await resolveFeishuSenderName({
       account,
