@@ -367,6 +367,10 @@ const parsePassthroughArgs = (args) => {
 };
 const { fileFilters: passthroughFileFilters, optionArgs: passthroughOptionArgs } =
   parsePassthroughArgs(passthroughArgs);
+const countExplicitEntryFilters = (entryArgs) => {
+  const { fileFilters } = parsePassthroughArgs(entryArgs.slice(2));
+  return fileFilters.length > 0 ? fileFilters.length : null;
+};
 const passthroughRequiresSingleRun = passthroughOptionArgs.some((arg) => {
   if (!arg.startsWith("-")) {
     return false;
@@ -757,15 +761,35 @@ const runOnce = (entry, extraArgs = []) =>
   });
 
 const run = async (entry, extraArgs = []) => {
-  if (shardCount <= 1) {
+  const explicitFilterCount = countExplicitEntryFilters(entry.args);
+  // Wrapper-generated singleton/small-file lanes should not ask Vitest to shard
+  // into more buckets than there are explicit test filters.
+  const effectiveShardCount =
+    explicitFilterCount === null ? shardCount : Math.min(shardCount, explicitFilterCount);
+
+  if (effectiveShardCount <= 1) {
+    if (shardIndexOverride !== null && shardIndexOverride > effectiveShardCount) {
+      return 0;
+    }
     return runOnce(entry, extraArgs);
   }
   if (shardIndexOverride !== null) {
-    return runOnce(entry, ["--shard", `${shardIndexOverride}/${shardCount}`, ...extraArgs]);
+    if (shardIndexOverride > effectiveShardCount) {
+      return 0;
+    }
+    return runOnce(entry, [
+      "--shard",
+      `${shardIndexOverride}/${effectiveShardCount}`,
+      ...extraArgs,
+    ]);
   }
-  for (let shardIndex = 1; shardIndex <= shardCount; shardIndex += 1) {
+  for (let shardIndex = 1; shardIndex <= effectiveShardCount; shardIndex += 1) {
     // eslint-disable-next-line no-await-in-loop
-    const code = await runOnce(entry, ["--shard", `${shardIndex}/${shardCount}`, ...extraArgs]);
+    const code = await runOnce(entry, [
+      "--shard",
+      `${shardIndex}/${effectiveShardCount}`,
+      ...extraArgs,
+    ]);
     if (code !== 0) {
       return code;
     }
