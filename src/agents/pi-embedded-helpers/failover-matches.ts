@@ -74,6 +74,8 @@ const ERROR_PATTERNS = {
     "insufficient balance",
     "insufficient usd or diem balance",
     /requires?\s+more\s+credits/i,
+    // Z.ai: error 1311 = model not included in current subscription plan (#48988)
+    /"code"\s*:\s*1311\b/,
   ],
   authPermanent: [
     /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
@@ -105,6 +107,8 @@ const ERROR_PATTERNS = {
     "no credentials found",
     "no api key found",
     /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
+    // Z.ai: error 1113 = wrong endpoint or invalid credentials (#48988)
+    /"code"\s*:\s*1113\b/,
   ],
   format: [
     "string should match pattern",
