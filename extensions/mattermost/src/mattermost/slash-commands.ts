@@ -14,6 +14,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeJsonAtomic } from "../../../../src/infra/json-files.js";
 import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -51,9 +52,13 @@ export type MattermostRegisteredCommand = {
   managed: boolean;
 };
 
+type PersistedMattermostRegisteredCommand = Omit<MattermostRegisteredCommand, "managed"> & {
+  managed?: boolean;
+};
+
 type PersistedMattermostSlashCommandState = {
   version: 1;
-  commands: MattermostRegisteredCommand[];
+  commands: PersistedMattermostRegisteredCommand[];
 };
 
 const SLASH_COMMAND_STATE_VERSION = 1;
@@ -263,13 +268,43 @@ function isMattermostRegisteredCommand(value: unknown): value is MattermostRegis
   );
 }
 
+function isPersistedMattermostRegisteredCommand(
+  value: unknown,
+): value is PersistedMattermostRegisteredCommand {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.id === "string" &&
+    typeof entry.trigger === "string" &&
+    typeof entry.teamId === "string" &&
+    typeof entry.token === "string" &&
+    typeof entry.callbackUrl === "string" &&
+    (entry.managed === undefined || typeof entry.managed === "boolean")
+  );
+}
+
+function cloneRegisteredCommands(
+  commands: MattermostRegisteredCommand[],
+): MattermostRegisteredCommand[] {
+  return commands.filter(isMattermostRegisteredCommand).map((entry) => ({
+    id: entry.id,
+    trigger: entry.trigger,
+    teamId: entry.teamId,
+    token: entry.token,
+    callbackUrl: entry.callbackUrl,
+    managed: entry.managed,
+  }));
+}
+
 function normalizePersistedCommands(value: unknown): MattermostRegisteredCommand[] {
   if (!Array.isArray(value)) {
     return [];
   }
   const commands: MattermostRegisteredCommand[] = [];
   for (const entry of value) {
-    if (!isMattermostRegisteredCommand(entry)) {
+    if (!isPersistedMattermostRegisteredCommand(entry)) {
       continue;
     }
     commands.push({
@@ -278,10 +313,24 @@ function normalizePersistedCommands(value: unknown): MattermostRegisteredCommand
       teamId: entry.teamId,
       token: entry.token,
       callbackUrl: entry.callbackUrl,
-      managed: entry.managed,
+      // Persisted cache is restart metadata only. Never trust disk state to
+      // decide whether shutdown should remotely delete a command.
+      managed: false,
     });
   }
   return commands;
+}
+
+function serializePersistedCommands(
+  commands: MattermostRegisteredCommand[],
+): PersistedMattermostRegisteredCommand[] {
+  return cloneRegisteredCommands(commands).map((entry) => ({
+    id: entry.id,
+    trigger: entry.trigger,
+    teamId: entry.teamId,
+    token: entry.token,
+    callbackUrl: entry.callbackUrl,
+  }));
 }
 
 function sanitizeAccountId(accountId: string): string {
@@ -329,12 +378,15 @@ export async function savePersistedSlashCommands(
   log?: (msg: string) => void,
 ): Promise<void> {
   try {
-    await fs.mkdir(path.dirname(cachePath), { recursive: true });
     const payload: PersistedMattermostSlashCommandState = {
       version: SLASH_COMMAND_STATE_VERSION,
-      commands: normalizePersistedCommands(commands),
+      commands: serializePersistedCommands(commands),
     };
-    await fs.writeFile(cachePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await writeJsonAtomic(cachePath, payload, {
+      mode: 0o600,
+      trailingNewline: true,
+      ensureDirMode: 0o700,
+    });
   } catch (err) {
     log?.(`mattermost: failed to save slash command cache ${cachePath}: ${String(err)}`);
   }
@@ -368,7 +420,7 @@ export function mergePersistedSlashCommands(params: {
   const preservedCachedCommands = params.cachedCommands.filter(
     (cmd) => !refreshedTeamIds.has(cmd.teamId.trim()),
   );
-  return normalizePersistedCommands([...preservedCachedCommands, ...params.registeredCommands]);
+  return cloneRegisteredCommands([...preservedCachedCommands, ...params.registeredCommands]);
 }
 
 /**
@@ -442,7 +494,10 @@ export async function registerSlashCommands(params: {
         log?.(
           `mattermost: reusing cached command /${spec.trigger} after listing failed (id=${cachedCmd.id})`,
         );
-        registered.push(cachedCmd);
+        registered.push({
+          ...cachedCmd,
+          managed: false,
+        });
         continue;
       }
     }

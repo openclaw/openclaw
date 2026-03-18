@@ -267,7 +267,7 @@ describe("slash-commands", () => {
         teamId: "team-1",
         token: "tok-cached-1",
         callbackUrl: "http://gateway/callback",
-        managed: true,
+        managed: false,
       },
     ]);
     expect(request).toHaveBeenCalledTimes(1);
@@ -479,6 +479,19 @@ describe("slash-commands", () => {
         },
       ]);
 
+      const raw = JSON.parse(await fs.readFile(cachePath, "utf8")) as {
+        commands?: Array<Record<string, unknown>>;
+      };
+      expect(raw.commands).toEqual([
+        {
+          id: "cmd-cache-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-cache-1",
+          callbackUrl: "http://gateway/callback",
+        },
+      ]);
+
       await expect(loadPersistedSlashCommands(cachePath)).resolves.toEqual([
         {
           id: "cmd-cache-1",
@@ -486,12 +499,58 @@ describe("slash-commands", () => {
           teamId: "team-1",
           token: "tok-cache-1",
           callbackUrl: "http://gateway/callback",
-          managed: true,
+          managed: false,
         },
       ]);
 
+      if (process.platform !== "win32") {
+        const dirMode = (await fs.stat(path.dirname(cachePath))).mode & 0o777;
+        const fileMode = (await fs.stat(cachePath)).mode & 0o777;
+        expect(dirMode).toBe(0o700);
+        expect(fileMode).toBe(0o600);
+      }
+
       await removePersistedSlashCommands(cachePath);
       await expect(loadPersistedSlashCommands(cachePath)).resolves.toEqual([]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats persisted managed flags as untrusted cache data", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mm-slash-cache-"));
+    const cachePath = resolveSlashCommandCachePath(stateDir, "default");
+
+    try {
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(
+        cachePath,
+        JSON.stringify({
+          version: 1,
+          commands: [
+            {
+              id: "cmd-cache-1",
+              trigger: "oc_status",
+              teamId: "team-1",
+              token: "tok-cache-1",
+              callbackUrl: "http://gateway/callback",
+              managed: true,
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      await expect(loadPersistedSlashCommands(cachePath)).resolves.toEqual([
+        {
+          id: "cmd-cache-1",
+          trigger: "oc_status",
+          teamId: "team-1",
+          token: "tok-cache-1",
+          callbackUrl: "http://gateway/callback",
+          managed: false,
+        },
+      ]);
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
