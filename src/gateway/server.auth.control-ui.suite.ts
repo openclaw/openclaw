@@ -112,6 +112,12 @@ export function registerControlUiAndPairingSuite(): void {
     expect(talk.error?.message).toBe("missing scope: operator.read");
   };
 
+  const expectDevicePairApproveDenied = async (ws: WebSocket, requestId: string) => {
+    const approve = await rpcReq(ws, "device.pair.approve", { requestId });
+    expect(approve.ok).toBe(false);
+    expect(approve.error?.message).toBe("missing scope: operator.admin");
+  };
+
   const connectControlUiWithoutDeviceAndExpectOk = async (params: {
     ws: WebSocket;
     token?: string;
@@ -244,6 +250,17 @@ export function registerControlUiAndPairingSuite(): void {
 
   test("clears self-declared scopes for trusted-proxy control ui without device identity", async () => {
     await configureTrustedProxyControlUiAuth();
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { requestDevicePairing } = await import("../infra/device-pairing.js");
+    const { identity } = await createOperatorIdentityFixture("openclaw-control-ui-trusted-proxy-");
+    const pendingRequest = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      role: "operator",
+      scopes: ["operator.admin"],
+      clientId: CONTROL_UI_CLIENT.id,
+      clientMode: CONTROL_UI_CLIENT.mode,
+    });
     await withGatewayServer(async ({ port }) => {
       const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
       try {
@@ -259,6 +276,7 @@ export function registerControlUiAndPairingSuite(): void {
         await expectStatusMissingScopeButHealthOk(ws);
         await expectAdminRpcDenied(ws);
         await expectTalkSecretsDenied(ws);
+        await expectDevicePairApproveDenied(ws, pendingRequest.request.requestId);
       } finally {
         ws.close();
       }
