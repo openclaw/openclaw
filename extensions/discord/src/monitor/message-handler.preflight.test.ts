@@ -1,5 +1,9 @@
 import { ChannelType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../../src/config/config.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
@@ -255,7 +259,9 @@ describe("resolvePreflightMentionRequirement", () => {
 
 describe("preflightDiscordMessage", () => {
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    threadBindingTesting.resetThreadBindingsForTests();
     transcribeFirstAudioMock.mockReset();
   });
 
@@ -422,6 +428,233 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
     expect(result?.shouldRequireMention).toBe(false);
+  });
+
+  it("drops thread messages for non-owning Discord accounts when another bot owns the binding", async () => {
+    const threadId = "thread-foreign-owner-1";
+    const parentId = "channel-parent-foreign-owner-1";
+    const message = createMessage({
+      id: "m-foreign-owner-1",
+      channelId: threadId,
+      content: "tables don't render in Discord, reformat",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const foreignManager = createThreadBindingManager({
+      accountId: "atlas",
+      persist: false,
+      enableSweeper: false,
+    });
+    await foreignManager.bindTarget({
+      threadId,
+      channelId: parentId,
+      targetKind: "subagent",
+      targetSessionKey: "agent:soren:subagent:child-1",
+      agentId: "soren",
+      webhookId: "wh-foreign-1",
+      webhookToken: "tok-foreign-1",
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createThreadClient({ threadId, parentId }),
+      }),
+      accountId: "soren",
+      threadBindings: createNoopThreadBindingManager("soren"),
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("ignores stale foreign bindings when the owning Discord account is not configured", async () => {
+    const threadId = "thread-stale-foreign-owner-1";
+    const parentId = "channel-parent-stale-foreign-owner-1";
+    const message = createMessage({
+      id: "m-stale-foreign-owner-1",
+      channelId: threadId,
+      content: "hi <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const foreignManager = createThreadBindingManager({
+      accountId: "atlas",
+      persist: false,
+      enableSweeper: false,
+    });
+    await foreignManager.bindTarget({
+      threadId,
+      channelId: parentId,
+      targetKind: "subagent",
+      targetSessionKey: "agent:soren:subagent:child-1",
+      agentId: "soren",
+      webhookId: "wh-stale-foreign-1",
+      webhookToken: "tok-stale-foreign-1",
+    });
+    foreignManager.stop();
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createThreadClient({ threadId, parentId }),
+      }),
+      accountId: "soren",
+      threadBindings: createNoopThreadBindingManager("soren"),
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.boundSessionKey).toBeUndefined();
+  });
+
+  it("ignores stale foreign bindings when only root Discord thread bindings are configured", async () => {
+    const threadId = "thread-root-stale-foreign-owner-1";
+    const parentId = "channel-parent-root-stale-foreign-owner-1";
+    const message = createMessage({
+      id: "m-root-stale-foreign-owner-1",
+      channelId: threadId,
+      content: "hi <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const foreignManager = createThreadBindingManager({
+      accountId: "atlas",
+      persist: false,
+      enableSweeper: false,
+    });
+    await foreignManager.bindTarget({
+      threadId,
+      channelId: parentId,
+      targetKind: "subagent",
+      targetSessionKey: "agent:soren:subagent:child-1",
+      agentId: "soren",
+      webhookId: "wh-root-stale-foreign-1",
+      webhookToken: "tok-root-stale-foreign-1",
+    });
+    foreignManager.stop();
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: {
+          ...DEFAULT_CFG,
+          channels: {
+            discord: {
+              threadBindings: {
+                enabled: true,
+              },
+            },
+          },
+        },
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createThreadClient({ threadId, parentId }),
+      }),
+      accountId: "soren",
+      threadBindings: createNoopThreadBindingManager("soren"),
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.boundSessionKey).toBeUndefined();
+  });
+
+  it("uses the preflight config instead of the runtime snapshot for foreign-owner suppression", async () => {
+    const threadId = "thread-runtime-snapshot-foreign-owner-1";
+    const parentId = "channel-parent-runtime-snapshot-foreign-owner-1";
+    const message = createMessage({
+      id: "m-runtime-snapshot-foreign-owner-1",
+      channelId: threadId,
+      content: "hi <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    setRuntimeConfigSnapshot({
+      ...DEFAULT_CFG,
+      channels: {
+        discord: {
+          accounts: {
+            atlas: {
+              enabled: true,
+              token: "discord-token-atlas",
+              threadBindings: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const foreignManager = createThreadBindingManager({
+      accountId: "atlas",
+      persist: false,
+      enableSweeper: false,
+    });
+    await foreignManager.bindTarget({
+      threadId,
+      channelId: parentId,
+      targetKind: "subagent",
+      targetSessionKey: "agent:soren:subagent:child-1",
+      agentId: "soren",
+      webhookId: "wh-runtime-snapshot-foreign-1",
+      webhookToken: "tok-runtime-snapshot-foreign-1",
+    });
+    foreignManager.stop();
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+        }),
+        client: createThreadClient({ threadId, parentId }),
+      }),
+      accountId: "soren",
+      threadBindings: createNoopThreadBindingManager("soren"),
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.boundSessionKey).toBeUndefined();
   });
 
   it("drops bot messages without mention when allowBots=mentions", async () => {

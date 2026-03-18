@@ -12,6 +12,7 @@ import {
   normalizeAccountId,
   resolveAgentIdFromSessionKey,
 } from "../../../../src/routing/session-key.js";
+import { listEnabledDiscordAccounts } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import {
   createThreadForBinding,
@@ -89,6 +90,34 @@ function resolveEffectiveBindingExpiresAt(params: {
     return Math.min(inactivityExpiresAt, maxAgeExpiresAt);
   }
   return inactivityExpiresAt ?? maxAgeExpiresAt;
+}
+
+function isActiveThreadBindingRecord(
+  record: ThreadBindingRecord,
+  manager?: Pick<ThreadBindingManager, "getIdleTimeoutMs" | "getMaxAgeMs"> | null,
+): boolean {
+  const defaultIdleTimeoutMs =
+    manager?.getIdleTimeoutMs() ?? DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS;
+  const defaultMaxAgeMs = manager?.getMaxAgeMs() ?? DEFAULT_THREAD_BINDING_MAX_AGE_MS;
+  const expiresAt = resolveEffectiveBindingExpiresAt({
+    record,
+    defaultIdleTimeoutMs,
+    defaultMaxAgeMs,
+  });
+  return expiresAt == null || Date.now() < expiresAt;
+}
+
+function isConfiguredDiscordThreadBindingAccount(
+  cfg: OpenClawConfig | null | undefined,
+  accountId: string,
+): boolean {
+  if (!cfg?.channels?.discord) {
+    return false;
+  }
+  const normalizedAccountId = normalizeAccountId(accountId);
+  return listEnabledDiscordAccounts(cfg).some(
+    (account) => account.accountId === normalizedAccountId,
+  );
 }
 
 function createNoopManager(accountIdRaw?: string): ThreadBindingManager {
@@ -682,6 +711,42 @@ export function createThreadBindingManager(
 
 export function createNoopThreadBindingManager(accountId?: string): ThreadBindingManager {
   return createNoopManager(accountId);
+}
+
+export function findActiveThreadBindingByThreadId(params: {
+  cfg?: OpenClawConfig | null;
+  threadId: string;
+  accountId?: string;
+  excludeAccountId?: string;
+}): ThreadBindingRecord | null {
+  const threadId = normalizeThreadId(params.threadId);
+  if (!threadId) {
+    return null;
+  }
+  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  const excludeAccountId = params.excludeAccountId
+    ? normalizeAccountId(params.excludeAccountId)
+    : undefined;
+  for (const record of BINDINGS_BY_THREAD_ID.values()) {
+    if (record.threadId !== threadId) {
+      continue;
+    }
+    if (accountId && record.accountId !== accountId) {
+      continue;
+    }
+    if (excludeAccountId && record.accountId === excludeAccountId) {
+      continue;
+    }
+    const manager = MANAGERS_BY_ACCOUNT_ID.get(record.accountId);
+    if (!manager && !isConfiguredDiscordThreadBindingAccount(params.cfg, record.accountId)) {
+      continue;
+    }
+    if (!isActiveThreadBindingRecord(record, manager)) {
+      continue;
+    }
+    return record;
+  }
+  return null;
 }
 
 export function getThreadBindingManager(accountId?: string): ThreadBindingManager | null {

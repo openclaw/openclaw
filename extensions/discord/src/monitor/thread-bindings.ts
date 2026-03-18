@@ -44,5 +44,6 @@ export {
   __testing,
   createNoopThreadBindingManager,
   createThreadBindingManager,
+  findActiveThreadBindingByThreadId,
   getThreadBindingManager,
 } from "./thread-bindings.manager.js";

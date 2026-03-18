@@ -67,7 +67,10 @@ import {
 } from "./route-resolution.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import { resolveDiscordSystemEvent } from "./system-events.js";
-import { isRecentlyUnboundThreadWebhookMessage } from "./thread-bindings.js";
+import {
+  findActiveThreadBindingByThreadId,
+  isRecentlyUnboundThreadWebhookMessage,
+} from "./thread-bindings.js";
 import { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } from "./threading.js";
 
 export type {
@@ -360,6 +363,19 @@ export async function preflightDiscordMessage(
       conversationId: bindingConversationId,
       parentConversationId: earlyThreadParentId,
     }) ?? undefined;
+  if (!threadBinding && earlyThreadChannel) {
+    const foreignBinding = findActiveThreadBindingByThreadId({
+      cfg: params.cfg,
+      threadId: messageChannelId,
+      excludeAccountId: params.accountId,
+    });
+    if (foreignBinding) {
+      logVerbose(
+        `discord: drop thread message ${message.id} (thread owned by discord account ${foreignBinding.accountId} target=${foreignBinding.targetSessionKey})`,
+      );
+      return null;
+    }
+  }
   const configuredRoute =
     threadBinding == null
       ? resolveConfiguredAcpRoute({
