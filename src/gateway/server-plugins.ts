@@ -330,6 +330,9 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(allowOverride && params.model && { model: params.model }),
           ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
           ...(params.lane && { lane: params.lane }),
+          ...(params.clientTools && { clientTools: params.clientTools }),
+          ...(params.disableTools === true && { disableTools: true }),
+          ...(params.streamParams && { streamParams: params.streamParams }),
           ...(params.idempotencyKey && { idempotencyKey: params.idempotencyKey }),
         },
         {
@@ -343,13 +346,19 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return { runId };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethod<{ status?: string; error?: string }>(
-        "agent.wait",
-        {
-          runId: params.runId,
-          ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
-        },
-      );
+      const payload = await dispatchGatewayMethod<{
+        status?: string;
+        error?: string;
+        stopReason?: string;
+        pendingToolCalls?: Array<{
+          id: string;
+          name: string;
+          arguments: string;
+        }>;
+      }>("agent.wait", {
+        runId: params.runId,
+        ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
+      });
       const status = payload?.status;
       if (status !== "ok" && status !== "error" && status !== "timeout") {
         throw new Error(`Gateway agent.wait returned unexpected status: ${status}`);
@@ -357,6 +366,11 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return {
         status,
         ...(typeof payload?.error === "string" && payload.error && { error: payload.error }),
+        ...(typeof payload?.stopReason === "string" &&
+          payload.stopReason && { stopReason: payload.stopReason }),
+        ...(Array.isArray(payload?.pendingToolCalls) && payload.pendingToolCalls.length > 0
+          ? { pendingToolCalls: payload.pendingToolCalls }
+          : {}),
       };
     },
     getSessionMessages,

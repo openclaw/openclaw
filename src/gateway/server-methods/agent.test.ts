@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
   performGatewaySessionReset: vi.fn(),
+  waitForAgentJob: vi.fn(),
+  readTerminalSnapshotFromGatewayDedupe: vi.fn(),
+  waitForTerminalGatewayDedupe: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
@@ -67,6 +70,17 @@ vi.mock("../session-reset-service.js", () => ({
     (mocks.performGatewaySessionReset as (...args: unknown[]) => unknown)(...args),
 }));
 
+vi.mock("./agent-job.js", () => ({
+  waitForAgentJob: (...args: unknown[]) => mocks.waitForAgentJob(...args),
+}));
+
+vi.mock("./agent-wait-dedupe.js", () => ({
+  readTerminalSnapshotFromGatewayDedupe: (...args: unknown[]) =>
+    mocks.readTerminalSnapshotFromGatewayDedupe(...args),
+  setGatewayDedupeEntry: vi.fn(),
+  waitForTerminalGatewayDedupe: (...args: unknown[]) => mocks.waitForTerminalGatewayDedupe(...args),
+}));
+
 vi.mock("../../sessions/send-policy.js", () => ({
   resolveSendPolicy: () => "allow",
 }));
@@ -93,6 +107,16 @@ type AgentParams = AgentHandlerArgs["params"];
 
 type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
+
+beforeEach(() => {
+  mocks.waitForAgentJob.mockReset();
+  mocks.waitForAgentJob.mockResolvedValue(null);
+  mocks.readTerminalSnapshotFromGatewayDedupe.mockReset();
+  mocks.readTerminalSnapshotFromGatewayDedupe.mockReturnValue(null);
+  mocks.waitForTerminalGatewayDedupe.mockReset();
+  mocks.waitForTerminalGatewayDedupe.mockResolvedValue(null);
+  mocks.loadConfigReturn = {};
+});
 
 function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string, unknown> = {}) {
   mocks.loadSessionEntry.mockReturnValue({
@@ -506,6 +530,64 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
+  it("forwards structured subagent options to agentCommandFromIngress", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "structured helper run",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        disableTools: true,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "emit_structured_result",
+              description: "Return a structured result payload.",
+              parameters: {
+                type: "object",
+                properties: {
+                  entries: { type: "array" },
+                },
+              },
+            },
+          },
+        ],
+        streamParams: {
+          toolChoice: {
+            type: "function",
+            function: {
+              name: "emit_structured_result",
+            },
+          },
+        },
+        idempotencyKey: "test-structured-helper",
+      } as AgentParams,
+      { reqId: "structured-helper-1" },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(callArgs.disableTools).toBe(true);
+    expect(callArgs.clientTools).toEqual([
+      {
+        type: "function",
+        function: expect.objectContaining({
+          name: "emit_structured_result",
+        }),
+      },
+    ]);
+    expect(callArgs.streamParams).toEqual({
+      toolChoice: {
+        type: "function",
+        function: {
+          name: "emit_structured_result",
+        },
+      },
+    });
+  });
+
   it("rejects public spawned-run metadata fields", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
@@ -749,5 +831,207 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("malformed session key"),
       }),
     );
+  });
+
+  it("returns structured fields for cached agent.wait snapshots", async () => {
+    const respond = vi.fn();
+    const context = makeContext();
+    context.chatAbortControllers = new Map();
+    mocks.readTerminalSnapshotFromGatewayDedupe.mockReturnValue({
+      status: "ok",
+      startedAt: 10,
+      endedAt: 20,
+      stopReason: "tool_calls",
+      pendingToolCalls: [
+        {
+          id: "call-1",
+          name: "emit_structured_result",
+          arguments: '{"entries":[]}',
+        },
+      ],
+    });
+
+    await agentHandlers["agent.wait"]({
+      params: { runId: "wait-cached", timeoutMs: 100 },
+      respond,
+      context,
+    } as unknown as Parameters<(typeof agentHandlers)["agent.wait"]>[0]);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "wait-cached",
+        status: "ok",
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call-1",
+            name: "emit_structured_result",
+            arguments: '{"entries":[]}',
+          },
+        ],
+      }),
+    );
+  });
+
+  it("merges structured fields from dedupe when lifecycle resolves first", async () => {
+    const respond = vi.fn();
+    const context = makeContext();
+    context.chatAbortControllers = new Map();
+    mocks.waitForAgentJob.mockResolvedValue({
+      status: "ok",
+      startedAt: 10,
+      endedAt: 20,
+    });
+    mocks.waitForTerminalGatewayDedupe.mockImplementation(async () => {
+      await Promise.resolve();
+      return {
+        status: "ok",
+        startedAt: 10,
+        endedAt: 20,
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call-1",
+            name: "emit_structured_result",
+            arguments: '{"entries":[]}',
+          },
+        ],
+      };
+    });
+
+    await agentHandlers["agent.wait"]({
+      params: { runId: "wait-live", timeoutMs: 100 },
+      respond,
+      context,
+    } as unknown as Parameters<(typeof agentHandlers)["agent.wait"]>[0]);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "wait-live",
+        status: "ok",
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          {
+            id: "call-1",
+            name: "emit_structured_result",
+            arguments: '{"entries":[]}',
+          },
+        ],
+      }),
+    );
+  });
+
+  it("does not grace-wait when lifecycle resolves without tool calls", async () => {
+    vi.useFakeTimers();
+    try {
+      const respond = vi.fn();
+      const context = makeContext();
+      context.chatAbortControllers = new Map([
+        [
+          "wait-no-tools",
+          {
+            controller: new AbortController(),
+            sessionKey: "agent:main:main",
+            sessionId: "test-session",
+            startedAtMs: Date.now(),
+            expiresAtMs: Date.now() + 60_000,
+          },
+        ],
+      ]);
+      mocks.waitForAgentJob.mockResolvedValue({
+        status: "ok",
+        startedAt: 10,
+        endedAt: 20,
+        stopReason: "stop",
+      });
+      mocks.waitForTerminalGatewayDedupe.mockImplementation(
+        () =>
+          new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), 1_000);
+          }),
+      );
+
+      const waitPromise = agentHandlers["agent.wait"]({
+        params: { runId: "wait-no-tools", timeoutMs: 100 },
+        respond,
+        context,
+      } as unknown as Parameters<(typeof agentHandlers)["agent.wait"]>[0]);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: "wait-no-tools",
+          status: "ok",
+          stopReason: "stop",
+          pendingToolCalls: undefined,
+        }),
+      );
+      expect(mocks.waitForTerminalGatewayDedupe).toHaveBeenCalledTimes(1);
+
+      await vi.runAllTimersAsync();
+      await waitPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not grace-wait for errors when lifecycle metadata omits stopReason", async () => {
+    vi.useFakeTimers();
+    try {
+      const respond = vi.fn();
+      const context = makeContext();
+      context.chatAbortControllers = new Map([
+        [
+          "wait-no-stop-reason",
+          {
+            controller: new AbortController(),
+            sessionKey: "agent:main:main",
+            sessionId: "test-session",
+            startedAtMs: Date.now(),
+            expiresAtMs: Date.now() + 60_000,
+          },
+        ],
+      ]);
+      mocks.waitForAgentJob.mockResolvedValue({
+        status: "error",
+        startedAt: 10,
+        endedAt: 20,
+        error: "boom",
+      });
+      mocks.waitForTerminalGatewayDedupe.mockImplementation(
+        () =>
+          new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), 1_000);
+          }),
+      );
+
+      const waitPromise = agentHandlers["agent.wait"]({
+        params: { runId: "wait-no-stop-reason", timeoutMs: 100 },
+        respond,
+        context,
+      } as unknown as Parameters<(typeof agentHandlers)["agent.wait"]>[0]);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: "wait-no-stop-reason",
+          status: "error",
+          error: "boom",
+          stopReason: undefined,
+          pendingToolCalls: undefined,
+        }),
+      );
+
+      await vi.runAllTimersAsync();
+      await waitPromise;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
