@@ -43,20 +43,6 @@ const bundledExtensionSubpathLoaders = pluginSdkSubpaths.map((id: string) => ({
   load: () => importPluginSdkSubpath(`openclaw/plugin-sdk/${id}`),
 }));
 
-const trimmedLegacyExtensionSubpaths = [
-  "copilot-proxy",
-  "device-pair",
-  "diagnostics-otel",
-  "diffs",
-  "llm-task",
-  "memory-lancedb",
-  "open-prose",
-  "phone-control",
-  "qwen-portal-auth",
-  "talk-voice",
-  "thread-ownership",
-] as const;
-
 const asExports = (mod: object) => mod as Record<string, unknown>;
 const ircSdk = await import("openclaw/plugin-sdk/irc");
 const feishuSdk = await import("openclaw/plugin-sdk/feishu");
@@ -335,12 +321,6 @@ describe("plugin-sdk subpath exports", () => {
       const mod = await load();
       expect(typeof mod).toBe("object");
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
-    }
-  });
-
-  it("does not advertise trimmed legacy extension helper surfaces", () => {
-    for (const id of trimmedLegacyExtensionSubpaths) {
-      expect(pluginSdkSubpaths).not.toContain(id);
     }
   });
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -8,11 +8,7 @@ type DeliveryTargetModule = typeof import("./isolated-agent/delivery-target.js")
 
 let resolveDeliveryTarget: DeliveryTargetModule["resolveDeliveryTarget"];
 
-beforeEach(async () => {
-  vi.resetModules();
-  for (const key of Object.keys(mockStore)) {
-    delete mockStore[key];
-  }
+beforeAll(async () => {
   vi.doMock("../config/sessions.js", () => ({
     loadSessionStore: vi.fn((storePath: string) => mockStore[storePath] ?? {}),
     resolveAgentMainSessionKey: vi.fn(
@@ -45,6 +41,13 @@ beforeEach(async () => {
     normalizeChannelId: vi.fn((id: string) => id),
   }));
   ({ resolveDeliveryTarget } = await import("./isolated-agent/delivery-target.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  for (const key of Object.keys(mockStore)) {
+    delete mockStore[key];
+  }
 });
 
 describe("resolveDeliveryTarget thread session lookup", () => {

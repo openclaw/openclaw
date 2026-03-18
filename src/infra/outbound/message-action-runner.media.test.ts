@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -94,13 +94,16 @@ function installSlackRuntime() {
 }
 
 describe("runMessageAction media behavior", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ runMessageAction } = await import("./message-action-runner.js"));
     ({ loadWebMedia } = await import("../../../extensions/whatsapp/src/media.js"));
     ({ slackPlugin } = await import("../../../extensions/slack/src/channel.js"));
     ({ createPluginRuntime } = await import("../../plugins/runtime/index.js"));
     ({ setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   describe("sendAttachment hydration", () => {

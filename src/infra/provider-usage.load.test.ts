@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
@@ -10,7 +10,18 @@ import {
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 
+const resolveProviderUsageSnapshotWithPlugin = vi.hoisted(() => vi.fn(async () => null));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveProviderUsageSnapshotWithPlugin,
+}));
+
 describe("provider-usage.load", () => {
+  beforeEach(() => {
+    resolveProviderUsageSnapshotWithPlugin.mockReset();
+    resolveProviderUsageSnapshotWithPlugin.mockResolvedValue(null);
+  });
+
   it("loads snapshots for copilot gemini codex and xiaomi", async () => {
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.github.com/copilot_internal/user")) {

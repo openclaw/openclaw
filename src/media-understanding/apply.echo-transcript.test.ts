@@ -5,6 +5,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -162,6 +163,37 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
       deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
     }));
+    vi.doMock("./providers/index.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./providers/index.js")>();
+      const { deepgramProvider } = await import("./providers/deepgram/index.js");
+      const { groqProvider } = await import("./providers/groq/index.js");
+      return {
+        ...actual,
+        buildMediaUnderstandingRegistry: (
+          overrides?: Record<string, MediaUnderstandingProvider>,
+        ) => {
+          const registry = new Map<string, MediaUnderstandingProvider>([
+            ["groq", groqProvider],
+            ["deepgram", deepgramProvider],
+          ]);
+          for (const [key, provider] of Object.entries(overrides ?? {})) {
+            const normalizedKey = actual.normalizeMediaProviderId(key);
+            const existing = registry.get(normalizedKey);
+            registry.set(
+              normalizedKey,
+              existing
+                ? {
+                    ...existing,
+                    ...provider,
+                    capabilities: provider.capabilities ?? existing.capabilities,
+                  }
+                : provider,
+            );
+          }
+          return registry;
+        },
+      };
+    });
 
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });

@@ -1,11 +1,9 @@
-import { beforeEach, describe, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, it, vi } from "vitest";
 import {
   expectAugmentedCodexCatalog,
   expectCodexBuiltInSuppression,
   expectCodexMissingAuthHint,
 } from "../provider-runtime.test-support.js";
-
-const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
 type ResolvePluginProviders = typeof import("../providers.js").resolvePluginProviders;
 type ResolveOwningPluginIdsForProvider =
@@ -40,19 +38,23 @@ let resolveProviderContractProvidersForPluginIds: typeof import("./registry.js")
 let uniqueProviderContractProviders: typeof import("./registry.js").uniqueProviderContractProviders;
 
 describe("provider catalog contract", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    const actualProviders =
-      await vi.importActual<typeof import("../providers.js")>("../providers.js");
-    resolvePluginProvidersMock.mockReset();
-    resolvePluginProvidersMock.mockImplementation((params) =>
-      actualProviders.resolvePluginProviders(params as never),
-    );
+  beforeAll(async () => {
     ({
       resolveProviderContractPluginIdsForProvider,
       resolveProviderContractProvidersForPluginIds,
       uniqueProviderContractProviders,
     } = await import("./registry.js"));
+    ({
+      augmentModelCatalogWithProviderPlugins,
+      buildProviderMissingAuthMessageWithPlugin,
+      resetProviderRuntimeHookCacheForTest,
+      resolveProviderBuiltInModelSuppression,
+    } = await import("../provider-runtime.js"));
+  });
+
+  beforeEach(() => {
+    resetProviderRuntimeHookCacheForTest();
+
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) => {
       const onlyPluginIds = params?.onlyPluginIds;
@@ -61,14 +63,6 @@ describe("provider catalog contract", () => {
       }
       return resolveProviderContractProvidersForPluginIds(onlyPluginIds);
     });
-    ({
-      augmentModelCatalogWithProviderPlugins,
-      buildProviderMissingAuthMessageWithPlugin,
-      resetProviderRuntimeHookCacheForTest,
-      resolveProviderBuiltInModelSuppression,
-    } = await import("../provider-runtime.js"));
-    resetProviderRuntimeHookCacheForTest();
-  }, CONTRACT_SETUP_TIMEOUT_MS);
 
     resolveOwningPluginIdsForProviderMock.mockReset();
     resolveOwningPluginIdsForProviderMock.mockImplementation((params) =>
@@ -77,7 +71,7 @@ describe("provider catalog contract", () => {
 
     resolveNonBundledProviderPluginIdsMock.mockReset();
     resolveNonBundledProviderPluginIdsMock.mockReturnValue([]);
-  }, CONTRACT_SETUP_TIMEOUT_MS);
+  });
 
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {
     expectCodexMissingAuthHint(buildProviderMissingAuthMessageWithPlugin);

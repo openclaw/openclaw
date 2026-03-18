@@ -7,6 +7,7 @@ const mockedLogger = vi.hoisted(() => ({
   warn: vi.fn<(msg: string) => void>(),
   error: vi.fn<(msg: string) => void>(),
   debug: vi.fn<(msg: string) => void>(),
+  child: vi.fn(() => mockedLogger),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({

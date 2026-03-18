@@ -274,14 +274,16 @@ function resolveDuplicatePrecedenceRank(params: {
   return 4;
 }
 
-export function loadPluginManifestRegistry(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  cache?: boolean;
-  env?: NodeJS.ProcessEnv;
-  candidates?: PluginCandidate[];
-  diagnostics?: PluginDiagnostic[];
-}): PluginManifestRegistry {
+export function loadPluginManifestRegistry(
+  params: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    cache?: boolean;
+    env?: NodeJS.ProcessEnv;
+    candidates?: PluginCandidate[];
+    diagnostics?: PluginDiagnostic[];
+  } = {},
+): PluginManifestRegistry {
   const config = params.config ?? {};
   const normalized = normalizePluginsConfig(config.plugins);
   const env = params.env ?? process.env;
