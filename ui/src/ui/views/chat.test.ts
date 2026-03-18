@@ -876,6 +876,120 @@ describe("chat view", () => {
     expect(labels).not.toContain("Subagent:");
   });
 
+  it("resolves bare server model against catalog when modelProvider is missing", () => {
+    const { state } = createChatHeaderState();
+    // Simulate server returning model without provider (e.g. set via /model in another channel)
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: null,
+          modelProvider: undefined,
+          model: "gpt-5-mini",
+        },
+      ],
+    };
+    state.chatModelOverrides = {};
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    expect(modelSelect).not.toBeNull();
+    // Should resolve to "openai/gpt-5-mini" via catalog, not fall through to default
+    expect(modelSelect?.value).toBe("openai/gpt-5-mini");
+
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    // Bare value must not appear as its own option
+    expect(optionValues).not.toContain("gpt-5-mini");
+  });
+
+  it("updates chatModelOverrides cache from sessions.patch resolved response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false } satisfies Partial<Response>));
+    const catalog: ModelCatalogEntry[] = [
+      { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro", provider: "google" },
+    ];
+    const { state, request } = createChatHeaderState({ models: catalog });
+    // Override request to return a resolved block
+    request.mockImplementation(async (method: string, _params: Record<string, unknown>) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: { modelProvider: "google", model: "gemini-3.1-pro" },
+        };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "main",
+              kind: "direct",
+              updatedAt: null,
+              modelProvider: "google",
+              model: "gemini-3.1-pro",
+            },
+          ],
+        };
+      }
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "models.list") {
+        return { models: catalog };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    modelSelect!.value = "google/gemini-3.1-pro";
+    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    // Cache should now reflect the server's authoritative resolved value
+    const override = state.chatModelOverrides["main"];
+    expect(override).not.toBeNull();
+    expect(override?.value).toBe("google/gemini-3.1-pro");
+    vi.unstubAllGlobals();
+  });
+
+  it("does not add bare-only option when catalog resolves the model", () => {
+    const { state } = createChatHeaderState();
+    // Current override is a bare model name (e.g. loaded from old state)
+    state.chatModelOverrides = { main: { kind: "raw", value: "gpt-5-mini" } };
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-model-select="true"]',
+    );
+    const optionValues = Array.from(modelSelect?.querySelectorAll("option") ?? []).map(
+      (option) => option.value,
+    );
+    // Bare name must not appear; only the qualified form should be present
+    expect(optionValues).not.toContain("gpt-5-mini");
+    expect(optionValues).toContain("openai/gpt-5-mini");
+  });
+
   it("disambiguates duplicate grouped labels with the scoped key suffix", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";

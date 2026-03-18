@@ -19,7 +19,7 @@ import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
-import type { ModelCatalogEntry, SessionsListResult } from "./types.ts";
+import type { ModelCatalogEntry, SessionsListResult, SessionsPatchResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -539,7 +539,16 @@ function resolveModelOverrideValue(state: AppViewState): string {
   // Include provider prefix so the value matches option keys (provider/model).
   const activeRow = resolveActiveSessionRow(state);
   if (activeRow && typeof activeRow.model === "string" && activeRow.model.trim()) {
-    return resolveServerChatModelValue(activeRow.model, activeRow.modelProvider);
+    const serverValue = resolveServerChatModelValue(activeRow.model, activeRow.modelProvider);
+    // When server data lacks a provider, normalize against the catalog
+    // so the value matches a "provider/model" dropdown option.
+    if (serverValue && !serverValue.includes("/")) {
+      return normalizeChatModelOverrideValue(
+        { kind: "raw", value: serverValue },
+        state.chatModelCatalog ?? [],
+      );
+    }
+    return serverValue;
   }
   return "";
 }
@@ -575,10 +584,16 @@ function buildChatModelOptions(
   }
 
   if (currentOverride) {
-    addOption(currentOverride);
+    const normalizedCurrent = currentOverride.includes("/")
+      ? currentOverride
+      : normalizeChatModelOverrideValue({ kind: "raw", value: currentOverride }, catalog);
+    addOption(normalizedCurrent || currentOverride);
   }
   if (defaultModel) {
-    addOption(defaultModel);
+    const normalizedDefault = defaultModel.includes("/")
+      ? defaultModel
+      : normalizeChatModelOverrideValue({ kind: "raw", value: defaultModel }, catalog);
+    addOption(normalizedDefault || defaultModel);
   }
   return options;
 }
@@ -639,10 +654,23 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
   try {
-    await state.client.request("sessions.patch", {
+    const patched = await state.client.request<SessionsPatchResult>("sessions.patch", {
       key: targetSessionKey,
       model: nextModel || null,
     });
+    // Update the local cache with the server's authoritative resolved value.
+    if (patched?.resolved) {
+      const resolvedValue = resolveServerChatModelValue(
+        patched.resolved.model,
+        patched.resolved.modelProvider,
+      );
+      if (resolvedValue) {
+        state.chatModelOverrides = {
+          ...state.chatModelOverrides,
+          [targetSessionKey]: createChatModelOverride(resolvedValue),
+        };
+      }
+    }
     await refreshSessionOptions(state);
   } catch (err) {
     // Roll back so the picker reflects the actual server model.
