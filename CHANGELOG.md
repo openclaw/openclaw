@@ -303,7 +303,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/WS handshake: raise the default pre-auth handshake timeout to 10 seconds and add `OPENCLAW_HANDSHAKE_TIMEOUT_MS` as a runtime override so busy local gateways stop dropping healthy CLI connections at 3 seconds. (#49262) Thanks @fuller-stack-dev.
 - Gateway/websocket pairing bypass for disabled auth: skip device-pairing enforcement for Control UI operator sessions when `gateway.auth.mode=none`, so reverse-proxied dashboards no longer get stuck on `pairing required` despite auth being explicitly disabled. (#47148) Thanks @ademczuk.
 - Agents/usage tracking: stop forcing `supportsUsageInStreaming: false` on non-native OpenAI-completions providers so compatible backends report token usage and cost again instead of showing all zeros. (#46500) Fixes #46142. Thanks @ademczuk.
-- Slack/embedded delivery: suppress transcript-only `delivery-mirror` assistant messages before embedded re-delivery and raise the default Slack chunk fallback so messages just over 4000 characters stay in a single post. (#45489) Thanks @theo674.
 - ACP/acpx: keep plugin-local backend installs under `extensions/acpx` in live repo checkouts so rebuilds no longer delete the runtime binary, and avoid package-lock churn during runtime repair.
 - Agents/compaction: rerun transcript repair after `session.compact()` so orphaned `tool_result` blocks cannot survive compaction and break later Anthropic requests. (#16095) thanks @claw-sylphx.
 - Agents/compaction: trigger overflow recovery from the tool-result guard once post-compaction context still exceeds the safe threshold, so long tool loops compact before the next model call hard-fails. (#29371) thanks @keshav55.
@@ -372,6 +371,8 @@ Docs: https://docs.openclaw.ai
 - Memory/core tools: register `memory_search` and `memory_get` independently so one unavailable memory tool no longer suppresses the other in new sessions. (#50198) Thanks @artwalker.
 - Telegram/Mattermost message tool: keep plugin button schemas optional in isolated and cron sessions so plain sends do not fail validation when no current channel is active. (#52589) Thanks @tylerliu612.
 - Release/npm publish: fail the npm release check when `dist/control-ui/index.html` is missing from the packed tarball, so broken Control UI asset releases are blocked before publish. Fixes #52808. (#52852) Thanks @kevinheinrichs.
+- Slack/embedded delivery: suppress transcript-only `delivery-mirror` assistant messages before embedded re-delivery and raise the default Slack chunk fallback so messages just over 4000 characters stay in a single post. (#45489) Thanks @theo674.
+- Slack/embedded delivery: suppress transcript-only `delivery-mirror` assistant messages before embedded re-delivery and raise the default Slack chunk fallback so messages just over 4000 characters stay in a single post. (#45489) Thanks @theo674.
 
 ## 2026.3.13
 
