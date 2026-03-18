@@ -161,14 +161,16 @@ async function waitForOpenAiBatch(params: {
   initial?: OpenAiBatchStatus;
 }): Promise<BatchCompletionResult> {
   const start = Date.now();
+  const deadline = start + params.timeoutMs;
   let current: OpenAiBatchStatus | undefined = params.initial;
   while (true) {
+    const remainingMs = Math.max(1, deadline - Date.now());
     const status =
       current ??
       (await fetchOpenAiBatchStatus({
         openAi: params.openAi,
         batchId: params.batchId,
-        timeoutMs: params.timeoutMs,
+        timeoutMs: remainingMs,
       }));
     const state = status.status ?? "unknown";
     if (state === "completed") {
@@ -185,13 +187,13 @@ async function waitForOpenAiBatch(params: {
         await readOpenAiBatchError({
           openAi: params.openAi,
           errorFileId,
-          timeoutMs: params.timeoutMs,
+          timeoutMs: remainingMs,
         }),
     });
     if (!params.wait) {
       throw new Error(`openai batch ${params.batchId} still ${state}; wait disabled`);
     }
-    if (Date.now() - start > params.timeoutMs) {
+    if (Date.now() >= deadline) {
       throw new Error(`openai batch ${params.batchId} timed out after ${params.timeoutMs}ms`);
     }
     params.debug?.(`openai batch ${params.batchId} ${state}; waiting ${params.pollIntervalMs}ms`);

@@ -707,7 +707,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return await params.run();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (this.isBatchTimeoutError(message)) {
+      // AbortError surfaces when fetchWithSsrFGuard fires its AbortController;
+      // its message does not match the timeout regex, so check the name too.
+      const isAbort = err instanceof DOMException && err.name === "AbortError";
+      if (isAbort || this.isBatchTimeoutError(message)) {
         log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
         try {
           return await params.run();

@@ -234,14 +234,16 @@ async function waitForGeminiBatch(params: {
   initial?: GeminiBatchStatus;
 }): Promise<{ outputFileId: string }> {
   const start = Date.now();
+  const deadline = start + params.timeoutMs;
   let current: GeminiBatchStatus | undefined = params.initial;
   while (true) {
+    const remainingMs = Math.max(1, deadline - Date.now());
     const status =
       current ??
       (await fetchGeminiBatchStatus({
         gemini: params.gemini,
         batchName: params.batchName,
-        timeoutMs: params.timeoutMs,
+        timeoutMs: remainingMs,
       }));
     const state = status.state ?? "UNKNOWN";
     if (["SUCCEEDED", "COMPLETED", "DONE"].includes(state)) {
@@ -261,7 +263,7 @@ async function waitForGeminiBatch(params: {
     if (!params.wait) {
       throw new Error(`gemini batch ${params.batchName} still ${state}; wait disabled`);
     }
-    if (Date.now() - start > params.timeoutMs) {
+    if (Date.now() >= deadline) {
       throw new Error(`gemini batch ${params.batchName} timed out after ${params.timeoutMs}ms`);
     }
     params.debug?.(`gemini batch ${params.batchName} ${state}; waiting ${params.pollIntervalMs}ms`);
