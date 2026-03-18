@@ -10,6 +10,25 @@ import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
+/** Hard timeout (ms) for memory_search to prevent stalling live sessions. */
+const MEMORY_SEARCH_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
@@ -90,24 +109,33 @@ export function createMemorySearchTool(options: {
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params) => {
-        const query = readStringParam(params, "query", { required: true });
-        const maxResults = readNumberParam(params, "maxResults");
-        const minScore = readNumberParam(params, "minScore");
-        const memory = await getMemoryManagerContext({ cfg, agentId });
-        if ("error" in memory) {
-          return jsonResult(buildMemorySearchUnavailableResult(memory.error));
-        }
+        // Outer try/catch guarantees a tool result even on init/setup failure (fail-open).
         try {
+          const query = readStringParam(params, "query", { required: true });
+          const maxResults = readNumberParam(params, "maxResults");
+          const minScore = readNumberParam(params, "minScore");
+          const memory = await withTimeout(
+            getMemoryManagerContext({ cfg, agentId }),
+            MEMORY_SEARCH_TIMEOUT_MS,
+            "memory_search init",
+          );
+          if ("error" in memory) {
+            return jsonResult(buildMemorySearchUnavailableResult(memory.error));
+          }
           const citationsMode = resolveMemoryCitationsMode(cfg);
           const includeCitations = shouldIncludeCitations({
             mode: citationsMode,
             sessionKey: options.agentSessionKey,
           });
-          const rawResults = await memory.manager.search(query, {
-            maxResults,
-            minScore,
-            sessionKey: options.agentSessionKey,
-          });
+          const rawResults = await withTimeout(
+            memory.manager.search(query, {
+              maxResults,
+              minScore,
+              sessionKey: options.agentSessionKey,
+            }),
+            MEMORY_SEARCH_TIMEOUT_MS,
+            "memory_search query",
+          );
           const status = memory.manager.status();
           const decorated = decorateCitations(rawResults, includeCitations);
           const resolved = resolveMemoryBackendConfig({ cfg, agentId });
@@ -149,16 +177,25 @@ export function createMemoryGetTool(options: {
         const relPath = readStringParam(params, "path", { required: true });
         const from = readNumberParam(params, "from", { integer: true });
         const lines = readNumberParam(params, "lines", { integer: true });
-        const memory = await getMemoryManagerContext({ cfg, agentId });
-        if ("error" in memory) {
-          return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
-        }
+        // Outer try/catch guarantees a tool result even on init/setup failure (fail-open).
         try {
-          const result = await memory.manager.readFile({
-            relPath,
-            from: from ?? undefined,
-            lines: lines ?? undefined,
-          });
+          const memory = await withTimeout(
+            getMemoryManagerContext({ cfg, agentId }),
+            MEMORY_SEARCH_TIMEOUT_MS,
+            "memory_get init",
+          );
+          if ("error" in memory) {
+            return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
+          }
+          const result = await withTimeout(
+            memory.manager.readFile({
+              relPath,
+              from: from ?? undefined,
+              lines: lines ?? undefined,
+            }),
+            MEMORY_SEARCH_TIMEOUT_MS,
+            "memory_get read",
+          );
           return jsonResult(result);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
