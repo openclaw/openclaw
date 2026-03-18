@@ -1563,6 +1563,101 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("stores GitHub Copilot token auth profile and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-gh-copilot-", async ({ configPath, runtime }) => {
+      await runNonInteractiveSetupWithDefaults(runtime, {
+        authChoice: "github-copilot",
+        githubCopilotToken: "ghu_test123",
+        skipSkills: true,
+      });
+
+      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+
+      expect(cfg.auth?.profiles?.["github-copilot:github"]?.provider).toBe("github-copilot");
+      expect(cfg.auth?.profiles?.["github-copilot:github"]?.mode).toBe("token");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("github-copilot/gpt-4o");
+
+      const store = ensureAuthProfileStore();
+      const profile = store.profiles["github-copilot:github"];
+      expect(profile?.type).toBe("token");
+      if (profile?.type === "token") {
+        expect(profile.provider).toBe("github-copilot");
+        expect(profile.token).toBe("ghu_test123");
+      }
+    });
+  });
+
+  it("infers github-copilot auth choice from --github-copilot-token alone", async () => {
+    await withOnboardEnv("openclaw-onboard-gh-copilot-infer-", async ({ configPath, runtime }) => {
+      await runNonInteractiveSetupWithDefaults(runtime, {
+        githubCopilotToken: "ghu_inferred",
+        skipSkills: true,
+      });
+
+      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+
+      expect(cfg.auth?.profiles?.["github-copilot:github"]?.provider).toBe("github-copilot");
+      expect(cfg.auth?.profiles?.["github-copilot:github"]?.mode).toBe("token");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("github-copilot/gpt-4o");
+    });
+  });
+
+  it("falls back to COPILOT_GITHUB_TOKEN env var for github-copilot auth", async () => {
+    await withOnboardEnv("openclaw-onboard-gh-copilot-env-", async ({ configPath, runtime }) => {
+      await withEnvAsync({ COPILOT_GITHUB_TOKEN: "ghu_from_env" }, async () => {
+        await runNonInteractiveSetupWithDefaults(runtime, {
+          authChoice: "github-copilot",
+          skipSkills: true,
+        });
+
+        const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+        expect(cfg.auth?.profiles?.["github-copilot:github"]?.provider).toBe("github-copilot");
+
+        const store = ensureAuthProfileStore();
+        const profile = store.profiles["github-copilot:github"];
+        expect(profile?.type).toBe("token");
+        if (profile?.type === "token") {
+          expect(profile.token).toBe("ghu_from_env");
+        }
+      });
+    });
+  });
+
+  it("rejects github-copilot auth choice without token or env var", async () => {
+    await withOnboardEnv("openclaw-onboard-gh-copilot-missing-", async ({ runtime }) => {
+      await withEnvAsync(
+        { COPILOT_GITHUB_TOKEN: undefined, GH_TOKEN: undefined, GITHUB_TOKEN: undefined },
+        async () => {
+          await expect(
+            runNonInteractiveSetupWithDefaults(runtime, {
+              authChoice: "github-copilot",
+              skipSkills: true,
+            }),
+          ).rejects.toThrow(
+            "Missing --github-copilot-token (or COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN env var)",
+          );
+        },
+      );
+    });
+  });
+
+  it("normalizes embedded CR/LF in github-copilot token", async () => {
+    await withOnboardEnv("openclaw-onboard-gh-copilot-normalize-", async (env) => {
+      await runNonInteractiveSetupWithDefaults(env.runtime, {
+        authChoice: "github-copilot",
+        githubCopilotToken: "ghu_test\r\n123",
+        skipSkills: true,
+      });
+
+      const store = ensureAuthProfileStore();
+      const profile = store.profiles["github-copilot:github"];
+      expect(profile?.type).toBe("token");
+      if (profile?.type === "token") {
+        expect(profile.token).toBe("ghu_test123");
+      }
+    });
+  });
+
   it("fails inferred custom auth when required flags are incomplete", async () => {
     await withOnboardEnv(
       "openclaw-onboard-custom-provider-missing-required-",
