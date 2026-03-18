@@ -573,23 +573,14 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       if (isAuthFailure && isAimlapiFailure) {
-        const guidanceText = isTelegram
-          ? [
-              // Placeholder for Telegram-specific instructions
-              // In future, we might provide Telegram-specific steps here.
-              "🔑 It looks like your AI/ML API key is missing or invalid.",
-              "Do you already have a key? If not, open https://aimlapi.com/app/keys/,",
-              "sign up/subscribe, then paste the key into the bot.",
-            ].join("\n")
-          : [
-              "🔑 It looks like your AI/ML API key is missing or invalid.",
-              "Do you already have a key? If not, open https://aimlapi.com/app/keys/,",
-              "sign up/subscribe, then paste the key into the bot.",
-            ].join("\n");
         return {
           kind: "final",
           payload: {
-            text: guidanceText,
+            text: [
+              "🔑 It looks like your AI/ML API key is missing or invalid.",
+              "Do you already have a key? If not, open https://aimlapi.com/app/keys/,",
+              "sign up/subscribe, then paste the key into the bot.",
+            ].join("\n"),
           },
         };
       }

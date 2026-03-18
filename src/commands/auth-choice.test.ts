@@ -1586,7 +1586,6 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
       { authChoice: "aimlapi-api-key" as const, expectedProvider: "aimlapi" },
       { authChoice: "ollama" as const, expectedProvider: "ollama" },
-      { authChoice: "aimlapi-api-key" as const, expectedProvider: "aimlapi" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {
