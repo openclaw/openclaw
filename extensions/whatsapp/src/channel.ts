@@ -18,6 +18,7 @@ import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "openclaw/plugin-sdk
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
 import { getWhatsAppRuntime } from "./runtime.js";
+import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import {
   createWhatsAppPluginBase,
@@ -82,6 +83,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeWhatsAppMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveWhatsAppOutboundSessionRoute(params),
     parseExplicitTarget: ({ raw }) => parseWhatsAppExplicitTarget(raw),
     inferTargetChatType: ({ to }) => parseWhatsAppExplicitTarget(to)?.chatType,
     targetResolver: {
