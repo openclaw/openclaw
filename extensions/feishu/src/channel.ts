@@ -49,7 +49,7 @@ const meta: ChannelMeta = {
 };
 
 const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
-  () => import("./channel.runtime.js"),
+  () => import(/* @vite-ignore */ new URL("./channel.runtime.js", import.meta.url).href),
   "feishuChannelRuntime",
 );
 
@@ -934,7 +934,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   },
   gateway: {
     startAccount: async (ctx) => {
-      const { monitorFeishuProvider } = await import("./monitor.js");
+      const { monitorFeishuProvider } = await import(
+        /* @vite-ignore */ new URL("./monitor.js", import.meta.url).href
+      );
       const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
       const port = account.config?.webhookPort ?? null;
       ctx.setStatus({ accountId: ctx.accountId, port });
