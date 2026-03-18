@@ -33,6 +33,7 @@ enum HostEnvSecurityPolicy {
         "GLIBC_TUNABLES",
         "MAVEN_OPTS",
         "SBT_OPTS",
+        "GRADLE_OPTS",
         "GRADLE_USER_HOME"
     ]
 
