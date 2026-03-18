@@ -182,7 +182,7 @@ export async function handleTelegramAction(
         ...(remove || isEmpty ? { removed: true } : { added: emoji }),
       });
     }
-    if (!remove && !isEmpty) {
+    if (!remove && (!isEmpty || !!customEmojiId)) {
       return jsonResult({
         ok: true,
         added: customEmojiId ? `custom_emoji:${customEmojiId}` : emoji,
