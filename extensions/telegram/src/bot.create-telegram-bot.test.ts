@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
@@ -1861,7 +1862,7 @@ describe("createTelegramBot", () => {
   });
   it("skips tool summaries for native slash commands", async () => {
     commandSpy.mockClear();
-    replySpy.mockImplementation(async (_ctx, opts) => {
+    replySpy.mockImplementation(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onToolResult?.({ text: "tool update" });
       return { text: "final reply" };
     });

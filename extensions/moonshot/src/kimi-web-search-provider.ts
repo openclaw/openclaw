@@ -8,10 +8,10 @@ import {
   readNumberParam,
   readProviderEnvValue,
   readStringParam,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
@@ -353,19 +353,23 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "moonshot", "apiKey", value);
     },
-    createTool: (ctx) => {
-      const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "moonshot");
-      const searchConfig = {
-        ...(ctx.searchConfig as SearchConfigRecord | undefined),
-        kimi: {
-          ...((ctx.searchConfig as SearchConfigRecord | undefined)?.kimi as
-            | Record<string, unknown>
-            | undefined),
-          ...(pluginConfig as Record<string, unknown> | undefined),
-        },
-      } as SearchConfigRecord;
-      return createKimiToolDefinition(searchConfig);
-    },
+    createTool: (ctx) =>
+      createKimiToolDefinition(
+        (() => {
+          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
+          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "moonshot");
+          if (!pluginConfig) {
+            return searchConfig;
+          }
+          return {
+            ...(searchConfig ?? {}),
+            kimi: {
+              ...resolveKimiConfig(searchConfig),
+              ...pluginConfig,
+            },
+          } as SearchConfigRecord;
+        })(),
+      ),
   };
 }
 

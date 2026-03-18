@@ -14,13 +14,12 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-export type SearchConfigRecord = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
+export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
-    ? Search extends Record<string, unknown>
-      ? Search
-      : Record<string, unknown>
-    : Record<string, unknown>
-  : Record<string, unknown>;
+    ? Search
+    : never
+  : never) &
+  Record<string, unknown>;
 
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;

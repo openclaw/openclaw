@@ -9,10 +9,10 @@ import {
   readProviderEnvValue,
   readStringParam,
   resolveCitationRedirectUrl,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
@@ -281,19 +281,23 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "google", "apiKey", value);
     },
-    createTool: (ctx) => {
-      const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "google");
-      const searchConfig = {
-        ...(ctx.searchConfig as SearchConfigRecord | undefined),
-        gemini: {
-          ...((ctx.searchConfig as SearchConfigRecord | undefined)?.gemini as
-            | Record<string, unknown>
-            | undefined),
-          ...(pluginConfig as Record<string, unknown> | undefined),
-        },
-      } as SearchConfigRecord;
-      return createGeminiToolDefinition(searchConfig);
-    },
+    createTool: (ctx) =>
+      createGeminiToolDefinition(
+        (() => {
+          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
+          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "google");
+          if (!pluginConfig) {
+            return searchConfig;
+          }
+          return {
+            ...(searchConfig ?? {}),
+            gemini: {
+              ...resolveGeminiConfig(searchConfig),
+              ...pluginConfig,
+            },
+          } as SearchConfigRecord;
+        })(),
+      ),
   };
 }
 

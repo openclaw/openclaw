@@ -14,11 +14,11 @@ import {
   readCachedSearchPayload,
   readConfiguredSecretString,
   readProviderEnvValue,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
   resolveSiteName,
-  resolveProviderWebSearchPluginConfig,
   setProviderWebSearchPluginConfigValue,
   throwWebSearchApiError,
   type SearchConfigRecord,
@@ -695,22 +695,24 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
         fallbackEnvVar: ctx.resolvedCredential?.fallbackEnvVar,
       }),
     }),
-    createTool: (ctx) => {
-      const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "perplexity");
-      const searchConfig = {
-        ...(ctx.searchConfig as SearchConfigRecord | undefined),
-        perplexity: {
-          ...((ctx.searchConfig as SearchConfigRecord | undefined)?.perplexity as
-            | Record<string, unknown>
-            | undefined),
-          ...(pluginConfig as Record<string, unknown> | undefined),
-        },
-      } as SearchConfigRecord;
-      return createPerplexityToolDefinition(
-        searchConfig,
+    createTool: (ctx) =>
+      createPerplexityToolDefinition(
+        (() => {
+          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
+          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "perplexity");
+          if (!pluginConfig) {
+            return searchConfig;
+          }
+          return {
+            ...(searchConfig ?? {}),
+            perplexity: {
+              ...resolvePerplexityConfig(searchConfig),
+              ...pluginConfig,
+            },
+          } as SearchConfigRecord;
+        })(),
         ctx.runtimeMetadata?.perplexityTransport as PerplexityTransport | undefined,
-      );
-    },
+      ),
   };
 }
 

@@ -16,6 +16,7 @@ export type SearchProvider = NonNullable<
   NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>["provider"]
 >;
 type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"]>;
+type MutableSearchConfig = SearchConfig & Record<string, unknown>;
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -32,7 +33,7 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] =
   resolvePluginWebSearchProviders({
     bundledAllowlistCompat: true,
   }).map((provider) => ({
-    value: provider.id as SearchProvider,
+    value: provider.id,
     label: provider.label,
     hint: provider.hint,
     envKeys: provider.envVars,
@@ -102,9 +103,9 @@ export function applySearchKey(
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  const search: SearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
+  const search: MutableSearchConfig = { ...config.tools?.web?.search, provider, enabled: true };
   if (providerEntry) {
-    providerEntry.setCredentialValue(search as Record<string, unknown>, key);
+    providerEntry.setCredentialValue(search, key);
   }
   const nextBase: OpenClawConfig = {
     ...config,
@@ -121,7 +122,7 @@ function applyProviderOnly(config: OpenClawConfig, provider: SearchProvider): Op
     config,
     bundledAllowlistCompat: true,
   }).find((candidate) => candidate.id === provider);
-  const search: SearchConfig = {
+  const search: MutableSearchConfig = {
     ...config.tools?.web?.search,
     provider,
     enabled: true,
@@ -193,8 +194,7 @@ export async function setupSearch(
     return SEARCH_PROVIDER_OPTIONS[0].value;
   })();
 
-  type PickerValue = SearchProvider | "__skip__";
-  const choice = await prompter.select<PickerValue>({
+  const choice = await prompter.select({
     message: "Search provider",
     options: [
       ...options,

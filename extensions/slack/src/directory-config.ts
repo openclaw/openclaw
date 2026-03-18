@@ -9,11 +9,11 @@ import { inspectSlackAccount, type InspectedSlackAccount } from "../api.js";
 import { parseSlackTarget } from "./targets.js";
 
 export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = inspectSlackAccount({
+  const account: InspectedSlackAccount = inspectSlackAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  }) as InspectedSlackAccount | null;
-  if (!account || !("config" in account)) {
+  });
+  if (!account.config) {
     return [];
   }
 
@@ -38,11 +38,11 @@ export async function listSlackDirectoryPeersFromConfig(params: DirectoryConfigP
 }
 
 export async function listSlackDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = inspectSlackAccount({
+  const account: InspectedSlackAccount = inspectSlackAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  }) as InspectedSlackAccount | null;
-  if (!account || !("config" in account)) {
+  });
+  if (!account.config) {
     return [];
   }
   return listDirectoryGroupEntriesFromMapKeys({

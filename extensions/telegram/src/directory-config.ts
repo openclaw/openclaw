@@ -9,11 +9,11 @@ import {
 import { inspectTelegramAccount, type InspectedTelegramAccount } from "../api.js";
 
 export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConfigParams) {
-  const account = inspectTelegramAccount({
+  const account: InspectedTelegramAccount = inspectTelegramAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  }) as InspectedTelegramAccount | null;
-  if (!account || !("config" in account)) {
+  });
+  if (!account.config) {
     return [];
   }
 
@@ -34,11 +34,11 @@ export async function listTelegramDirectoryPeersFromConfig(params: DirectoryConf
 }
 
 export async function listTelegramDirectoryGroupsFromConfig(params: DirectoryConfigParams) {
-  const account = inspectTelegramAccount({
+  const account: InspectedTelegramAccount = inspectTelegramAccount({
     cfg: params.cfg,
     accountId: params.accountId,
-  }) as InspectedTelegramAccount | null;
-  if (!account || !("config" in account)) {
+  });
+  if (!account.config) {
     return [];
   }
   return listDirectoryGroupEntriesFromMapKeys({

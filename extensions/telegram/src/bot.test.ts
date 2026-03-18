@@ -1067,8 +1067,11 @@ describe("createTelegramBot", () => {
         expect(replySpy).toHaveBeenCalledTimes(2);
       });
       const threadIds = replySpy.mock.calls
-        .map((call) => (call[0] as { MessageThreadId?: number }).MessageThreadId)
-        .toSorted((a, b) => (a ?? 0) - (b ?? 0));
+        .map(
+          (call: [unknown, ...unknown[]]) =>
+            (call[0] as { MessageThreadId?: number }).MessageThreadId,
+        )
+        .toSorted((a: number | undefined, b: number | undefined) => (a ?? 0) - (b ?? 0));
       expect(threadIds).toEqual([100, 200]);
     } finally {
       setTimeoutSpy.mockRestore();

@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { feishuPlugin } from "../../extensions/feishu/src/channel.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import * as persistentBindingsResolveModule from "./persistent-bindings.resolve.js";
 import { buildConfiguredAcpSessionKey } from "./persistent-bindings.types.js";
 const managerMocks = vi.hoisted(() => ({
   resolveSession: vi.fn(),
@@ -39,7 +39,6 @@ type PersistentBindingsModule = Pick<
     "ensureConfiguredAcpBindingSession" | "resetAcpSessionInPlace"
   >;
 let persistentBindings: PersistentBindingsModule;
-let persistentBindingsImportScope = 0;
 
 type ConfiguredBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 type BindingRecordInput = Parameters<
@@ -180,25 +179,20 @@ function mockReadySession(params: {
   return sessionKey;
 }
 
-beforeEach(async () => {
-  vi.resetModules();
-  persistentBindingsImportScope += 1;
-  const [resolveModule, lifecycleModule] = await Promise.all([
-    importFreshModule<typeof import("./persistent-bindings.resolve.js")>(
-      import.meta.url,
-      `./persistent-bindings.resolve.js?scope=${persistentBindingsImportScope}`,
-    ),
-    importFreshModule<typeof import("./persistent-bindings.lifecycle.js")>(
-      import.meta.url,
-      `./persistent-bindings.lifecycle.js?scope=${persistentBindingsImportScope}`,
-    ),
-  ]);
+beforeEach(() => {
   persistentBindings = {
-    resolveConfiguredAcpBindingRecord: resolveModule.resolveConfiguredAcpBindingRecord,
+    resolveConfiguredAcpBindingRecord:
+      persistentBindingsResolveModule.resolveConfiguredAcpBindingRecord,
     resolveConfiguredAcpBindingSpecBySessionKey:
-      resolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
-    ensureConfiguredAcpBindingSession: lifecycleModule.ensureConfiguredAcpBindingSession,
-    resetAcpSessionInPlace: lifecycleModule.resetAcpSessionInPlace,
+      persistentBindingsResolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
+    ensureConfiguredAcpBindingSession: async (...args) => {
+      const lifecycleModule = await import("./persistent-bindings.lifecycle.js");
+      return await lifecycleModule.ensureConfiguredAcpBindingSession(...args);
+    },
+    resetAcpSessionInPlace: async (...args) => {
+      const lifecycleModule = await import("./persistent-bindings.lifecycle.js");
+      return await lifecycleModule.resetAcpSessionInPlace(...args);
+    },
   };
   setActivePluginRegistry(
     createTestRegistry([
