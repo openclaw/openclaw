@@ -89,11 +89,14 @@ function hasOpenAiAnthropicToolPayloadCompatFlag(model: { compat?: unknown }): b
   );
 }
 
-function requiresAnthropicToolPayloadCompatibilityForModel(model: {
-  api?: unknown;
-  provider?: unknown;
-  compat?: unknown;
-}, options?: AnthropicToolPayloadResolverOptions): boolean {
+function requiresAnthropicToolPayloadCompatibilityForModel(
+  model: {
+    api?: unknown;
+    provider?: unknown;
+    compat?: unknown;
+  },
+  options?: AnthropicToolPayloadResolverOptions,
+): boolean {
   if (model.api !== "anthropic-messages") {
     return false;
   }
@@ -107,10 +110,13 @@ function requiresAnthropicToolPayloadCompatibilityForModel(model: {
   return hasOpenAiAnthropicToolPayloadCompatFlag(model);
 }
 
-function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
-  provider?: unknown;
-  compat?: unknown;
-}, options?: AnthropicToolPayloadResolverOptions): boolean {
+function usesOpenAiFunctionAnthropicToolSchemaForModel(
+  model: {
+    provider?: unknown;
+    compat?: unknown;
+  },
+  options?: AnthropicToolPayloadResolverOptions,
+): boolean {
   if (
     typeof model.provider === "string" &&
     usesOpenAiFunctionAnthropicToolSchema(model.provider, options)
@@ -120,10 +126,13 @@ function usesOpenAiFunctionAnthropicToolSchemaForModel(model: {
   return hasOpenAiAnthropicToolPayloadCompatFlag(model);
 }
 
-function usesOpenAiStringModeAnthropicToolChoiceForModel(model: {
-  provider?: unknown;
-  compat?: unknown;
-}, options?: AnthropicToolPayloadResolverOptions): boolean {
+function usesOpenAiStringModeAnthropicToolChoiceForModel(
+  model: {
+    provider?: unknown;
+    compat?: unknown;
+  },
+  options?: AnthropicToolPayloadResolverOptions,
+): boolean {
   if (
     typeof model.provider === "string" &&
     usesOpenAiStringModeAnthropicToolChoice(model.provider, options)
