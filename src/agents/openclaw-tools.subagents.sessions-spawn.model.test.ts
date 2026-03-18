@@ -244,7 +244,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       },
       runId: "run-agent-primary-over-subagent-default",
       callId: "call-agent-primary-over-subagent-default",
-      expectedModel: "opencode/claude",
+      expectedModel: "minimax/MiniMax-M2.5",
     });
   });
 

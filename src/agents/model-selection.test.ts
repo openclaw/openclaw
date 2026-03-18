@@ -829,7 +829,7 @@ describe("normalizeModelSelection", () => {
 });
 
 describe("resolveSubagentConfiguredModelSelection", () => {
-  it("prefers the target agent primary model over the global subagent default", () => {
+  it("prefers the target agent subagents.model over global defaults.subagents.model and agent.primary", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -841,7 +841,7 @@ describe("resolveSubagentConfiguredModelSelection", () => {
     } as OpenClawConfig;
 
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
-      "opencode/claude",
+      "minimax/MiniMax-M2.5",
     );
   });
 });
