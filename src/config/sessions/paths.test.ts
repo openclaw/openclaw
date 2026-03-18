@@ -261,6 +261,49 @@ describe("ensurePrivateSessionsDir", () => {
     }
   });
 
+  it("rejects when an existing state root changes after parent pinning and before final mkdir", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-existing-state-root-swap-"));
+    const stateDir = path.join(tempDir, "state");
+    const replacementStateDir = path.join(tempDir, "replacement-state");
+    const agentsDir = path.join(stateDir, "agents");
+    const agentDir = path.join(agentsDir, "main");
+    const sessionsDir = path.join(agentDir, "sessions");
+    const realLstat = fsPromises.lstat.bind(fsPromises);
+    let agentsDirLstatCalls = 0;
+
+    fs.mkdirSync(agentDir, { recursive: true });
+
+    vi.spyOn(fsPromises, "lstat").mockImplementation(async (filePath) => {
+      const resolved = path.resolve(String(filePath));
+      if (resolved === agentsDir) {
+        agentsDirLstatCalls++;
+        if (agentsDirLstatCalls === 2) {
+          fs.renameSync(stateDir, replacementStateDir);
+          fs.mkdirSync(stateDir, { recursive: true });
+        }
+      }
+      return await realLstat(filePath);
+    });
+
+    try {
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
+
+      await expect(ensurePrivateSessionsDir(sessionsDir)).rejects.toThrow(
+        /changed during permission update/i,
+      );
+      expect(fs.existsSync(path.join(stateDir, "agents", "main", "sessions"))).toBe(false);
+      expect(fs.existsSync(path.join(replacementStateDir, "agents", "main", "sessions"))).toBe(
+        false,
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces chmod permission failures for managed session dirs on POSIX", async () => {
     if (process.platform === "win32") {
       return;
@@ -473,6 +516,52 @@ describe("isManagedSessionsDir", () => {
       expect(
         isManagedSessionTranscriptPath(path.join(customSessionsDir, "sess-1.jsonl"), env),
       ).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat case-variant custom per-agent roots as managed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-custom-case-"));
+    try {
+      const stateDir = path.join(tempDir, "StateRoot");
+      const customRoot = path.join(tempDir, "custom-root");
+      const canonicalCustomSessionsDir = path.join(customRoot, "agents", "ops", "sessions");
+      const caseVariantCustomSessionsDir = path.join(customRoot, "agents", "Ops", "sessions");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(canonicalCustomSessionsDir, { recursive: true });
+
+      const realLstatSync = fs.lstatSync.bind(fs);
+      vi.spyOn(fs, "lstatSync").mockImplementation((candidatePath) => {
+        const resolved = path.resolve(String(candidatePath));
+        if (resolved === path.join(tempDir, "stateroot")) {
+          throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        }
+        return realLstatSync(candidatePath);
+      });
+
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+      } as NodeJS.ProcessEnv;
+
+      const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =
+        await import("./paths.js");
+
+      expect(isManagedSessionsDir(caseVariantCustomSessionsDir, env)).toBe(false);
+      expect(
+        isManagedSessionStorePath(path.join(caseVariantCustomSessionsDir, "sessions.json"), env),
+      ).toBe(false);
+      expect(
+        isManagedSessionTranscriptPath(
+          path.join(caseVariantCustomSessionsDir, "sess-1.jsonl"),
+          env,
+        ),
+      ).toBe(false);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

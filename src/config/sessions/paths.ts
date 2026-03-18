@@ -51,7 +51,9 @@ function resolveManagedSessionsSafetyChain(sessionsDir: string): string[] {
   return [path.dirname(resolved), resolved];
 }
 
-async function ensureManagedSessionsParentChain(sessionsDir: string): Promise<void> {
+async function ensureManagedSessionsParentChain(
+  sessionsDir: string,
+): Promise<PinnedStateRootIdentity | undefined> {
   const resolved = path.resolve(sessionsDir);
   const agentDir = path.dirname(resolved);
   const agentsDir = path.dirname(agentDir);
@@ -59,7 +61,7 @@ async function ensureManagedSessionsParentChain(sessionsDir: string): Promise<vo
     path.basename(resolved).toLowerCase() !== "sessions" ||
     path.basename(agentsDir).toLowerCase() !== "agents"
   ) {
-    return;
+    return undefined;
   }
 
   const stateDir = path.dirname(agentsDir);
@@ -108,6 +110,8 @@ async function ensureManagedSessionsParentChain(sessionsDir: string): Promise<vo
     await verifyDirectoryIdentity(dirPath);
     await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
   }
+
+  return pinnedStateRootIdentity;
 }
 
 async function verifyDirectoryIdentity(dirPath: string): Promise<fs.Stats> {
@@ -248,10 +252,12 @@ async function applyPrivateSessionsMode(
 
 export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<string> {
   const resolved = path.resolve(sessionsDir);
-  await ensureManagedSessionsParentChain(resolved);
+  const pinnedStateRootIdentity = await ensureManagedSessionsParentChain(resolved);
+  await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
   const ancestorSnapshots = await snapshotManagedSessionsSafetyChain(resolved, {
     allowMissingTail: true,
   });
+  await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
   try {
     const stat = await fsPromises.lstat(resolved);
     if (stat.isSymbolicLink()) {
@@ -264,10 +270,12 @@ export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<str
     }
   }
   await fsPromises.mkdir(resolved, { recursive: true, mode: 0o700 });
+  await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
   const currentAncestorSnapshots = await snapshotManagedSessionsSafetyChain(resolved, {
     allowMissingTail: false,
   });
   assertStablePathIdentities(ancestorSnapshots, currentAncestorSnapshots);
+  await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
   const stat = await fsPromises.lstat(resolved);
   if (stat.isSymbolicLink()) {
     throw new Error(`Session transcripts dir must not be a symlink: ${resolved}`);
@@ -287,6 +295,7 @@ export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<str
         allowMissingTail: false,
       });
       assertStablePathIdentities(currentAncestorSnapshots, finalAncestorSnapshots);
+      await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
       const currentStat = await fsPromises.lstat(resolved);
       if (!sameFileIdentity(stat, openedStat) || !sameFileIdentity(currentStat, openedStat)) {
         throw new Error(`Session transcripts dir changed during permission update: ${resolved}`);
@@ -298,6 +307,7 @@ export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<str
     return resolved;
   }
 
+  await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
   await applyPrivateSessionsMode(resolved);
   return resolved;
 }
@@ -356,10 +366,9 @@ export function isManagedSessionsDir(
 
   const normalizedAgentId = normalizeAgentId(agentId);
   // Structured custom roots such as /srv/custom/agents/{agentId}/sessions
-  // are still per-agent managed stores even when they live outside OPENCLAW_STATE_DIR.
-  return !(
-    normalizedAgentId === DEFAULT_AGENT_ID && agentId.trim().toLowerCase() !== DEFAULT_AGENT_ID
-  );
+  // are still per-agent managed stores even when they live outside OPENCLAW_STATE_DIR,
+  // but only when they keep the canonical normalized agent directory name.
+  return normalizedAgentId === agentId;
 }
 
 export function isManagedSessionStorePath(
