@@ -386,8 +386,8 @@ describe("applyMinimaxApiConfig", () => {
     });
   });
 
-  it("keeps reasoning enabled for MiniMax-M2.5", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.5");
+  it("keeps reasoning enabled for MiniMax-M2.7", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.7");
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
   });
 
@@ -397,7 +397,7 @@ describe("applyMinimaxApiConfig", () => {
         agents: {
           defaults: {
             models: {
-              "minimax/MiniMax-M2.5": {
+              "minimax/MiniMax-M2.7": {
                 alias: "MiniMax",
                 params: { custom: "value" },
               },
@@ -405,9 +405,9 @@ describe("applyMinimaxApiConfig", () => {
           },
         },
       },
-      "MiniMax-M2.5",
+      "MiniMax-M2.7",
     );
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.5"]).toMatchObject({
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toMatchObject({
       alias: "Minimax",
       params: { custom: "value" },
     });
@@ -426,7 +426,7 @@ describe("applyMinimaxApiConfig", () => {
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
       "old-model",
-      "MiniMax-M2.5",
+      "MiniMax-M2.7",
     ]);
   });
 
@@ -669,8 +669,8 @@ describe("provider alias defaults", () => {
   it("adds expected alias for provider defaults", () => {
     const aliasCases = [
       {
-        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5"),
-        modelRef: "minimax/MiniMax-M2.5",
+        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.7"),
+        modelRef: "minimax/MiniMax-M2.7",
         alias: "Minimax",
       },
       {
