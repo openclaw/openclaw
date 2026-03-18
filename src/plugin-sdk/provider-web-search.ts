@@ -1,17 +1,45 @@
 // Public web-search registration helpers for provider plugins.
 
-import type { WebSearchProviderPlugin } from "../plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type {
+  WebSearchCredentialResolutionSource,
+  WebSearchProviderPlugin,
+  WebSearchProviderToolDefinition,
+} from "../plugins/types.js";
+export { readNumberParam, readStringArrayParam, readStringParam } from "../agents/tools/common.js";
+export { resolveCitationRedirectUrl } from "../agents/tools/web-search-citation-redirect.js";
 export {
   getScopedCredentialValue,
   getTopLevelCredentialValue,
+  resolveProviderWebSearchPluginConfig,
   setScopedCredentialValue,
+  setProviderWebSearchPluginConfigValue,
   setTopLevelCredentialValue,
 } from "../agents/tools/web-search-provider-config.js";
+export type { SearchConfigRecord } from "../agents/tools/web-search-provider-common.js";
 export { resolveWebSearchProviderCredential } from "../agents/tools/web-search-provider-credentials.js";
 export { withTrustedWebToolsEndpoint } from "../agents/tools/web-guarded-fetch.js";
 export {
-  DEFAULT_TIMEOUT_SECONDS,
+  buildSearchCacheKey,
+  DEFAULT_SEARCH_COUNT,
+  MAX_SEARCH_COUNT,
+  isoToPerplexityDate,
+  normalizeFreshness,
+  normalizeToIsoDate,
+  readCachedSearchPayload,
+  readConfiguredSecretString,
+  readProviderEnvValue,
+  resolveSearchCacheTtlMs,
+  resolveSearchCount,
+  resolveSearchTimeoutSeconds,
+  resolveSiteName,
+  throwWebSearchApiError,
+  withTrustedWebSearchEndpoint,
+  writeCachedSearchPayload,
+} from "../agents/tools/web-search-provider-common.js";
+export {
   DEFAULT_CACHE_TTL_MINUTES,
+  DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
   readCache,
   readResponseText,
@@ -19,7 +47,15 @@ export {
   resolveTimeoutSeconds,
   writeCache,
 } from "../agents/tools/web-shared.js";
+export { enablePluginInConfig } from "../plugins/enable.js";
+export { formatCliCommand } from "../cli/command-format.js";
 export { wrapWebContent } from "../security/external-content.js";
+export type {
+  OpenClawConfig,
+  WebSearchCredentialResolutionSource,
+  WebSearchProviderPlugin,
+  WebSearchProviderToolDefinition,
+};
 
 /**
  * @deprecated Implement provider-owned `createTool(...)` directly on the
