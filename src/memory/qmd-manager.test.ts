@@ -1605,6 +1605,19 @@ describe("QmdMemoryManager", () => {
     );
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("cold-start"));
 
+    // Verify mcporter calls use `qmd.query` (the actual MCP tool name) with
+    // a `searches` array instead of the legacy `search`/`vector_search` tools.
+    const callCmds = mcporterCalls.filter((call: unknown[]) => (call[1] as string[])[0] === "call");
+    for (const call of callCmds) {
+      const args = call[1] as string[];
+      expect(args[1]).toBe("qmd.query");
+      const argsJsonIdx = args.indexOf("--args");
+      expect(argsJsonIdx).toBeGreaterThan(-1);
+      const parsed = JSON.parse(args[argsJsonIdx + 1]) as Record<string, unknown>;
+      expect(parsed).toHaveProperty("searches");
+      expect(Array.isArray(parsed.searches)).toBe(true);
+    }
+
     await manager.close();
   });
 

@@ -1272,9 +1272,27 @@ export class QmdMemoryManager implements MemorySearchManager {
   }): Promise<QmdQueryResult[]> {
     await this.ensureMcporterDaemonStarted(params.mcporter);
 
-    const selector = `${params.mcporter.serverName}.${params.tool}`;
+    // QMD's MCP server exposes a single `query` tool that accepts a `searches`
+    // array with typed sub-queries.  Map the legacy tool names to the
+    // appropriate search types so the call succeeds.
+    const searchTypeMap: Record<string, string> = {
+      search: "lex",
+      vector_search: "vec",
+      // deep_search → hybrid lex+vec for best recall
+      deep_search: "lex",
+    };
+
+    const selector = `${params.mcporter.serverName}.query`;
+    const searches: Array<{ type: string; query: string }> =
+      params.tool === "deep_search"
+        ? [
+            { type: "lex", query: params.query },
+            { type: "vec", query: params.query },
+          ]
+        : [{ type: searchTypeMap[params.tool] ?? "lex", query: params.query }];
+
     const callArgs: Record<string, unknown> = {
-      query: params.query,
+      searches,
       limit: params.limit,
       minScore: params.minScore,
     };
