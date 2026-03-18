@@ -1182,6 +1182,11 @@ describe("classifyFailoverReason provider messages", () => {
       ),
     ).toBe("timeout");
     expect(classifyFailoverReason(OPENAI_SERVER_ERROR_PAYLOAD)).toBe("server_error");
+    expect(
+      classifyFailoverReason(
+        "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 7a3da80b-ed7d-4a91-a33a-a6e0328fc2bc in your message.",
+      ),
+    ).toBe("timeout");
     expect(classifyFailoverReason(`402 Payment Required ${OPENAI_SERVER_ERROR_PAYLOAD}`)).toBe(
       "billing",
     );
