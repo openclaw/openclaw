@@ -12,3 +12,10 @@ export {
   resolveIMessageConfigDefaultTo,
 } from "./channel-config-helpers.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
+export {
+  parseChatAllowTargetPrefixes,
+  parseChatTargetPrefixesOrThrow,
+  resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedTarget,
+} from "../../extensions/imessage/src/target-parsing-helpers.js";
+export type { ParsedChatTarget } from "../../extensions/imessage/src/target-parsing-helpers.js";
