@@ -101,25 +101,33 @@ async function runSessionResetFromAgent(params: {
   };
 }
 
-function buildUsageMetaFromRunResult(result: {
-  meta?: {
-    agentMeta?: {
-      provider?: string;
-      model?: string;
-      usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
-      lastCallUsage?: { input?: number; output?: number };
+function buildUsageMetaFromRunResult(
+  result: {
+    meta?: {
+      agentMeta?: {
+        provider?: string;
+        model?: string;
+        usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+        lastCallUsage?: { input?: number; output?: number };
+      };
     };
-  };
-}): AgentWaitUsageMeta | undefined {
+  },
+  sessionId?: string,
+): AgentWaitUsageMeta | undefined {
   const agentMeta = result.meta?.agentMeta;
-  if (!agentMeta) {
+  if (!agentMeta && !sessionId) {
     return undefined;
   }
 
   const meta: AgentWaitUsageMeta = {};
   let hasAnyField = false;
 
-  if (agentMeta.usage) {
+  if (sessionId) {
+    meta.sessionId = sessionId;
+    hasAnyField = true;
+  }
+
+  if (agentMeta?.usage) {
     const input = agentMeta.usage.input ?? 0;
     const output = agentMeta.usage.output ?? 0;
     const cacheRead = agentMeta.usage.cacheRead ?? 0;
@@ -135,7 +143,7 @@ function buildUsageMetaFromRunResult(result: {
     }
   }
 
-  if (agentMeta.lastCallUsage) {
+  if (agentMeta?.lastCallUsage) {
     const input = agentMeta.lastCallUsage.input ?? 0;
     const output = agentMeta.lastCallUsage.output ?? 0;
     if (input > 0 || output > 0) {
@@ -144,17 +152,17 @@ function buildUsageMetaFromRunResult(result: {
     }
   }
 
-  if (agentMeta.provider) {
+  if (agentMeta?.provider) {
     meta.provider = agentMeta.provider;
     hasAnyField = true;
   }
-  if (agentMeta.model) {
+  if (agentMeta?.model) {
     meta.model = agentMeta.model;
     hasAnyField = true;
   }
 
   // Estimate cost from accumulated usage when provider/model cost config is available.
-  if (meta.usage && agentMeta.provider && agentMeta.model) {
+  if (meta.usage && agentMeta?.provider && agentMeta?.model) {
     const costConfig = resolveModelCostConfig({
       provider: agentMeta.provider,
       model: agentMeta.model,
@@ -179,7 +187,7 @@ function dispatchAgentRunFromGateway(params: {
 }) {
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
-      const meta = buildUsageMetaFromRunResult(result);
+      const meta = buildUsageMetaFromRunResult(result, result.entry?.sessionId);
       const payload = {
         runId: params.runId,
         status: "ok" as const,

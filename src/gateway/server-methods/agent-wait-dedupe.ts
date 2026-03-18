@@ -2,6 +2,7 @@ import type { DedupeEntry } from "../server-shared.js";
 
 /** Per-run usage and cost metadata for external orchestrators. */
 export type AgentWaitUsageMeta = {
+  sessionId?: string;
   usage?: {
     input: number;
     output: number;
@@ -128,6 +129,10 @@ function extractUsageMeta(payload: Record<string, unknown> | undefined): AgentWa
     hasAnyField = true;
   }
 
+  if (typeof raw.sessionId === "string" && raw.sessionId) {
+    meta.sessionId = raw.sessionId;
+    hasAnyField = true;
+  }
   if (typeof raw.provider === "string" && raw.provider) {
     meta.provider = raw.provider;
     hasAnyField = true;
