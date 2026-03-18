@@ -1,6 +1,12 @@
 // Narrow plugin-sdk surface for the bundled googlechat plugin.
 // Keep this list additive and scoped to symbols used under extensions/googlechat.
 
+import { resolveChannelGroupRequireMention } from "./channel-policy.js";
+import {
+  createOptionalChannelSetupAdapter,
+  createOptionalChannelSetupWizard,
+} from "./optional-channel-setup.js";
+
 export {
   createActionGate,
   jsonResult,
@@ -20,7 +26,6 @@ export {
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
-export { resolveGoogleChatGroupRequireMention } from "../../extensions/googlechat/src/group-policy.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export {
@@ -65,8 +70,6 @@ export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 export { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { googlechatSetupAdapter } from "../../extensions/googlechat/api.js";
-export { googlechatSetupWizard } from "../../extensions/googlechat/api.js";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "./inbound-envelope.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
 export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
@@ -88,3 +91,32 @@ export {
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
 } from "./webhook-targets.js";
+
+type GoogleChatGroupContext = {
+  cfg: import("../config/config.js").OpenClawConfig;
+  accountId?: string | null;
+  groupId?: string | null;
+};
+
+export function resolveGoogleChatGroupRequireMention(params: GoogleChatGroupContext): boolean {
+  return resolveChannelGroupRequireMention({
+    cfg: params.cfg,
+    channel: "googlechat",
+    groupId: params.groupId,
+    accountId: params.accountId,
+  });
+}
+
+export const googlechatSetupAdapter = createOptionalChannelSetupAdapter({
+  channel: "googlechat",
+  label: "Google Chat",
+  npmSpec: "@openclaw/googlechat",
+  docsPath: "/channels/googlechat",
+});
+
+export const googlechatSetupWizard = createOptionalChannelSetupWizard({
+  channel: "googlechat",
+  label: "Google Chat",
+  npmSpec: "@openclaw/googlechat",
+  docsPath: "/channels/googlechat",
+});

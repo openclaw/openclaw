@@ -1,6 +1,11 @@
 // Narrow plugin-sdk surface for the bundled tlon plugin.
 // Keep this list additive and scoped to symbols used under extensions/tlon.
 
+import {
+  createOptionalChannelSetupAdapter,
+  createOptionalChannelSetupWizard,
+} from "./optional-channel-setup.js";
+
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
@@ -27,4 +32,17 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
-export { tlonSetupAdapter, tlonSetupWizard } from "../../extensions/tlon/setup-api.js";
+
+export const tlonSetupAdapter = createOptionalChannelSetupAdapter({
+  channel: "tlon",
+  label: "Tlon",
+  npmSpec: "@openclaw/tlon",
+  docsPath: "/channels/tlon",
+});
+
+export const tlonSetupWizard = createOptionalChannelSetupWizard({
+  channel: "tlon",
+  label: "Tlon",
+  npmSpec: "@openclaw/tlon",
+  docsPath: "/channels/tlon",
+});
