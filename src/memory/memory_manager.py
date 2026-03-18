@@ -19,6 +19,7 @@ FTS_TABLE_NAME: Final[str] = "user_experiences_fts"
 MAX_CONTEXT_RESULTS: Final[int] = 3
 MAX_CONTEXT_CANDIDATES: Final[int] = 25
 DB_PATH_ENV_VAR: Final[str] = "OPENCLAW_IMPLICIT_MEMORY_DB_PATH"
+STATE_DIR_ENV_VAR: Final[str] = "OPENCLAW_STATE_DIR"
 MIN_OVERLAP_FOR_STRICT_MATCH: Final[int] = 2
 MIN_STRICT_TOKEN_COUNT: Final[int] = 3
 COMMON_QUERY_TOKENS: Final[frozenset[str]] = frozenset(
@@ -55,7 +56,14 @@ COMMON_QUERY_TOKENS: Final[frozenset[str]] = frozenset(
 
 def resolve_default_db_path() -> Path:
     raw = os.environ.get(DB_PATH_ENV_VAR, "").strip()
-    return Path(raw).expanduser() if raw else DEFAULT_DB_PATH
+    if raw:
+        return Path(raw).expanduser()
+
+    state_dir = os.environ.get(STATE_DIR_ENV_VAR, "").strip()
+    if state_dir:
+        return Path(state_dir).expanduser() / "implicit_memory.db"
+
+    return DEFAULT_DB_PATH
 
 
 class MemoryManager:
@@ -262,7 +270,11 @@ class MemoryManager:
             for token in unique_tokens
             if len(token) > 2 and token not in COMMON_QUERY_TOKENS
         ]
-        return significant_tokens or unique_tokens
+        if significant_tokens:
+            return significant_tokens
+        if unique_tokens and all(token in COMMON_QUERY_TOKENS for token in unique_tokens):
+            return []
+        return unique_tokens
 
     @staticmethod
     def _build_match_query(user_query: str) -> str:

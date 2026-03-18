@@ -13,11 +13,13 @@ import {
 describe("implicit memory runtime", () => {
   let dbPath: string;
   let previousDbPath: string | undefined;
+  let previousStateDir: string | undefined;
 
   beforeEach(async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-implicit-memory-"));
     dbPath = path.join(tempDir, "implicit-memory.db");
     previousDbPath = process.env.OPENCLAW_IMPLICIT_MEMORY_DB_PATH;
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_IMPLICIT_MEMORY_DB_PATH = dbPath;
   });
 
@@ -26,6 +28,11 @@ describe("implicit memory runtime", () => {
       delete process.env.OPENCLAW_IMPLICIT_MEMORY_DB_PATH;
     } else {
       process.env.OPENCLAW_IMPLICIT_MEMORY_DB_PATH = previousDbPath;
+    }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     await fs.rm(path.dirname(dbPath), { recursive: true, force: true });
   });
@@ -179,6 +186,21 @@ describe("implicit memory runtime", () => {
     expect(context).toContain("Preserve leading dashes in stored prompts.");
   });
 
+  it("stores implicit memory under OPENCLAW_STATE_DIR when no DB override is set", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-implicit-memory-state-"));
+    delete process.env.OPENCLAW_IMPLICIT_MEMORY_DB_PATH;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    await saveImplicitExperience({
+      scopeKey: "sender:discord:user-state-dir",
+      intent: "query weather",
+      rules: "Store under the active state dir.",
+    });
+
+    await expect(fs.stat(path.join(stateDir, "implicit_memory.db"))).resolves.toBeTruthy();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
   it("avoids false-positive matches on shared common words", async () => {
     await saveImplicitExperience({
       scopeKey: "sender:discord:user-help",
@@ -188,6 +210,18 @@ describe("implicit memory runtime", () => {
 
     await expect(
       retrieveImplicitContext("Can you help me deploy this container?", "sender:discord:user-help"),
+    ).resolves.toBeNull();
+  });
+
+  it("skips retrieval when the prompt only contains common words", async () => {
+    await saveImplicitExperience({
+      scopeKey: "sender:discord:user-common-words",
+      intent: "can you write a poem",
+      rules: "Use rhyming couplets and 8-syllable lines.",
+    });
+
+    await expect(
+      retrieveImplicitContext("what can you do", "sender:discord:user-common-words"),
     ).resolves.toBeNull();
   });
 
