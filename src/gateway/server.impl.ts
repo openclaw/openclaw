@@ -32,6 +32,7 @@ import {
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { loadDotEnv } from "../infra/dotenv.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
@@ -381,6 +382,7 @@ export async function startGatewayServer(
     description: "raw stream log path override",
   });
 
+  loadDotEnv({ quiet: true });
   setConfigSource(resolveConfigSource(process.env));
 
   let configSnapshot = await readConfigFileSnapshot();

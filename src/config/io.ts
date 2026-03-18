@@ -1497,8 +1497,32 @@ export async function readBestEffortConfig(): Promise<OpenClawConfig> {
   return snapshot.valid ? loadConfig() : snapshot.config;
 }
 
+function buildSnapshotFromRuntimeSnapshots(path: string): ConfigFileSnapshot | null {
+  if (!runtimeConfigSnapshot) return null;
+  const config = runtimeConfigSnapshot;
+  const resolved = runtimeConfigSourceSnapshot ?? config;
+  const raw = JSON.stringify(config);
+  return {
+    path,
+    exists: true,
+    raw,
+    parsed: config as unknown,
+    resolved: resolved as unknown,
+    valid: true,
+    config,
+    hash: hashConfigRaw(raw),
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  };
+}
+
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   const source = getConfigSource();
+  if (source?.kind === "nacos") {
+    const fromRuntime = buildSnapshotFromRuntimeSnapshots("nacos:openclaw.json");
+    if (fromRuntime) return fromRuntime;
+  }
   if (source !== null) {
     return source.readSnapshot();
   }
@@ -1508,6 +1532,13 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
 export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
   const source = getConfigSource();
   if (source?.kind === "nacos") {
+    const fromRuntime = buildSnapshotFromRuntimeSnapshots("nacos:openclaw.json");
+    if (fromRuntime) {
+      return {
+        snapshot: fromRuntime,
+        writeOptions: { expectedConfigPath: fromRuntime.path },
+      };
+    }
     const snapshot = await source.readSnapshot();
     return {
       snapshot,
@@ -1530,7 +1561,25 @@ export async function writeConfigFile(
       const issueMessage = issue?.message ?? "invalid";
       throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
     }
-    setRuntimeConfigSnapshot(cfg);
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const refreshHandler = runtimeConfigSnapshotRefreshHandler;
+    if (refreshHandler) {
+      try {
+        const refreshed = await refreshHandler.refresh({ sourceConfig: cfg });
+        if (refreshed) return;
+      } catch (error) {
+        try {
+          refreshHandler.clearOnRefreshFailure?.();
+        } catch {
+          // Keep the original refresh failure as the surfaced error.
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new ConfigRuntimeRefreshError(
+          `Config was written (Nacos in-memory), but runtime snapshot refresh failed: ${detail}`,
+          { cause: error },
+        );
+      }
+    }
     return;
   }
   const io = createConfigIO();

@@ -1,7 +1,10 @@
 /**
  * Nacos config client: fetch config via Open API and long-poll for changes.
  * No nacos npm dependency; plain HTTP only. Uses opts.fetch for test injection.
+ * Listener uses Nacos v1 format: Listening-Configs=<dataId>%02<group>%02<contentMD5>%02<tenant>%01
  */
+
+import crypto from "node:crypto";
 
 export type NacosConfigClientOptions = {
   serverAddr: string;
@@ -41,25 +44,32 @@ export function createNacosConfigClient(opts: NacosConfigClientOptions): NacosCo
 
   const listenerUrl = `${base}/nacos/v1/cs/configs/listener`;
 
+  // MD5 of last-fetched content; used by listener so Nacos can compare and hold connection until change.
+  let lastContentMD5 = "";
+
   return {
     async fetchConfig(): Promise<string> {
       const res = await doFetch(getConfigUrl());
       if (!res.ok) {
         throw new Error(`Nacos get config failed: ${res.status} ${res.statusText}`);
       }
-      return res.text();
+      const text = await res.text();
+      lastContentMD5 = crypto.createHash("md5").update(text).digest("hex");
+      return text;
     },
 
     subscribe(onChange: () => void): () => void {
       let stopped = false;
+      const STX = "\x02";
+      const SOH = "\x01";
 
       const poll = async (): Promise<void> => {
         if (stopped) return;
-        const body = new URLSearchParams({
-          dataId: opts.dataId,
-          group: opts.group,
-        });
-        if (opts.tenant) body.set("tenant", opts.tenant);
+        // Nacos v1 listener expects Listening-Configs=<dataId>%02<group>%02<contentMD5>%02<tenant>%01
+        const tenant = opts.tenant ?? "";
+        const listeningConfigs =
+          `${opts.dataId}${STX}${opts.group}${STX}${lastContentMD5}${STX}${tenant}${SOH}`;
+        const body = new URLSearchParams({ "Listening-Configs": listeningConfigs });
         try {
           const res = await doFetch(listenerUrl, {
             method: "POST",
@@ -71,10 +81,11 @@ export function createNacosConfigClient(opts: NacosConfigClientOptions): NacosCo
           });
           if (stopped) return;
           if (res.ok) {
-            onChange();
+            const text = await res.text();
+            if (text.trim()) onChange();
           }
         } catch {
-          // Ignore errors; loop will retry or exit when stopped
+          await new Promise((r) => setTimeout(r, 5000));
         }
         if (!stopped) {
           void poll();
