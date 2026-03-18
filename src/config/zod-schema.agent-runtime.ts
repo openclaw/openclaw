@@ -460,6 +460,7 @@ const ToolLoopDetectionDetectorSchema = z
     genericRepeat: z.boolean().optional(),
     knownPollNoProgress: z.boolean().optional(),
     pingPong: z.boolean().optional(),
+    browserSearchStorm: z.boolean().optional(),
   })
   .strict()
   .optional();
@@ -470,6 +471,16 @@ const ToolLoopDetectionSchema = z
     historySize: z.number().int().positive().optional(),
     warningThreshold: z.number().int().positive().optional(),
     criticalThreshold: z.number().int().positive().optional(),
+    browserSearchWarningThreshold: z
+      .number()
+      .int()
+      .min(2, "tools.loopDetection.browserSearchWarningThreshold must be at least 2.")
+      .optional(),
+    browserSearchCriticalThreshold: z
+      .number()
+      .int()
+      .min(2, "tools.loopDetection.browserSearchCriticalThreshold must be at least 2.")
+      .optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
   })
@@ -484,6 +495,18 @@ const ToolLoopDetectionSchema = z
         code: z.ZodIssueCode.custom,
         path: ["criticalThreshold"],
         message: "tools.loopDetection.warningThreshold must be lower than criticalThreshold.",
+      });
+    }
+    if (
+      value.browserSearchWarningThreshold !== undefined &&
+      value.browserSearchCriticalThreshold !== undefined &&
+      value.browserSearchWarningThreshold >= value.browserSearchCriticalThreshold
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["browserSearchCriticalThreshold"],
+        message:
+          "tools.loopDetection.browserSearchWarningThreshold must be lower than browserSearchCriticalThreshold.",
       });
     }
     if (
