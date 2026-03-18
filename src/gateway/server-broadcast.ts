@@ -98,25 +98,21 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         continue;
       }
       // Assign per-client seq only for non-targeted (broadcast) events.
-      // Use a local variable + spread to avoid mutating a shared object,
-      // which would silently break if the loop body ever became async.
-      const clientSeq = !isTargeted
-        ? (() => {
-            const prev = clientSeqs.get(c) ?? 0;
-            clientSeqs.set(c, prev + 1);
-            return prev + 1;
-          })()
-        : undefined;
-      if (clientSeq !== undefined) {
-        minSeq = Math.min(minSeq, clientSeq);
-        maxSeq = Math.max(maxSeq, clientSeq);
+      // Increment only after a successful send so failed sends don't create
+      // seq gaps that trigger false "missed event" warnings on the client.
+      const nextSeq = !isTargeted ? (clientSeqs.get(c) ?? 0) + 1 : undefined;
+      try {
+        c.socket.send(JSON.stringify({ ...baseFrame, seq: nextSeq }));
+      } catch {
+        // Send failed — skip seq increment so the counter stays consistent.
+        continue;
+      }
+      if (nextSeq !== undefined) {
+        clientSeqs.set(c, nextSeq);
+        minSeq = Math.min(minSeq, nextSeq);
+        maxSeq = Math.max(maxSeq, nextSeq);
       }
       clientsSent++;
-      try {
-        c.socket.send(JSON.stringify({ ...baseFrame, seq: clientSeq }));
-      } catch {
-        /* ignore */
-      }
     }
     if (shouldLogWs()) {
       const logMeta: Record<string, unknown> = {
