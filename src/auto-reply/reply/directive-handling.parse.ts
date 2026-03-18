@@ -225,5 +225,5 @@ export function isDirectiveOnly(params: {
   }
   const stripped = stripStructuralPrefixes(cleanedBody ?? "");
   const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
-  return noMentions.length === 0;
+  return noMentions.trim().length === 0;
 }
