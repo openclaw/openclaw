@@ -14,6 +14,8 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
+/** Maximum number of times to retry a rate-limited command sync operation. */
+const TELEGRAM_COMMAND_SYNC_RATE_LIMIT_RETRIES = 3;
 
 export type TelegramMenuCommand = {
   command: string;
@@ -24,6 +26,20 @@ type TelegramPluginCommandSpec = {
   name: unknown;
   description: unknown;
 };
+
+/**
+ * Extract the retry-after delay in seconds from a Telegram 429 rate-limit error.
+ * Returns undefined if the error is not a 429 or the delay cannot be parsed.
+ */
+function extractRateLimitRetryAfterSeconds(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const maybe = err as { error_code?: unknown; description?: unknown };
+  if (maybe.error_code !== 429) return undefined;
+  const desc = typeof maybe.description === "string" ? maybe.description : "";
+  const match = /retry after (\d+)/i.exec(desc);
+  if (match?.[1]) return parseInt(match[1], 10);
+  return undefined;
+}
 
 function isBotCommandsTooMuchError(err: unknown): boolean {
   if (!err) {
@@ -209,12 +225,15 @@ export function syncTelegramMenuCommands(params: {
 
     let retryCommands = commandsToRegister;
     const initialCommandCount = commandsToRegister.length;
+    // Track 429 retry attempts separately from BOT_COMMANDS_TOO_MUCH shrink retries.
+    let rateLimitRetries = 0;
     while (retryCommands.length > 0) {
       try {
         await withTelegramApiErrorLogging({
           operation: "setMyCommands",
           runtime,
-          shouldLog: (err) => !isBotCommandsTooMuchError(err),
+          shouldLog: (err) =>
+            !isBotCommandsTooMuchError(err) && extractRateLimitRetryAfterSeconds(err) === undefined,
           fn: () => bot.api.setMyCommands(retryCommands),
         });
         if (retryCommands.length < initialCommandCount) {
@@ -228,6 +247,25 @@ export function syncTelegramMenuCommands(params: {
         await writeCachedCommandHash(accountId, botIdentity, currentHash);
         return;
       } catch (err) {
+        // Handle 429 rate-limit: wait for the server-specified delay then retry.
+        const rateLimitDelaySecs = extractRateLimitRetryAfterSeconds(err);
+        if (rateLimitDelaySecs !== undefined) {
+          if (rateLimitRetries >= TELEGRAM_COMMAND_SYNC_RATE_LIMIT_RETRIES) {
+            runtime.error?.(
+              `Telegram setMyCommands rate-limited after ${rateLimitRetries} retries; giving up. ` +
+                "The command menu will be synced on the next gateway restart.",
+            );
+            return;
+          }
+          rateLimitRetries++;
+          runtime.log?.(
+            `Telegram setMyCommands rate-limited (retry after ${rateLimitDelaySecs}s); ` +
+              `will retry in ${rateLimitDelaySecs}s (attempt ${rateLimitRetries}/${TELEGRAM_COMMAND_SYNC_RATE_LIMIT_RETRIES}).`,
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, rateLimitDelaySecs * 1000));
+          continue;
+        }
+
         if (!isBotCommandsTooMuchError(err)) {
           throw err;
         }
