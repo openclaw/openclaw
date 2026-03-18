@@ -907,7 +907,7 @@ export const registerTelegramHandlers = ({
     } = params;
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
-    // We buffer 鈥渘ear-limit鈥?messages and append immediately-following parts.
+    // We buffer “near-limit” messages and append immediately-following parts.
     const text = typeof msg.text === "string" ? msg.text : undefined;
     const isCommandLike = (text ?? "").trim().startsWith("/");
     if (text && !isCommandLike) {
@@ -1015,7 +1015,7 @@ export const registerTelegramHandlers = ({
             operation: "sendMessage",
             runtime,
             fn: () =>
-              bot.api.sendMessage(chatId, `鈿狅笍 File too large. Maximum size is ${limitMb}MB.`, {
+              bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
                 reply_to_message_id: msg.message_id,
               }),
           }).catch(() => {});
@@ -1028,7 +1028,7 @@ export const registerTelegramHandlers = ({
         operation: "sendMessage",
         runtime,
         fn: () =>
-          bot.api.sendMessage(chatId, "鈿狅笍 Failed to download media. Please try again.", {
+          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
             reply_to_message_id: msg.message_id,
           }),
       }).catch(() => {});
@@ -1397,7 +1397,7 @@ export const registerTelegramHandlers = ({
           const modelSet = byProvider.get(selection.provider);
           if (!modelSet?.has(selection.model)) {
             await editMessageWithButtons(
-              `鉂?Model "${selection.provider}/${selection.model}" is not allowed.`,
+              `❌ Model "${selection.provider}/${selection.model}" is not allowed.`,
               [],
             );
             return;
@@ -1437,11 +1437,11 @@ export const registerTelegramHandlers = ({
               ? "reset to default"
               : `changed to **${selection.provider}/${selection.model}**`;
             await editMessageWithButtons(
-              `鉁?Model ${actionText}\n\nThis model will be used for your next message.`,
+              `✅ Model ${actionText}\n\nThis model will be used for your next message.`,
               [], // Empty buttons = remove inline keyboard
             );
           } catch (err) {
-            await editMessageWithButtons(`鉂?Failed to change model: ${String(err)}`, []);
+            await editMessageWithButtons(`❌ Failed to change model: ${String(err)}`, []);
           }
           return;
         }
@@ -1478,7 +1478,7 @@ export const registerTelegramHandlers = ({
       const newChatId = String(msg.migrate_to_chat_id);
       const chatTitle = msg.chat.title ?? "Unknown";
 
-      runtime.log?.(warn(`[telegram] Group migrated: "${chatTitle}" ${oldChatId} 鈫?${newChatId}`));
+      runtime.log?.(warn(`[telegram] Group migrated: "${chatTitle}" ${oldChatId} → ${newChatId}`));
 
       if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
         runtime.log?.(warn("[telegram] Config writes disabled; skipping group config migration."));
@@ -1649,7 +1649,7 @@ export const registerTelegramHandlers = ({
     });
   });
 
-  // Handle channel posts 鈥?enables bot-to-bot communication via Telegram channels.
+  // Handle channel posts — enables bot-to-bot communication via Telegram channels.
   // Telegram bots cannot see other bot messages in groups, but CAN in channels.
   // This handler normalizes channel_post updates into the standard message pipeline.
   bot.on("channel_post", async (ctx) => {
