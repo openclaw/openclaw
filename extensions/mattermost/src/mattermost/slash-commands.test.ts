@@ -7,6 +7,7 @@ import {
   cleanupSlashCommands,
   DEFAULT_COMMAND_SPECS,
   loadPersistedSlashCommands,
+  mergePersistedSlashCommands,
   parseSlashCommandPayload,
   removePersistedSlashCommands,
   registerSlashCommands,
@@ -15,6 +16,7 @@ import {
   resolveCommandText,
   resolveSlashCommandConfig,
   savePersistedSlashCommands,
+  shouldBlindCreateFromListError,
 } from "./slash-commands.js";
 
 describe("slash-commands", () => {
@@ -201,6 +203,23 @@ describe("slash-commands", () => {
       }),
     ]);
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not blind-create when listing fails for a non-403 error", async () => {
+    const request = vi.fn(async (path: string, init?: { method?: string }) => {
+      if (path.startsWith("/commands?team_id=")) {
+        throw new Error("Mattermost API 500 Internal Server Error: database unavailable");
+      }
+      if (init?.method === "POST") {
+        throw new Error("should not blind-create on non-403 list failure");
+      }
+      throw new Error(`unexpected request path: ${path}`);
+    });
+
+    await expect(registerSingleStatusCommand(request)).rejects.toThrow(
+      "Mattermost API 500 Internal Server Error",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("reuses cached commands when listing existing commands is forbidden after restart", async () => {
@@ -476,5 +495,72 @@ describe("slash-commands", () => {
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("preserves untouched cached teams when merging refreshed commands", () => {
+    expect(
+      mergePersistedSlashCommands({
+        cachedCommands: [
+          {
+            id: "cmd-team-1-old",
+            trigger: "oc_status",
+            teamId: "team-1",
+            token: "tok-team-1-old",
+            callbackUrl: "http://gateway/callback",
+            managed: true,
+          },
+          {
+            id: "cmd-team-2-old",
+            trigger: "oc_help",
+            teamId: "team-2",
+            token: "tok-team-2-old",
+            callbackUrl: "http://gateway/callback",
+            managed: true,
+          },
+        ],
+        registeredCommands: [
+          {
+            id: "cmd-team-1-new",
+            trigger: "oc_status",
+            teamId: "team-1",
+            token: "tok-team-1-new",
+            callbackUrl: "http://gateway/callback",
+            managed: true,
+          },
+        ],
+        refreshedTeamIds: ["team-1"],
+      }),
+    ).toEqual([
+      {
+        id: "cmd-team-2-old",
+        trigger: "oc_help",
+        teamId: "team-2",
+        token: "tok-team-2-old",
+        callbackUrl: "http://gateway/callback",
+        managed: true,
+      },
+      {
+        id: "cmd-team-1-new",
+        trigger: "oc_status",
+        teamId: "team-1",
+        token: "tok-team-1-new",
+        callbackUrl: "http://gateway/callback",
+        managed: true,
+      },
+    ]);
+  });
+
+  it("only enables blind-create fallback for 403 list errors", () => {
+    expect(
+      shouldBlindCreateFromListError(
+        new Error("Mattermost API 403 Forbidden: You do not have the appropriate permissions."),
+      ),
+    ).toBe(true);
+    expect(
+      shouldBlindCreateFromListError(
+        new Error("Mattermost API 500 Internal Server Error: database unavailable"),
+      ),
+    ).toBe(false);
+    expect(shouldBlindCreateFromListError(new Error("socket hang up"))).toBe(false);
   });
 });

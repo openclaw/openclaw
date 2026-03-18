@@ -351,11 +351,31 @@ export async function removePersistedSlashCommands(
   }
 }
 
+export function shouldBlindCreateFromListError(err: unknown): boolean {
+  const message =
+    err instanceof Error ? err.message : typeof err === "string" ? err : String(err ?? "");
+  return /^Mattermost API 403\b/i.test(message.trim());
+}
+
+export function mergePersistedSlashCommands(params: {
+  cachedCommands: MattermostRegisteredCommand[];
+  registeredCommands: MattermostRegisteredCommand[];
+  refreshedTeamIds: Iterable<string>;
+}): MattermostRegisteredCommand[] {
+  const refreshedTeamIds = new Set(
+    [...params.refreshedTeamIds].map((teamId) => teamId.trim()).filter(Boolean),
+  );
+  const preservedCachedCommands = params.cachedCommands.filter(
+    (cmd) => !refreshedTeamIds.has(cmd.teamId.trim()),
+  );
+  return normalizePersistedCommands([...preservedCachedCommands, ...params.registeredCommands]);
+}
+
 /**
  * Register all OpenClaw slash commands for a given team.
  * Skips commands that are already registered with the same trigger + callback URL.
- * Falls back to a persisted cache when Mattermost refuses GET /commands but
- * still allows POST /commands for bot tokens.
+ * Falls back to a persisted cache only when Mattermost refuses GET /commands
+ * with a 403 but still allows POST /commands for bot tokens.
  */
 export async function registerSlashCommands(params: {
   client: MattermostClient;
@@ -375,14 +395,19 @@ export async function registerSlashCommands(params: {
   // Fetch existing commands to avoid duplicates
   let existing: MattermostCommandResponse[] = [];
   let listError: unknown;
+  let allowBlindCreate = false;
   try {
     existing = await listMattermostCommands(client, teamId);
   } catch (err) {
     listError = err;
     log?.(`mattermost: failed to list existing commands: ${String(err)}`);
+    allowBlindCreate = shouldBlindCreateFromListError(err);
+    if (!allowBlindCreate) {
+      throw err;
+    }
     // Some Mattermost deployments allow POST /commands for bot tokens while
-    // rejecting GET /commands. Fall back to blind-create, but only activate
-    // slash callbacks if every requested trigger is created successfully.
+    // rejecting GET /commands with 403. Fall back to blind-create, but only
+    // activate slash callbacks if every requested trigger is created successfully.
   }
 
   const existingByTrigger = new Map<string, MattermostCommandResponse[]>();
@@ -393,7 +418,6 @@ export async function registerSlashCommands(params: {
   }
 
   const registered: MattermostRegisteredCommand[] = [];
-  const allowBlindCreate = listError != null;
   const createdThisRun: MattermostRegisteredCommand[] = [];
   const cachedByTrigger = new Map<string, MattermostRegisteredCommand[]>();
   for (const cmd of cachedCommands ?? []) {
