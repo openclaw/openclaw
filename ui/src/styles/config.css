@@ -715,6 +715,13 @@
   line-height: 1.55;
 }
 
+.config-raw-toggle {
+  width: 32px;
+  height: 32px;
+  padding: 6px !important;
+  min-width: 32px;
+}
+
 /* Loading State */
 .config-loading {
   display: flex;
