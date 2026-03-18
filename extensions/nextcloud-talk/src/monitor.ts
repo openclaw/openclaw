@@ -149,11 +149,82 @@ function decodeWebhookCreateMessage(params: {
   return { kind: "message", message: payloadToInboundMessage(payload) };
 }
 
+interface RichObjectFileParam {
+  type: string;
+  id?: string;
+  name?: string;
+  path?: string;
+  link?: string;
+  mimetype?: string;
+}
+
+interface RichObjectContent {
+  message: string;
+  parameters: Record<string, unknown>;
+}
+
+function parseRichObjectContent(
+  content: string,
+): { displayText: string; mediaUrls?: string[] } | null {
+  let parsed: RichObjectContent;
+  try {
+    const raw = JSON.parse(content) as unknown;
+    if (
+      typeof raw !== "object" ||
+      raw === null ||
+      typeof (raw as Record<string, unknown>).message !== "string" ||
+      typeof (raw as Record<string, unknown>).parameters !== "object" ||
+      (raw as Record<string, unknown>).parameters === null
+    ) {
+      return null;
+    }
+    parsed = raw as RichObjectContent;
+  } catch {
+    return null;
+  }
+
+  const mediaUrls: string[] = [];
+  let displayText = parsed.message;
+  let hadPlaceholders = false;
+
+  for (const [key, value] of Object.entries(parsed.parameters)) {
+    const param = value as RichObjectFileParam;
+    // Only accept http(s) URLs to prevent file:// or javascript: injection
+    if (
+      param?.type === "file" &&
+      typeof param.link === "string" &&
+      /^https?:\/\//i.test(param.link)
+    ) {
+      mediaUrls.push(param.link);
+    }
+    const placeholder = `{${key}}`;
+    if (displayText.includes(placeholder)) {
+      hadPlaceholders = true;
+      const fileName = typeof param?.name === "string" && param.name ? param.name : key;
+      // Use replaceAll to handle duplicate placeholders
+      displayText = displayText.replaceAll(placeholder, fileName);
+    }
+  }
+
+  // Return if we have files OR if we resolved any placeholders (non-file rich objects
+  // like mentions, deck cards, polls — don't discard their resolved displayText)
+  if (mediaUrls.length === 0 && !hadPlaceholders) {
+    return null;
+  }
+
+  return {
+    displayText: displayText.trim(),
+    mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+  };
+}
+
 function payloadToInboundMessage(
   payload: NextcloudTalkWebhookPayload,
 ): NextcloudTalkInboundMessage {
   // Payload doesn't indicate DM vs room; mark as group and let inbound handler refine.
   const isGroupChat = true;
+  const rawContent = payload.object.content || payload.object.name || "";
+  const richObject = rawContent ? parseRichObjectContent(rawContent) : null;
 
   return {
     messageId: String(payload.object.id),
@@ -161,8 +232,9 @@ function payloadToInboundMessage(
     roomName: payload.target.name,
     senderId: payload.actor.id,
     senderName: payload.actor.name ?? "",
-    text: payload.object.content || payload.object.name || "",
+    text: richObject?.displayText ?? rawContent,
     mediaType: payload.object.mediaType || "text/plain",
+    mediaUrls: richObject?.mediaUrls,
     timestamp: Date.now(),
     isGroupChat,
   };
