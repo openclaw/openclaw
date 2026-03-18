@@ -162,7 +162,7 @@ describe("models.providers.google.safetySettings", () => {
         providers: {
           [providerKey]: {
             baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            api: "google-generative-ai",
+            api: "google-generative-ai" as const,
             models: [],
             ...(safetySettings ? { safetySettings } : {}),
           },

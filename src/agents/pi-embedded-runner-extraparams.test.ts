@@ -1633,7 +1633,7 @@ describe("applyExtraParamsToAgent", () => {
     const cfg = {
       models: {
         providers: {
-          googleAiStudio: {
+          "google-ai-studio": {
             baseUrl: "https://generativelanguage.googleapis.com/v1beta",
             api: "google-generative-ai" as const,
             models: [],
