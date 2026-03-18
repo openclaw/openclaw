@@ -5,18 +5,18 @@ import {
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
+  listSignalAccountIds,
+  resolveDefaultSignalAccountId,
+  resolveSignalAccount,
+  type ResolvedSignalAccount,
+} from "./accounts.js";
+import {
   buildChannelConfigSchema,
   getChatChannelMeta,
   normalizeE164,
   SignalConfigSchema,
   type ChannelPlugin,
 } from "./runtime-api.js";
-import {
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
-  resolveSignalAccount,
-  type ResolvedSignalAccount,
-} from "./accounts.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 export const SIGNAL_CHANNEL = "signal" as const;

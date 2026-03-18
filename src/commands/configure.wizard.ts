@@ -184,13 +184,13 @@ async function promptWebToolsConfig(
     if (!entry) {
       return false;
     }
-    return hasExistingKey(nextConfig, provider as SP) || hasKeyInEnv(entry);
+    return hasExistingKey(nextConfig, provider) || hasKeyInEnv(entry);
   };
 
   const existingProvider: SP = (() => {
     const stored = existingSearch?.provider;
     if (stored && SEARCH_PROVIDER_OPTIONS.some((e) => e.value === stored)) {
-      return stored as SP;
+      return stored;
     }
     return (
       SEARCH_PROVIDER_OPTIONS.find((e) => hasKeyForProvider(e.value))?.value ?? defaultProvider
@@ -242,8 +242,8 @@ async function promptWebToolsConfig(
     nextSearch = { ...nextSearch, provider: providerChoice };
 
     const entry = SEARCH_PROVIDER_OPTIONS.find((e) => e.value === providerChoice)!;
-    const existingKey = resolveExistingKey(nextConfig, providerChoice as SP);
-    const keyConfigured = hasExistingKey(nextConfig, providerChoice as SP);
+    const existingKey = resolveExistingKey(nextConfig, providerChoice);
+    const keyConfigured = hasExistingKey(nextConfig, providerChoice);
     const envAvailable = entry.envKeys.some((k) => Boolean(process.env[k]?.trim()));
     const envVarNames = entry.envKeys.join(" / ");
 
@@ -263,7 +263,7 @@ async function promptWebToolsConfig(
     const key = String(keyInput ?? "").trim();
 
     if (key || existingKey) {
-      const applied = applySearchKey(nextConfig, providerChoice as SP, (key || existingKey)!);
+      const applied = applySearchKey(nextConfig, providerChoice, (key || existingKey)!);
       nextSearch = { ...applied.tools?.web?.search };
     } else if (keyConfigured || envAvailable) {
       nextSearch = { ...nextSearch };
