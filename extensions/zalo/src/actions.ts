@@ -3,8 +3,8 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/zalo";
-import { extractToolSend, jsonResult, readStringParam } from "openclaw/plugin-sdk/zalo";
+} from "./runtime-api.js";
+import { extractToolSend, jsonResult, readStringParam } from "./runtime-api.js";
 import { listEnabledZaloAccounts } from "./accounts.js";
 
 const loadZaloActionsRuntime = createLazyRuntimeNamedExport(
