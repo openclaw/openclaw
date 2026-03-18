@@ -21,6 +21,10 @@ import {
   waitForGatewayReachable,
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
+import {
+  resolveLocalSetupExecutionPlan,
+  type LocalSetupIntent,
+} from "../commands/onboard-local-plan.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
@@ -41,6 +45,7 @@ type FinalizeOnboardingOptions = {
   baseConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   workspaceDir: string;
+  intent: LocalSetupIntent;
   settings: GatewayWizardSettings;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -89,28 +94,39 @@ export async function finalizeSetupWizard(
     });
   }
 
-  const explicitInstallDaemon =
-    typeof opts.installDaemon === "boolean" ? opts.installDaemon : undefined;
-  let installDaemon: boolean;
-  if (explicitInstallDaemon !== undefined) {
-    installDaemon = explicitInstallDaemon;
-  } else if (process.platform === "linux" && !systemdAvailable) {
-    installDaemon = false;
-  } else if (flow === "quickstart") {
-    installDaemon = true;
-  } else {
-    installDaemon = await prompter.confirm({
+  // Resolve the wizard's execution plan from the shared local intent instead of
+  // re-deriving defaults inline, so quickstart/advanced behavior stays inspectable.
+  let setupPlan = resolveLocalSetupExecutionPlan({
+    intent: options.intent,
+    executionMode: "interactive",
+    flow,
+    platform: process.platform,
+    systemdAvailable,
+  });
+  let installDaemon = setupPlan.daemonDecision === "install";
+  if (setupPlan.daemonDecision === "prompt") {
+    const installConfirmed = await prompter.confirm({
       message: "Install Gateway service (recommended)",
       initialValue: true,
     });
+    setupPlan = resolveLocalSetupExecutionPlan({
+      intent: {
+        ...options.intent,
+        daemonPreference: installConfirmed ? "install" : "skip",
+      },
+      executionMode: "interactive",
+      flow,
+      platform: process.platform,
+      systemdAvailable,
+    });
+    installDaemon = setupPlan.daemonDecision === "install";
   }
 
-  if (process.platform === "linux" && !systemdAvailable && installDaemon) {
+  if (setupPlan.daemonDecisionReason === "systemd-unavailable") {
     await prompter.note(
       "Systemd user services are unavailable; skipping service install. Use your container supervisor or `docker compose up -d`.",
       "Gateway service",
     );
-    installDaemon = false;
   }
 
   if (installDaemon) {
@@ -223,7 +239,7 @@ export async function finalizeSetupWizard(
     }
   }
 
-  if (!opts.skipHealth) {
+  if (setupPlan.shouldRunHealthCheck) {
     const probeLinks = resolveControlUiLinks({
       bind: nextConfig.gateway?.bind ?? "loopback",
       port: settings.port,

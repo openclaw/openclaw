@@ -1,4 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
+import { createLocalSetupIntent } from "../commands/onboard-local-plan.js";
 import type {
   GatewayAuthChoice,
   OnboardMode,
@@ -419,6 +420,14 @@ export async function runSetupWizard(
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
+  // Freeze the shared local setup intent here before later wizard steps add
+  // more branching, so finalize can reason from the same inputs as CLI setup.
+  const setupIntent = createLocalSetupIntent({
+    workspaceDir,
+    authChoice,
+    installDaemon: opts.installDaemon,
+    skipHealth: opts.skipHealth,
+  });
 
   const { configureGatewayForSetup } = await import("./setup.gateway-config.js");
   const gateway = await configureGatewayForSetup({
@@ -493,6 +502,7 @@ export async function runSetupWizard(
     baseConfig,
     nextConfig,
     workspaceDir,
+    intent: setupIntent,
     settings,
     prompter,
     runtime,

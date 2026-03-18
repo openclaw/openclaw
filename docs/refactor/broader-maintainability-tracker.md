@@ -101,6 +101,7 @@ Do not edit these files under this plan:
 - [x] Extract shared gateway mode probe summary used by configure and setup flows
 - [x] Extract shared gateway exposure safety normalization used by wizard and non-interactive local onboarding
 - [x] Reuse shared gateway exposure safety normalization in `configure.gateway`
+- [x] Thread a shared `LocalSetupIntent` and execution-plan seam through wizard and non-interactive local setup
 - [ ] Define shared `OnboardingPlan` decision graph
 - [ ] Keep separate interactive and non-interactive executors
 - [ ] Add parity coverage for equivalent inputs

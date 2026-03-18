@@ -15,6 +15,7 @@ import {
   ensureWorkspaceAndSessions,
   resolveControlUiLinks,
 } from "../onboard-helpers.js";
+import { createLocalSetupIntent, resolveLocalSetupExecutionPlan } from "../onboard-local-plan.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { inferAuthChoiceFromFlags } from "./local/auth-choice-inference.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
@@ -98,6 +99,20 @@ export async function runNonInteractiveLocalSetup(params: {
     return;
   }
   const authChoice = opts.authChoice ?? inferredAuthChoice.choice ?? "skip";
+  // Resolve the shared local setup intent once so auth/workspace/daemon/health
+  // expectations stop being reconstructed in later branches and log paths.
+  const setupIntent = createLocalSetupIntent({
+    workspaceDir,
+    authChoice,
+    installDaemon: opts.installDaemon,
+    skipHealth: opts.skipHealth,
+  });
+  const executionPlan = resolveLocalSetupExecutionPlan({
+    intent: setupIntent,
+    executionMode: "non-interactive",
+    platform: process.platform,
+  });
+
   if (authChoice !== "skip") {
     const { applyNonInteractiveAuthChoice } = await import("./local/auth-choice.js");
     const nextConfigAfterAuth = await applyNonInteractiveAuthChoice({
@@ -143,7 +158,7 @@ export async function runNonInteractiveLocalSetup(params: {
         skippedReason?: "systemd-user-unavailable";
       }
     | undefined;
-  if (opts.installDaemon) {
+  if (executionPlan.daemonDecision === "install") {
     const { installGatewayDaemonNonInteractive } = await import("./local/daemon-install.js");
     const daemonInstall = await installGatewayDaemonNonInteractive({
       nextConfig,
@@ -191,7 +206,7 @@ export async function runNonInteractiveLocalSetup(params: {
     }
   }
 
-  if (!opts.skipHealth) {
+  if (executionPlan.shouldRunHealthCheck) {
     const links = resolveControlUiLinks({
       bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom" | "tailnet",
       port: gatewayResult.port,
@@ -202,14 +217,16 @@ export async function runNonInteractiveLocalSetup(params: {
       runtime,
       wsUrl: links.wsUrl,
       token: gatewayResult.gatewayToken,
-      deadlineMs: opts.installDaemon
-        ? INSTALL_DAEMON_HEALTH_DEADLINE_MS
-        : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
+      deadlineMs:
+        executionPlan.healthExpectation === "managed-gateway"
+          ? INSTALL_DAEMON_HEALTH_DEADLINE_MS
+          : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
     });
     if (!probe.ok) {
-      const diagnostics = opts.installDaemon
-        ? await collectGatewayHealthFailureDiagnostics()
-        : undefined;
+      const diagnostics =
+        executionPlan.healthExpectation === "managed-gateway"
+          ? await collectGatewayHealthFailureDiagnostics()
+          : undefined;
       logNonInteractiveOnboardingFailure({
         opts,
         runtime,
@@ -221,19 +238,20 @@ export async function runNonInteractiveLocalSetup(params: {
           wsUrl: links.wsUrl,
           httpUrl: links.httpUrl,
         },
-        installDaemon: Boolean(opts.installDaemon),
+        installDaemon: executionPlan.daemonDecision === "install",
         daemonInstall: daemonInstallStatus,
-        daemonRuntime: opts.installDaemon ? daemonRuntimeRaw : undefined,
+        daemonRuntime: executionPlan.daemonDecision === "install" ? daemonRuntimeRaw : undefined,
         diagnostics,
-        hints: !opts.installDaemon
-          ? [
-              "Non-interactive local setup only waits for an already-running gateway unless you pass --install-daemon.",
-              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
-              process.platform === "win32"
-                ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
-                : undefined,
-            ].filter((value): value is string => Boolean(value))
-          : [`Run \`${formatCliCommand("openclaw gateway status --deep")}\` for more detail.`],
+        hints:
+          executionPlan.healthExpectation === "existing-gateway"
+            ? [
+                "Non-interactive local setup only waits for an already-running gateway unless you pass --install-daemon.",
+                `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
+                process.platform === "win32"
+                  ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
+                  : undefined,
+              ].filter((value): value is string => Boolean(value))
+            : [`Run \`${formatCliCommand("openclaw gateway status --deep")}\` for more detail.`],
       });
       runtime.exit(1);
       return;
@@ -252,11 +270,11 @@ export async function runNonInteractiveLocalSetup(params: {
       authMode: gatewayResult.authMode,
       tailscaleMode: gatewayResult.tailscaleMode,
     },
-    installDaemon: Boolean(opts.installDaemon),
+    installDaemon: executionPlan.daemonDecision === "install",
     daemonInstall: daemonInstallStatus,
-    daemonRuntime: opts.installDaemon ? daemonRuntimeRaw : undefined,
+    daemonRuntime: executionPlan.daemonDecision === "install" ? daemonRuntimeRaw : undefined,
     skipSkills: Boolean(opts.skipSkills),
-    skipHealth: Boolean(opts.skipHealth),
+    skipHealth: !executionPlan.shouldRunHealthCheck,
   });
 
   if (!opts.json) {

@@ -180,6 +180,13 @@ describe("finalizeSetupWizard", () => {
           },
         },
         workspaceDir: "/tmp",
+        intent: {
+          mode: "local",
+          workspaceDir: "/tmp",
+          authChoice: "skip",
+          daemonPreference: "skip",
+          healthRequested: false,
+        },
         settings: {
           port: 18789,
           bind: "loopback",
@@ -243,6 +250,13 @@ describe("finalizeSetupWizard", () => {
         },
       },
       workspaceDir: "/tmp",
+      intent: {
+        mode: "local",
+        workspaceDir: "/tmp",
+        authChoice: "skip",
+        daemonPreference: "install",
+        healthRequested: false,
+      },
       settings: {
         port: 18789,
         bind: "loopback",
@@ -289,6 +303,13 @@ describe("finalizeSetupWizard", () => {
       baseConfig: {},
       nextConfig: {},
       workspaceDir: "/tmp",
+      intent: {
+        mode: "local",
+        workspaceDir: "/tmp",
+        authChoice: "skip",
+        daemonPreference: "install",
+        healthRequested: false,
+      },
       settings: {
         port: 18789,
         bind: "loopback",
