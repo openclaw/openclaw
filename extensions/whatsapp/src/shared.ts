@@ -7,15 +7,6 @@ import {
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import { createDelegatedSetupWizardProxy } from "openclaw/plugin-sdk/setup";
 import {
-  buildChannelConfigSchema,
-  formatWhatsAppConfigAllowFromEntries,
-  getChatChannelMeta,
-  normalizeE164,
-  resolveWhatsAppGroupIntroHint,
-  WhatsAppConfigSchema,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/whatsapp-core";
-import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
@@ -25,6 +16,15 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
+import {
+  buildChannelConfigSchema,
+  formatWhatsAppConfigAllowFromEntries,
+  getChatChannelMeta,
+  normalizeE164,
+  resolveWhatsAppGroupIntroHint,
+  WhatsAppConfigSchema,
+  type ChannelPlugin,
+} from "./runtime-api.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 

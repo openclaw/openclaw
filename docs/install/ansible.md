@@ -154,7 +154,7 @@ If you're locked out:
 - SSH access (port 22) is always allowed
 - The gateway is **only** accessible via Tailscale by design
 
-### Service won't start
+### Service will not start
 
 ```bash
 # Check logs

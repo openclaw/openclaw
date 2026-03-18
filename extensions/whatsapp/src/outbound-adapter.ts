@@ -3,7 +3,7 @@ import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-runtime
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveWhatsAppOutboundTarget } from "openclaw/plugin-sdk/whatsapp";
+import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
 function trimLeadingWhitespace(text: string | undefined): string {

@@ -14,6 +14,7 @@
   "config-runtime",
   "reply-runtime",
   "channel-runtime",
+  "interactive-runtime",
   "infra-runtime",
   "media-runtime",
   "media-understanding-runtime",
@@ -67,9 +68,9 @@
   "phone-control",
   "qwen-portal-auth",
   "synology-chat",
-  "talk-voice",
   "testing",
   "test-utils",
+  "talk-voice",
   "thread-ownership",
   "tlon",
   "twitch",
@@ -108,5 +109,6 @@
   "web-media",
   "speech",
   "state-paths",
-  "tool-send"
+  "tool-send",
+  "secret-input-schema"
 ]
