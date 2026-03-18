@@ -1,12 +1,12 @@
+import { z } from "zod";
+import { requireChannelOpenAllowFrom } from "../../shared/config-schema-helpers.js";
 import {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk/mattermost";
-import { z } from "zod";
-import { requireChannelOpenAllowFrom } from "../../shared/config-schema-helpers.js";
+} from "./runtime-api.js";
 import { buildSecretInputSchema } from "./secret-input.js";
 
 const DmChannelRetrySchema = z

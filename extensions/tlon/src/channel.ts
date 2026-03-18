@@ -1,5 +1,5 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/tlon";
+import type { ChannelAccountSnapshot, ChannelPlugin, OpenClawConfig } from "../api.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import {
   applyTlonSetupConfig,
@@ -214,7 +214,7 @@ export const tlonPlugin: ChannelPlugin = {
         lastError: runtime?.lastError ?? null,
         probe,
       };
-      return snapshot as import("openclaw/plugin-sdk/tlon").ChannelAccountSnapshot;
+      return snapshot as ChannelAccountSnapshot;
     },
   },
   gateway: {

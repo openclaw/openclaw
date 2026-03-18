@@ -7,7 +7,7 @@ import { probeSlack as probeSlackImpl } from "../../../extensions/slack/runtime-
 import { resolveSlackChannelAllowlist as resolveSlackChannelAllowlistImpl } from "../../../extensions/slack/runtime-api.js";
 import { resolveSlackUserAllowlist as resolveSlackUserAllowlistImpl } from "../../../extensions/slack/runtime-api.js";
 import { sendMessageSlack as sendMessageSlackImpl } from "../../../extensions/slack/runtime-api.js";
-import { handleSlackAction as handleSlackActionImpl } from "../../agents/tools/slack-actions.js";
+import { handleSlackAction as handleSlackActionImpl } from "../../../extensions/slack/runtime-api.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 type RuntimeSlackOps = Pick<

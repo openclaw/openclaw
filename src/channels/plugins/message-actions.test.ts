@@ -15,7 +15,7 @@ import {
   listChannelMessageCapabilities,
   listChannelMessageCapabilitiesForChannel,
   resolveChannelMessageToolSchemaProperties,
-} from "./message-actions.js";
+} from "./message-action-discovery.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type { ChannelPlugin } from "./types.js";
 

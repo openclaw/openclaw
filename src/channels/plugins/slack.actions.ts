@@ -1,5 +1,8 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
+import {
+  handleSlackAction,
+  type SlackActionContext,
+} from "../../../extensions/slack/runtime-api.js";
 import {
   extractSlackToolSend,
   isSlackInteractiveRepliesEnabled,

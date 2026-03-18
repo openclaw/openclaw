@@ -382,6 +382,11 @@ export type ChannelThreadingToolContext = {
 
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  resolveSessionTarget?: (params: {
+    kind: "group" | "channel";
+    id: string;
+    threadId?: string | null;
+  }) => string | undefined;
   parseExplicitTarget?: (params: { raw: string }) => {
     to: string;
     threadId?: string | number;
@@ -521,6 +526,10 @@ export type ChannelMessageActionAdapter = {
     toolContext?: ChannelThreadingToolContext;
   }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
+  /**
+   * Prefer this for channel-specific poll semantics or extra poll parameters.
+   * Core only parses the shared poll model when falling back to `outbound.sendPoll`.
+   */
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };
 
