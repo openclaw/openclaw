@@ -21,8 +21,14 @@ function extractTextContent(content: unknown): string {
         parts.push(c.text);
       } else if (c.type === "image") {
         parts.push("[image]");
-      } else if (c.type === "tool_use" || c.type === "tool_result") {
-        // skip tool blocks
+      } else if (
+        c.type === "tool_use" ||
+        c.type === "tool_result" ||
+        c.type === "toolCall" ||
+        c.type === "toolUse" ||
+        c.type === "toolResult"
+      ) {
+        // skip tool blocks (both snake_case and camelCase variants)
       } else if (c.type) {
         parts.push(`[${c.type}]`);
       }
@@ -44,6 +50,10 @@ function extractTextContent(content: unknown): string {
  * auto-compaction, this may include turns from inactive branches. For most
  * channel-plugin use cases (recent context injection) this is acceptable;
  * consumers needing branch-accurate history should use the gateway API instead.
+ *
+ * Limitation: older topic/thread sessions without a persisted `sessionFile`
+ * entry may not be found, as this helper does not perform the topic-specific
+ * path fallback that `resolveAndPersistSessionFile` provides.
  */
 export async function readSessionRecentMessages(params: {
   /**
