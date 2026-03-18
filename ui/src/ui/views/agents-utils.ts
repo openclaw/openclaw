@@ -221,6 +221,23 @@ export function agentLogoUrl(basePath: string): string {
   return base ? `${base}/favicon.svg` : "favicon.svg";
 }
 
+const EMOJI_CONTROL_CHARS_RE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+
+function sanitizeEmojiValue(value: string): string {
+  const cleaned = value.replaceAll(EMOJI_CONTROL_CHARS_RE, "").trim();
+  if (!cleaned) {
+    return "";
+  }
+  if (typeof Intl.Segmenter !== "function") {
+    return cleaned;
+  }
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const first = segmenter.segment(cleaned)[Symbol.iterator]().next().value as
+    | { segment?: string }
+    | undefined;
+  return first?.segment?.trim() || "";
+}
+
 function isLikelyEmoji(value: string) {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -245,24 +262,35 @@ function isLikelyEmoji(value: string) {
   return true;
 }
 
+function pickEmoji(value?: string | null): string {
+  if (!value) {
+    return "";
+  }
+  const sanitized = sanitizeEmojiValue(value);
+  if (!sanitized) {
+    return "";
+  }
+  return isLikelyEmoji(sanitized) ? sanitized : "";
+}
+
 export function resolveAgentEmoji(
   agent: { identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ) {
-  const identityEmoji = agentIdentity?.emoji?.trim();
-  if (identityEmoji && isLikelyEmoji(identityEmoji)) {
+  const identityEmoji = pickEmoji(agentIdentity?.emoji);
+  if (identityEmoji) {
     return identityEmoji;
   }
-  const agentEmoji = agent.identity?.emoji?.trim();
-  if (agentEmoji && isLikelyEmoji(agentEmoji)) {
+  const agentEmoji = pickEmoji(agent.identity?.emoji);
+  if (agentEmoji) {
     return agentEmoji;
   }
-  const identityAvatar = agentIdentity?.avatar?.trim();
-  if (identityAvatar && isLikelyEmoji(identityAvatar)) {
+  const identityAvatar = pickEmoji(agentIdentity?.avatar);
+  if (identityAvatar) {
     return identityAvatar;
   }
-  const avatar = agent.identity?.avatar?.trim();
-  if (avatar && isLikelyEmoji(avatar)) {
+  const avatar = pickEmoji(agent.identity?.avatar);
+  if (avatar) {
     return avatar;
   }
   return "";

@@ -3,6 +3,7 @@ import {
   agentLogoUrl,
   resolveConfiguredCronModelSuggestions,
   resolveAgentAvatarUrl,
+  resolveAgentEmoji,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./agents-utils.ts";
@@ -129,5 +130,19 @@ describe("resolveAgentAvatarUrl", () => {
   it("returns null for initials or emoji avatar values without a URL", () => {
     expect(resolveAgentAvatarUrl({ identity: { avatar: "A" } })).toBeNull();
     expect(resolveAgentAvatarUrl({ identity: { avatar: "🦞" } })).toBeNull();
+  });
+});
+
+describe("resolveAgentEmoji", () => {
+  it("strips bidi controls from emoji values", () => {
+    expect(resolveAgentEmoji({ identity: { emoji: "\u202E🤖" } })).toBe("🤖");
+  });
+
+  it("keeps only the first grapheme cluster", () => {
+    expect(resolveAgentEmoji({ identity: { emoji: "🤖😈" } })).toBe("🤖");
+  });
+
+  it("falls back to empty for control-only emoji strings", () => {
+    expect(resolveAgentEmoji({ identity: { emoji: "\u202E\u2066" } })).toBe("");
   });
 });
