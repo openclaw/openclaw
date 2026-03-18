@@ -31,6 +31,7 @@ import {
 } from "./message-handler.preflight.test-helpers.js";
 import {
   __testing as threadBindingTesting,
+  createNoopThreadBindingManager,
   createThreadBindingManager,
 } from "./thread-bindings.js";
 
@@ -433,7 +434,7 @@ describe("preflightDiscordMessage", () => {
   it("drops thread messages for non-owning Discord accounts when another bot owns the binding", async () => {
     const threadId = "thread-foreign-owner-1";
     const parentId = "channel-parent-foreign-owner-1";
-    const message = createMessage({
+    const message = createDiscordMessage({
       id: "m-foreign-owner-1",
       channelId: threadId,
       content: "tables don't render in Discord, reformat",
@@ -461,7 +462,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await preflightDiscordMessage({
       ...createPreflightArgs({
-        cfg: DEFAULT_CFG,
+        cfg: DEFAULT_PREFLIGHT_CFG,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId: threadId,
@@ -481,7 +482,7 @@ describe("preflightDiscordMessage", () => {
   it("ignores stale foreign bindings when the owning Discord account is not configured", async () => {
     const threadId = "thread-stale-foreign-owner-1";
     const parentId = "channel-parent-stale-foreign-owner-1";
-    const message = createMessage({
+    const message = createDiscordMessage({
       id: "m-stale-foreign-owner-1",
       channelId: threadId,
       content: "hi <@openclaw-bot>",
@@ -511,7 +512,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await preflightDiscordMessage({
       ...createPreflightArgs({
-        cfg: DEFAULT_CFG,
+        cfg: DEFAULT_PREFLIGHT_CFG,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId: threadId,
@@ -532,7 +533,7 @@ describe("preflightDiscordMessage", () => {
   it("ignores stale foreign bindings when only root Discord thread bindings are configured", async () => {
     const threadId = "thread-root-stale-foreign-owner-1";
     const parentId = "channel-parent-root-stale-foreign-owner-1";
-    const message = createMessage({
+    const message = createDiscordMessage({
       id: "m-root-stale-foreign-owner-1",
       channelId: threadId,
       content: "hi <@openclaw-bot>",
@@ -563,7 +564,7 @@ describe("preflightDiscordMessage", () => {
     const result = await preflightDiscordMessage({
       ...createPreflightArgs({
         cfg: {
-          ...DEFAULT_CFG,
+          ...DEFAULT_PREFLIGHT_CFG,
           channels: {
             discord: {
               threadBindings: {
@@ -592,7 +593,7 @@ describe("preflightDiscordMessage", () => {
   it("uses the preflight config instead of the runtime snapshot for foreign-owner suppression", async () => {
     const threadId = "thread-runtime-snapshot-foreign-owner-1";
     const parentId = "channel-parent-runtime-snapshot-foreign-owner-1";
-    const message = createMessage({
+    const message = createDiscordMessage({
       id: "m-runtime-snapshot-foreign-owner-1",
       channelId: threadId,
       content: "hi <@openclaw-bot>",
@@ -605,7 +606,7 @@ describe("preflightDiscordMessage", () => {
     });
 
     setRuntimeConfigSnapshot({
-      ...DEFAULT_CFG,
+      ...DEFAULT_PREFLIGHT_CFG,
       channels: {
         discord: {
           accounts: {
@@ -639,7 +640,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await preflightDiscordMessage({
       ...createPreflightArgs({
-        cfg: DEFAULT_CFG,
+        cfg: DEFAULT_PREFLIGHT_CFG,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId: threadId,
