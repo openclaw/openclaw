@@ -101,6 +101,8 @@ openclaw [--dev] [--profile <name>] <command>
     get
     set
     unset
+    file
+    validate
   completion
   doctor
   dashboard
@@ -283,7 +285,7 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 Manage extensions and their config:
 
 - `openclaw plugins list` — discover plugins (use `--json` for machine output).
-- `openclaw plugins info <id>` — show details for a plugin.
+- `openclaw plugins inspect <id>` — show details for a plugin (`info` is an alias).
 - `openclaw plugins install <path|.tgz|npm-spec|plugin@marketplace>` — install a plugin (or add a plugin path to `plugins.load.paths`).
 - `openclaw plugins marketplace list <marketplace>` — list marketplace entries before install.
 - `openclaw plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
@@ -393,7 +395,15 @@ subcommand launches the wizard.
 Subcommands:
 
 - `config get <path>`: print a config value (dot/bracket path).
-- `config set <path> <value>`: set a value (JSON5 or raw string).
+- `config set`: supports four assignment modes:
+  - value mode: `config set <path> <value>` (JSON5-or-string parsing)
+  - SecretRef builder mode: `config set <path> --ref-provider <provider> --ref-source <source> --ref-id <id>`
+  - provider builder mode: `config set secrets.providers.<alias> --provider-source <env|file|exec> ...`
+  - batch mode: `config set --batch-json '<json>'` or `config set --batch-file <path>`
+- `config set --dry-run`: validate assignments without writing `openclaw.json` (exec SecretRef checks are skipped by default).
+- `config set --allow-exec --dry-run`: opt in to exec SecretRef dry-run checks (may execute provider commands).
+- `config set --dry-run --json`: emit machine-readable dry-run output (checks + completeness signal, operations, refs checked/skipped, errors).
+- `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
 - `config validate`: validate the current config against the schema without starting the gateway.

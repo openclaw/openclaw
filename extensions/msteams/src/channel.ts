@@ -1,5 +1,8 @@
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
+import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-runtime";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   ChannelMessageActionName,
   ChannelPlugin,
@@ -14,7 +17,6 @@ import {
   MSTeamsConfigSchema,
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/msteams";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
@@ -57,11 +59,9 @@ const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
   "Files.Read.All": "files (OneDrive)",
 };
 
-type MSTeamsChannelRuntime = typeof import("./channel.runtime.js").msTeamsChannelRuntime;
-
-const loadMSTeamsChannelRuntime = createLazyRuntimeSurface(
+const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
-  ({ msTeamsChannelRuntime }) => msTeamsChannelRuntime,
+  "msTeamsChannelRuntime",
 );
 
 export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
@@ -370,20 +370,23 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
     },
   },
   actions: {
-    listActions: ({ cfg }) => {
+    describeMessageTool: ({
+      cfg,
+    }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]) => {
       const enabled =
         cfg.channels?.msteams?.enabled !== false &&
         Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
-      if (!enabled) {
-        return [];
-      }
-      return ["poll"] satisfies ChannelMessageActionName[];
-    },
-    getCapabilities: ({ cfg }) => {
-      return cfg.channels?.msteams?.enabled !== false &&
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams))
-        ? (["cards"] as const)
-        : [];
+      return {
+        actions: enabled ? (["poll"] satisfies ChannelMessageActionName[]) : [],
+        capabilities: enabled ? ["cards"] : [],
+        schema: enabled
+          ? {
+              properties: {
+                card: createMessageToolCardSchema(),
+              },
+            }
+          : null,
+      };
     },
     handleAction: async (ctx) => {
       // Handle send action with card parameter

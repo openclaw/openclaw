@@ -3,6 +3,9 @@ import { mattermostPlugin } from "./src/channel.js";
 import { registerSlashCommandRoute } from "./src/mattermost/slash-state.js";
 import { setMattermostRuntime } from "./src/runtime.js";
 
+export { mattermostPlugin } from "./src/channel.js";
+export { setMattermostRuntime } from "./src/runtime.js";
+
 export default defineChannelPluginEntry({
   id: "mattermost",
   name: "Mattermost",

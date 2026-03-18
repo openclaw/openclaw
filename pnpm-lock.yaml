@@ -288,6 +288,8 @@ importers:
 
   extensions/byteplus: {}
 
+  extensions/chutes: {}
+
   extensions/cloudflare-ai-gateway: {}
 
   extensions/copilot-proxy: {}
@@ -601,8 +603,8 @@ importers:
         specifier: 0.34.48
         version: 0.34.48
       zca-js:
-        specifier: 2.1.1
-        version: 2.1.1
+        specifier: 2.1.2
+        version: 2.1.2
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -6879,8 +6881,8 @@ packages:
     resolution: {integrity: sha512-CzhO+pFNo8ajLM2d2IW/R93ipy99LWjtwblvC1RsoSUMZgyLbYFr221TnSNT7GjGdYui6P459mw9JH/g/zW2ug==}
     engines: {node: '>=18'}
 
-  zca-js@2.1.1:
-    resolution: {integrity: sha512-6zCmaIIWg/1eYlvCvO4rVsFt6SQ8MRodro3dCzMkk+LNgB3MyaEMBywBJfsw44WhODmOh8iMlPv4xDTNTMWDWA==}
+  zca-js@2.1.2:
+    resolution: {integrity: sha512-82+zCqoIXnXEF6C9YuN3Kf7WKlyyujY/6Ejl2n8PkwazYkBK0k7kiPd8S7nHvC5Wl7vjwGRhDYeAM8zTHyoRxQ==}
     engines: {node: '>=18.0.0'}
 
   zod-to-json-schema@3.25.1:
@@ -14349,7 +14351,7 @@ snapshots:
 
   yoctocolors@2.1.2: {}
 
-  zca-js@2.1.1:
+  zca-js@2.1.2:
     dependencies:
       crypto-js: 4.2.0
       form-data: 2.5.4

@@ -4,6 +4,7 @@ import {
   buildAccountScopedDmSecurityPolicy,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
@@ -42,7 +43,9 @@ import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 
 const mattermostMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
+  describeMessageTool: ({
+    cfg,
+  }: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0]) => {
     const enabledAccounts = listMattermostAccountIds(cfg)
       .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
       .filter((account) => account.enabled)
@@ -66,16 +69,21 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       actions.push("react");
     }
 
-    return actions;
+    return {
+      actions,
+      capabilities: enabledAccounts.length > 0 ? ["buttons"] : [],
+      schema:
+        enabledAccounts.length > 0
+          ? {
+              properties: {
+                buttons: createMessageToolButtonsSchema(),
+              },
+            }
+          : null,
+    };
   },
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
-  },
-  getCapabilities: ({ cfg }) => {
-    const accounts = listMattermostAccountIds(cfg)
-      .map((id) => resolveMattermostAccount({ cfg, accountId: id }))
-      .filter((a) => a.enabled && a.botToken?.trim() && a.baseUrl?.trim());
-    return accounts.length > 0 ? (["buttons"] as const) : [];
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {

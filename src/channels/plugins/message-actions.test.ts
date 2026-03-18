@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -13,7 +14,8 @@ import {
   listChannelMessageActions,
   listChannelMessageCapabilities,
   listChannelMessageCapabilitiesForChannel,
-} from "./message-actions.js";
+  resolveChannelMessageToolSchemaProperties,
+} from "./message-action-discovery.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type { ChannelPlugin } from "./types.js";
 
@@ -22,16 +24,22 @@ const emptyRegistry = createTestRegistry([]);
 function createMessageActionsPlugin(params: {
   id: "discord" | "telegram";
   capabilities: readonly ChannelMessageCapability[];
+  aliases?: string[];
 }): ChannelPlugin {
+  const base = createChannelTestPluginBase({
+    id: params.id,
+    label: params.id === "discord" ? "Discord" : "Telegram",
+    capabilities: { chatTypes: ["direct", "group"] },
+    config: {
+      listAccountIds: () => ["default"],
+    },
+  });
   return {
-    ...createChannelTestPluginBase({
-      id: params.id,
-      label: params.id === "discord" ? "Discord" : "Telegram",
-      capabilities: { chatTypes: ["direct", "group"] },
-      config: {
-        listAccountIds: () => ["default"],
-      },
-    }),
+    ...base,
+    meta: {
+      ...base.meta,
+      ...(params.aliases ? { aliases: params.aliases } : {}),
+    },
     actions: {
       listActions: () => ["send"],
       getCapabilities: () => params.capabilities,
@@ -128,6 +136,80 @@ describe("message action capability checks", () => {
     expect(channelSupportsMessageCapabilityForChannel({ cfg: {} as OpenClawConfig }, "cards")).toBe(
       false,
     );
+  });
+
+  it("normalizes channel aliases for per-channel capability checks", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createMessageActionsPlugin({
+            id: "telegram",
+            aliases: ["tg"],
+            capabilities: ["cards"],
+          }),
+        },
+      ]),
+    );
+
+    expect(
+      listChannelMessageCapabilitiesForChannel({
+        cfg: {} as OpenClawConfig,
+        channel: "tg",
+      }),
+    ).toEqual(["cards"]);
+  });
+
+  it("prefers unified message tool discovery over legacy discovery methods", () => {
+    const legacyListActions = vi.fn(() => {
+      throw new Error("legacy listActions should not run");
+    });
+    const legacyCapabilities = vi.fn(() => {
+      throw new Error("legacy getCapabilities should not run");
+    });
+    const legacySchema = vi.fn(() => {
+      throw new Error("legacy getToolSchema should not run");
+    });
+    const unifiedPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        label: "Discord",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["react"],
+          capabilities: ["interactive"],
+          schema: {
+            properties: {
+              components: Type.Array(Type.String()),
+            },
+          },
+        }),
+        listActions: legacyListActions,
+        getCapabilities: legacyCapabilities,
+        getToolSchema: legacySchema,
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "discord", source: "test", plugin: unifiedPlugin }]),
+    );
+
+    expect(listChannelMessageActions({} as OpenClawConfig)).toEqual(["send", "broadcast", "react"]);
+    expect(listChannelMessageCapabilities({} as OpenClawConfig)).toEqual(["interactive"]);
+    expect(
+      resolveChannelMessageToolSchemaProperties({
+        cfg: {} as OpenClawConfig,
+        channel: "discord",
+      }),
+    ).toHaveProperty("components");
+    expect(legacyListActions).not.toHaveBeenCalled();
+    expect(legacyCapabilities).not.toHaveBeenCalled();
+    expect(legacySchema).not.toHaveBeenCalled();
   });
 
   it("skips crashing action/capability discovery paths and logs once", () => {
