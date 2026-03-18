@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
+import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
 import type { ProviderRuntimeModel } from "../types.js";
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
@@ -16,11 +18,17 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock("../../providers/qwen-portal-oauth.js", () => ({
-  refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
-}));
+vi.mock("openclaw/plugin-sdk/qwen-portal-auth", async () => {
+  const actual = await vi.importActual<object>("openclaw/plugin-sdk/qwen-portal-auth");
+  return {
+    ...actual,
+    refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
+  };
+});
 
-let requireProviderContractProvider: typeof import("./registry.js").requireProviderContractProvider;
+let requireBundledProviderContractProvider: typeof import("./registry.js").requireProviderContractProvider;
+let openAIPlugin: (typeof import("../../../extensions/openai/index.js"))["default"];
+let qwenPortalPlugin: (typeof import("../../../extensions/qwen-portal-auth/index.js"))["default"];
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
@@ -37,10 +45,39 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
   } satisfies ProviderRuntimeModel;
 }
 
+function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
+  const captured = createCapturedPluginRegistration();
+  for (const plugin of plugins) {
+    plugin.register(captured.api);
+  }
+  return captured.providers;
+}
+
+function requireProvider(providers: ProviderPlugin[], providerId: string) {
+  const provider = providers.find((entry) => entry.id === providerId);
+  if (!provider) {
+    throw new Error(`provider ${providerId} missing`);
+  }
+  return provider;
+}
+
+function requireProviderContractProvider(providerId: string): ProviderPlugin {
+  if (providerId === "openai-codex") {
+    return requireProvider(registerProviders(openAIPlugin), providerId);
+  }
+  if (providerId === "qwen-portal") {
+    return requireProvider(registerProviders(qwenPortalPlugin), providerId);
+  }
+  return requireBundledProviderContractProvider(providerId);
+}
+
 describe("provider runtime contract", () => {
   beforeEach(async () => {
     vi.resetModules();
-    ({ requireProviderContractProvider } = await import("./registry.js"));
+    ({ requireProviderContractProvider: requireBundledProviderContractProvider } =
+      await import("./registry.js"));
+    openAIPlugin = (await import("../../../extensions/openai/index.js")).default;
+    qwenPortalPlugin = (await import("../../../extensions/qwen-portal-auth/index.js")).default;
     getOAuthApiKeyMock.mockReset();
     refreshQwenPortalCredentialsMock.mockReset();
   });
