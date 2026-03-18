@@ -346,6 +346,10 @@
       "types": "./dist/plugin-sdk/zalouser.d.ts",
       "default": "./dist/plugin-sdk/zalouser.js"
     },
+    "./plugin-sdk/account-helpers": {
+      "types": "./dist/plugin-sdk/account-helpers.d.ts",
+      "default": "./dist/plugin-sdk/account-helpers.js"
+    },
     "./plugin-sdk/account-id": {
       "types": "./dist/plugin-sdk/account-id.d.ts",
       "default": "./dist/plugin-sdk/account-id.js"
