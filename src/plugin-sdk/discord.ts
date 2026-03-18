@@ -46,14 +46,13 @@ export {
   resolveConfiguredFromCredentialStatuses,
 } from "../channels/account-snapshot-fields.js";
 export {
-  listDiscordDirectoryGroupsFromConfig,
-  listDiscordDirectoryPeersFromConfig,
-} from "../channels/plugins/directory-config.js";
-
-export {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
 } from "../config/runtime-group-policy.js";
+export {
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
+} from "../../extensions/discord/src/directory-config.js";
 export {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
