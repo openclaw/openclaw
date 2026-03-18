@@ -1,8 +1,4 @@
 import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
-import {
-  createScopedDmSecurityResolver,
-  collectAllowlistProviderRestrictSendersWarnings,
-} from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import {
@@ -23,17 +19,15 @@ import {
 } from "./group-policy.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { imessageSetupAdapter } from "./setup-core.js";
-import { createIMessagePluginBase, imessageSetupWizard } from "./shared.js";
+import {
+  collectIMessageSecurityWarnings,
+  createIMessagePluginBase,
+  imessageResolveDmPolicy,
+  imessageSetupWizard,
+} from "./shared.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
 const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
-
-const resolveIMessageDmPolicy = createScopedDmSecurityResolver<ResolvedIMessageAccount>({
-  channelKey: "imessage",
-  resolvePolicy: (account) => account.config.dmPolicy,
-  resolveAllowFrom: (account) => account.config.allowFrom,
-  policyPathSuffix: "dmPolicy",
-});
 
 function buildIMessageBaseSessionKey(params: {
   cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
@@ -136,19 +130,8 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     }),
   },
   security: {
-    resolveDmPolicy: resolveIMessageDmPolicy,
-    collectWarnings: ({ account, cfg }) => {
-      return collectAllowlistProviderRestrictSendersWarnings({
-        cfg,
-        providerConfigPresent: cfg.channels?.imessage !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        surface: "iMessage groups",
-        openScope: "any member",
-        groupPolicyPath: "channels.imessage.groupPolicy",
-        groupAllowFromPath: "channels.imessage.groupAllowFrom",
-        mentionGated: false,
-      });
-    },
+    resolveDmPolicy: imessageResolveDmPolicy,
+    collectWarnings: collectIMessageSecurityWarnings,
   },
   groups: {
     resolveRequireMention: resolveIMessageGroupRequireMention,
