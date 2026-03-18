@@ -26,9 +26,7 @@ const {
   sequentializeSpy,
   setMessageReactionSpy,
   setMyCommandsSpy,
-  telegramBotHandlersRuntimeForTest,
-  telegramBotMessageDispatchRuntimeForTest,
-  telegramBotNativeCommandsRuntimeForTest,
+  telegramBotDepsForTest,
   telegramBotRuntimeForTest,
   throttlerSpy,
   useSpy,
@@ -36,16 +34,17 @@ const {
 import { resolveTelegramFetch } from "./fetch.js";
 
 // Import after the harness registers `vi.mock(...)` for grammY and Telegram internals.
-const { createTelegramBot, getTelegramSequentialKey, setTelegramBotRuntimeForTest } =
-  await import("./bot.js");
-const { setBotHandlersRuntimeForTest } = await import("./bot-handlers.runtime.js");
-const { setBotMessageDispatchRuntimeForTest } = await import("./bot-message-dispatch.js");
-const { setBotNativeCommandsRuntimeForTest } = await import("./bot-native-commands.js");
-
+const {
+  createTelegramBot: createTelegramBotBase,
+  getTelegramSequentialKey,
+  setTelegramBotRuntimeForTest,
+} = await import("./bot.js");
 setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
-setBotHandlersRuntimeForTest(telegramBotHandlersRuntimeForTest);
-setBotMessageDispatchRuntimeForTest(telegramBotMessageDispatchRuntimeForTest);
-setBotNativeCommandsRuntimeForTest(telegramBotNativeCommandsRuntimeForTest);
+const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
+  createTelegramBotBase({
+    ...opts,
+    telegramDeps: telegramBotDepsForTest,
+  });
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
