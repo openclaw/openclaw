@@ -144,7 +144,7 @@ class NodeForegroundService : Service() {
       @Suppress("DEPRECATION")
       startForeground(NOTIFICATION_ID, notification)
     }
-      didStartForeground = true
+    didStartForeground = true
   }
 
   companion object {
