@@ -77,6 +77,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
     messagingToolSentMediaUrls: [],
+    messagingToolSentTextBaseline: 0,
+    messagingToolSentMediaBaseline: 0,
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
@@ -84,6 +86,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingToolMediaUrls: [],
     pendingToolAudioAsVoice: false,
     deterministicApprovalPromptSent: false,
+    consecutiveToolOnlyTurns: 0,
+    toolOnlyNudgeInjected: false,
+    lastCountedToolOnlyMessageIndex: -1,
+    visibleOutputEmittedThisTurn: false,
   };
   const usageTotals = {
     input: 0,
@@ -149,6 +155,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
+    state.messagingToolSentTextBaseline = messagingToolSentTexts.length;
+    state.messagingToolSentMediaBaseline = messagingToolSentMediaUrls.length;
+    state.visibleOutputEmittedThisTurn = false;
   };
 
   const rememberAssistantText = (text: string) => {
@@ -547,6 +556,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       replyToTag,
       replyToCurrent,
     });
+    // Voice-only replies are visible output even without assistant text.
+    if (audioAsVoice) {
+      state.visibleOutputEmittedThisTurn = true;
+    }
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
@@ -602,6 +615,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     void params.onReasoningStream({
       text: formatted,
     });
+    // Visible reasoning surfaced to the user should prevent the tool-only
+    // turn counter from incrementing.
+    state.visibleOutputEmittedThisTurn = true;
   };
 
   const resetForCompactionRetry = () => {
@@ -708,10 +724,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     getSuccessfulCronAdds: () => state.successfulCronAdds,
-    // Returns true if any messaging tool successfully sent a message.
+    // Returns true if any messaging tool successfully sent user-visible output.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
-    didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
+    didSendViaMessagingTool: () =>
+      messagingToolSentTexts.length > 0 || messagingToolSentMediaUrls.length > 0,
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,

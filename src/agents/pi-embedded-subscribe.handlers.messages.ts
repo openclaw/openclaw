@@ -2,13 +2,19 @@ import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import {
+  buildToolOnlyTurnNudgeMessage,
+  resolveEffectiveToolOnlyTurnSafetyConfig,
+} from "./pi-embedded-runner/tool-only-turn-safety.js";
 import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
@@ -22,6 +28,32 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+
+const messageLog = createSubsystemLogger("agent/embedded/messages");
+
+/** Resolve the maxConsecutiveToolOnlyTurns setting from config. */
+function resolveMaxConsecutiveToolOnlyTurns(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
+}): number {
+  return resolveEffectiveToolOnlyTurnSafetyConfig(params).maxConsecutiveToolOnlyTurns;
+}
+
+/** Check whether an assistant message contains any tool-call content blocks. */
+function hasToolCallBlocks(msg: AgentMessage): boolean {
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block: unknown) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return type === "toolCall" || type === "toolUse" || type === "functionCall";
+  });
+}
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -572,4 +604,51 @@ export function handleMessageEnd(
   ctx.state.lastStreamedAssistant = undefined;
   ctx.state.lastStreamedAssistantCleaned = undefined;
   ctx.state.reasoningStreamOpen = false;
+
+  // ── Tool-only turn safety valve ─────────────────────────────────────────
+  // Track consecutive assistant turns that contain only tool calls and no
+  // user-visible text. When the counter exceeds the configured threshold,
+  // inject a steer message asking the agent to reply to the user.
+  // See: https://github.com/openclaw/openclaw/issues/38792
+  const hasToolCalls = hasToolCallBlocks(assistantMessage);
+  const sentMessagingReplyThisTurn =
+    ctx.state.messagingToolSentTexts.length > ctx.state.messagingToolSentTextBaseline ||
+    ctx.state.messagingToolSentMediaUrls.length > ctx.state.messagingToolSentMediaBaseline;
+  if (
+    cleanedText ||
+    hasMedia ||
+    sentMessagingReplyThisTurn ||
+    ctx.state.visibleOutputEmittedThisTurn
+  ) {
+    // This turn produced user-visible output — either directly, via a
+    // messaging tool send, or through visible tool results / reasoning /
+    // voice-only replies — so it should reset the tool-only streak.
+    ctx.state.consecutiveToolOnlyTurns = 0;
+    ctx.state.toolOnlyNudgeInjected = false;
+  } else if (hasToolCalls) {
+    // Some providers can repeat message_end for the same assistant turn.
+    // Count each assistant message at most once for tool-only safety.
+    if (ctx.state.lastCountedToolOnlyMessageIndex === ctx.state.assistantMessageIndex) {
+      return;
+    }
+    ctx.state.lastCountedToolOnlyMessageIndex = ctx.state.assistantMessageIndex;
+    ctx.state.consecutiveToolOnlyTurns++;
+    const threshold = resolveMaxConsecutiveToolOnlyTurns({
+      config: ctx.params.config,
+      sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
+    });
+    if (
+      threshold > 0 &&
+      ctx.state.consecutiveToolOnlyTurns >= threshold &&
+      !ctx.state.toolOnlyNudgeInjected
+    ) {
+      ctx.state.toolOnlyNudgeInjected = true;
+      const nudgeMsg = buildToolOnlyTurnNudgeMessage(ctx.state.consecutiveToolOnlyTurns);
+      // Fire-and-forget steer to avoid blocking the event handler.
+      void ctx.params.session.steer(nudgeMsg).catch((err: unknown) => {
+        messageLog.warn(`tool-only turn nudge steer failed: ${String(err)}`);
+      });
+    }
+  }
 }

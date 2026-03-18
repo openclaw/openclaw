@@ -73,6 +73,8 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTextsNormalized: string[];
   messagingToolSentTargets: MessagingToolSend[];
   messagingToolSentMediaUrls: string[];
+  messagingToolSentTextBaseline: number;
+  messagingToolSentMediaBaseline: number;
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -81,6 +83,21 @@ export type EmbeddedPiSubscribeState = {
   pendingToolAudioAsVoice: boolean;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AgentMessage;
+
+  /** Consecutive assistant turns that contained only tool calls and no text. */
+  consecutiveToolOnlyTurns: number;
+  /** Whether a tool-only turn nudge has been injected for the current streak. */
+  toolOnlyNudgeInjected: boolean;
+  /** Assistant message index already counted for the current tool-only streak. */
+  lastCountedToolOnlyMessageIndex: number;
+  /**
+   * Set to `true` when any visible output has been emitted during the current
+   * assistant turn — via tool result delivery, surfaced reasoning, or
+   * voice-only replies. Checked by the tool-only turn counter to avoid
+   * incrementing the streak when the user actually received progress.
+   * Reset at the start of each new assistant message.
+   */
+  visibleOutputEmittedThisTurn: boolean;
 };
 
 export type EmbeddedPiSubscribeContext = {
@@ -163,6 +180,7 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTargets"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
+  | "visibleOutputEmittedThisTurn"
 >;
 
 export type ToolHandlerContext = {

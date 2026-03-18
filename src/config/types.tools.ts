@@ -297,6 +297,17 @@ export type AgentToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /**
+   * Maximum consecutive assistant turns that contain only tool calls and no
+   * user-visible text before injecting a system nudge asking the agent to
+   * reply. 0 disables the safety valve. Default: 15.
+   */
+  maxConsecutiveToolOnlyTurns?: number;
+  /**
+   * When an API error occurs and the agent has not yet sent any text reply,
+   * notify the user with a brief status message. Default: true.
+   */
+  notifyUserOnApiError?: boolean;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -620,6 +631,18 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /**
+   * Maximum consecutive assistant turns that contain only tool calls and no
+   * user-visible text before injecting a system nudge asking the agent to
+   * reply. 0 disables the safety valve. Default: 15.
+   */
+  maxConsecutiveToolOnlyTurns?: number;
+  /**
+   * When an API error (e.g. overloaded_error) occurs and the agent has not
+   * yet sent any text reply, notify the user with a brief status message.
+   * Default: true.
+   */
+  notifyUserOnApiError?: boolean;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */

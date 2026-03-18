@@ -13,6 +13,7 @@ export function createBaseToolHandlerState() {
     messagingToolSentMediaUrls: [] as string[],
     messagingToolSentTargets: [] as unknown[],
     deterministicApprovalPromptSent: false,
+    visibleOutputEmittedThisTurn: false,
     blockBuffer: "",
   };
 }

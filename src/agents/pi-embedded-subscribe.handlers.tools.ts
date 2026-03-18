@@ -257,6 +257,8 @@ async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
+    ctx.state.deterministicApprovalPromptSent = true;
+    ctx.state.visibleOutputEmittedThisTurn = true;
     try {
       await ctx.params.onToolResult(
         buildExecApprovalPendingReplyPayload({
@@ -270,7 +272,6 @@ async function emitToolResultOutput(params: {
           warningText: approvalPending.warningText,
         }),
       );
-      ctx.state.deterministicApprovalPromptSent = true;
     } catch {
       // ignore delivery failures
     }
@@ -282,6 +283,8 @@ async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
+    ctx.state.deterministicApprovalPromptSent = true;
+    ctx.state.visibleOutputEmittedThisTurn = true;
     try {
       await ctx.params.onToolResult?.(
         buildExecApprovalUnavailableReplyPayload({
@@ -291,7 +294,6 @@ async function emitToolResultOutput(params: {
           sentApproverDms: approvalUnavailable.sentApproverDms,
         }),
       );
-      ctx.state.deterministicApprovalPromptSent = true;
     } catch {
       // ignore delivery failures
     }
@@ -301,7 +303,8 @@ async function emitToolResultOutput(params: {
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText, result);
+      ctx.emitToolOutput(toolName, meta, outputText);
+      ctx.state.visibleOutputEmittedThisTurn = true;
     }
     if (!hasStructuredMedia) {
       return;
@@ -320,6 +323,7 @@ async function emitToolResultOutput(params: {
   if (mediaUrls.length === 0) {
     return;
   }
+  ctx.state.visibleOutputEmittedThisTurn = true;
   queuePendingToolMedia(ctx, {
     mediaUrls,
     ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),

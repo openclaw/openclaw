@@ -85,6 +85,10 @@ import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
 import {
+  buildApiErrorNotice,
+  resolveEffectiveToolOnlyTurnSafetyConfig,
+} from "./tool-only-turn-safety.js";
+import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
 } from "./tool-result-truncation.js";
@@ -93,6 +97,32 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
+type PartialReplyPayload = Parameters<NonNullable<RunEmbeddedPiAgentParams["onPartialReply"]>>[0];
+type BlockReplyStreamPayload = Parameters<NonNullable<RunEmbeddedPiAgentParams["onBlockReply"]>>[0];
+
+type UserVisibleReplyAttempt = {
+  assistantTexts: string[];
+  didSendViaMessagingTool: boolean;
+  messagingToolSentMediaUrls?: string[];
+  didSendDeterministicApprovalPrompt?: boolean;
+};
+
+function hasVisiblePartialReplyPayload(payload: PartialReplyPayload): boolean {
+  return Boolean(payload.text?.trim() || payload.mediaUrls?.length);
+}
+
+function hasVisibleBlockReplyPayload(payload: BlockReplyStreamPayload): boolean {
+  return Boolean(payload.text?.trim() || payload.mediaUrls?.length || payload.audioAsVoice);
+}
+
+function attemptSentUserVisibleReply(attempt: UserVisibleReplyAttempt): boolean {
+  return (
+    attempt.assistantTexts.some((text) => text.trim().length > 0) ||
+    attempt.didSendViaMessagingTool ||
+    Boolean(attempt.messagingToolSentMediaUrls?.length) ||
+    attempt.didSendDeterministicApprovalPrompt === true
+  );
+}
 
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
@@ -116,6 +146,23 @@ export async function runEmbeddedPiAgent(
   return enqueueSession(() =>
     enqueueGlobal(async () => {
       const started = Date.now();
+      let hasUserVisibleReply = false;
+      const emitPartialReply = params.onPartialReply
+        ? (payload: PartialReplyPayload) => {
+            if (hasVisiblePartialReplyPayload(payload)) {
+              hasUserVisibleReply = true;
+            }
+            return params.onPartialReply?.(payload);
+          }
+        : undefined;
+      const emitBlockReply = params.onBlockReply
+        ? (payload: BlockReplyStreamPayload) => {
+            if (hasVisibleBlockReplyPayload(payload)) {
+              hasUserVisibleReply = true;
+            }
+            return params.onBlockReply?.(payload);
+          }
+        : undefined;
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
@@ -360,6 +407,27 @@ export async function runEmbeddedPiAgent(
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);
+      const toolOnlySafetyConfig = resolveEffectiveToolOnlyTurnSafetyConfig({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+      });
+      let apiErrorNotified = false;
+      const maybeNotifyUserOfApiError = (errorSummary: string) => {
+        if (apiErrorNotified || hasUserVisibleReply || !emitBlockReply) {
+          return;
+        }
+        const notice = buildApiErrorNotice(errorSummary, toolOnlySafetyConfig);
+        if (!notice) {
+          return;
+        }
+        apiErrorNotified = true;
+        void Promise.resolve()
+          .then(() => emitBlockReply({ text: notice }))
+          .catch((err) => {
+            log.warn(`API error user notification failed: ${String(err)}`);
+          });
+      };
       try {
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
         // bypassed. Fire lifecycle hooks here so recovery paths still notify
@@ -509,9 +577,9 @@ export async function runEmbeddedPiAgent(
             abortSignal: params.abortSignal,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
+            onPartialReply: emitPartialReply,
             onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
+            onBlockReply: emitBlockReply,
             onBlockReplyFlush: params.onBlockReplyFlush,
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
@@ -538,6 +606,7 @@ export async function runEmbeddedPiAgent(
             sessionIdUsed,
             lastAssistant,
           } = attempt;
+          hasUserVisibleReply ||= attemptSentUserVisibleReply(attempt);
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
             (attempt.bootstrapPromptWarningSignature
@@ -1027,6 +1096,7 @@ export async function runEmbeddedPiAgent(
               promptFailoverReason !== "timeout" &&
               (await advanceAuthProfile())
             ) {
+              maybeNotifyUserOfApiError(promptFailoverReason ?? "service_error");
               logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               continue;
@@ -1047,6 +1117,7 @@ export async function runEmbeddedPiAgent(
             // rate-limit, auth, or billing failures.
             if (fallbackConfigured && promptFailoverFailure) {
               const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
+              maybeNotifyUserOfApiError(promptFailoverReason ?? "service_error");
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
               throw (
@@ -1171,6 +1242,7 @@ export async function runEmbeddedPiAgent(
                 log.warn(
                   `overload profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
                 );
+                maybeNotifyUserOfApiError("overloaded");
                 logAssistantFailoverDecision("fallback_model", { status });
                 throw new FailoverError(
                   "The AI service is temporarily overloaded. Please try again in a moment.",
@@ -1187,12 +1259,14 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
+              maybeNotifyUserOfApiError(assistantFailoverReason ?? "service_error");
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               continue;
             }
 
             if (fallbackConfigured) {
+              maybeNotifyUserOfApiError(assistantFailoverReason ?? "service_error");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               // Prefer formatted error message (user-friendly) over raw errorMessage
               const message =

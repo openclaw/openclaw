@@ -7242,6 +7242,26 @@
       "hasChildren": false
     },
     {
+      "path": "agents.list.*.tools.maxConsecutiveToolOnlyTurns",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.tools.notifyUserOnApiError",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.list.*.tools.profile",
       "kind": "core",
       "type": "string",
@@ -63436,6 +63456,16 @@
       "hasChildren": false
     },
     {
+      "path": "tools.maxConsecutiveToolOnlyTurns",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "tools.media",
       "kind": "core",
       "type": "object",
@@ -65879,6 +65909,16 @@
       ],
       "label": "Cross-Context Marker Suffix",
       "help": "Text suffix for cross-context markers (supports \"{channel}\").",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.notifyUserOnApiError",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
