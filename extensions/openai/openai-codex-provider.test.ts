@@ -18,7 +18,7 @@ describe("buildOpenAICodexProviderPlugin", () => {
           reasoning: true,
           input: ["text", "image"],
           cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
+          contextWindow: 272_000,
           maxTokens: 64_000,
         };
       },
