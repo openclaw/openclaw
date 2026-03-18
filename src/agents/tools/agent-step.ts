@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
 
@@ -49,7 +48,7 @@ export async function runAgentStep(params: {
       sessionKey: params.sessionKey,
       idempotencyKey: stepIdem,
       deliver: false,
-      channel: params.channel ?? INTERNAL_MESSAGE_CHANNEL,
+      channel: params.channel,
       lane: params.lane ?? AGENT_LANE_NESTED,
       extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance: {

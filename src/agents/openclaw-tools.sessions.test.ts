@@ -649,7 +649,7 @@ describe("sessions tools", () => {
     }
     const followUpCalls = agentCalls.filter((call) => !initialSendCalls.includes(call));
     for (const call of followUpCalls) {
-      expect((call.params as { channel?: string }).channel).toBe("webchat");
+      expect((call.params as { channel?: string }).channel).not.toBe("webchat");
     }
     expect(
       agentCalls.some(
@@ -843,7 +843,7 @@ describe("sessions tools", () => {
     ).toBeUndefined();
     const followUpCalls = agentCalls.filter((call) => !initialSendCalls.includes(call));
     for (const call of followUpCalls) {
-      expect((call.params as { channel?: string }).channel).toBe("webchat");
+      expect((call.params as { channel?: string }).channel).not.toBe("webchat");
     }
 
     const replySteps = calls.filter(
@@ -895,11 +895,18 @@ describe("sessions tools", () => {
       runId: "run-no-channel",
     });
     const agentCall = calls.find((call) => call.method === "agent");
-    expect(agentCall?.params).toMatchObject({
-      inputProvenance: {
-        sourceChannel: undefined,
-      },
-    });
+    expect(agentCall?.params).toMatchObject({});
+    expect(
+      (
+        agentCall?.params as
+          | {
+              inputProvenance?: {
+                sourceChannel?: string;
+              };
+            }
+          | undefined
+      )?.inputProvenance?.sourceChannel,
+    ).toBeUndefined();
     expect((agentCall?.params as { channel?: string } | undefined)?.channel).toBeUndefined();
   });
 
