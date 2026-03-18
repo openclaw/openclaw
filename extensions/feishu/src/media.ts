@@ -1,8 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
-import { withTempDownloadPath, type ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { withTempDownloadPath, type ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";

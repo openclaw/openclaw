@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/feishu";
+import type { BaseProbeResult } from "../runtime-api.js";
 import type {
   FeishuConfigSchema,
   FeishuGroupSchema,
