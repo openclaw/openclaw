@@ -1,14 +1,14 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 export type SlimConfig = {
-  datahubApiUrl: string;
-  datahubUsername: string;
-  datahubApiKey: string | undefined;
+  /** Gateway base URL (e.g., http://43.134.61.136:9080) */
+  gatewayUrl: string;
+  /** API Key with fch_ prefix (e.g., fch_<64-char-hex>) */
+  apiKey: string | undefined;
   requestTimeoutMs: number;
 };
 
-const DEFAULT_DATAHUB_URL = "http://172.22.0.10:8088";
-const DEFAULT_DATAHUB_USERNAME = "admin";
+const DEFAULT_GATEWAY_URL = "http://43.134.61.136:9080";
 
 function env(keys: string[]): string | undefined {
   for (const key of keys) {
@@ -20,27 +20,21 @@ function env(keys: string[]): string | undefined {
 export function resolveConfig(api: OpenClawPluginApi): SlimConfig {
   const raw = api.pluginConfig as Record<string, unknown> | undefined;
 
-  const datahubApiUrl =
-    (typeof raw?.datahubApiUrl === "string" ? raw.datahubApiUrl : undefined) ??
-    env(["DATAHUB_API_URL", "OPENFINCLAW_DATAHUB_API_URL"]) ??
-    DEFAULT_DATAHUB_URL;
+  const gatewayUrl =
+    (typeof raw?.gatewayUrl === "string" ? raw.gatewayUrl : undefined) ??
+    env(["DATAHUB_GATEWAY_URL", "OPENFINCLAW_DATAHUB_GATEWAY_URL"]) ??
+    DEFAULT_GATEWAY_URL;
 
-  const datahubUsername =
-    (typeof raw?.datahubUsername === "string" ? raw.datahubUsername : undefined) ??
-    env(["DATAHUB_USERNAME"]) ??
-    DEFAULT_DATAHUB_USERNAME;
-
-  const datahubApiKey =
-    (typeof raw?.datahubApiKey === "string" ? raw.datahubApiKey : undefined) ??
-    env(["DATAHUB_API_KEY", "DATAHUB_PASSWORD", "OPENFINCLAW_DATAHUB_PASSWORD"]) ??
+  const apiKey =
+    (typeof raw?.apiKey === "string" ? raw.apiKey : undefined) ??
+    env(["DATAHUB_API_KEY", "OPENFINCLAW_DATAHUB_API_KEY"]) ??
     undefined;
 
   const t = Number(raw?.requestTimeoutMs ?? env(["OPENFINCLAW_DATAHUB_TIMEOUT_MS"]));
 
   return {
-    datahubApiUrl: datahubApiUrl.replace(/\/+$/, ""),
-    datahubUsername,
-    datahubApiKey,
+    gatewayUrl: gatewayUrl.replace(/\/+$/, ""),
+    apiKey,
     requestTimeoutMs: Number.isFinite(t) && t >= 1000 ? Math.floor(t) : 30_000,
   };
 }
