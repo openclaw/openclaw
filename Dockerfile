@@ -96,8 +96,14 @@ RUN pnpm ui:build
 # Prune dev dependencies and strip build-only metadata before copying
 # runtime assets into the final image.
 FROM build AS runtime-assets
-RUN CI=true pnpm prune --prod && \
-    find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
+
+# Test stage: keep dev dependencies for running tests
+FROM build AS test-runner
+# No prune, keep all dependencies including devDependencies
+WORKDIR /app
+
+# Default command runs tests
+CMD ["pnpm", "test:fast", "--run"]
 
 # ── Runtime base images ─────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default
