@@ -1,13 +1,15 @@
 import {
+  createAllowFromSection,
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
   mergeAllowFromEntries,
+  normalizeAccountId,
   setSetupChannelEnabled,
   splitSetupEntries,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { ChannelSetupAdapter } from "../../../src/channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  type ChannelSetupAdapter,
+  type ChannelSetupWizard,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
 
@@ -280,7 +282,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         }),
     },
   ],
-  allowFrom: {
+  allowFrom: createAllowFromSection({
     helpTitle: "Synology Chat allowlist",
     helpLines: SYNOLOGY_ALLOW_FROM_HELP_LINES,
     message: "Allowed Synology Chat user ids",
@@ -288,15 +290,6 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     invalidWithoutCredentialNote: "Synology Chat user ids must be numeric.",
     parseInputs: splitSetupEntries,
     parseId: parseSynologyUserId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseSynologyUserId(entry);
-        return {
-          input: entry,
-          resolved: Boolean(id),
-          id,
-        };
-      }),
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchSynologyChatAccountConfig({
         cfg,
@@ -310,7 +303,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
           ),
         },
       }),
-  },
+  }),
   completionNote: {
     title: "Synology Chat access control",
     lines: [

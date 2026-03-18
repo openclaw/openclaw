@@ -47,7 +47,7 @@ Welcome to the lobster tank! 🦞
 - **Christoph Nakazawa** - JS Infra
   - GitHub: [@cpojer](https://github.com/cpojer) · X: [@cnakazawa](https://x.com/cnakazawa)
 
-- **Gustavo Madeira Santana** - Multi-agents, CLI, web UI
+- **Gustavo Madeira Santana** - Multi-agents, CLI, Performance, Plugins, Matrix
   - GitHub: [@gumadeiras](https://github.com/gumadeiras) · X: [@gumadeiras](https://x.com/gumadeiras)
 
 - **Onur Solmaz** - Agents, dev workflows, ACP integrations, MS Teams
@@ -93,6 +93,7 @@ Welcome to the lobster tank! 🦞
   - `pnpm test:extension <extension-name>`
   - `pnpm test:extension --list` to see valid extension ids
   - If you changed shared plugin or channel surfaces, run `pnpm test:contracts`
+  - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
   - If you changed broader runtime behavior, still run the relevant wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
 - If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
 - Ensure CI checks pass

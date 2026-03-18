@@ -1,151 +1,164 @@
-import { createFirecrawlWebSearchProvider } from "../../extensions/firecrawl/src/firecrawl-search-provider.js";
-import {
-  createPluginBackedWebSearchProvider,
-  getScopedCredentialValue,
-  getTopLevelCredentialValue,
-  setScopedCredentialValue,
-  setTopLevelCredentialValue,
-} from "../agents/tools/web-search-plugin-factory.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import type { PluginLoadOptions } from "./loader.js";
+import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import { createPluginLoaderLogger } from "./logger.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 
-const BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS = [
-  "brave",
-  "firecrawl",
-  "google",
-  "moonshot",
-  "perplexity",
-  "xai",
-] as const;
+const log = createSubsystemLogger("plugins");
 
-const BUNDLED_WEB_SEARCH_PROVIDER_REGISTRY = [
-  {
-    pluginId: "brave",
-    provider: createPluginBackedWebSearchProvider({
-      id: "brave",
-      label: "Brave Search",
-      hint: "Structured results · country/language/time filters",
-      envVars: ["BRAVE_API_KEY"],
-      placeholder: "BSA...",
-      signupUrl: "https://brave.com/search/api/",
-      docsUrl: "https://docs.openclaw.ai/brave-search",
-      autoDetectOrder: 10,
-      getCredentialValue: getTopLevelCredentialValue,
-      setCredentialValue: setTopLevelCredentialValue,
-    }),
-  },
-  {
-    pluginId: "google",
-    provider: createPluginBackedWebSearchProvider({
-      id: "gemini",
-      label: "Gemini (Google Search)",
-      hint: "Google Search grounding · AI-synthesized",
-      envVars: ["GEMINI_API_KEY"],
-      placeholder: "AIza...",
-      signupUrl: "https://aistudio.google.com/apikey",
-      docsUrl: "https://docs.openclaw.ai/tools/web",
-      autoDetectOrder: 20,
-      getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "gemini"),
-      setCredentialValue: (searchConfigTarget, value) =>
-        setScopedCredentialValue(searchConfigTarget, "gemini", value),
-    }),
-  },
-  {
-    pluginId: "xai",
-    provider: createPluginBackedWebSearchProvider({
-      id: "grok",
-      label: "Grok (xAI)",
-      hint: "xAI web-grounded responses",
-      envVars: ["XAI_API_KEY"],
-      placeholder: "xai-...",
-      signupUrl: "https://console.x.ai/",
-      docsUrl: "https://docs.openclaw.ai/tools/web",
-      autoDetectOrder: 30,
-      getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "grok"),
-      setCredentialValue: (searchConfigTarget, value) =>
-        setScopedCredentialValue(searchConfigTarget, "grok", value),
-    }),
-  },
-  {
-    pluginId: "moonshot",
-    provider: createPluginBackedWebSearchProvider({
-      id: "kimi",
-      label: "Kimi (Moonshot)",
-      hint: "Moonshot web search",
-      envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-      placeholder: "sk-...",
-      signupUrl: "https://platform.moonshot.cn/",
-      docsUrl: "https://docs.openclaw.ai/tools/web",
-      autoDetectOrder: 40,
-      getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "kimi"),
-      setCredentialValue: (searchConfigTarget, value) =>
-        setScopedCredentialValue(searchConfigTarget, "kimi", value),
-    }),
-  },
-  {
-    pluginId: "perplexity",
-    provider: createPluginBackedWebSearchProvider({
-      id: "perplexity",
-      label: "Perplexity Search",
-      hint: "Structured results · domain/country/language/time filters",
-      envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-      placeholder: "pplx-...",
-      signupUrl: "https://www.perplexity.ai/settings/api",
-      docsUrl: "https://docs.openclaw.ai/perplexity",
-      autoDetectOrder: 50,
-      getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "perplexity"),
-      setCredentialValue: (searchConfigTarget, value) =>
-        setScopedCredentialValue(searchConfigTarget, "perplexity", value),
-    }),
-  },
-  {
-    pluginId: "firecrawl",
-    provider: createFirecrawlWebSearchProvider(),
-  },
-] as const;
+function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
+  const plugins = config?.plugins;
+  if (!plugins) {
+    return false;
+  }
+  if (typeof plugins.enabled === "boolean") {
+    return true;
+  }
+  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
+    return true;
+  }
+  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
+    return true;
+  }
+  if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
+    return true;
+  }
+  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
+    return true;
+  }
+  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
+    return true;
+  }
+  return false;
+}
+
+function resolveBundledWebSearchCompatPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] {
+  const registry = loadOpenClawPlugins({
+    config: {
+      ...params.config,
+      plugins: {
+        enabled: true,
+      },
+    },
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    cache: false,
+    activate: false,
+    logger: createPluginLoaderLogger(log),
+  });
+  const bundledPluginIds = new Set(
+    registry.plugins.filter((plugin) => plugin.origin === "bundled").map((plugin) => plugin.id),
+  );
+  return [...new Set(registry.webSearchProviders.map((entry) => entry.pluginId))]
+    .filter((pluginId) => bundledPluginIds.has(pluginId))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function withBundledWebSearchVitestCompat(params: {
+  config: PluginLoadOptions["config"];
+  pluginIds: readonly string[];
+  env?: PluginLoadOptions["env"];
+}): PluginLoadOptions["config"] {
+  const env = params.env ?? process.env;
+  const isVitest = Boolean(env.VITEST || process.env.VITEST);
+  if (!isVitest || hasExplicitPluginConfig(params.config) || params.pluginIds.length === 0) {
+    return params.config;
+  }
+
+  return {
+    ...params.config,
+    plugins: {
+      ...params.config?.plugins,
+      enabled: true,
+      allow: [...params.pluginIds],
+      slots: {
+        ...params.config?.plugins?.slots,
+        memory: "none",
+      },
+    },
+  };
+}
+
+function sortWebSearchProviders(
+  providers: PluginWebSearchProviderEntry[],
+): PluginWebSearchProviderEntry[] {
+  return providers.toSorted((a, b) => {
+    const aOrder = a.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
+    const bOrder = b.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
+    if (aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
 
 export function resolvePluginWebSearchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
+  activate?: boolean;
+  cache?: boolean;
 }): PluginWebSearchProviderEntry[] {
+  const bundledCompatPluginIds = resolveBundledWebSearchCompatPluginIds({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
   const allowlistCompat = params.bundledAllowlistCompat
     ? withBundledPluginAllowlistCompat({
         config: params.config,
-        pluginIds: BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS,
+        pluginIds: bundledCompatPluginIds,
       })
     : params.config;
-  const config = withBundledPluginEnablementCompat({
+  const enablementCompat = withBundledPluginEnablementCompat({
     config: allowlistCompat,
-    pluginIds: BUNDLED_WEB_SEARCH_ALLOWLIST_COMPAT_PLUGIN_IDS,
+    pluginIds: bundledCompatPluginIds,
   });
-  const normalizedPlugins = normalizePluginsConfig(config?.plugins);
+  const config = withBundledWebSearchVitestCompat({
+    config: enablementCompat,
+    pluginIds: bundledCompatPluginIds,
+    env: params.env,
+  });
+  const registry = loadOpenClawPlugins({
+    config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    cache: params.cache ?? false,
+    activate: params.activate ?? false,
+    logger: createPluginLoaderLogger(log),
+  });
 
-  return BUNDLED_WEB_SEARCH_PROVIDER_REGISTRY.filter(
-    ({ pluginId }) =>
-      resolveEffectiveEnableState({
-        id: pluginId,
-        origin: "bundled",
-        config: normalizedPlugins,
-        rootConfig: config,
-      }).enabled,
-  )
-    .map((entry) => ({
+  return sortWebSearchProviders(
+    registry.webSearchProviders.map((entry) => ({
       ...entry.provider,
       pluginId: entry.pluginId,
-    }))
-    .toSorted((a, b) => {
-      const aOrder = a.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-      const bOrder = b.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-      if (aOrder !== bOrder) {
-        return aOrder - bOrder;
-      }
-      return a.id.localeCompare(b.id);
-    });
+    })),
+  );
+}
+
+export function resolveRuntimeWebSearchProviders(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  bundledAllowlistCompat?: boolean;
+}): PluginWebSearchProviderEntry[] {
+  const runtimeProviders = getActivePluginRegistry()?.webSearchProviders ?? [];
+  if (runtimeProviders.length > 0) {
+    return sortWebSearchProviders(
+      runtimeProviders.map((entry) => ({
+        ...entry.provider,
+        pluginId: entry.pluginId,
+      })),
+    );
+  }
+  return resolvePluginWebSearchProviders(params);
 }

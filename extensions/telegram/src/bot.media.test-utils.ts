@@ -1,6 +1,5 @@
+import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
-import * as ssrf from "../../../src/infra/net/ssrf.js";
-import { onSpy, sendChatActionSpy } from "./bot.media.e2e-harness.js";
 
 type StickerSpy = Mock<(...args: unknown[]) => unknown>;
 
@@ -21,6 +20,8 @@ const TELEGRAM_BOT_IMPORT_TIMEOUT_MS = process.platform === "win32" ? 180_000 : 
 
 let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;
 let replySpyRef: ReturnType<typeof vi.fn>;
+let onSpyRef: Mock;
+let sendChatActionSpyRef: Mock;
 
 export async function createBotHandler(): Promise<{
   handler: (ctx: Record<string, unknown>) => Promise<void>;
@@ -39,9 +40,9 @@ export async function createBotHandlerWithOptions(options: {
   replySpy: ReturnType<typeof vi.fn>;
   runtimeError: ReturnType<typeof vi.fn>;
 }> {
-  onSpy.mockClear();
+  onSpyRef.mockClear();
   replySpyRef.mockClear();
-  sendChatActionSpy.mockClear();
+  sendChatActionSpyRef.mockClear();
 
   const runtimeError = options.runtimeError ?? vi.fn();
   const runtimeLog = options.runtimeLog ?? vi.fn();
@@ -57,7 +58,7 @@ export async function createBotHandlerWithOptions(options: {
       },
     },
   });
-  const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+  const handler = onSpyRef.mock.calls.find((call) => call[0] === "message")?.[1] as (
     ctx: Record<string, unknown>,
   ) => Promise<void>;
   expect(handler).toBeDefined();
@@ -102,8 +103,17 @@ afterEach(() => {
 });
 
 beforeAll(async () => {
-  ({ createTelegramBot: createTelegramBotRef } = await import("./bot.js"));
-  const replyModule = await import("../../../src/auto-reply/reply.js");
+  const harness = await import("./bot.media.e2e-harness.js");
+  onSpyRef = harness.onSpy;
+  sendChatActionSpyRef = harness.sendChatActionSpy;
+  const botModule = await import("./bot.js");
+  botModule.setTelegramBotRuntimeForTest(harness.telegramBotRuntimeForTest);
+  createTelegramBotRef = (opts) =>
+    botModule.createTelegramBot({
+      ...opts,
+      telegramDeps: harness.telegramBotDepsForTest,
+    });
+  const replyModule = await import("openclaw/plugin-sdk/reply-runtime");
   replySpyRef = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
 }, TELEGRAM_BOT_IMPORT_TIMEOUT_MS);
 

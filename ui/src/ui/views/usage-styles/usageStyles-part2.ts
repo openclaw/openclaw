@@ -699,4 +699,78 @@ export const usageStylesPart2 = `
     font-size: 14px;
     margin-bottom: 12px;
   }
+
+  /* ===== RESPONSIVE ===== */
+  @media (max-width: 768px) {
+    .usage-grid {
+      grid-template-columns: 1fr;
+    }
+    .usage-insights-grid {
+      grid-template-columns: 1fr;
+    }
+    .usage-meta-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .daily-chart-bars {
+      height: 180px;
+      gap: 3px;
+      padding-bottom: 40px;
+    }
+    .session-bar-row {
+      padding: 8px 10px;
+      gap: 8px;
+    }
+    .session-bar-track {
+      flex: 0 0 60px;
+    }
+    .session-bar-value {
+      flex: 0 0 55px;
+      font-size: 11px;
+    }
+    .cost-breakdown {
+      padding: 12px;
+    }
+    .cost-breakdown-legend {
+      gap: 10px;
+    }
+    .session-log-content {
+      max-height: 160px;
+      font-size: 12px;
+    }
+    .context-weight-breakdown {
+      padding: 12px;
+    }
+  }
+  @media (max-width: 480px) {
+    .usage-meta-grid {
+      grid-template-columns: 1fr;
+    }
+    .usage-insights-grid {
+      gap: 10px;
+    }
+    .usage-insight-card {
+      padding: 10px;
+    }
+    .daily-chart-bars {
+      height: 150px;
+      gap: 2px;
+    }
+    .daily-bar-label {
+      font-size: 8px;
+      bottom: -30px;
+      transform: rotate(-45deg);
+    }
+    .session-bar-track {
+      display: none;
+    }
+    .session-bar-value {
+      flex: 0 0 auto;
+    }
+    .legend-item {
+      font-size: 11px;
+    }
+    .session-log-content {
+      max-height: 120px;
+    }
+  }
 `;
