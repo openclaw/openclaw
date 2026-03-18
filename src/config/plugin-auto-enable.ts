@@ -1,3 +1,4 @@
+import { hasAnyWhatsAppAuth } from "openclaw/plugin-sdk/whatsapp";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { hasMeaningfulChannelConfig } from "../channels/config-presence.js";
 import {
@@ -9,7 +10,6 @@ import {
   listChatChannels,
   normalizeChatChannelId,
 } from "../channels/registry.js";
-import { hasAnyWhatsAppAuth } from "../plugin-sdk/whatsapp.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
