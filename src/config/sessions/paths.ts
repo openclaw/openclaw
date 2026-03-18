@@ -40,6 +40,51 @@ function resolveManagedSessionsSafetyChain(sessionsDir: string): string[] {
   return [path.dirname(resolved), resolved];
 }
 
+async function ensureManagedSessionsParentChain(sessionsDir: string): Promise<void> {
+  const resolved = path.resolve(sessionsDir);
+  const agentDir = path.dirname(resolved);
+  const agentsDir = path.dirname(agentDir);
+  if (path.basename(resolved) !== "sessions" || path.basename(agentsDir) !== "agents") {
+    return;
+  }
+
+  const stateDir = path.dirname(agentsDir);
+  try {
+    const stat = await fsPromises.stat(stateDir);
+    if (!stat.isDirectory()) {
+      throw new Error(`Session transcripts dir must be a directory: ${stateDir}`);
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw err;
+    }
+    await fsPromises.mkdir(stateDir, { recursive: true });
+  }
+
+  for (const dirPath of [agentsDir, agentDir]) {
+    try {
+      await verifyDirectoryIdentity(dirPath);
+      continue;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        throw err;
+      }
+    }
+
+    try {
+      await fsPromises.mkdir(dirPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") {
+        throw err;
+      }
+    }
+    await verifyDirectoryIdentity(dirPath);
+  }
+}
+
 async function verifyDirectoryIdentity(dirPath: string): Promise<fs.Stats> {
   const stat = await fsPromises.lstat(dirPath);
   if (stat.isSymbolicLink()) {
@@ -103,6 +148,7 @@ function assertStablePathIdentities(
 
 export async function ensurePrivateSessionsDir(sessionsDir: string): Promise<string> {
   const resolved = path.resolve(sessionsDir);
+  await ensureManagedSessionsParentChain(resolved);
   const ancestorSnapshots = await snapshotManagedSessionsSafetyChain(resolved, {
     allowMissingTail: true,
   });

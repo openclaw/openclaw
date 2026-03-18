@@ -61,6 +61,42 @@ describe("ensurePrivateSessionsDir", () => {
     }
   });
 
+  it("materializes missing managed parents before the final recursive mkdir", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-parent-pin-"));
+    const stateDir = path.join(tempDir, "state");
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    const outsideAgentsDir = path.join(tempDir, "outside-agents");
+    const realMkdir = fsPromises.mkdir.bind(fsPromises);
+
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.mkdirSync(outsideAgentsDir, { recursive: true });
+
+    vi.spyOn(fsPromises, "mkdir").mockImplementation(async (filePath, options) => {
+      const resolved = path.resolve(String(filePath));
+      if (resolved === sessionsDir) {
+        const agentsDir = path.join(stateDir, "agents");
+        if (!fs.existsSync(agentsDir)) {
+          fs.symlinkSync(outsideAgentsDir, agentsDir, "dir");
+        }
+      }
+      return await realMkdir(filePath, options);
+    });
+
+    try {
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
+
+      await expect(ensurePrivateSessionsDir(sessionsDir)).resolves.toBe(path.resolve(sessionsDir));
+      expect(fs.existsSync(path.join(stateDir, "agents", "main", "sessions"))).toBe(true);
+      expect(fs.existsSync(path.join(outsideAgentsDir, "main", "sessions"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects symlinked agents parents for custom state roots", async () => {
     if (process.platform === "win32") {
       return;
