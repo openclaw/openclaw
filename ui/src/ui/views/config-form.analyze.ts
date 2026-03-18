@@ -7,6 +7,15 @@ export type ConfigSchemaAnalysis = {
 
 const META_KEYS = new Set(["title", "description", "default", "nullable"]);
 
+const RENDERABLE_UNION_TYPES = new Set([
+  "string",
+  "number",
+  "integer",
+  "boolean",
+  "object",
+  "array",
+]);
+
 function isAnySchema(schema: JsonSchema): boolean {
   const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
   return keys.length === 0;
@@ -309,20 +318,12 @@ function normalizeUnion(
     return res;
   }
 
-  const renderableUnionTypes = new Set([
-    "string",
-    "number",
-    "integer",
-    "boolean",
-    "object",
-    "array",
-  ]);
   if (
     remaining.length > 0 &&
     literals.length === 0 &&
     remaining.every((entry) => {
       const type = schemaType(entry);
-      return Boolean(type) && renderableUnionTypes.has(String(type));
+      return Boolean(type) && RENDERABLE_UNION_TYPES.has(String(type));
     })
   ) {
     return {
@@ -340,7 +341,10 @@ function normalizeUnion(
   if (
     remaining.length > 0 &&
     literals.length > 0 &&
-    remaining.every((entry) => entry.type && primitiveTypes.has(String(entry.type)))
+    remaining.every((entry) => {
+      const t = String(entry.type);
+      return entry.type != null && (t === "string" || t === "number" || t === "integer" || t === "boolean");
+    })
   ) {
     const expanded: unknown[] = [];
     for (const entry of remaining) {
