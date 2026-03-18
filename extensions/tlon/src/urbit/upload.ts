@@ -1,8 +1,8 @@
 /**
  * Upload an image from a URL to Tlon storage.
  */
-import { uploadFile } from "@tloncorp/api";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
+import { loadTlonApi } from "../tlon-api.js";
 import { getDefaultSsrFPolicy } from "./context.js";
 
 /**
@@ -43,6 +43,7 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
       const fileName = urlPath.split("/").pop() || `upload-${Date.now()}.png`;
 
       // Upload to Tlon storage
+      const { uploadFile } = await loadTlonApi();
       const result = await uploadFile({
         blob,
         fileName,

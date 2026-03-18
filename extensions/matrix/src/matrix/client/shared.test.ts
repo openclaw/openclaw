@@ -9,6 +9,13 @@ vi.mock("./create-client.js", () => ({
   createMatrixClient: (...args: unknown[]) => createMatrixClientMock(...args),
 }));
 
+vi.mock("../sdk-runtime.js", () => ({
+  getMatrixLogService: () => ({
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
 function makeAuth(suffix: string): MatrixAuth {
   return {
     homeserver: "https://matrix.example.org",
