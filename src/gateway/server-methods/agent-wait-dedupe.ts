@@ -96,12 +96,14 @@ function extractUsageMeta(payload: Record<string, unknown> | undefined): AgentWa
   if (rawUsage && typeof rawUsage === "object") {
     const input = asFiniteNumber(rawUsage.input);
     const output = asFiniteNumber(rawUsage.output);
-    if (input !== undefined || output !== undefined) {
+    const cacheRead = asFiniteNumber(rawUsage.cacheRead);
+    const cacheWrite = asFiniteNumber(rawUsage.cacheWrite);
+    if (input !== undefined || output !== undefined || cacheRead !== undefined || cacheWrite !== undefined) {
       meta.usage = {
         input: input ?? 0,
         output: output ?? 0,
-        cacheRead: asFiniteNumber(rawUsage.cacheRead),
-        cacheWrite: asFiniteNumber(rawUsage.cacheWrite),
+        ...(cacheRead !== undefined ? { cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
       };
       hasAnyField = true;
     }

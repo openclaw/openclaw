@@ -864,11 +864,11 @@ export const agentHandlers: GatewayRequestHandlers = {
     // When lifecycle wins the race, it may not carry meta (usage/cost).
     // Fall back to the dedupe entry which has meta from dispatchAgentRunFromGateway.
     let meta: AgentWaitUsageMeta | undefined =
-      "meta" in snapshot ? snapshot.meta : undefined;
+      "meta" in snapshot ? (snapshot as AgentWaitTerminalSnapshot).meta ?? undefined : undefined;
     if (!meta && first.source === "lifecycle") {
       const dedupeSnapshot = await dedupePromise.catch(() => null);
       if (dedupeSnapshot && "meta" in dedupeSnapshot) {
-        meta = dedupeSnapshot.meta;
+        meta = (dedupeSnapshot as AgentWaitTerminalSnapshot).meta ?? undefined;
       }
     }
 
