@@ -11,7 +11,7 @@ import {
   normalizeE164,
   SignalConfigSchema,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/signal-core";
+} from "../runtime-api.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
