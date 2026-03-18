@@ -39,9 +39,13 @@ vi.mock("undici", () => ({
 }));
 
 import { makeProxyFetch, resolveProxyFetchFromEnv } from "./proxy-fetch.js";
+import { resetProxyCircuits } from "./proxy-probe.js";
 
 describe("makeProxyFetch", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetProxyCircuits();
+  });
 
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
     const proxyUrl = "http://proxy.test:8080";
@@ -135,5 +139,85 @@ describe("resolveProxyFetchFromEnv", () => {
 
     const fetchFn = resolveProxyFetchFromEnv();
     expect(fetchFn).toBeUndefined();
+  });
+});
+
+describe("circuit breaker integration", () => {
+  const directFetchResult = { ok: true, direct: true } as unknown as Response;
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetProxyCircuits();
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(directFetchResult);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("falls back to direct fetch on proxy connection error", async () => {
+    const connError = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    undiciFetch.mockRejectedValueOnce(connError);
+
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+    const result = await proxyFetch("https://api.example.com");
+
+    expect(result).toBe(directFetchResult);
+    expect(globalThis.fetch).toHaveBeenCalledWith("https://api.example.com", undefined);
+  });
+
+  it("rethrows non-connection errors without fallback", async () => {
+    const apiError = new Error("500 Internal Server Error");
+    undiciFetch.mockRejectedValueOnce(apiError);
+
+    const proxyFetch = makeProxyFetch("http://proxy.test:9090");
+    await expect(proxyFetch("https://api.example.com")).rejects.toThrow("500 Internal Server Error");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("skips proxy after circuit opens", async () => {
+    const connError = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+    });
+    undiciFetch.mockRejectedValueOnce(connError);
+
+    const proxyFetch = makeProxyFetch("http://proxy.test:7070");
+
+    // First call: proxy fails, falls back to direct
+    await proxyFetch("https://api.example.com/1");
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+
+    // Second call: circuit open, goes direct immediately (no proxy attempt)
+    await proxyFetch("https://api.example.com/2");
+    expect(undiciFetch).toHaveBeenCalledTimes(1); // still 1 — proxy skipped
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes proxy after circuit closes on success", async () => {
+    vi.useFakeTimers();
+    const connError = Object.assign(new Error("ETIMEDOUT"), { code: "ETIMEDOUT" });
+    undiciFetch.mockRejectedValueOnce(connError);
+
+    const proxyFetch = makeProxyFetch("http://proxy.test:6060");
+
+    // First call: proxy fails
+    await proxyFetch("https://api.example.com/1");
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+
+    // Wait for cooldown to expire
+    vi.advanceTimersByTime(11_000);
+
+    // Next call: half_open, tries proxy again — this time it succeeds
+    undiciFetch.mockResolvedValueOnce({ ok: true, proxy: true });
+    const result = await proxyFetch("https://api.example.com/2");
+    expect(undiciFetch).toHaveBeenCalledTimes(2); // proxy was tried again
+    expect((result as unknown as { proxy: boolean }).proxy).toBe(true);
+
+    vi.useRealTimers();
   });
 });

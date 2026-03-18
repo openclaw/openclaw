@@ -5,6 +5,12 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 import WebSocket from "ws";
 import type { DiscordAccountConfig } from "../../config/types.js";
 import { danger } from "../../globals.js";
+import {
+  isProxyCircuitOpen,
+  isProxyConnectError,
+  recordProxyFailure,
+  recordProxySuccess,
+} from "../../infra/net/proxy-probe.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 export function resolveDiscordGatewayIntents(
@@ -34,7 +40,7 @@ export function createDiscordGatewayPlugin(params: {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
   const proxy = params.discordConfig?.proxy?.trim();
   const options = {
-    reconnect: { maxAttempts: 50 },
+    reconnect: { maxAttempts: 10 },
     intents,
     autoInteractions: true,
   };
@@ -57,14 +63,21 @@ export function createDiscordGatewayPlugin(params: {
       override async registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
         if (!this.gatewayInfo) {
           try {
+            const useProxy = !isProxyCircuitOpen(proxy);
             const response = await undiciFetch("https://discord.com/api/v10/gateway/bot", {
               headers: {
                 Authorization: `Bot ${client.options.token}`,
               },
-              dispatcher: fetchAgent,
+              ...(useProxy ? { dispatcher: fetchAgent } : {}),
             } as Record<string, unknown>);
             this.gatewayInfo = (await response.json()) as APIGatewayBotInfo;
+            if (useProxy) {
+              recordProxySuccess(proxy);
+            }
           } catch (error) {
+            if (isProxyConnectError(error)) {
+              recordProxyFailure(proxy);
+            }
             throw new Error(
               `Failed to get gateway information from Discord: ${error instanceof Error ? error.message : String(error)}`,
               { cause: error },
@@ -75,6 +88,9 @@ export function createDiscordGatewayPlugin(params: {
       }
 
       override createWebSocket(url: string) {
+        if (isProxyCircuitOpen(proxy)) {
+          return new WebSocket(url);
+        }
         return new WebSocket(url, { agent: wsAgent });
       }
     }
