@@ -27,7 +27,7 @@ export function formatToolOutputForSidebar(text: string): string {
  * Uses JSON code blocks for structured values and preserves plain text input.
  */
 export function formatToolPayloadForSidebar(value: unknown): string | null {
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     return null;
   }
   if (typeof value === "string") {

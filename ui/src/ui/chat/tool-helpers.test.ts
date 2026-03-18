@@ -159,6 +159,10 @@ describe("tool-helpers", () => {
     it("returns null for undefined arguments", () => {
       expect(formatToolPayloadForSidebar(undefined)).toBeNull();
     });
+
+    it("returns null for null arguments", () => {
+      expect(formatToolPayloadForSidebar(null)).toBeNull();
+    });
   });
 
   describe("buildToolSidebarContent", () => {
