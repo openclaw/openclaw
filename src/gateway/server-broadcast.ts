@@ -73,24 +73,11 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       type: "event" as const,
       event,
       payload,
-      seq: undefined as number | undefined,
       stateVersion: opts?.stateVersion,
     };
-    if (shouldLogWs()) {
-      const logMeta: Record<string, unknown> = {
-        event,
-        seq: isTargeted ? "targeted" : "per-client",
-        clients: params.clients.size,
-        targets: targetConnIds ? targetConnIds.size : undefined,
-        dropIfSlow: opts?.dropIfSlow,
-        presenceVersion: opts?.stateVersion?.presence,
-        healthVersion: opts?.stateVersion?.health,
-      };
-      if (event === "agent") {
-        Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
-      }
-      logWs("out", "event", logMeta);
-    }
+    let minSeq = Infinity;
+    let maxSeq = -Infinity;
+    let clientsSent = 0;
     for (const c of params.clients) {
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
@@ -111,18 +98,40 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         continue;
       }
       // Assign per-client seq only for non-targeted (broadcast) events.
-      if (!isTargeted) {
-        const prev = clientSeqs.get(c) ?? 0;
-        baseFrame.seq = prev + 1;
-        clientSeqs.set(c, prev + 1);
-      } else {
-        baseFrame.seq = undefined;
+      // Use a local variable + spread to avoid mutating a shared object,
+      // which would silently break if the loop body ever became async.
+      const clientSeq = !isTargeted
+        ? (() => { const prev = clientSeqs.get(c) ?? 0; clientSeqs.set(c, prev + 1); return prev + 1; })()
+        : undefined;
+      if (clientSeq !== undefined) {
+        minSeq = Math.min(minSeq, clientSeq);
+        maxSeq = Math.max(maxSeq, clientSeq);
       }
+      clientsSent++;
       try {
-        c.socket.send(JSON.stringify(baseFrame));
+        c.socket.send(JSON.stringify({ ...baseFrame, seq: clientSeq }));
       } catch {
         /* ignore */
       }
+    }
+    if (shouldLogWs()) {
+      const logMeta: Record<string, unknown> = {
+        event,
+        clients: params.clients.size,
+        clientsSent,
+        targets: targetConnIds ? targetConnIds.size : undefined,
+        dropIfSlow: opts?.dropIfSlow,
+        presenceVersion: opts?.stateVersion?.presence,
+        healthVersion: opts?.stateVersion?.health,
+      };
+      if (!isTargeted && clientsSent > 0) {
+        logMeta.minSeq = minSeq;
+        logMeta.maxSeq = maxSeq;
+      }
+      if (event === "agent") {
+        Object.assign(logMeta, summarizeAgentEventForWsLog(payload));
+      }
+      logWs("out", "event", logMeta);
     }
   };
 
