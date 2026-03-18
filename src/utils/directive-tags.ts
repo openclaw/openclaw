@@ -1,3 +1,5 @@
+import { parseFenceSpans } from "../markdown/fences.js";
+
 export type InlineDirectiveParseResult = {
   text: string;
   audioAsVoice: boolean;
@@ -17,11 +19,27 @@ type InlineDirectiveParseOptions = {
 const AUDIO_TAG_RE = /\[\[\s*audio_as_voice\s*\]\]/gi;
 const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]\]/gi;
 
+const COLLAPSE_SPACES_RE = /[ \t]+/g;
+const STRIP_AROUND_NEWLINES_RE = /[ \t]*\n[ \t]*/g;
+
+function normalizeSegment(segment: string): string {
+  return segment.replace(COLLAPSE_SPACES_RE, " ").replace(STRIP_AROUND_NEWLINES_RE, "\n");
+}
+
 function normalizeDirectiveWhitespace(text: string): string {
-  return text
-    .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
+  const spans = parseFenceSpans(text);
+  if (spans.length === 0) {
+    return normalizeSegment(text).trim();
+  }
+  let result = "";
+  let cursor = 0;
+  for (const span of spans) {
+    result += normalizeSegment(text.slice(cursor, span.start));
+    result += text.slice(span.start, span.end);
+    cursor = span.end;
+  }
+  result += normalizeSegment(text.slice(cursor));
+  return result.trim();
 }
 
 type StripInlineDirectiveTagsResult = {
