@@ -5,14 +5,14 @@ import type {
   WindowsSpawnProgram,
   WindowsSpawnProgramCandidate,
   WindowsSpawnResolution,
-} from "../runtime-api.js";
+} from "../../runtime-api.js";
 import {
   applyWindowsSpawnProgramPolicy,
   listKnownProviderAuthEnvVarNames,
   materializeWindowsSpawnProgram,
   omitEnvKeysCaseInsensitive,
   resolveWindowsSpawnProgramCandidate,
-} from "../runtime-api.js";
+} from "../../runtime-api.js";
 
 export type SpawnExit = {
   code: number | null;
