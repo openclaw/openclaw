@@ -3,10 +3,6 @@ import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
 } from "./bundled-compat.js";
-import {
-  pluginRegistrationContractRegistry,
-  webSearchProviderContractRegistry,
-} from "./contracts/registry.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -45,10 +41,24 @@ function resolveBundledWebSearchCompatPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): string[] {
-  void params;
-  return pluginRegistrationContractRegistry
-    .filter((plugin) => plugin.webSearchProviderIds.length > 0)
-    .map((plugin) => plugin.pluginId)
+  const registry = loadOpenClawPlugins({
+    config: {
+      ...params.config,
+      plugins: {
+        enabled: true,
+      },
+    },
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    cache: false,
+    activate: false,
+    logger: createPluginLoaderLogger(log),
+  });
+  const bundledPluginIds = new Set(
+    registry.plugins.filter((plugin) => plugin.origin === "bundled").map((plugin) => plugin.id),
+  );
+  return [...new Set(registry.webSearchProviders.map((entry) => entry.pluginId))]
+    .filter((pluginId) => bundledPluginIds.has(pluginId))
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -75,33 +85,6 @@ function withBundledWebSearchVitestCompat(params: {
       },
     },
   };
-}
-
-function applyVitestContractMetadataCompat(
-  providers: PluginWebSearchProviderEntry[],
-  env?: PluginLoadOptions["env"],
-): PluginWebSearchProviderEntry[] {
-  if (!(env?.VITEST || process.env.VITEST)) {
-    return providers;
-  }
-
-  return providers.map((provider) => {
-    const contract = webSearchProviderContractRegistry.find(
-      (entry) => entry.pluginId === provider.pluginId && entry.provider.id === provider.id,
-    );
-    if (!contract) {
-      return provider;
-    }
-    return {
-      ...contract.provider,
-      ...provider,
-      credentialPath: provider.credentialPath ?? contract.provider.credentialPath,
-      inactiveSecretPaths: provider.inactiveSecretPaths ?? contract.provider.inactiveSecretPaths,
-      applySelectionConfig: provider.applySelectionConfig ?? contract.provider.applySelectionConfig,
-      resolveRuntimeMetadata:
-        provider.resolveRuntimeMetadata ?? contract.provider.resolveRuntimeMetadata,
-    };
-  });
 }
 
 function sortWebSearchProviders(
@@ -155,13 +138,10 @@ export function resolvePluginWebSearchProviders(params: {
   });
 
   return sortWebSearchProviders(
-    applyVitestContractMetadataCompat(
-      registry.webSearchProviders.map((entry) => ({
-        ...entry.provider,
-        pluginId: entry.pluginId,
-      })),
-      params.env,
-    ),
+    registry.webSearchProviders.map((entry) => ({
+      ...entry.provider,
+      pluginId: entry.pluginId,
+    })),
   );
 }
 

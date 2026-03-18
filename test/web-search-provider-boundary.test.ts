@@ -21,15 +21,10 @@ function readBaseline() {
 }
 
 describe("web search provider boundary inventory", () => {
-  it("finds the current shared core onboarding import", async () => {
+  it("has no remaining production inventory in core", async () => {
     const inventory = await collectWebSearchProviderBoundaryInventory();
 
-    expect(inventory).toContainEqual(
-      expect.objectContaining({
-        provider: "shared",
-        file: "src/commands/onboard-search.ts",
-      }),
-    );
+    expect(inventory).toEqual([]);
   });
 
   it("ignores extension-owned registrations", async () => {
@@ -59,6 +54,7 @@ describe("web search provider boundary inventory", () => {
     const actual = await collectWebSearchProviderBoundaryInventory();
 
     expect(diffInventory(expected, actual)).toEqual({ missing: [], unexpected: [] });
+    expect(actual).toEqual([]);
   });
 
   it("script json output matches the baseline exactly", () => {
