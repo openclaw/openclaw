@@ -171,6 +171,7 @@ describe("plugin contract registry", () => {
   });
 
   it("keeps bundled image-generation ownership explicit", () => {
+    expect(findImageGenerationProviderIdsForPlugin("fal")).toEqual(["fal"]);
     expect(findImageGenerationProviderIdsForPlugin("google")).toEqual(["google"]);
     expect(findImageGenerationProviderIdsForPlugin("openai")).toEqual(["openai"]);
   });
@@ -187,6 +188,13 @@ describe("plugin contract registry", () => {
   });
 
   it("tracks speech registrations on bundled provider plugins", () => {
+    expect(findRegistrationForPlugin("fal")).toMatchObject({
+      providerIds: ["fal"],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: ["fal"],
+      webSearchProviderIds: [],
+    });
     expect(findRegistrationForPlugin("google")).toMatchObject({
       providerIds: ["google", "google-gemini-cli"],
       speechProviderIds: [],
@@ -214,12 +222,13 @@ describe("plugin contract registry", () => {
     });
   });
 
-  it("tracks every provider, speech, media, or web search plugin in the registration registry", () => {
+  it("tracks every provider, speech, media, image, or web search plugin in the registration registry", () => {
     const expectedPluginIds = [
       ...new Set([
         ...providerContractRegistry.map((entry) => entry.pluginId),
         ...speechProviderContractRegistry.map((entry) => entry.pluginId),
         ...mediaUnderstandingProviderContractRegistry.map((entry) => entry.pluginId),
+        ...imageGenerationProviderContractRegistry.map((entry) => entry.pluginId),
         ...webSearchProviderContractRegistry.map((entry) => entry.pluginId),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
