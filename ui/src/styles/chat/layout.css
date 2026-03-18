@@ -381,7 +381,7 @@
 
 .agent-chat__input:focus-within {
   border-color: var(--border-strong);
-  box-shadow: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-strong) 24%, transparent);
 }
 
 @supports (backdrop-filter: blur(1px)) {
