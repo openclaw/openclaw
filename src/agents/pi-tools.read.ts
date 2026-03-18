@@ -517,6 +517,20 @@ function mapContainerPathToWorkspaceRoot(params: {
     .map((bind) => parseSandboxBindMount(bind))
     .filter((bind): bind is NonNullable<ReturnType<typeof parseSandboxBindMount>> => !!bind)
     .toSorted((a, b) => b.containerRoot.length - a.containerRoot.length);
+
+  // If the candidate is already a host path under one of the bind mounts, return it directly.
+  // This avoids double-mapping when someone passes a host-resolved path.
+  for (const bind of bindMatches) {
+    const hostNorm = bind.hostRoot.replace(/\/+$/, "") || "/";
+    if (normalizedCandidate === hostNorm) {
+      return bind.hostRoot;
+    }
+    const hostPrefix = hostNorm === "/" ? "/" : `${hostNorm}/`;
+    if (normalizedCandidate.startsWith(hostPrefix)) {
+      return path.resolve(normalizedCandidate);
+    }
+  }
+
   for (const bind of bindMatches) {
     if (normalizedCandidate === bind.containerRoot) {
       return bind.hostRoot;

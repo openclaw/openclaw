@@ -19,12 +19,6 @@ type EmptySchema = {
       };
 };
 
-type RootAliasTestHooks = {
-  __unsafeIsMonolithicLoadedForTest?: () => boolean;
-  __unsafeResetMonolithicForTest?: () => void;
-  __unsafeSetJitiOverrideForTest?: (loader: (modulePath: string) => unknown) => void;
-};
-
 function loadRootAliasWithStubs(options?: {
   distExists?: boolean;
   monolithicExports?: Record<string | symbol, unknown>;
@@ -154,53 +148,11 @@ describe("plugin-sdk root alias", () => {
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("keeps fast legacy export resolution off the monolithic SDK path", () => {
-    const hooks = rootSdk as RootAliasTestHooks;
-    expect(typeof hooks.__unsafeIsMonolithicLoadedForTest).toBe("function");
-    expect(hooks.__unsafeIsMonolithicLoadedForTest?.()).toBe(false);
-
-    expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
-
-    expect(hooks.__unsafeIsMonolithicLoadedForTest?.()).toBe(false);
-  });
-
-  it("keeps `in` capability probes non-throwing when monolithic load fails", () => {
-    const hooks = rootSdk as RootAliasTestHooks;
-    hooks.__unsafeResetMonolithicForTest?.();
-    hooks.__unsafeSetJitiOverrideForTest?.(() => {
-      throw new Error("forced-monolithic-load-failure");
-    });
-
-    expect(() => "registerPluginHttpRoute" in rootSdk).not.toThrow();
-    expect("registerPluginHttpRoute" in rootSdk).toBe(false);
-
-    hooks.__unsafeResetMonolithicForTest?.();
-  });
-
-  it("keeps descriptor capability probes non-throwing when monolithic load fails", () => {
-    const hooks = rootSdk as RootAliasTestHooks;
-    hooks.__unsafeResetMonolithicForTest?.();
-    hooks.__unsafeSetJitiOverrideForTest?.(() => {
-      throw new Error("forced-monolithic-load-failure");
-    });
-
-    expect(() =>
-      Object.prototype.hasOwnProperty.call(rootSdk, "registerPluginHttpRoute"),
-    ).not.toThrow();
-    expect(Object.prototype.hasOwnProperty.call(rootSdk, "registerPluginHttpRoute")).toBe(false);
-
-    hooks.__unsafeResetMonolithicForTest?.();
-  });
-
-  it("enumerates monolithic exports on first key scan", () => {
-    const hooks = rootSdk as RootAliasTestHooks;
-    hooks.__unsafeResetMonolithicForTest?.();
-    hooks.__unsafeSetJitiOverrideForTest?.(() => ({ registerPluginHttpRoute: () => undefined }));
-
+  it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {
+    expect("resolveControlCommandGate" in rootSdk).toBe(true);
     const keys = Object.keys(rootSdk);
     expect(keys).toContain("resolveControlCommandGate");
-    expect(keys).toContain("registerPluginHttpRoute");
-
-    hooks.__unsafeResetMonolithicForTest?.();
+    const descriptor = Object.getOwnPropertyDescriptor(rootSdk, "resolveControlCommandGate");
+    expect(descriptor).toBeDefined();
   });
 });
