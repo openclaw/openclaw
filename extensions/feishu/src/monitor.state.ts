@@ -137,9 +137,9 @@ export function stopFeishuMonitorState(accountId?: string): void {
     wsClients.delete(accountId);
     const server = httpServers.get(accountId);
     if (server) {
-      httpServers.delete(accountId);
       server.close();
       server.closeAllConnections();
+      httpServers.delete(accountId);
     }
     botOpenIds.delete(accountId);
     botNames.delete(accountId);
