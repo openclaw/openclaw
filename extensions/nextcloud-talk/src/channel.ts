@@ -4,10 +4,11 @@ import {
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
-  collectAllowlistProviderGroupPolicyWarnings,
-  collectOpenGroupPolicyRouteAllowlistWarnings,
-} from "openclaw/plugin-sdk/channel-policy";
+  createLoggedPairingApprovalNotifier,
+  createPairingPrefixStripper,
+} from "openclaw/plugin-sdk/channel-runtime";
 import { runStoppablePassiveMonitor } from "../../shared/passive-monitor.js";
 import {
   buildBaseChannelStatusSummary,
@@ -76,17 +77,40 @@ const resolveNextcloudTalkDmPolicy = createScopedDmSecurityResolver<ResolvedNext
   normalizeEntry: (raw) => raw.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").toLowerCase(),
 });
 
+const collectNextcloudTalkSecurityWarnings =
+  createAllowlistProviderRouteAllowlistWarningCollector<ResolvedNextcloudTalkAccount>({
+    providerConfigPresent: (cfg) =>
+      (cfg.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] !== undefined,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+    resolveRouteAllowlistConfigured: (account) =>
+      Boolean(account.config.rooms) && Object.keys(account.config.rooms ?? {}).length > 0,
+    restrictSenders: {
+      surface: "Nextcloud Talk rooms",
+      openScope: "any member in allowed rooms",
+      groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
+      groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
+    },
+    noRouteAllowlist: {
+      surface: "Nextcloud Talk rooms",
+      routeAllowlistPath: "channels.nextcloud-talk.rooms",
+      routeScope: "room",
+      groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
+      groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
+    },
+  });
+
 export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = {
   id: "nextcloud-talk",
   meta,
   setupWizard: nextcloudTalkSetupWizard,
   pairing: {
     idLabel: "nextcloudUserId",
-    normalizeAllowEntry: (entry) =>
-      entry.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").toLowerCase(),
-    notifyApproval: async ({ id }) => {
-      console.log(`[nextcloud-talk] User ${id} approved for pairing`);
-    },
+    normalizeAllowEntry: createPairingPrefixStripper(/^(nextcloud-talk|nc-talk|nc):/i, (entry) =>
+      entry.toLowerCase(),
+    ),
+    notifyApproval: createLoggedPairingApprovalNotifier(
+      ({ id }) => `[nextcloud-talk] User ${id} approved for pairing`,
+    ),
   },
   capabilities: {
     chatTypes: ["direct", "group"],
@@ -112,34 +136,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
   },
   security: {
     resolveDmPolicy: resolveNextcloudTalkDmPolicy,
-    collectWarnings: ({ account, cfg }) => {
-      const roomAllowlistConfigured =
-        account.config.rooms && Object.keys(account.config.rooms).length > 0;
-      return collectAllowlistProviderGroupPolicyWarnings({
-        cfg,
-        providerConfigPresent:
-          (cfg.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        collect: (groupPolicy) =>
-          collectOpenGroupPolicyRouteAllowlistWarnings({
-            groupPolicy,
-            routeAllowlistConfigured: Boolean(roomAllowlistConfigured),
-            restrictSenders: {
-              surface: "Nextcloud Talk rooms",
-              openScope: "any member in allowed rooms",
-              groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
-              groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
-            },
-            noRouteAllowlist: {
-              surface: "Nextcloud Talk rooms",
-              routeAllowlistPath: "channels.nextcloud-talk.rooms",
-              routeScope: "room",
-              groupPolicyPath: "channels.nextcloud-talk.groupPolicy",
-              groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
-            },
-          }),
-      });
-    },
+    collectWarnings: collectNextcloudTalkSecurityWarnings,
   },
   groups: {
     resolveRequireMention: ({ cfg, accountId, groupId }) => {

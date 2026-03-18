@@ -1,3 +1,4 @@
+import * as channelRuntimeSdk from "openclaw/plugin-sdk/channel-runtime";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as coreSdk from "openclaw/plugin-sdk/core";
 import type {
@@ -5,6 +6,7 @@ import type {
   OpenClawPluginApi as CoreOpenClawPluginApi,
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
+import * as directoryRuntimeSdk from "openclaw/plugin-sdk/directory-runtime";
 import * as discordSdk from "openclaw/plugin-sdk/discord";
 import * as imessageSdk from "openclaw/plugin-sdk/imessage";
 import * as lazyRuntimeSdk from "openclaw/plugin-sdk/lazy-runtime";
@@ -58,6 +60,7 @@ const mattermostSdk = await import("openclaw/plugin-sdk/mattermost");
 const nextcloudTalkSdk = await import("openclaw/plugin-sdk/nextcloud-talk");
 const twitchSdk = await import("openclaw/plugin-sdk/twitch");
 const accountHelpersSdk = await import("openclaw/plugin-sdk/account-helpers");
+const allowlistEditSdk = await import("openclaw/plugin-sdk/allowlist-config-edit");
 const lobsterSdk = await import("openclaw/plugin-sdk/lobster");
 
 describe("plugin-sdk subpath exports", () => {
@@ -94,8 +97,40 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof accountHelpersSdk.createAccountListHelpers).toBe("function");
   });
 
+  it("exports allowlist edit helpers from the dedicated subpath", () => {
+    expect(typeof allowlistEditSdk.buildDmGroupAccountAllowlistAdapter).toBe("function");
+    expect(typeof allowlistEditSdk.buildLegacyDmAccountAllowlistAdapter).toBe("function");
+    expect(typeof allowlistEditSdk.createAccountScopedAllowlistNameResolver).toBe("function");
+    expect(typeof allowlistEditSdk.createFlatAllowlistOverrideResolver).toBe("function");
+    expect(typeof allowlistEditSdk.createNestedAllowlistOverrideResolver).toBe("function");
+  });
+
   it("exports runtime helpers from the dedicated subpath", () => {
     expect(typeof runtimeSdk.createLoggerBackedRuntime).toBe("function");
+  });
+
+  it("exports directory runtime helpers from the dedicated subpath", () => {
+    expect(typeof directoryRuntimeSdk.listDirectoryEntriesFromSources).toBe("function");
+    expect(typeof directoryRuntimeSdk.listInspectedDirectoryEntriesFromSources).toBe("function");
+    expect(typeof directoryRuntimeSdk.listResolvedDirectoryEntriesFromSources).toBe("function");
+    expect(typeof directoryRuntimeSdk.listResolvedDirectoryGroupEntriesFromMapKeys).toBe(
+      "function",
+    );
+    expect(typeof directoryRuntimeSdk.listResolvedDirectoryUserEntriesFromAllowFrom).toBe(
+      "function",
+    );
+  });
+
+  it("exports channel runtime helpers from the dedicated subpath", () => {
+    expect(typeof channelRuntimeSdk.buildUnresolvedTargetResults).toBe("function");
+    expect(typeof channelRuntimeSdk.createChannelDirectoryAdapter).toBe("function");
+    expect(typeof channelRuntimeSdk.createEmptyChannelDirectoryAdapter).toBe("function");
+    expect(typeof channelRuntimeSdk.createLoggedPairingApprovalNotifier).toBe("function");
+    expect(typeof channelRuntimeSdk.createPairingPrefixStripper).toBe("function");
+    expect(typeof channelRuntimeSdk.createRuntimeDirectoryLiveAdapter).toBe("function");
+    expect(typeof channelRuntimeSdk.createRuntimeOutboundDelegates).toBe("function");
+    expect(typeof channelRuntimeSdk.resolveTargetsWithOptionalToken).toBe("function");
+    expect(typeof channelRuntimeSdk.createTextPairingAdapter).toBe("function");
   });
 
   it("exports provider setup helpers from the dedicated subpath", () => {

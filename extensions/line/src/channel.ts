@@ -1,5 +1,10 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
-import { collectAllowlistProviderRestrictSendersWarnings } from "openclaw/plugin-sdk/channel-policy";
+import { createAllowlistProviderRestrictSendersWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import {
+  createEmptyChannelDirectoryAdapter,
+  createPairingPrefixStripper,
+  createTextPairingAdapter,
+} from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildChannelConfigSchema,
   buildComputedAccountStatusSnapshot,
@@ -42,29 +47,39 @@ const resolveLineDmPolicy = createScopedDmSecurityResolver<ResolvedLineAccount>(
   normalizeEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
 });
 
+const collectLineSecurityWarnings =
+  createAllowlistProviderRestrictSendersWarningCollector<ResolvedLineAccount>({
+    providerConfigPresent: (cfg) => cfg.channels?.line !== undefined,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+    surface: "LINE groups",
+    openScope: "any member in groups",
+    groupPolicyPath: "channels.line.groupPolicy",
+    groupAllowFromPath: "channels.line.groupAllowFrom",
+    mentionGated: false,
+  });
+
 export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   id: "line",
   meta: {
     ...meta,
     quickstartAllowFrom: true,
   },
-  pairing: {
+  pairing: createTextPairingAdapter({
     idLabel: "lineUserId",
-    normalizeAllowEntry: (entry) => {
-      // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
-      return entry.replace(/^line:(?:user:)?/i, "");
-    },
-    notifyApproval: async ({ cfg, id }) => {
+    message: "OpenClaw: your access has been approved.",
+    // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
+    normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
+    notify: async ({ cfg, id, message }) => {
       const line = getLineRuntime().channel.line;
       const account = line.resolveLineAccount({ cfg });
       if (!account.channelAccessToken) {
         throw new Error("LINE channel access token not configured");
       }
-      await line.pushMessageLine(id, "OpenClaw: your access has been approved.", {
+      await line.pushMessageLine(id, message, {
         channelAccessToken: account.channelAccessToken,
       });
     },
-  },
+  }),
   capabilities: {
     chatTypes: ["direct", "group"],
     reactions: false,
@@ -90,18 +105,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
   },
   security: {
     resolveDmPolicy: resolveLineDmPolicy,
-    collectWarnings: ({ account, cfg }) => {
-      return collectAllowlistProviderRestrictSendersWarnings({
-        cfg,
-        providerConfigPresent: cfg.channels?.line !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        surface: "LINE groups",
-        openScope: "any member in groups",
-        groupPolicyPath: "channels.line.groupPolicy",
-        groupAllowFromPath: "channels.line.groupAllowFrom",
-        mentionGated: false,
-      });
-    },
+    collectWarnings: collectLineSecurityWarnings,
   },
   groups: {
     resolveRequireMention: resolveLineGroupRequireMention,
@@ -128,11 +132,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       hint: "<userId|groupId|roomId>",
     },
   },
-  directory: {
-    self: async () => null,
-    listPeers: async () => [],
-    listGroups: async () => [],
-  },
+  directory: createEmptyChannelDirectoryAdapter(),
   setup: lineSetupAdapter,
   outbound: {
     deliveryMode: "direct",

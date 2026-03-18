@@ -1,4 +1,4 @@
-import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -21,6 +21,7 @@ import { imessageSetupAdapter } from "./setup-core.js";
 import {
   collectIMessageSecurityWarnings,
   createIMessagePluginBase,
+  imessageConfigAdapter,
   imessageResolveDmPolicy,
   imessageSetupWizard,
 } from "./shared.js";
@@ -113,26 +114,15 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     notifyApproval: async ({ id }) =>
       await (await loadIMessageChannelRuntime()).notifyIMessageApproval(id),
   },
-  allowlist: {
-    supportsScope: ({ scope }) => scope === "dm" || scope === "group" || scope === "all",
-    readConfig: ({ cfg, accountId }) => {
-      const account = resolveIMessageAccount({ cfg, accountId });
-      return {
-        dmAllowFrom: (account.config.allowFrom ?? []).map(String),
-        groupAllowFrom: (account.config.groupAllowFrom ?? []).map(String),
-        dmPolicy: account.config.dmPolicy,
-        groupPolicy: account.config.groupPolicy,
-      };
-    },
-    applyConfigEdit: buildAccountScopedAllowlistConfigEditor({
-      channelId: "imessage",
-      normalize: ({ values }) => formatTrimmedAllowFromEntries(values),
-      resolvePaths: (scope) => ({
-        readPaths: [[scope === "dm" ? "allowFrom" : "groupAllowFrom"]],
-        writePath: [scope === "dm" ? "allowFrom" : "groupAllowFrom"],
-      }),
-    }),
-  },
+  allowlist: buildDmGroupAccountAllowlistAdapter({
+    channelId: "imessage",
+    resolveAccount: ({ cfg, accountId }) => resolveIMessageAccount({ cfg, accountId }),
+    normalize: ({ values }) => formatTrimmedAllowFromEntries(values),
+    resolveDmAllowFrom: (account) => account.config.allowFrom,
+    resolveGroupAllowFrom: (account) => account.config.groupAllowFrom,
+    resolveDmPolicy: (account) => account.config.dmPolicy,
+    resolveGroupPolicy: (account) => account.config.groupPolicy,
+  }),
   security: {
     resolveDmPolicy: imessageResolveDmPolicy,
     collectWarnings: collectIMessageSecurityWarnings,

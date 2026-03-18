@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectAllowlistProviderRestrictSendersWarnings,
+  composeWarningCollectors,
+  createAllowlistProviderGroupPolicyWarningCollector,
+  createConditionalWarningCollector,
+  createAllowlistProviderOpenWarningCollector,
+  createAllowlistProviderRestrictSendersWarningCollector,
+  createAllowlistProviderRouteAllowlistWarningCollector,
+  createOpenGroupPolicyRestrictSendersWarningCollector,
+  createOpenProviderGroupPolicyWarningCollector,
+  createOpenProviderConfiguredRouteWarningCollector,
+  projectWarningCollector,
   collectOpenGroupPolicyConfiguredRouteWarnings,
   collectOpenProviderGroupPolicyWarnings,
   collectOpenGroupPolicyRestrictSendersWarnings,
@@ -13,6 +23,35 @@ import {
 } from "./group-policy-warnings.js";
 
 describe("group policy warning builders", () => {
+  it("composes warning collectors", () => {
+    const collect = composeWarningCollectors<{ enabled: boolean }>(
+      () => ["a"],
+      ({ enabled }) => (enabled ? ["b"] : []),
+    );
+
+    expect(collect({ enabled: true })).toEqual(["a", "b"]);
+    expect(collect({ enabled: false })).toEqual(["a"]);
+  });
+
+  it("projects warning collector inputs", () => {
+    const collect = projectWarningCollector(
+      ({ value }: { value: string }) => value,
+      (value: string) => [value.toUpperCase()],
+    );
+
+    expect(collect({ value: "abc" })).toEqual(["ABC"]);
+  });
+
+  it("builds conditional warning collectors", () => {
+    const collect = createConditionalWarningCollector<{ open: boolean; token?: string }>(
+      ({ open }) => (open ? "open" : undefined),
+      ({ token }) => (token ? undefined : ["missing token", "cannot send replies"]),
+    );
+
+    expect(collect({ open: true })).toEqual(["open", "missing token", "cannot send replies"]);
+    expect(collect({ open: false, token: "x" })).toEqual([]);
+  });
+
   it("builds base open-policy warning", () => {
     expect(
       buildOpenGroupPolicyWarning({
@@ -252,5 +291,206 @@ describe("group policy warning builders", () => {
         routeAllowlistConfigured: false,
       }),
     ).toEqual([buildOpenGroupPolicyWarning(params.missingRouteAllowlist)]);
+  });
+
+  it("builds account-aware allowlist-provider restrict-senders collectors", () => {
+    const collectWarnings = createAllowlistProviderRestrictSendersWarningCollector<{
+      groupPolicy?: "open" | "allowlist" | "disabled";
+    }>({
+      providerConfigPresent: (cfg) => cfg.channels?.example !== undefined,
+      resolveGroupPolicy: (account) => account.groupPolicy,
+      surface: "Example groups",
+      openScope: "any member",
+      groupPolicyPath: "channels.example.groupPolicy",
+      groupAllowFromPath: "channels.example.groupAllowFrom",
+    });
+
+    expect(
+      collectWarnings({
+        account: { groupPolicy: "open" },
+        cfg: { channels: { example: {} } },
+      }),
+    ).toEqual([
+      buildOpenGroupPolicyRestrictSendersWarning({
+        surface: "Example groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      }),
+    ]);
+  });
+
+  it("builds config-aware allowlist-provider collectors", () => {
+    const collectWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
+      cfg: {
+        channels?: {
+          defaults?: { groupPolicy?: "open" | "allowlist" | "disabled" };
+          example?: unknown;
+        };
+      };
+      channelLabel: string;
+      configuredGroupPolicy?: "open" | "allowlist" | "disabled";
+    }>({
+      providerConfigPresent: (cfg) => cfg.channels?.example !== undefined,
+      resolveGroupPolicy: ({ configuredGroupPolicy }) => configuredGroupPolicy,
+      collect: ({ channelLabel, groupPolicy }) =>
+        groupPolicy === "open" ? [`warn:${channelLabel}`] : [],
+    });
+
+    expect(
+      collectWarnings({
+        cfg: { channels: { example: {} } },
+        channelLabel: "example",
+        configuredGroupPolicy: "open",
+      }),
+    ).toEqual(["warn:example"]);
+  });
+
+  it("builds account-aware route-allowlist collectors", () => {
+    const collectWarnings = createAllowlistProviderRouteAllowlistWarningCollector<{
+      groupPolicy?: "open" | "allowlist" | "disabled";
+      groups?: Record<string, unknown>;
+    }>({
+      providerConfigPresent: (cfg) => cfg.channels?.example !== undefined,
+      resolveGroupPolicy: (account) => account.groupPolicy,
+      resolveRouteAllowlistConfigured: (account) => Object.keys(account.groups ?? {}).length > 0,
+      restrictSenders: {
+        surface: "Example groups",
+        openScope: "any member in allowed groups",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      },
+      noRouteAllowlist: {
+        surface: "Example groups",
+        routeAllowlistPath: "channels.example.groups",
+        routeScope: "group",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      },
+    });
+
+    expect(
+      collectWarnings({
+        account: { groupPolicy: "open", groups: {} },
+        cfg: { channels: { example: {} } },
+      }),
+    ).toEqual([
+      buildOpenGroupPolicyNoRouteAllowlistWarning({
+        surface: "Example groups",
+        routeAllowlistPath: "channels.example.groups",
+        routeScope: "group",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+      }),
+    ]);
+  });
+
+  it("builds account-aware configured-route collectors", () => {
+    const collectWarnings = createOpenProviderConfiguredRouteWarningCollector<{
+      groupPolicy?: "open" | "allowlist" | "disabled";
+      channels?: Record<string, unknown>;
+    }>({
+      providerConfigPresent: (cfg) => cfg.channels?.example !== undefined,
+      resolveGroupPolicy: (account) => account.groupPolicy,
+      resolveRouteAllowlistConfigured: (account) => Object.keys(account.channels ?? {}).length > 0,
+      configureRouteAllowlist: {
+        surface: "Example channels",
+        openScope: "any channel not explicitly denied",
+        groupPolicyPath: "channels.example.groupPolicy",
+        routeAllowlistPath: "channels.example.channels",
+      },
+      missingRouteAllowlist: {
+        surface: "Example channels",
+        openBehavior: "with no route allowlist; any channel can trigger (mention-gated)",
+        remediation:
+          'Set channels.example.groupPolicy="allowlist" and configure channels.example.channels',
+      },
+    });
+
+    expect(
+      collectWarnings({
+        account: { groupPolicy: "open", channels: { general: true } },
+        cfg: { channels: { example: {} } },
+      }),
+    ).toEqual([
+      buildOpenGroupPolicyConfigureRouteAllowlistWarning({
+        surface: "Example channels",
+        openScope: "any channel not explicitly denied",
+        groupPolicyPath: "channels.example.groupPolicy",
+        routeAllowlistPath: "channels.example.channels",
+      }),
+    ]);
+  });
+
+  it("builds config-aware open-provider collectors", () => {
+    const collectWarnings = createOpenProviderGroupPolicyWarningCollector<{
+      cfg: { channels?: { example?: unknown } };
+      configuredGroupPolicy?: "open" | "allowlist" | "disabled";
+    }>({
+      providerConfigPresent: (cfg) => cfg.channels?.example !== undefined,
+      resolveGroupPolicy: ({ configuredGroupPolicy }) => configuredGroupPolicy,
+      collect: ({ groupPolicy }) => [groupPolicy],
+    });
+
+    expect(
+      collectWarnings({
+        cfg: { channels: { example: {} } },
+        configuredGroupPolicy: "open",
+      }),
+    ).toEqual(["open"]);
+  });
+
+  it("builds account-aware simple open warning collectors", () => {
+    const collectWarnings = createAllowlistProviderOpenWarningCollector<{
+      groupPolicy?: "open" | "allowlist" | "disabled";
+    }>({
+      providerConfigPresent: (cfg) => cfg.channels?.example !== undefined,
+      resolveGroupPolicy: (account) => account.groupPolicy,
+      buildOpenWarning: {
+        surface: "Example channels",
+        openBehavior: "allows any channel to trigger (mention-gated)",
+        remediation:
+          'Set channels.example.groupPolicy="allowlist" and configure channels.example.channels',
+      },
+    });
+
+    expect(
+      collectWarnings({
+        account: { groupPolicy: "open" },
+        cfg: { channels: { example: {} } },
+      }),
+    ).toEqual([
+      buildOpenGroupPolicyWarning({
+        surface: "Example channels",
+        openBehavior: "allows any channel to trigger (mention-gated)",
+        remediation:
+          'Set channels.example.groupPolicy="allowlist" and configure channels.example.channels',
+      }),
+    ]);
+  });
+
+  it("builds direct account-aware open-policy restrict-senders collectors", () => {
+    const collectWarnings = createOpenGroupPolicyRestrictSendersWarningCollector<{
+      groupPolicy?: "open" | "allowlist" | "disabled";
+    }>({
+      resolveGroupPolicy: (account) => account.groupPolicy,
+      defaultGroupPolicy: "allowlist",
+      surface: "Example groups",
+      openScope: "any member",
+      groupPolicyPath: "channels.example.groupPolicy",
+      groupAllowFromPath: "channels.example.groupAllowFrom",
+      mentionGated: false,
+    });
+
+    expect(collectWarnings({ groupPolicy: "allowlist" })).toEqual([]);
+    expect(collectWarnings({ groupPolicy: "open" })).toEqual([
+      buildOpenGroupPolicyRestrictSendersWarning({
+        surface: "Example groups",
+        openScope: "any member",
+        groupPolicyPath: "channels.example.groupPolicy",
+        groupAllowFromPath: "channels.example.groupAllowFrom",
+        mentionGated: false,
+      }),
+    ]);
   });
 });
