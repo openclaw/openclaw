@@ -3,6 +3,7 @@ import {
   sleepWithAbort,
   type BackoffPolicy,
 } from "openclaw/plugin-sdk/infra-runtime";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 export type TelegramSendChatActionLogger = (message: string) => void;
 
@@ -43,6 +44,11 @@ export type CreateTelegramSendChatActionHandlerParams = {
   sendChatActionFn: SendChatActionFn;
   logger: TelegramSendChatActionLogger;
   maxConsecutive401?: number;
+  maxConsecutiveNetworkFailures?: number;
+  onRecoverableNetworkFailure?: (params: {
+    error: unknown;
+    consecutiveFailures: number;
+  }) => void | Promise<void>;
 };
 
 const BACKOFF_POLICY: BackoffPolicy = {
@@ -73,12 +79,18 @@ export function createTelegramSendChatActionHandler({
   sendChatActionFn,
   logger,
   maxConsecutive401 = 10,
+  maxConsecutiveNetworkFailures = 2,
+  onRecoverableNetworkFailure,
 }: CreateTelegramSendChatActionHandlerParams): TelegramSendChatActionHandler {
   let consecutive401Failures = 0;
+  let consecutiveNetworkFailures = 0;
+  let networkFailureSignaled = false;
   let suspended = false;
 
   const reset = () => {
     consecutive401Failures = 0;
+    consecutiveNetworkFailures = 0;
+    networkFailureSignaled = false;
     suspended = false;
   };
 
@@ -107,6 +119,8 @@ export function createTelegramSendChatActionHandler({
         logger(`sendChatAction recovered after ${consecutive401Failures} consecutive 401 failures`);
         consecutive401Failures = 0;
       }
+      consecutiveNetworkFailures = 0;
+      networkFailureSignaled = false;
     } catch (error) {
       if (is401Error(error)) {
         consecutive401Failures++;
@@ -124,6 +138,22 @@ export function createTelegramSendChatActionHandler({
               `Retrying with exponential backoff.`,
           );
         }
+      } else if (isRecoverableTelegramNetworkError(error, { context: "unknown" })) {
+        consecutiveNetworkFailures++;
+        if (
+          onRecoverableNetworkFailure &&
+          !networkFailureSignaled &&
+          consecutiveNetworkFailures >= maxConsecutiveNetworkFailures
+        ) {
+          networkFailureSignaled = true;
+          void onRecoverableNetworkFailure({
+            error,
+            consecutiveFailures: consecutiveNetworkFailures,
+          });
+        }
+      } else {
+        consecutiveNetworkFailures = 0;
+        networkFailureSignaled = false;
       }
       throw error;
     }

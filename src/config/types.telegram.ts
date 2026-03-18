@@ -52,6 +52,12 @@ export type TelegramNetworkConfig = {
    * Default: "ipv4first" on Node 22+ to avoid common fetch failures.
    */
   dnsResultOrder?: "ipv4first" | "verbatim";
+  /**
+   * Polling stall detection threshold in milliseconds.
+   * If no getUpdates call succeeds for this duration, the polling session will be restarted.
+   * Default: 90_000 (90 seconds).
+   */
+  pollStallThresholdMs?: number;
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";

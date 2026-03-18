@@ -18,6 +18,13 @@ const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
 
+const resolvePollStallThresholdMs = (value: number | undefined): number => {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return POLL_STALL_THRESHOLD_MS;
+  }
+  return Math.floor(value);
+};
+
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -50,12 +57,15 @@ type TelegramPollingSessionOpts = {
   log: (line: string) => void;
   /** Pre-resolved Telegram transport to reuse across bot instances */
   telegramTransport?: TelegramTransport;
+  /** Polling stall detection threshold in milliseconds. Default: 90_000 */
+  pollStallThresholdMs?: number;
 };
 
 export class TelegramPollingSession {
   #restartAttempts = 0;
   #webhookCleared = false;
   #forceRestarted = false;
+  #outboundRestartSignaled = false;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
 
@@ -71,6 +81,23 @@ export class TelegramPollingSession {
 
   abortActiveFetch() {
     this.#activeFetchAbort?.abort();
+  }
+
+  signalRecoverableOutboundNetworkError(err: unknown) {
+    if (this.opts.abortSignal?.aborted || this.#outboundRestartSignaled) {
+      return;
+    }
+    const activeRunner = this.#activeRunner;
+    if (!activeRunner || !activeRunner.isRunning()) {
+      return;
+    }
+    this.#outboundRestartSignaled = true;
+    this.#forceRestarted = true;
+    this.opts.log(
+      `[telegram] Restarting polling after outbound network error: ${formatErrorMessage(err)}`,
+    );
+    this.abortActiveFetch();
+    void activeRunner.stop().catch(() => {});
   }
 
   async runUntilAbort(): Promise<void> {
@@ -139,6 +166,9 @@ export class TelegramPollingSession {
           onUpdateId: this.opts.persistUpdateId,
         },
         telegramTransport: this.opts.telegramTransport,
+        onRecoverableSendChatActionNetworkFailure: ({ error }) => {
+          this.signalRecoverableOutboundNetworkError(error);
+        },
       });
     } catch (err) {
       await this.#waitBeforeRetryOnRecoverableSetupError(err, "Telegram setup network error");
@@ -184,6 +214,8 @@ export class TelegramPollingSession {
 
   async #runPollingCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     await this.#confirmPersistedOffset(bot);
+    this.#outboundRestartSignaled = false;
+    const pollStallThresholdMs = resolvePollStallThresholdMs(this.opts.pollStallThresholdMs);
 
     let lastGetUpdatesAt = Date.now();
     bot.api.config.use((prev, method, payload, signal) => {
@@ -230,7 +262,7 @@ export class TelegramPollingSession {
         return;
       }
       const elapsed = Date.now() - lastGetUpdatesAt;
-      if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+      if (elapsed > pollStallThresholdMs && runner.isRunning()) {
         stalledRestart = true;
         this.opts.log(
           `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,

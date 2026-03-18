@@ -196,6 +196,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       persistUpdateId,
       log,
       telegramTransport,
+      pollStallThresholdMs: account.config.network?.pollStallThresholdMs,
     });
     await pollingSession.runUntilAbort();
   } finally {

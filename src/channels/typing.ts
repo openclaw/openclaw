@@ -27,6 +27,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   const maxDurationMs = params.maxDurationMs ?? 60_000; // Default 60s TTL
   let stopSent = false;
   let closed = false;
+  let replyStarted = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
   const startGuard = createTypingStartGuard({
@@ -73,15 +74,17 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       return;
     }
     stopSent = false;
+    startTtlTimer(); // Keep the current reply cycle alive during long streams/tools.
+    if (replyStarted) {
+      return;
+    }
+    replyStarted = true;
     startGuard.reset();
-    keepaliveLoop.stop();
-    clearTtlTimer();
     await fireStart();
     if (startGuard.isTripped()) {
       return;
     }
     keepaliveLoop.start();
-    startTtlTimer(); // Start TTL safety timer
   };
 
   const fireStop = () => {

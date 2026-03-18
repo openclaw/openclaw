@@ -493,6 +493,86 @@ describe("createTelegramBot", () => {
     expect(sendChatActionSpy).toHaveBeenCalledWith(42, "typing", undefined);
   });
 
+  it("does not restart Telegram typing after the breaker trips during later reply chunks", async () => {
+    vi.useFakeTimers();
+    try {
+      sendChatActionSpy.mockRejectedValue(new Error("network request failed"));
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions }) => {
+          await dispatcherOptions.typingCallbacks?.onReplyStart?.();
+          await vi.advanceTimersByTimeAsync(3_000);
+          await dispatcherOptions.typingCallbacks?.onReplyStart?.();
+          await dispatcherOptions.typingCallbacks?.onReplyStart?.();
+          await vi.advanceTimersByTimeAsync(9_000);
+          return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+        },
+      );
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          from: { id: 999, username: "random" },
+          text: "hi",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(sendChatActionSpy).toHaveBeenCalledTimes(2);
+      expect(sendChatActionSpy).toHaveBeenNthCalledWith(1, 42, "typing", undefined);
+      expect(sendChatActionSpy).toHaveBeenNthCalledWith(2, 42, "typing", undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("signals recoverable typing network failures through the bot option callback", async () => {
+    vi.useFakeTimers();
+    try {
+      const onRecoverableSendChatActionNetworkFailure = vi.fn();
+      sendChatActionSpy.mockRejectedValue(
+        Object.assign(new TypeError("fetch failed"), {
+          cause: Object.assign(new Error("connect timeout"), {
+            code: "UND_ERR_CONNECT_TIMEOUT",
+          }),
+        }),
+      );
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+        async ({ dispatcherOptions }) => {
+          await dispatcherOptions.typingCallbacks?.onReplyStart?.();
+          await vi.advanceTimersByTimeAsync(3_000);
+          return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+        },
+      );
+
+      createTelegramBot({
+        token: "tok",
+        onRecoverableSendChatActionNetworkFailure,
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          from: { id: 999, username: "random" },
+          text: "hi",
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(onRecoverableSendChatActionNetworkFailure).toHaveBeenCalledTimes(1);
+      expect(onRecoverableSendChatActionNetworkFailure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          consecutiveFailures: 2,
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("dedupes duplicate updates for callback_query, message, and channel_post", async () => {
     loadConfig.mockReturnValue({
       channels: {

@@ -221,6 +221,7 @@ export const TelegramAccountSchemaBase = z
       .object({
         autoSelectFamily: z.boolean().optional(),
         dnsResultOrder: z.enum(["ipv4first", "verbatim"]).optional(),
+        pollStallThresholdMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

@@ -141,6 +141,26 @@ describe("createTypingCallbacks", () => {
     });
   });
 
+  it("does not reset a tripped breaker on later reply chunks", async () => {
+    await withFakeTimers(async () => {
+      const { start, onStartError, callbacks } = createTypingHarness({
+        start: vi.fn().mockRejectedValue(new Error("gone")),
+        maxConsecutiveFailures: 1,
+      });
+
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(onStartError).toHaveBeenCalledTimes(1);
+
+      await callbacks.onReplyStart();
+      await callbacks.onReplyStart();
+      await vi.advanceTimersByTimeAsync(9_000);
+
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(onStartError).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("resets failure counter after a successful keepalive tick", async () => {
     await withFakeTimers(async () => {
       let callCount = 0;

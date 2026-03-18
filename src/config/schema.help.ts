@@ -1445,6 +1445,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional session-key filters matched as substring or regex-style patterns before Telegram approval routing is used. Use narrow patterns so Telegram approvals only appear for intended sessions.",
   "channels.telegram.execApprovals.target":
     'Controls where Telegram approval prompts are sent: "dm" sends to approver DMs (default), "channel" sends to the originating Telegram chat/topic, and "both" sends to both. Channel delivery exposes the command text to the chat, so only use it in trusted groups/topics.',
+  "channels.telegram.network.pollStallThresholdMs":
+    "Polling stall watchdog threshold in milliseconds. If Telegram polling sees no getUpdates activity for longer than this, OpenClaw force-restarts the polling runner. Lower this only when your network/proxy frequently blackholes long polls and you want faster recovery.",
   "channels.slack.configWrites":
     "Allow Slack to write config in response to channel events/commands (default: true).",
   "channels.slack.botToken":

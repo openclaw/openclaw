@@ -734,6 +734,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
   "channels.telegram.retry.jitter": "Telegram Retry Jitter",
   "channels.telegram.network.autoSelectFamily": "Telegram autoSelectFamily",
+  "channels.telegram.network.pollStallThresholdMs": "Telegram Poll Stall Threshold (ms)",
   "channels.telegram.timeoutSeconds": "Telegram API Timeout (seconds)",
   "channels.telegram.silentErrorReplies": "Telegram Silent Error Replies",
   "channels.telegram.apiRoot": "Telegram API Root URL",

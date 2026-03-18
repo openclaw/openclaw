@@ -65,6 +65,10 @@ export type TelegramBotOptions = {
   /** Pre-resolved Telegram transport to reuse across bot instances. If not provided, creates a new one. */
   telegramTransport?: TelegramTransport;
   telegramDeps?: TelegramBotDeps;
+  onRecoverableSendChatActionNetworkFailure?: (params: {
+    error: unknown;
+    consecutiveFailures: number;
+  }) => void | Promise<void>;
 };
 
 export { getTelegramSequentialKey };
@@ -497,6 +501,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         threadParams as Parameters<typeof bot.api.sendChatAction>[2],
       ),
     logger: (message) => logVerbose(`telegram: ${message}`),
+    onRecoverableNetworkFailure: opts.onRecoverableSendChatActionNetworkFailure,
   });
 
   const processMessage = createTelegramMessageProcessor({
