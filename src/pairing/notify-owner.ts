@@ -15,6 +15,8 @@ import {
   type InternalHookHandler,
 } from "../hooks/internal-hooks.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
+
+type ChannelSendFn = (target: string, text: string, opts?: { accountId?: string }) => Promise<void>;
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("pairing-notify");
@@ -39,9 +41,10 @@ function buildNotificationText(params: {
 /** Truncate and strip control characters from untrusted input. */
 function sanitizeField(value: string, maxLength: number): string {
   // Strip C0/C1 control chars and zero-width/bidi chars that could be used for injection.
+  // oxlint-disable-next-line eslint/no-control-regex -- intentional: sanitizing untrusted input
   // eslint-disable-next-line no-control-regex -- intentional: sanitizing untrusted input
   const cleaned = value.replace(
-    /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202F\uFEFF]/g,
+    /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202F\u2066-\u2069\uFEFF]/g,
     "",
   );
   return cleaned.slice(0, maxLength);
@@ -68,7 +71,7 @@ async function sendNotification(params: {
 
   switch (channel) {
     case "imessage": {
-      const send = sendDeps?.sendIMessage;
+      const send = sendDeps?.sendIMessage as ChannelSendFn | undefined;
       if (!send) {
         log.warn("pairing-notify: iMessage send function not available");
         return;
@@ -77,7 +80,7 @@ async function sendNotification(params: {
       break;
     }
     case "telegram": {
-      const send = sendDeps?.sendTelegram;
+      const send = sendDeps?.sendTelegram as ChannelSendFn | undefined;
       if (!send) {
         log.warn("pairing-notify: Telegram send function not available");
         return;
@@ -86,7 +89,7 @@ async function sendNotification(params: {
       break;
     }
     case "whatsapp": {
-      const send = sendDeps?.sendWhatsApp;
+      const send = sendDeps?.sendWhatsApp as ChannelSendFn | undefined;
       if (!send) {
         log.warn("pairing-notify: WhatsApp send function not available");
         return;
@@ -95,7 +98,7 @@ async function sendNotification(params: {
       break;
     }
     case "discord": {
-      const send = sendDeps?.sendDiscord;
+      const send = sendDeps?.sendDiscord as ChannelSendFn | undefined;
       if (!send) {
         log.warn("pairing-notify: Discord send function not available");
         return;
@@ -104,7 +107,7 @@ async function sendNotification(params: {
       break;
     }
     case "signal": {
-      const send = sendDeps?.sendSignal;
+      const send = sendDeps?.sendSignal as ChannelSendFn | undefined;
       if (!send) {
         log.warn("pairing-notify: Signal send function not available");
         return;
@@ -113,7 +116,7 @@ async function sendNotification(params: {
       break;
     }
     case "slack": {
-      const send = sendDeps?.sendSlack;
+      const send = sendDeps?.sendSlack as ChannelSendFn | undefined;
       if (!send) {
         log.warn("pairing-notify: Slack send function not available");
         return;

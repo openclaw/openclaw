@@ -39,6 +39,18 @@ describe("sanitizeField", () => {
   it("handles empty string", () => {
     expect(sanitizeField("", 10)).toBe("");
   });
+
+  it("strips bidi isolate characters (U+2066-U+2069)", () => {
+    expect(sanitizeField("a\u2066b\u2067c\u2068d\u2069e", 64)).toBe("abcde");
+  });
+
+  it("strips C1 control characters (U+0080-U+009F)", () => {
+    expect(sanitizeField("hello\u0080\u009Bworld", 64)).toBe("helloworld");
+  });
+
+  it("strips newlines to prevent message injection", () => {
+    expect(sanitizeField("line1\nline2\rline3", 64)).toBe("line1line2line3");
+  });
 });
 
 describe("buildNotificationText", () => {
