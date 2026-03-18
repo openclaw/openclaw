@@ -41,10 +41,14 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../send.js", () => ({
-  sendMessageDiscord: hoisted.sendMessageDiscord,
-  sendWebhookMessageDiscord: hoisted.sendWebhookMessageDiscord,
-}));
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    sendMessageDiscord: hoisted.sendMessageDiscord,
+    sendWebhookMessageDiscord: hoisted.sendWebhookMessageDiscord,
+  };
+});
 
 vi.mock("../send.messages.js", () => ({
   createThreadDiscord: hoisted.createThreadDiscord,

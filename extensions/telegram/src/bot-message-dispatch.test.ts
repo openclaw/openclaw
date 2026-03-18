@@ -11,6 +11,13 @@ const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
 const editMessageTelegram = vi.hoisted(() => vi.fn());
+const createForumTopicTelegram = vi.hoisted(() => vi.fn());
+const deleteMessageTelegram = vi.hoisted(() => vi.fn());
+const editForumTopicTelegram = vi.hoisted(() => vi.fn());
+const reactMessageTelegram = vi.hoisted(() => vi.fn());
+const sendMessageTelegram = vi.hoisted(() => vi.fn());
+const sendPollTelegram = vi.hoisted(() => vi.fn());
+const sendStickerTelegram = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 
@@ -27,11 +34,18 @@ vi.mock("./bot/delivery.js", () => ({
 }));
 
 vi.mock("./send.js", () => ({
+  createForumTopicTelegram,
+  deleteMessageTelegram,
+  editForumTopicTelegram,
   editMessageTelegram,
+  reactMessageTelegram,
+  sendMessageTelegram,
+  sendPollTelegram,
+  sendStickerTelegram,
 }));
 
-vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/sessions.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadSessionStore,
@@ -41,6 +55,10 @@ vi.mock("../../../src/config/sessions.js", async (importOriginal) => {
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
+  getCachedSticker: () => null,
+  getCacheStats: () => ({ count: 0 }),
+  searchStickers: () => [],
+  getAllCachedStickers: () => [],
   describeStickerImage: vi.fn(),
 }));
 
@@ -154,6 +172,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       replyToMode: "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
+      telegramDeps: {
+        dispatchReplyWithBufferedBlockDispatcher,
+      } as unknown as NonNullable<Parameters<typeof dispatchTelegramMessage>[0]["telegramDeps"]>,
       telegramCfg: params.telegramCfg ?? {},
       opts: { token: "token" },
     });

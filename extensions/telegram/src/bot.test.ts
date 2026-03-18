@@ -1,7 +1,12 @@
 import { rm } from "node:fs/promises";
 import type { PluginInteractiveTelegramHandlerContext } from "openclaw/plugin-sdk/core";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../src/channels/plugins/contracts/suites.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../../src/config/config.js";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
@@ -38,14 +43,18 @@ const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest }
 setTelegramBotRuntimeForTest(
   telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
 );
-const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
-  createTelegramBotBase({
-    ...opts,
-    telegramDeps: telegramBotDepsForTest,
-  });
-
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
+const resolveHarnessConfig = () => (loadConfig as unknown as () => OpenClawConfig)();
+const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) => {
+  const cfg = opts.config ?? resolveHarnessConfig();
+  setRuntimeConfigSnapshot(cfg);
+  return createTelegramBotBase({
+    ...opts,
+    config: cfg,
+    telegramDeps: telegramBotDepsForTest,
+  });
+};
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
   void config;
@@ -61,6 +70,9 @@ describe("createTelegramBot", () => {
   });
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
+  });
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
   });
 
   beforeEach(() => {

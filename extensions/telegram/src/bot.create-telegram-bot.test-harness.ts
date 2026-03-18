@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -29,11 +32,22 @@ const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
   loadWebMedia: vi.fn(),
 }));
 
+function maybePrefixReplyText(text: unknown, responsePrefix?: string): unknown {
+  if (typeof text !== "string") {
+    return text;
+  }
+  const normalizedPrefix = responsePrefix?.trim();
+  if (!normalizedPrefix || !text.trim() || text.startsWith(normalizedPrefix)) {
+    return text;
+  }
+  return `${normalizedPrefix} ${text}`;
+}
+
 export function getLoadWebMediaMock(): AnyMock {
   return loadWebMedia;
 }
 
-vi.doMock("openclaw/plugin-sdk/web-media", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
@@ -49,18 +63,11 @@ const { resolveStorePathMock } = vi.hoisted(
 export function getLoadConfigMock(): AnyMock {
   return loadConfig;
 }
-vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig,
-  };
-});
-
-vi.doMock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
     resolveStorePath: resolveStorePathMock,
   };
 });
@@ -86,7 +93,7 @@ export function getUpsertChannelPairingRequestMock(): AnyAsyncMock {
   return upsertChannelPairingRequest;
 }
 
-vi.doMock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
@@ -117,7 +124,15 @@ const skillCommandsHoisted = vi.hoisted(() => ({
       const reply = await skillCommandsHoisted.replySpy(params.ctx, params.replyOptions);
       const payloads = reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
       for (const payload of payloads) {
-        await params.dispatcherOptions?.deliver?.(payload, { kind: "final" });
+        await params.dispatcherOptions?.deliver?.(
+          {
+            ...payload,
+            text: maybePrefixReplyText(payload.text, params.dispatcherOptions.responsePrefix) as
+              | string
+              | undefined,
+          },
+          { kind: "final" },
+        );
       }
       return result;
     },
@@ -128,7 +143,7 @@ export const replySpy = skillCommandsHoisted.replySpy;
 export const dispatchReplyWithBufferedBlockDispatcher =
   skillCommandsHoisted.dispatchReplyWithBufferedBlockDispatcher;
 
-vi.doMock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
@@ -146,7 +161,7 @@ const systemEventsHoisted = vi.hoisted(() => ({
 export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueSystemEvent"]> =
   systemEventsHoisted.enqueueSystemEventSpy;
 
-vi.doMock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
@@ -159,7 +174,7 @@ const sentMessageCacheHoisted = vi.hoisted(() => ({
 }));
 export const wasSentByBot = sentMessageCacheHoisted.wasSentByBot;
 
-vi.doMock("./sent-message-cache.js", () => ({
+vi.mock("./sent-message-cache.js", () => ({
   wasSentByBot: sentMessageCacheHoisted.wasSentByBot,
   recordSentMessage: vi.fn(),
   clearSentMessageCache: vi.fn(),
@@ -347,6 +362,9 @@ export function makeForumGroupMessageCtx(params?: {
 
 beforeEach(() => {
   resetInboundDedupe();
+  fs.rmSync(path.join(os.homedir(), ".openclaw", "credentials", "telegram-pairing.json"), {
+    force: true,
+  });
   loadConfig.mockReset();
   loadConfig.mockReturnValue(DEFAULT_TELEGRAM_TEST_CONFIG);
   resolveStorePathMock.mockReset();
@@ -376,7 +394,15 @@ beforeEach(() => {
       const reply = await replySpy(params.ctx, params.replyOptions);
       const payloads = reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
       for (const payload of payloads) {
-        await params.dispatcherOptions?.deliver?.(payload, { kind: "final" });
+        await params.dispatcherOptions?.deliver?.(
+          {
+            ...payload,
+            text: maybePrefixReplyText(payload.text, params.dispatcherOptions.responsePrefix) as
+              | string
+              | undefined,
+          },
+          { kind: "final" },
+        );
       }
       return result;
     },

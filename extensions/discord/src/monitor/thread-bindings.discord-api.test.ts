@@ -24,10 +24,14 @@ vi.mock("../client.js", () => ({
   createDiscordRestClient: hoisted.createDiscordRestClient,
 }));
 
-vi.mock("../send.js", () => ({
-  sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscord(...args),
-  sendWebhookMessageDiscord: (...args: unknown[]) => hoisted.sendWebhookMessageDiscord(...args),
-}));
+vi.mock("../send.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.js")>();
+  return {
+    ...actual,
+    sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscord(...args),
+    sendWebhookMessageDiscord: (...args: unknown[]) => hoisted.sendWebhookMessageDiscord(...args),
+  };
+});
 
 const { maybeSendBindingMessage, resolveChannelIdForBinding } =
   await import("./thread-bindings.discord-api.js");
