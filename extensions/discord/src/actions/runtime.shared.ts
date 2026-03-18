@@ -1,4 +1,4 @@
-import { readStringParam } from "openclaw/plugin-sdk/discord-core";
+import { readStringParam } from "../runtime-api.js";
 
 export function readDiscordParentIdParam(
   params: Record<string, unknown>,
