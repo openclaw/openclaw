@@ -36,6 +36,14 @@ export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     groupHint: "Unified LLM gateway (100+ providers)",
   },
   {
+    value: "local-api",
+    label: "Local API",
+    hint: "Connect to a local OpenAI-compatible server (LM Studio, Ollama, llama.cpp, vLLM, etc.)",
+    groupId: "local",
+    groupLabel: "Local",
+    groupHint: "Local API server",
+  },
+  {
     value: "custom-api-key",
     label: "Custom Provider",
     hint: "Any OpenAI or Anthropic compatible endpoint",
