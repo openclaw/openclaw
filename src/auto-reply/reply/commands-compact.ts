@@ -148,18 +148,14 @@ export const handleCompactCommand: CommandHandler = async (params) => {
 
   const rawReason = result.reason?.trim();
   const rawReasonLower = rawReason?.toLowerCase();
-  // Treat all benign safeguard cancellations as "skipped" rather than "failed".
-  // This includes: generic SDK cancellations, no model/API key, no messages,
-  // and summarization failures (which are not user errors).
+  // Benign skips: context too low or no messages — the system worked as intended.
+  // These get a friendly "Compaction skipped" label.
   const isCancellation =
     rawReasonLower === "compaction cancelled" ||
     rawReasonLower === "compaction canceled" ||
-    rawReasonLower === "no real conversation messages" ||
-    rawReasonLower === "no compaction model configured" ||
-    rawReasonLower === "no api key available for compaction model" ||
-    (rawReasonLower?.startsWith("summarization failed:") ?? false);
-  // Treat SDK cancellations (e.g. safeguard deciding context is too low) as
-  // skips rather than failures — the system worked as intended.
+    rawReasonLower === "no real conversation messages";
+  // Configuration/runtime errors still show "Compaction failed" so the user
+  // knows action is needed (e.g. missing model, missing API key, crash).
   const compactLabel = result.ok
     ? result.compacted
       ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
