@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin } from "../types.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
@@ -75,17 +75,14 @@ function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
 }
 
 describe("provider wizard contract", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     const actualProviders =
       await vi.importActual<typeof import("../providers.js")>("../providers.js");
-    resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) =>
       actualProviders.resolvePluginProviders(params as never),
     );
     ({ providerContractPluginIds, uniqueProviderContractProviders } =
       await import("./registry.js"));
-    resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
     ({
       buildProviderPluginMethodChoice,
@@ -94,6 +91,11 @@ describe("provider wizard contract", () => {
       resolveProviderWizardOptions,
     } = await import("../provider-wizard.js"));
   }, CONTRACT_SETUP_TIMEOUT_MS);
+
+  beforeEach(() => {
+    resolvePluginProvidersMock.mockClear();
+    resolvePluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
+  });
 
   it("exposes every registered provider setup choice through the shared wizard layer", () => {
     const options = resolveProviderWizardOptions({

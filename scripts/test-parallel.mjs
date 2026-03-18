@@ -20,6 +20,9 @@ const unitIsolatedFilesRaw = [
   "src/auto-reply/tool-meta.test.ts",
   "src/auto-reply/envelope.test.ts",
   "src/commands/auth-choice.test.ts",
+  // Provider runtime contract imports plugin runtimes plus async ESM mocks;
+  // keep it off the shared fast lane to avoid teardown stalls on this host.
+  "src/plugins/contracts/runtime.contract.test.ts",
   // Process supervision + docker setup suites are stable but setup-heavy.
   "src/process/supervisor/supervisor.test.ts",
   "src/docker-setup.test.ts",

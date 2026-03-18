@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 
@@ -245,6 +246,37 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
+    vi.doMock("./providers/index.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./providers/index.js")>();
+      const { deepgramProvider } = await import("./providers/deepgram/index.js");
+      const { groqProvider } = await import("./providers/groq/index.js");
+      return {
+        ...actual,
+        buildMediaUnderstandingRegistry: (
+          overrides?: Record<string, MediaUnderstandingProvider>,
+        ) => {
+          const registry = new Map<string, MediaUnderstandingProvider>([
+            ["groq", groqProvider],
+            ["deepgram", deepgramProvider],
+          ]);
+          for (const [key, provider] of Object.entries(overrides ?? {})) {
+            const normalizedKey = actual.normalizeMediaProviderId(key);
+            const existing = registry.get(normalizedKey);
+            registry.set(
+              normalizedKey,
+              existing
+                ? {
+                    ...existing,
+                    ...provider,
+                    capabilities: provider.capabilities ?? existing.capabilities,
+                  }
+                : provider,
+            );
+          }
+          return registry;
+        },
+      };
+    });
     ({ applyMediaUnderstanding } = await import("./apply.js"));
     ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.js"));
 

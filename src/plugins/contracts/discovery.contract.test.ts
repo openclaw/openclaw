@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { QWEN_OAUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { registerProviders, requireProvider } from "./testkit.js";
@@ -7,6 +8,8 @@ const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());
 const buildSglangProviderMock = vi.hoisted(() => vi.fn());
+const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
+const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
 
 let runProviderCatalog: typeof import("../provider-discovery.js").runProviderCatalog;
 let qwenPortalProvider: Awaited<ReturnType<typeof requireProvider>>;
@@ -18,8 +21,6 @@ let minimaxProvider: Awaited<ReturnType<typeof requireProvider>>;
 let minimaxPortalProvider: Awaited<ReturnType<typeof requireProvider>>;
 let modelStudioProvider: Awaited<ReturnType<typeof requireProvider>>;
 let cloudflareAiGatewayProvider: Awaited<ReturnType<typeof requireProvider>>;
-let clearRuntimeAuthProfileStoreSnapshots: typeof import("../../agents/auth-profiles/store.js").clearRuntimeAuthProfileStoreSnapshots;
-let replaceRuntimeAuthProfileStoreSnapshots: typeof import("../../agents/auth-profiles/store.js").replaceRuntimeAuthProfileStoreSnapshots;
 
 function createModelConfig(id: string, name = id): ModelDefinitionConfig {
   return {
@@ -38,40 +39,46 @@ function createModelConfig(id: string, name = id): ModelDefinitionConfig {
   };
 }
 
+function setRuntimeAuthStore(store?: AuthProfileStore) {
+  const resolvedStore = store ?? {
+    version: 1,
+    profiles: {},
+  };
+  ensureAuthProfileStoreMock.mockReturnValue(resolvedStore);
+  listProfilesForProviderMock.mockImplementation(
+    (authStore: AuthProfileStore, providerId: string) =>
+      Object.entries(authStore.profiles)
+        .filter(([, credential]) => credential.provider === providerId)
+        .map(([profileId]) => profileId),
+  );
+}
+
 function setQwenPortalOauthSnapshot() {
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      store: {
-        version: 1,
-        profiles: {
-          "qwen-portal:default": {
-            type: "oauth",
-            provider: "qwen-portal",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60_000,
-          },
-        },
+  setRuntimeAuthStore({
+    version: 1,
+    profiles: {
+      "qwen-portal:default": {
+        type: "oauth",
+        provider: "qwen-portal",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
       },
     },
-  ]);
+  });
 }
 
 function setGithubCopilotProfileSnapshot() {
-  replaceRuntimeAuthProfileStoreSnapshots([
-    {
-      store: {
-        version: 1,
-        profiles: {
-          "github-copilot:github": {
-            type: "token",
-            provider: "github-copilot",
-            token: "profile-token",
-          },
-        },
+  setRuntimeAuthStore({
+    version: 1,
+    profiles: {
+      "github-copilot:github": {
+        type: "token",
+        provider: "github-copilot",
+        token: "profile-token",
       },
     },
-  ]);
+  });
 }
 
 function runCatalog(params: {
@@ -106,8 +113,25 @@ function runCatalog(params: {
 }
 
 describe("provider discovery contract", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    vi.doMock("openclaw/plugin-sdk/agent-runtime", async () => {
+      // Import the direct source module, not the mocked subpath, so bundled
+      // provider helpers still see the full agent-runtime surface.
+      const actual = await import("../../plugin-sdk/agent-runtime.ts");
+      return {
+        ...actual,
+        ensureAuthProfileStore: ensureAuthProfileStoreMock,
+        listProfilesForProvider: listProfilesForProviderMock,
+      };
+    });
+    vi.doMock("openclaw/plugin-sdk/provider-auth", async () => {
+      const actual = await vi.importActual<object>("openclaw/plugin-sdk/provider-auth");
+      return {
+        ...actual,
+        ensureAuthProfileStore: ensureAuthProfileStoreMock,
+        listProfilesForProvider: listProfilesForProviderMock,
+      };
+    });
     vi.doMock("../../../extensions/github-copilot/token.js", async () => {
       const actual = await vi.importActual<object>("../../../extensions/github-copilot/token.js");
       return {
@@ -142,8 +166,6 @@ describe("provider discovery contract", () => {
       };
     });
 
-    ({ clearRuntimeAuthProfileStoreSnapshots, replaceRuntimeAuthProfileStoreSnapshots } =
-      await import("../../agents/auth-profiles/store.js"));
     ({ runProviderCatalog } = await import("../provider-discovery.js"));
     const [
       { default: qwenPortalPlugin },
@@ -181,13 +203,18 @@ describe("provider discovery contract", () => {
     );
   });
 
+  beforeEach(() => {
+    setRuntimeAuthStore();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     resolveCopilotApiTokenMock.mockReset();
     buildOllamaProviderMock.mockReset();
     buildVllmProviderMock.mockReset();
     buildSglangProviderMock.mockReset();
-    clearRuntimeAuthProfileStoreSnapshots();
+    ensureAuthProfileStoreMock.mockReset();
+    listProfilesForProviderMock.mockReset();
   });
 
   it("keeps qwen portal oauth marker fallback provider-owned", async () => {
@@ -439,22 +466,18 @@ describe("provider discovery contract", () => {
   });
 
   it("keeps MiniMax portal oauth marker fallback provider-owned", async () => {
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        store: {
-          version: 1,
-          profiles: {
-            "minimax-portal:default": {
-              type: "oauth",
-              provider: "minimax-portal",
-              access: "access-token",
-              refresh: "refresh-token",
-              expires: Date.now() + 60_000,
-            },
-          },
+    setRuntimeAuthStore({
+      version: 1,
+      profiles: {
+        "minimax-portal:default": {
+          type: "oauth",
+          provider: "minimax-portal",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
         },
       },
-    ]);
+    });
 
     await expect(
       runProviderCatalog({
@@ -569,28 +592,24 @@ describe("provider discovery contract", () => {
   });
 
   it("keeps Cloudflare AI Gateway env-managed catalog provider-owned", async () => {
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        store: {
-          version: 1,
-          profiles: {
-            "cloudflare-ai-gateway:default": {
-              type: "api_key",
-              provider: "cloudflare-ai-gateway",
-              keyRef: {
-                source: "env",
-                provider: "default",
-                id: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-              },
-              metadata: {
-                accountId: "acc-123",
-                gatewayId: "gw-456",
-              },
-            },
+    setRuntimeAuthStore({
+      version: 1,
+      profiles: {
+        "cloudflare-ai-gateway:default": {
+          type: "api_key",
+          provider: "cloudflare-ai-gateway",
+          keyRef: {
+            source: "env",
+            provider: "default",
+            id: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+          },
+          metadata: {
+            accountId: "acc-123",
+            gatewayId: "gw-456",
           },
         },
       },
-    ]);
+    });
 
     await expect(
       runProviderCatalog({
