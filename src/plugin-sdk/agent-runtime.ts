@@ -31,3 +31,7 @@ export {
   isDiscordModerationAction,
   readDiscordModerationCommand,
 } from "../../extensions/discord/runtime-api.js";
+export {
+  handleTelegramAction,
+  readTelegramButtons,
+} from "../../extensions/telegram/runtime-api.js";
