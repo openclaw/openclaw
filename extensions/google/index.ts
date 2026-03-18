@@ -1,5 +1,5 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import { buildGoogleImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
