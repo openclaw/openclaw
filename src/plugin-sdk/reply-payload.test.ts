@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  countOutboundMedia,
   deliverFormattedTextWithAttachments,
   deliverTextOrMediaReply,
+  hasOutboundMedia,
+  hasOutboundReplyContent,
+  hasOutboundText,
   isNumericTargetId,
   resolveOutboundMediaUrls,
+  resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
@@ -84,6 +89,102 @@ describe("resolveOutboundMediaUrls", () => {
   });
 });
 
+describe("countOutboundMedia", () => {
+  it("counts normalized media entries", () => {
+    expect(
+      countOutboundMedia({
+        mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+      }),
+    ).toBe(2);
+  });
+
+  it("counts legacy single-media payloads", () => {
+    expect(
+      countOutboundMedia({
+        mediaUrl: "https://example.com/legacy.png",
+      }),
+    ).toBe(1);
+  });
+});
+
+describe("hasOutboundMedia", () => {
+  it("reports whether normalized payloads include media", () => {
+    expect(hasOutboundMedia({ mediaUrls: ["https://example.com/a.png"] })).toBe(true);
+    expect(hasOutboundMedia({ mediaUrl: "https://example.com/legacy.png" })).toBe(true);
+    expect(hasOutboundMedia({})).toBe(false);
+  });
+});
+
+describe("hasOutboundText", () => {
+  it("checks raw text presence by default", () => {
+    expect(hasOutboundText({ text: "hello" })).toBe(true);
+    expect(hasOutboundText({ text: "   " })).toBe(true);
+    expect(hasOutboundText({})).toBe(false);
+  });
+
+  it("can trim whitespace-only text", () => {
+    expect(hasOutboundText({ text: "   " }, { trim: true })).toBe(false);
+    expect(hasOutboundText({ text: " hi " }, { trim: true })).toBe(true);
+  });
+});
+
+describe("hasOutboundReplyContent", () => {
+  it("detects text or media content", () => {
+    expect(hasOutboundReplyContent({ text: "hello" })).toBe(true);
+    expect(hasOutboundReplyContent({ mediaUrl: "https://example.com/a.png" })).toBe(true);
+    expect(hasOutboundReplyContent({})).toBe(false);
+  });
+
+  it("can ignore whitespace-only text unless media exists", () => {
+    expect(hasOutboundReplyContent({ text: "   " }, { trimText: true })).toBe(false);
+    expect(
+      hasOutboundReplyContent(
+        { text: "   ", mediaUrls: ["https://example.com/a.png"] },
+        { trimText: true },
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("resolveSendableOutboundReplyParts", () => {
+  it("normalizes missing text and trims media urls", () => {
+    expect(
+      resolveSendableOutboundReplyParts({
+        mediaUrls: [" https://example.com/a.png ", "   "],
+      }),
+    ).toEqual({
+      text: "",
+      trimmedText: "",
+      mediaUrls: ["https://example.com/a.png"],
+      mediaCount: 1,
+      hasText: false,
+      hasMedia: true,
+      hasContent: true,
+    });
+  });
+
+  it("accepts transformed text overrides", () => {
+    expect(
+      resolveSendableOutboundReplyParts(
+        {
+          text: "ignored",
+        },
+        {
+          text: "  hello  ",
+        },
+      ),
+    ).toEqual({
+      text: "  hello  ",
+      trimmedText: "hello",
+      mediaUrls: [],
+      mediaCount: 0,
+      hasText: true,
+      hasMedia: false,
+      hasContent: true,
+    });
+  });
+});
+
 describe("resolveTextChunksWithFallback", () => {
   it("returns existing chunks unchanged", () => {
     expect(resolveTextChunksWithFallback("hello", ["a", "b"])).toEqual(["a", "b"]);
@@ -160,6 +261,26 @@ describe("deliverTextOrMediaReply", () => {
 
     expect(sendText).not.toHaveBeenCalled();
     expect(sendMedia).not.toHaveBeenCalled();
+  });
+
+  it("ignores blank media urls before sending", async () => {
+    const sendMedia = vi.fn(async () => undefined);
+    const sendText = vi.fn(async () => undefined);
+
+    await expect(
+      deliverTextOrMediaReply({
+        payload: { text: "hello", mediaUrls: ["   ", " https://a "] },
+        text: "hello",
+        sendText,
+        sendMedia,
+      }),
+    ).resolves.toBe("media");
+
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    expect(sendMedia).toHaveBeenCalledWith({
+      mediaUrl: "https://a",
+      caption: "hello",
+    });
   });
 });
 

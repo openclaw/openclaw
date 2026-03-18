@@ -1,5 +1,8 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { deliverTextOrMediaReply } from "openclaw/plugin-sdk/reply-payload";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "../../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { sendMessageMatrix } from "../send.js";
@@ -33,8 +36,10 @@ export async function deliverMatrixReplies(params: {
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "matrix", params.accountId);
   let hasReplied = false;
   for (const reply of params.replies) {
-    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
-    if (!reply?.text && !hasMedia) {
+    const rawText = reply.text ?? "";
+    const text = core.channel.text.convertMarkdownTables(rawText, tableMode);
+    const replyContent = resolveSendableOutboundReplyParts(reply, { text });
+    if (!replyContent.hasContent) {
       if (reply?.audioAsVoice) {
         logVerbose("matrix reply has audioAsVoice without media/text; skipping");
         continue;
@@ -49,13 +54,6 @@ export async function deliverMatrixReplies(params: {
     }
     const replyToIdRaw = reply.replyToId?.trim();
     const replyToId = params.threadId || params.replyToMode === "off" ? undefined : replyToIdRaw;
-    const rawText = reply.text ?? "";
-    const text = core.channel.text.convertMarkdownTables(rawText, tableMode);
-    const mediaList = reply.mediaUrls?.length
-      ? reply.mediaUrls
-      : reply.mediaUrl
-        ? [reply.mediaUrl]
-        : [];
 
     const shouldIncludeReply = (id?: string) =>
       Boolean(id) && (params.replyToMode === "all" || !hasReplied);
@@ -63,7 +61,7 @@ export async function deliverMatrixReplies(params: {
 
     const delivered = await deliverTextOrMediaReply({
       payload: reply,
-      text,
+      text: replyContent.text,
       chunkText: (value) =>
         core.channel.text
           .chunkMarkdownTextWithMode(value, chunkLimit, chunkMode)

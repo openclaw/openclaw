@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -127,7 +128,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.blockCount += 1;
     }
 
-    if ((payload.text?.trim() ?? "").length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
+    if (hasOutboundReplyContent(payload, { trimText: true })) {
       await startReplyLifecycleOnce();
     }
 

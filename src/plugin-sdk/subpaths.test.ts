@@ -98,9 +98,13 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("exports reply payload helpers from the dedicated subpath", () => {
+    expect(typeof replyPayloadSdk.countOutboundMedia).toBe("function");
     expect(typeof replyPayloadSdk.deliverFormattedTextWithAttachments).toBe("function");
     expect(typeof replyPayloadSdk.deliverTextOrMediaReply).toBe("function");
     expect(typeof replyPayloadSdk.formatTextWithAttachmentLinks).toBe("function");
+    expect(typeof replyPayloadSdk.hasOutboundMedia).toBe("function");
+    expect(typeof replyPayloadSdk.hasOutboundReplyContent).toBe("function");
+    expect(typeof replyPayloadSdk.hasOutboundText).toBe("function");
     expect(typeof replyPayloadSdk.resolveOutboundMediaUrls).toBe("function");
     expect(typeof replyPayloadSdk.resolveTextChunksWithFallback).toBe("function");
     expect(typeof replyPayloadSdk.sendMediaWithLeadingCaption).toBe("function");

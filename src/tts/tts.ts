@@ -24,6 +24,7 @@ import type {
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
+import { resolveSendableOutboundReplyParts } from "../plugin-sdk/reply-payload.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   getSpeechProvider,
@@ -793,7 +794,8 @@ export async function maybeApplyTtsToPayload(params: {
     return params.payload;
   }
 
-  const text = params.payload.text ?? "";
+  const reply = resolveSendableOutboundReplyParts(params.payload);
+  const text = reply.text;
   const directives = parseTtsDirectives(text, config.modelOverrides, config.openai.baseUrl);
   if (directives.warnings.length > 0) {
     logVerbose(`TTS: ignored directive overrides (${directives.warnings.join("; ")})`);
@@ -827,7 +829,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (!ttsText.trim()) {
     return nextPayload;
   }
-  if (params.payload.mediaUrl || (params.payload.mediaUrls?.length ?? 0) > 0) {
+  if (reply.hasMedia) {
     return nextPayload;
   }
   if (text.includes("MEDIA:")) {

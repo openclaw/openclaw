@@ -9,7 +9,10 @@ import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-
 import type { BackoffPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
-import { deliverTextOrMediaReply } from "openclaw/plugin-sdk/reply-payload";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkTextWithMode,
   resolveChunkMode,
@@ -297,9 +300,10 @@ async function deliverReplies(params: {
   const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
     params;
   for (const payload of replies) {
+    const reply = resolveSendableOutboundReplyParts(payload);
     const delivered = await deliverTextOrMediaReply({
       payload,
-      text: payload.text ?? "",
+      text: reply.text,
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         await sendMessageSignal(target, chunk, {

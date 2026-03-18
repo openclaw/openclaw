@@ -1,5 +1,8 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { deliverTextOrMediaReply } from "openclaw/plugin-sdk/reply-payload";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
@@ -38,15 +41,14 @@ export async function deliverReplies(params: {
     // must not force threading.
     const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
     const threadTs = inlineReplyToId ?? params.replyThreadTs;
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const text = payload.text ?? "";
+    const reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);
-    if (!text && mediaList.length === 0 && !slackBlocks?.length) {
+    if (!reply.hasContent && !slackBlocks?.length) {
       continue;
     }
 
-    if (mediaList.length === 0 && slackBlocks?.length) {
-      const trimmed = text.trim();
+    if (!reply.hasMedia && slackBlocks?.length) {
+      const trimmed = reply.trimmedText;
       if (!trimmed && !slackBlocks?.length) {
         continue;
       }
@@ -66,17 +68,16 @@ export async function deliverReplies(params: {
 
     const delivered = await deliverTextOrMediaReply({
       payload,
-      text,
-      chunkText:
-        mediaList.length === 0
-          ? (value) => {
-              const trimmed = value.trim();
-              if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-                return [];
-              }
-              return [trimmed];
+      text: reply.text,
+      chunkText: !reply.hasMedia
+        ? (value) => {
+            const trimmed = value.trim();
+            if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+              return [];
             }
-          : undefined,
+            return [trimmed];
+          }
+        : undefined,
       sendText: async (trimmed) => {
         await sendMessageSlack(params.target, trimmed, {
           token: params.token,
@@ -189,12 +190,12 @@ export async function deliverSlackSlashReplies(params: {
   const messages: string[] = [];
   const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {
-    const textRaw = payload.text?.trim() ?? "";
-    const text = textRaw && !isSilentReplyText(textRaw, SILENT_REPLY_TOKEN) ? textRaw : undefined;
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const combined = [text ?? "", ...mediaList.map((url) => url.trim()).filter(Boolean)]
-      .filter(Boolean)
-      .join("\n");
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const text =
+      reply.hasText && !isSilentReplyText(reply.trimmedText, SILENT_REPLY_TOKEN)
+        ? reply.trimmedText
+        : undefined;
+    const combined = [text ?? "", ...reply.mediaUrls].filter(Boolean).join("\n");
     if (!combined) {
       continue;
     }
