@@ -265,15 +265,15 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
   });
 
-  it("keeps bare /model arguments raw after successful changes", async () => {
+  it("keeps ambiguous bare /model aliases raw after successful changes", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {
         return {
           ok: true,
           key: "main",
           resolved: {
-            modelProvider: "openai",
-            model: "gpt-5-mini",
+            modelProvider: "astroncodingplan",
+            model: "glm-5",
           },
         };
       }
@@ -284,16 +284,48 @@ describe("executeSlashCommand directives", () => {
       { request } as unknown as GatewayBrowserClient,
       "main",
       "model",
-      "gpt-5-mini",
+      "glm-5",
     );
 
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "main",
-      model: "gpt-5-mini",
+      model: "glm-5",
     });
     expect(result.sessionPatch?.modelOverride).toEqual({
       kind: "raw",
-      value: "gpt-5-mini",
+      value: "glm-5",
+    });
+  });
+
+  it("caches canonicalized /model shorthands as resolved provider/model refs", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "anthropic",
+            model: "claude-sonnet-4-5",
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "sonnet",
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "sonnet",
+    });
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "anthropic/claude-sonnet-4-5",
     });
   });
 

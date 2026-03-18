@@ -16,7 +16,10 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../../src/routing/session-key.js";
-import { createChatModelOverride } from "../chat-model-ref.ts";
+import {
+  buildQualifiedChatModelValue,
+  createChatModelOverride,
+} from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   AgentsListResult,
@@ -151,18 +154,40 @@ async function executeModel(
   }
 
   try {
-    await client.request<SessionsPatchResult>("sessions.patch", {
+    const requestedModel = args.trim();
+    const patched = await client.request<SessionsPatchResult>("sessions.patch", {
       key: sessionKey,
-      model: args.trim(),
+      model: requestedModel,
     });
     return {
-      content: `Model set to \`${args.trim()}\`.`,
+      content: `Model set to \`${requestedModel}\`.`,
       action: "refresh",
-      sessionPatch: { modelOverride: createChatModelOverride(args.trim()) },
+      sessionPatch: {
+        modelOverride: resolvePatchedModelOverride(requestedModel, patched.resolved),
+      },
     };
   } catch (err) {
     return { content: `Failed to set model: ${String(err)}` };
   }
+}
+
+function resolvePatchedModelOverride(
+  requestedModel: string,
+  resolved?: SessionsPatchResult["resolved"],
+): ChatModelOverride | null {
+  const requestedOverride = createChatModelOverride(requestedModel);
+  const resolvedModel = resolved?.model?.trim();
+  if (!requestedOverride || !resolvedModel) {
+    return requestedOverride;
+  }
+  if (requestedOverride.kind === "raw" && requestedOverride.value === resolvedModel) {
+    return requestedOverride;
+  }
+  return (
+    createChatModelOverride(
+      buildQualifiedChatModelValue(resolvedModel, resolved?.modelProvider),
+    ) ?? requestedOverride
+  );
 }
 
 async function executeThink(
