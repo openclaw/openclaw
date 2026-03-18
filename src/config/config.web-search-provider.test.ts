@@ -53,6 +53,13 @@ vi.mock("../plugins/web-search-providers.js", () => {
         getConfiguredCredentialValue: getConfigured("moonshot"),
       },
       {
+        id: "parallel",
+        envVars: ["PARALLEL_API_KEY"],
+        credentialPath: "plugins.entries.parallel.config.webSearch.apiKey",
+        getCredentialValue: getScoped("parallel"),
+        getConfiguredCredentialValue: getConfigured("parallel"),
+      },
+      {
         id: "perplexity",
         envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
         credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
@@ -137,7 +144,7 @@ describe("web search provider config", () => {
   });
 
   it("accepts parallel provider and config", () => {
-    const res = validateConfigObject(
+    const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
         enabled: true,
         provider: "parallel",

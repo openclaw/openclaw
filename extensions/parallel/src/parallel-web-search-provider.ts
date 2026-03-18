@@ -22,7 +22,8 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { DEFAULT_PARALLEL_BASE_URL } from "../../../src/agents/tools/parallel-shared.js";
+
+const DEFAULT_PARALLEL_BASE_URL = "https://api.parallel.ai";
 
 type ParallelConfig = {
   apiKey?: string;
@@ -40,8 +41,15 @@ type ParallelSearchResponse = {
   results?: ParallelSearchResult[];
 };
 
-function resolveParallelConfig(searchConfig?: SearchConfigRecord): ParallelConfig {
-  const parallel = searchConfig?.parallel;
+function resolveParallelConfig(
+  config?: OpenClawConfig,
+  searchConfig?: SearchConfigRecord,
+): ParallelConfig {
+  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "parallel");
+  if (pluginConfig) {
+    return pluginConfig as ParallelConfig;
+  }
+  const parallel = (searchConfig as Record<string, unknown> | undefined)?.parallel;
   return parallel && typeof parallel === "object" && !Array.isArray(parallel)
     ? (parallel as ParallelConfig)
     : {};
@@ -49,8 +57,10 @@ function resolveParallelConfig(searchConfig?: SearchConfigRecord): ParallelConfi
 
 function resolveParallelApiKey(parallel?: ParallelConfig): string | undefined {
   return (
-    readConfiguredSecretString(parallel?.apiKey, "tools.web.search.parallel.apiKey") ??
-    readProviderEnvValue(["PARALLEL_API_KEY"])
+    readConfiguredSecretString(
+      parallel?.apiKey,
+      "plugins.entries.parallel.config.webSearch.apiKey",
+    ) ?? readProviderEnvValue(["PARALLEL_API_KEY"])
   );
 }
 
@@ -119,7 +129,7 @@ function createParallelSchema() {
 }
 
 function createParallelToolDefinition(
-  _config?: OpenClawConfig,
+  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
@@ -128,7 +138,7 @@ function createParallelToolDefinition(
     parameters: createParallelSchema(),
     execute: async (args) => {
       const params = args as Record<string, unknown>;
-      const parallelConfig = resolveParallelConfig(searchConfig);
+      const parallelConfig = resolveParallelConfig(config, searchConfig);
       const apiKey = resolveParallelApiKey(parallelConfig);
       if (!apiKey) {
         return {
