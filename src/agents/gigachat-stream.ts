@@ -556,8 +556,13 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
       log.debug(`GigaChat auth: basic mode`);
     } else {
       clientConfig.credentials = apiKey;
-      clientConfig.scope = opts.scope ?? "GIGACHAT_API_PERS";
-      log.debug(`GigaChat auth: oauth scope=${clientConfig.scope}`);
+      const configuredScope = opts.scope?.trim();
+      if (configuredScope) {
+        clientConfig.scope = configuredScope;
+      }
+      log.debug(
+        `GigaChat auth: oauth${clientConfig.scope ? ` scope=${clientConfig.scope}` : " (sdk default scope)"}`,
+      );
     }
 
     return clientConfig;
@@ -729,6 +734,9 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
         } else {
           chatRequest.top_p = 0;
         }
+        const outboundPayload = { ...chatRequest, stream: true };
+        const requestPayload = (options?.onPayload?.(outboundPayload, model) ??
+          outboundPayload) as Chat & { stream: true };
 
         log.debug(`GigaChat request: ${messages.length} messages, ${functions.length} functions`);
 
@@ -741,7 +749,7 @@ export function createGigachatStreamFn(opts: GigachatStreamOptions): StreamFn {
           return axiosClient.request({
             method: "POST",
             url: "/chat/completions",
-            data: { ...chatRequest, stream: true },
+            data: requestPayload,
             responseType: "stream",
             headers: {
               ...resolveGigachatModelHeaders(model),

@@ -584,11 +584,11 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
     );
     expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
-      {
+      expect.objectContaining({
         messageCount: 1,
         tokenCount: 10,
         compactedCount: 1,
-      },
+      }),
       expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
     );
   });
@@ -906,6 +906,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       profiles: {
         "gigachat:business": {
           type: "api_key",
+          provider: "gigachat",
           metadata: {
             authMode: "basic",
             insecureTls: "true",
@@ -993,6 +994,54 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         authMode: "basic",
         insecureTls: true,
         scope: "GIGACHAT_API_B2B",
+      });
+      return {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        details: { ok: true },
+      };
+    });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: gigachatTestConfig(),
+      provider: "gigachat",
+      model: "GigaChat-2-Max",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok, result.reason).toBe(true);
+  });
+
+  it("infers basic auth for env-backed GigaChat credentials without stored profile metadata", async () => {
+    resolveModelMock.mockReturnValue({
+      model: {
+        provider: "gigachat",
+        api: "openai-completions",
+        id: "GigaChat-2-Max",
+        input: ["text"],
+        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+    vi.mocked(getApiKeyForModel).mockResolvedValueOnce({
+      apiKey: "user:password",
+      mode: "api-key",
+      source: "env: GIGACHAT_CREDENTIALS",
+    });
+    ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
+    sessionCompactImpl.mockImplementation(async () => {
+      expect(createGigachatStreamFnMock).toHaveBeenCalledWith({
+        baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+        authMode: "basic",
+        insecureTls: false,
+        scope: undefined,
       });
       return {
         summary: "summary",

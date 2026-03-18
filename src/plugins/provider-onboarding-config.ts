@@ -6,6 +6,7 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "../config/types.models.js";
+import type { SecretInput } from "../config/types.secrets.js";
 
 function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined {
   if (!model || typeof model !== "object") {
@@ -35,6 +36,7 @@ export function applyOnboardAuthAgentModelsAndProviders(
       },
     },
     models: {
+      ...cfg.models,
       mode: cfg.models?.mode ?? "merge",
       providers: params.providers,
     },
@@ -73,18 +75,10 @@ export function applyProviderConfigWithDefaultModels(
   },
 ): OpenClawConfig {
   const providerState = resolveProviderModelMergeState(cfg, params.providerId);
-
-  const defaultModels = params.defaultModels;
-  const defaultModelId = params.defaultModelId ?? defaultModels[0]?.id;
-  const hasDefaultModel = defaultModelId
-    ? providerState.existingModels.some((model) => model.id === defaultModelId)
-    : true;
   const mergedModels =
     providerState.existingModels.length > 0
-      ? hasDefaultModel || defaultModels.length === 0
-        ? providerState.existingModels
-        : [...providerState.existingModels, ...defaultModels]
-      : defaultModels;
+      ? mergeMissingModelsById(providerState.existingModels, params.defaultModels)
+      : params.defaultModels;
   return applyProviderConfigWithMergedModels(cfg, {
     agentModels: params.agentModels,
     providerId: params.providerId,
@@ -92,7 +86,7 @@ export function applyProviderConfigWithDefaultModels(
     api: params.api,
     baseUrl: params.baseUrl,
     mergedModels,
-    fallbackModels: defaultModels,
+    fallbackModels: params.defaultModels,
   });
 }
 
@@ -155,6 +149,22 @@ type ProviderModelMergeState = {
   existingModels: ModelDefinitionConfig[];
 };
 
+function mergeMissingModelsById(
+  existingModels: ModelDefinitionConfig[],
+  incomingModels: ModelDefinitionConfig[],
+): ModelDefinitionConfig[] {
+  if (incomingModels.length === 0) {
+    return existingModels;
+  }
+
+  return [
+    ...existingModels,
+    ...incomingModels.filter(
+      (model) => !existingModels.some((existing) => existing.id === model.id),
+    ),
+  ];
+}
+
 function resolveProviderModelMergeState(
   cfg: OpenClawConfig,
   providerId: string,
@@ -207,15 +217,16 @@ function buildProviderConfig(params: {
   fallbackModels: ModelDefinitionConfig[];
 }): ModelProviderConfig {
   const { apiKey: existingApiKey, ...existingProviderRest } = (params.existingProvider ?? {}) as {
-    apiKey?: string;
+    apiKey?: SecretInput;
   };
-  const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
+  const normalizedApiKey =
+    typeof existingApiKey === "string" ? existingApiKey.trim() || undefined : existingApiKey;
 
   return {
     ...existingProviderRest,
     baseUrl: params.baseUrl,
     api: params.api,
-    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    ...(normalizedApiKey !== undefined ? { apiKey: normalizedApiKey } : {}),
     models: params.mergedModels.length > 0 ? params.mergedModels : params.fallbackModels,
   };
 }

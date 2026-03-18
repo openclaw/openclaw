@@ -652,4 +652,74 @@ describe("createGigachatStreamFn tool calling", () => {
     expect(clientConfigs[0]?.user).toBeUndefined();
     expect(clientConfigs[0]?.password).toBeUndefined();
   });
+
+  it("falls back to the SDK default oauth scope when no metadata scope is available", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "oauth-credential" } as never,
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "done" }],
+    });
+
+    expect(clientConfigs).toHaveLength(1);
+    expect(clientConfigs[0]?.credentials).toBe("oauth-credential");
+    expect(clientConfigs[0]).not.toHaveProperty("scope");
+  });
+
+  it("runs outbound payload hooks before sending the chat request", async () => {
+    request.mockResolvedValueOnce({
+      status: 200,
+      data: createSseStream(['data: {"choices":[{"delta":{"content":"done"}}]}', "data: [DONE]"]),
+    });
+    const onPayload = vi.fn((payload: unknown) => ({
+      ...(payload as Record<string, unknown>),
+      parallel_tool_calls: true,
+    }));
+
+    const streamFn = createGigachatStreamFn({
+      baseUrl: "https://gigachat.devices.sberbank.ru/api/v1",
+      authMode: "oauth",
+    });
+
+    const stream = await streamFn(
+      { api: "gigachat", provider: "gigachat", id: "GigaChat-2-Max" } as never,
+      { messages: [], tools: [] } as never,
+      { apiKey: "token", onPayload } as never,
+    );
+
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "done" }],
+    });
+
+    expect(onPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "GigaChat-2-Max",
+        stream: true,
+      }),
+      expect.objectContaining({
+        id: "GigaChat-2-Max",
+      }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          parallel_tool_calls: true,
+          stream: true,
+        }),
+      }),
+    );
+  });
 });

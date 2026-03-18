@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
+import { resolveGigachatAuthMode } from "../../gigachat-auth.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
@@ -202,6 +203,21 @@ describe("resolveGigachatAuthProfileMetadata", () => {
         "openai:p1",
       ),
     ).toEqual({ scope: "GIGACHAT_API_PERS" });
+  });
+});
+
+describe("resolveGigachatAuthMode", () => {
+  it("infers basic auth for env-backed combined credentials without profile metadata", () => {
+    expect(resolveGigachatAuthMode({ apiKey: "user:password" })).toBe("basic");
+  });
+
+  it("keeps oauth as the fallback when a profile is selected but has no metadata", () => {
+    expect(
+      resolveGigachatAuthMode({
+        apiKey: "oauth:credential:with:colon",
+        authProfileId: "gigachat:business",
+      }),
+    ).toBe("oauth");
   });
 });
 

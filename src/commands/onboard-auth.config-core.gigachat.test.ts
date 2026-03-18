@@ -54,6 +54,26 @@ describe("GigaChat provider config", () => {
       expect(result.agents?.defaults?.models?.[GIGACHAT_DEFAULT_MODEL_REF]?.alias).toBe("GigaChat");
       expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openai/gpt-5");
     });
+
+    it("preserves an existing custom base URL when re-auth does not pass one", () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            gigachat: {
+              baseUrl: "https://preview.gigachat.example/api/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      };
+
+      const result = applyGigachatProviderConfig(cfg);
+
+      expect(result.models?.providers?.gigachat?.baseUrl).toBe(
+        "https://preview.gigachat.example/api/v1",
+      );
+    });
   });
 
   describe("applyGigachatConfig", () => {

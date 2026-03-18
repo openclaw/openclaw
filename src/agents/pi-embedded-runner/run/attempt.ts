@@ -37,7 +37,6 @@ import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { ensureAuthProfileStore } from "../../auth-profiles.js";
-import type { AuthProfileStore } from "../../auth-profiles.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -55,6 +54,10 @@ import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import {
+  resolveGigachatAuthMode,
+  resolveGigachatAuthProfileMetadata,
+} from "../../gigachat-auth.js";
 import { createGigachatStreamFn } from "../../gigachat-stream.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
@@ -225,22 +228,7 @@ function createYieldAbortedResponse(model: { api?: string; provider?: string; id
     result: async () => message,
   };
 }
-
-export function resolveGigachatAuthProfileMetadata(
-  store: Pick<AuthProfileStore, "profiles">,
-  authProfileId?: string,
-): Record<string, string> | undefined {
-  const profileIds = [authProfileId?.trim(), "gigachat:default"].filter(
-    (profileId): profileId is string => Boolean(profileId),
-  );
-  for (const profileId of profileIds) {
-    const credential = store.profiles[profileId];
-    if (credential?.type === "api_key" && credential.provider === "gigachat") {
-      return credential.metadata;
-    }
-  }
-  return undefined;
-}
+export { resolveGigachatAuthProfileMetadata } from "../../gigachat-auth.js";
 
 // Queue a hidden steering message so pi-agent-core skips any remaining tool calls.
 function queueSessionsYieldInterruptMessage(activeSession: {
@@ -1995,10 +1983,15 @@ export async function runEmbeddedAttempt(
           gigachatStore,
           params.authProfileId,
         );
+        const gigachatApiKey = await params.authStorage.getApiKey(params.provider);
 
         const gigachatStreamFn = createGigachatStreamFn({
           baseUrl,
-          authMode: (gigachatMeta?.authMode as "oauth" | "basic") ?? "oauth",
+          authMode: resolveGigachatAuthMode({
+            metadata: gigachatMeta,
+            apiKey: gigachatApiKey ?? undefined,
+            authProfileId: params.authProfileId,
+          }),
           insecureTls: gigachatMeta?.insecureTls === "true",
           scope: gigachatMeta?.scope,
         });

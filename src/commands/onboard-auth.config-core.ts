@@ -11,6 +11,7 @@ import {
   QIANFAN_DEFAULT_MODEL_ID,
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.static.js";
+import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -467,12 +468,17 @@ export function applyGigachatProviderConfig(
   };
 
   const defaultModel = buildGigachatModelDefinition();
+  const existingProvider = findNormalizedProviderValue(cfg.models?.providers, "gigachat");
+  const baseUrl =
+    opts?.baseUrl?.trim() ||
+    (typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl : "") ||
+    GIGACHAT_BASE_URL;
 
   return applyProviderConfigWithDefaultModel(cfg, {
     agentModels: models,
     providerId: "gigachat",
     api: "openai-completions",
-    baseUrl: opts?.baseUrl ?? GIGACHAT_BASE_URL,
+    baseUrl,
     defaultModel,
     defaultModelId: GIGACHAT_DEFAULT_MODEL_ID,
   });

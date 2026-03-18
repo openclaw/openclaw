@@ -3,6 +3,10 @@ import {
   QIANFAN_DEFAULT_MODEL_ID,
 } from "../../extensions/qianfan/provider-catalog.js";
 import { XIAOMI_DEFAULT_MODEL_ID } from "../../extensions/xiaomi/provider-catalog.js";
+import {
+  buildGigachatModelDefinition,
+  GIGACHAT_BASE_URL,
+} from "../commands/onboard-auth.models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
@@ -82,6 +86,15 @@ function normalizeProviderBaseUrl(baseUrl: string | undefined): string {
   } catch {
     return trimmed.replace(/\/+$/, "").toLowerCase();
   }
+}
+
+function buildGigachatProvider(apiKey?: string): ProviderConfig {
+  return {
+    baseUrl: GIGACHAT_BASE_URL,
+    api: "openai-completions",
+    ...(apiKey ? { apiKey } : {}),
+    models: [buildGigachatModelDefinition()],
+  } satisfies ProviderConfig;
 }
 
 function withStreamingUsageCompat(provider: ProviderConfig): ProviderConfig {
@@ -694,6 +707,15 @@ async function resolvePluginImplicitProviders(
   return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
+function resolveImplicitGigachatProvider(ctx: ImplicitProviderContext): ProviderConfig | null {
+  const auth = ctx.resolveProviderAuth("gigachat");
+  if (!auth.apiKey) {
+    return null;
+  }
+
+  return buildGigachatProvider(auth.apiKey);
+}
+
 export async function resolveImplicitProviders(
   params: ImplicitProviderParams,
 ): Promise<ModelsConfig["providers"]> {
@@ -792,6 +814,11 @@ export async function resolveImplicitProviders(
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "profile"));
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
+
+  const implicitGigachat = resolveImplicitGigachatProvider(context);
+  if (implicitGigachat) {
+    providers.gigachat = implicitGigachat;
+  }
 
   const implicitBedrock = await resolveImplicitBedrockProvider({
     agentDir: params.agentDir,
