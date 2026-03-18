@@ -235,8 +235,13 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
     return null;
   }
 
+  // Context occupancy = input (uncached) + cacheRead + cacheWrite — the full
+  // token footprint sent to the model, not just the uncached portion.
+  const contextTotal = input + cacheRead + cacheWrite;
   const contextPercent =
-    contextWindow && input > 0 ? Math.min(Math.round((input / contextWindow) * 100), 100) : null;
+    contextWindow && contextTotal > 0
+      ? Math.min(Math.round((contextTotal / contextWindow) * 100), 100)
+      : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
