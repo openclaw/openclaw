@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderRuntimeModel } from "../types.js";
-import { requireProviderContractProvider } from "./registry.js";
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
 const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
@@ -20,6 +19,8 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
 vi.mock("../../providers/qwen-portal-oauth.js", () => ({
   refreshQwenPortalCredentials: refreshQwenPortalCredentialsMock,
 }));
+
+let requireProviderContractProvider: typeof import("./registry.js").requireProviderContractProvider;
 
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
@@ -37,6 +38,13 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
 }
 
 describe("provider runtime contract", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ requireProviderContractProvider } = await import("./registry.js"));
+    getOAuthApiKeyMock.mockReset();
+    refreshQwenPortalCredentialsMock.mockReset();
+  });
+
   describe("anthropic", () => {
     it("owns anthropic 4.6 forward-compat resolution", () => {
       const provider = requireProviderContractProvider("anthropic");

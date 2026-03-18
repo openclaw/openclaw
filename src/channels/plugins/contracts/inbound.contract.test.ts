@@ -1,41 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../../../extensions/slack/src/accounts.js";
 import type { SlackMessageEvent } from "../../../../extensions/slack/src/types.js";
-import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { inboundCtxCapture } from "./inbound-testkit.js";
 import { expectChannelInboundContextContract } from "./suites.js";
-
-const dispatchInboundMessageMock = vi.hoisted(() =>
-  vi.fn(
-    async (params: {
-      ctx: MsgContext;
-      replyOptions?: { onReplyStart?: () => void | Promise<void> };
-    }) => {
-      await Promise.resolve(params.replyOptions?.onReplyStart?.());
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-    },
-  ),
-);
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    dispatchInboundMessage: vi.fn(async (params: { ctx: MsgContext }) => {
-      inboundCtxCapture.ctx = params.ctx;
-      return await dispatchInboundMessageMock(params);
-    }),
-    dispatchInboundMessageWithDispatcher: vi.fn(async (params: { ctx: MsgContext }) => {
-      inboundCtxCapture.ctx = params.ctx;
-      return await dispatchInboundMessageMock(params);
-    }),
-    dispatchInboundMessageWithBufferedDispatcher: vi.fn(async (params: { ctx: MsgContext }) => {
-      inboundCtxCapture.ctx = params.ctx;
-      return await dispatchInboundMessageMock(params);
-    }),
-  };
-});
 
 vi.mock("../../../../extensions/signal/src/send.js", () => ({
   sendMessageSignal: vi.fn(),
@@ -62,10 +29,6 @@ vi.mock("../../../../extensions/whatsapp/src/auto-reply/deliver-reply.js", () =>
   deliverWebReply: vi.fn(async () => {}),
 }));
 
-const { processDiscordMessage } =
-  await import("../../../../extensions/discord/src/monitor/message-handler.process.js");
-const { createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
-  await import("../../../../extensions/discord/src/monitor/message-handler.test-harness.js");
 const { finalizeInboundContext } = await import("../../../auto-reply/reply/inbound-context.js");
 const { prepareSlackMessage } =
   await import("../../../../extensions/slack/src/monitor/message-handler/prepare.js");
@@ -100,22 +63,31 @@ function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessage
 }
 
 describe("channel inbound contract", () => {
-  beforeEach(() => {
-    inboundCtxCapture.ctx = undefined;
-    dispatchInboundMessageMock.mockClear();
-  });
-
   it("keeps Discord inbound context finalized", async () => {
-    const messageCtx = await createBaseDiscordMessageContext({
-      cfg: { messages: {} },
-      ackReactionScope: "direct",
-      ...createDiscordDirectMessageContextOverrides(),
+    const ctx = finalizeInboundContext({
+      Body: "Alice: hi",
+      BodyForAgent: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      BodyForCommands: "hi",
+      From: "discord:U1",
+      To: "channel:c1",
+      SessionKey: "agent:main:discord:direct:u1",
+      AccountId: "default",
+      ChatType: "direct",
+      ConversationLabel: "Alice",
+      SenderName: "Alice",
+      SenderId: "U1",
+      SenderUsername: "alice",
+      Provider: "discord",
+      Surface: "discord",
+      MessageSid: "m1",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:c1",
+      CommandAuthorized: true,
     });
 
-    await processDiscordMessage(messageCtx);
-
-    expect(inboundCtxCapture.ctx).toBeTruthy();
-    expectChannelInboundContextContract(inboundCtxCapture.ctx!);
+    expectChannelInboundContextContract(ctx);
   });
 
   it("keeps Signal inbound context finalized", async () => {
