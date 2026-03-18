@@ -869,7 +869,7 @@ export async function updateLastRoute(params: {
       lastAccountId: normalized.lastAccountId,
       lastThreadId: normalized.lastThreadId,
     };
-    const next = mergeSessionEntry(
+    const next = mergeSessionEntryPreserveActivity(
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
