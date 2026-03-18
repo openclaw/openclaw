@@ -711,7 +711,7 @@ describe("telegramMessageActions", () => {
     }
   });
 
-  it("forwards telegram action aliases into the runtime seam", async () => {
+  it("forwards telegram action aliases into the runtime interface", async () => {
     const cases = [
       {
         name: "media-only send preserves asVoice",
