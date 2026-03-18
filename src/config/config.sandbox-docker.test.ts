@@ -332,4 +332,22 @@ describe("sandbox browser binds config", () => {
     });
     expect(res.ok).toBe(true);
   });
+
+  it("accepts evaluateEnabled in sandbox.browser config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            browser: {
+              evaluateEnabled: false,
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.browser?.evaluateEnabled).toBe(false);
+    }
+  });
 });

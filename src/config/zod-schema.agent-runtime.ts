@@ -207,6 +207,7 @@ export const SandboxDockerSchema = z
 export const SandboxBrowserSchema = z
   .object({
     enabled: z.boolean().optional(),
+    evaluateEnabled: z.boolean().optional(),
     image: z.string().optional(),
     containerPrefix: z.string().optional(),
     network: z.string().optional(),
