@@ -1,6 +1,6 @@
 import { buildAccountScopedAllowlistConfigEditor } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
-  buildAccountScopedDmSecurityPolicy,
+  createScopedDmSecurityResolver,
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
@@ -25,6 +25,13 @@ import { createIMessagePluginBase, imessageSetupWizard } from "./shared.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
 const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+
+const resolveIMessageDmPolicy = createScopedDmSecurityResolver<ResolvedIMessageAccount>({
+  channelKey: "imessage",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+});
 
 function buildIMessageBaseSessionKey(params: {
   cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
@@ -127,17 +134,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     }),
   },
   security: {
-    resolveDmPolicy: ({ cfg, accountId, account }) => {
-      return buildAccountScopedDmSecurityPolicy({
-        cfg,
-        channelKey: "imessage",
-        accountId,
-        fallbackAccountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
-        policy: account.config.dmPolicy,
-        allowFrom: account.config.allowFrom ?? [],
-        policyPathSuffix: "dmPolicy",
-      });
-    },
+    resolveDmPolicy: resolveIMessageDmPolicy,
     collectWarnings: ({ account, cfg }) => {
       return collectAllowlistProviderRestrictSendersWarnings({
         cfg,
