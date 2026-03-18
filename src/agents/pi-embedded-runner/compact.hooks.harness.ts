@@ -6,6 +6,11 @@ type MockResolvedModel = {
   authStorage: { setRuntimeApiKey: Mock<(provider?: string, apiKey?: string) => void> };
   modelRegistry: Record<string, never>;
 };
+type MockMemorySearchManager = {
+  manager: {
+    sync: (params?: unknown) => Promise<void>;
+  };
+};
 
 export const contextEngineCompactMock = vi.fn(async () => ({
   ok: true as boolean,
@@ -45,9 +50,11 @@ export const triggerInternalHook: Mock<(event?: unknown) => void> = vi.fn();
 export const sanitizeSessionHistoryMock = vi.fn(
   async (params: { messages: unknown[] }) => params.messages,
 );
-export const getMemorySearchManagerMock = vi.fn(async () => ({
+export const getMemorySearchManagerMock: Mock<
+  (params?: unknown) => Promise<MockMemorySearchManager>
+> = vi.fn(async () => ({
   manager: {
-    sync: vi.fn(async () => {}),
+    sync: vi.fn(async (_params?: unknown) => {}),
   },
 }));
 export const resolveMemorySearchConfigMock = vi.fn(() => ({
