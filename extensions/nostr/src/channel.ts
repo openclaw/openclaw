@@ -1,3 +1,4 @@
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
@@ -17,6 +18,7 @@ import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { normalizePubkey, startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
 import { getNostrRuntime } from "./runtime.js";
+import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 import { nostrSetupAdapter, nostrSetupWizard } from "./setup-surface.js";
 import {
   listNostrAccountIds,
@@ -30,6 +32,22 @@ const activeBuses = new Map<string, NostrBusHandle>();
 
 // Store metrics snapshots per account (for status reporting)
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
+
+const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount>({
+  channelKey: "nostr",
+  resolvePolicy: (account) => account.config.dmPolicy,
+  resolveAllowFrom: (account) => account.config.allowFrom,
+  policyPathSuffix: "dmPolicy",
+  defaultPolicy: "pairing",
+  approveHint: formatPairingApproveHint("nostr"),
+  normalizeEntry: (raw) => {
+    try {
+      return normalizePubkey(raw.replace(/^nostr:/i, "").trim());
+    } catch {
+      return raw.trim();
+    }
+  },
+});
 
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   id: "nostr",
@@ -101,22 +119,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   },
 
   security: {
-    resolveDmPolicy: ({ account }) => {
-      return {
-        policy: account.config.dmPolicy ?? "pairing",
-        allowFrom: account.config.allowFrom ?? [],
-        policyPath: "channels.nostr.dmPolicy",
-        allowFromPath: "channels.nostr.allowFrom",
-        approveHint: formatPairingApproveHint("nostr"),
-        normalizeEntry: (raw) => {
-          try {
-            return normalizePubkey(raw.replace(/^nostr:/i, "").trim());
-          } catch {
-            return raw.trim();
-          }
-        },
-      };
-    },
+    resolveDmPolicy: resolveNostrDmPolicy,
   },
 
   messaging: {
@@ -136,6 +139,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
       },
       hint: "<npub|hex pubkey|nostr:npub...>",
     },
+    resolveOutboundSessionRoute: (params) => resolveNostrOutboundSessionRoute(params),
   },
 
   outbound: {

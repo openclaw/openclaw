@@ -7,6 +7,8 @@ import {
   buildOpenGroupPolicyWarning,
   collectAllowlistProviderGroupPolicyWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
@@ -14,9 +16,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/matrix";
-import { createLazyRuntimeSurface } from "../../../src/shared/lazy-runtime.js";
-import { buildTrafficStatusSummary } from "../../shared/channel-status-summary.js";
+} from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
@@ -32,6 +32,7 @@ import {
 } from "./matrix/accounts.js";
 import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import { getMatrixRuntime } from "./runtime.js";
+import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import { matrixSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
@@ -39,11 +40,9 @@ import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
-type MatrixChannelRuntime = typeof import("./channel.runtime.js").matrixChannelRuntime;
-
-const loadMatrixChannelRuntime = createLazyRuntimeSurface(
+const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
-  ({ matrixChannelRuntime }) => matrixChannelRuntime,
+  "matrixChannelRuntime",
 );
 
 const meta = {
@@ -174,6 +173,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeMatrixMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveMatrixOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: (raw) => {
         const trimmed = raw.trim();

@@ -22,6 +22,20 @@ describe("resolvePluginWebSearchProviders", () => {
       "perplexity:perplexity",
       "firecrawl:firecrawl",
     ]);
+    expect(providers.map((provider) => provider.credentialPath)).toEqual([
+      "tools.web.search.apiKey",
+      "tools.web.search.gemini.apiKey",
+      "tools.web.search.grok.apiKey",
+      "tools.web.search.kimi.apiKey",
+      "tools.web.search.perplexity.apiKey",
+      "tools.web.search.firecrawl.apiKey",
+    ]);
+    expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
+      expect.any(Function),
+    );
+    expect(
+      providers.find((provider) => provider.id === "perplexity")?.resolveRuntimeMetadata,
+    ).toEqual(expect.any(Function));
   });
 
   it("can augment restrictive allowlists for bundled compatibility", () => {
@@ -95,6 +109,7 @@ describe("resolvePluginWebSearchProviders", () => {
         placeholder: "custom-...",
         signupUrl: "https://example.com/signup",
         autoDetectOrder: 1,
+        credentialPath: "tools.web.search.custom.apiKey",
         getCredentialValue: () => "configured",
         setCredentialValue: () => {},
         createTool: () => ({

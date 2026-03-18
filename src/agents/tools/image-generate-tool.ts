@@ -15,7 +15,17 @@ import { loadWebMedia } from "../../plugin-sdk/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
-import { resolveMediaToolLocalRoots } from "./media-tool-shared.js";
+import {
+  applyImageGenerationModelConfigDefaults,
+  resolveMediaToolLocalRoots,
+} from "./media-tool-shared.js";
+import {
+  buildToolModelConfigFromCandidates,
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  resolveDefaultModelRef,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -71,15 +81,51 @@ const ImageGenerateToolSchema = Type.Object({
   ),
 });
 
-function hasConfiguredImageGenerationModel(cfg: OpenClawConfig): boolean {
-  const configured = cfg.agents?.defaults?.imageGenerationModel;
-  if (typeof configured === "string") {
-    return configured.trim().length > 0;
+function resolveImageGenerationModelCandidates(
+  cfg: OpenClawConfig | undefined,
+): Array<string | undefined> {
+  const providerDefaults = new Map<string, string>();
+  for (const provider of listRuntimeImageGenerationProviders({ config: cfg })) {
+    const providerId = provider.id.trim();
+    const modelId = provider.defaultModel?.trim();
+    if (!providerId || !modelId || providerDefaults.has(providerId)) {
+      continue;
+    }
+    providerDefaults.set(providerId, `${providerId}/${modelId}`);
   }
-  if (configured?.primary?.trim()) {
-    return true;
+
+  const orderedProviders = [
+    resolveDefaultModelRef(cfg).provider,
+    "openai",
+    "google",
+    ...providerDefaults.keys(),
+  ];
+  const orderedRefs: string[] = [];
+  const seen = new Set<string>();
+  for (const providerId of orderedProviders) {
+    const ref = providerDefaults.get(providerId);
+    if (!ref || seen.has(ref)) {
+      continue;
+    }
+    seen.add(ref);
+    orderedRefs.push(ref);
   }
-  return (configured?.fallbacks ?? []).some((entry) => entry.trim().length > 0);
+  return orderedRefs;
+}
+
+export function resolveImageGenerationModelConfigForTool(params: {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): ToolModelConfig | null {
+  const explicit = coerceToolModelConfig(params.cfg?.agents?.defaults?.imageGenerationModel);
+  if (hasToolModelConfig(explicit)) {
+    return explicit;
+  }
+  return buildToolModelConfigFromCandidates({
+    explicit,
+    agentDir: params.agentDir,
+    candidates: resolveImageGenerationModelCandidates(params.cfg),
+  });
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" {
@@ -274,9 +320,15 @@ export function createImageGenerateTool(options?: {
   fsPolicy?: ToolFsPolicy;
 }): AnyAgentTool | null {
   const cfg = options?.config ?? loadConfig();
-  if (!hasConfiguredImageGenerationModel(cfg)) {
+  const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
+    cfg,
+    agentDir: options?.agentDir,
+  });
+  if (!imageGenerationModelConfig) {
     return null;
   }
+  const effectiveCfg =
+    applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
   const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
     workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
   });
@@ -293,25 +345,27 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured image-generation model. Use action="list" to inspect available providers/models. Generated images are delivered automatically from the tool result as MEDIA paths.',
+      'Generate new images or edit reference images with the configured or inferred image-generation model. Use action="list" to inspect available providers/models. Generated images are delivered automatically from the tool result as MEDIA paths.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = resolveAction(params);
       if (action === "list") {
-        const providers = listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
-          id: provider.id,
-          ...(provider.label ? { label: provider.label } : {}),
-          ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
-          models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
-          ...(provider.supportedSizes ? { supportedSizes: [...provider.supportedSizes] } : {}),
-          ...(provider.supportedResolutions
-            ? { supportedResolutions: [...provider.supportedResolutions] }
-            : {}),
-          ...(typeof provider.supportsImageEditing === "boolean"
-            ? { supportsImageEditing: provider.supportsImageEditing }
-            : {}),
-        }));
+        const providers = listRuntimeImageGenerationProviders({ config: effectiveCfg }).map(
+          (provider) => ({
+            id: provider.id,
+            ...(provider.label ? { label: provider.label } : {}),
+            ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
+            models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
+            ...(provider.supportedSizes ? { supportedSizes: [...provider.supportedSizes] } : {}),
+            ...(provider.supportedResolutions
+              ? { supportedResolutions: [...provider.supportedResolutions] }
+              : {}),
+            ...(typeof provider.supportsImageEditing === "boolean"
+              ? { supportsImageEditing: provider.supportsImageEditing }
+              : {}),
+          }),
+        );
         const lines = providers.flatMap((provider) => {
           const caps: string[] = [];
           if (provider.supportsImageEditing) {
@@ -360,7 +414,7 @@ export function createImageGenerateTool(options?: {
             : undefined);
 
       const result = await generateImage({
-        cfg,
+        cfg: effectiveCfg,
         prompt,
         agentDir: options?.agentDir,
         modelOverride: model,

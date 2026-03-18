@@ -1,5 +1,5 @@
-import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk/tlon";
-import { createLoggerBackedRuntime, createReplyPrefixOptions } from "openclaw/plugin-sdk/tlon";
+import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "../../api.js";
+import { createLoggerBackedRuntime, createReplyPrefixOptions } from "../../api.js";
 import { getTlonRuntime } from "../runtime.js";
 import { createSettingsManager, type TlonSettingsStore } from "../settings.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
@@ -24,10 +24,16 @@ import {
   formatBlockedList,
   formatPendingList,
 } from "./approval.js";
+import { resolveChannelAuthorization } from "./authorization.js";
 import { fetchAllChannels, fetchInitData } from "./discovery.js";
 import { cacheMessage, getChannelHistory, fetchThreadHistory } from "./history.js";
 import { downloadMessageImages } from "./media.js";
 import { createProcessedMessageTracker } from "./processed-messages.js";
+import {
+  applyTlonSettingsOverrides,
+  buildTlonSettingsMigrations,
+  mergeUniqueStrings,
+} from "./settings-helpers.js";
 import {
   extractMessageText,
   extractCites,
@@ -36,6 +42,7 @@ import {
   stripBotMention,
   isDmAllowed,
   isSummarizationRequest,
+  resolveAuthorizedMessageText,
   type ParsedCite,
 } from "./utils.js";
 
@@ -44,40 +51,6 @@ export type MonitorTlonOpts = {
   abortSignal?: AbortSignal;
   accountId?: string | null;
 };
-
-type ChannelAuthorization = {
-  mode?: "restricted" | "open";
-  allowedShips?: string[];
-};
-
-/**
- * Resolve channel authorization by merging file config with settings store.
- * Settings store takes precedence for fields it defines.
- */
-function resolveChannelAuthorization(
-  cfg: OpenClawConfig,
-  channelNest: string,
-  settings?: TlonSettingsStore,
-): { mode: "restricted" | "open"; allowedShips: string[] } {
-  const tlonConfig = cfg.channels?.tlon as
-    | {
-        authorization?: { channelRules?: Record<string, ChannelAuthorization> };
-        defaultAuthorizedShips?: string[];
-      }
-    | undefined;
-
-  // Merge channel rules: settings override file config
-  const fileRules = tlonConfig?.authorization?.channelRules ?? {};
-  const settingsRules = settings?.channelRules ?? {};
-  const rule = settingsRules[channelNest] ?? fileRules[channelNest];
-
-  // Merge default authorized ships: settings override file config
-  const defaultShips = settings?.defaultAuthorizedShips ?? tlonConfig?.defaultAuthorizedShips ?? [];
-
-  const allowedShips = rule?.allowedShips ?? defaultShips;
-  const mode = rule?.mode ?? "restricted";
-  return { mode, allowedShips };
-}
 
 export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<void> {
   const core = getTlonRuntime();
@@ -209,48 +182,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Migrate file config to settings store (seed on first run)
   async function migrateConfigToSettings() {
-    const migrations: Array<{ key: string; fileValue: unknown; settingsValue: unknown }> = [
-      {
-        key: "dmAllowlist",
-        fileValue: account.dmAllowlist,
-        settingsValue: currentSettings.dmAllowlist,
-      },
-      {
-        key: "groupInviteAllowlist",
-        fileValue: account.groupInviteAllowlist,
-        settingsValue: currentSettings.groupInviteAllowlist,
-      },
-      {
-        key: "groupChannels",
-        fileValue: account.groupChannels,
-        settingsValue: currentSettings.groupChannels,
-      },
-      {
-        key: "defaultAuthorizedShips",
-        fileValue: account.defaultAuthorizedShips,
-        settingsValue: currentSettings.defaultAuthorizedShips,
-      },
-      {
-        key: "autoDiscoverChannels",
-        fileValue: account.autoDiscoverChannels,
-        settingsValue: currentSettings.autoDiscoverChannels,
-      },
-      {
-        key: "autoAcceptDmInvites",
-        fileValue: account.autoAcceptDmInvites,
-        settingsValue: currentSettings.autoAcceptDmInvites,
-      },
-      {
-        key: "autoAcceptGroupInvites",
-        fileValue: account.autoAcceptGroupInvites,
-        settingsValue: currentSettings.autoAcceptGroupInvites,
-      },
-      {
-        key: "showModelSig",
-        fileValue: account.showModelSignature,
-        settingsValue: currentSettings.showModelSig,
-      },
-    ];
+    const migrations = buildTlonSettingsMigrations(account, currentSettings);
 
     for (const { key, fileValue, settingsValue } of migrations) {
       // Only migrate if file has a value and settings store doesn't
@@ -287,55 +219,21 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     // Migrate file config to settings store if not already present
     await migrateConfigToSettings();
-
-    // Apply settings overrides
-    // Note: groupChannels from settings store are merged AFTER discovery runs (below)
-    if (currentSettings.defaultAuthorizedShips?.length) {
-      runtime.log?.(
-        `[tlon] Using defaultAuthorizedShips from settings store: ${currentSettings.defaultAuthorizedShips.join(", ")}`,
-      );
-    }
-    if (currentSettings.autoDiscoverChannels !== undefined) {
-      effectiveAutoDiscoverChannels = currentSettings.autoDiscoverChannels;
-      runtime.log?.(
-        `[tlon] Using autoDiscoverChannels from settings store: ${effectiveAutoDiscoverChannels}`,
-      );
-    }
-    if (currentSettings.dmAllowlist !== undefined) {
-      effectiveDmAllowlist = currentSettings.dmAllowlist;
-      runtime.log?.(
-        `[tlon] Using dmAllowlist from settings store: ${effectiveDmAllowlist.join(", ")}`,
-      );
-    }
-    if (currentSettings.showModelSig !== undefined) {
-      effectiveShowModelSig = currentSettings.showModelSig;
-    }
-    if (currentSettings.autoAcceptDmInvites !== undefined) {
-      effectiveAutoAcceptDmInvites = currentSettings.autoAcceptDmInvites;
-      runtime.log?.(
-        `[tlon] Using autoAcceptDmInvites from settings store: ${effectiveAutoAcceptDmInvites}`,
-      );
-    }
-    if (currentSettings.autoAcceptGroupInvites !== undefined) {
-      effectiveAutoAcceptGroupInvites = currentSettings.autoAcceptGroupInvites;
-      runtime.log?.(
-        `[tlon] Using autoAcceptGroupInvites from settings store: ${effectiveAutoAcceptGroupInvites}`,
-      );
-    }
-    if (currentSettings.groupInviteAllowlist !== undefined) {
-      effectiveGroupInviteAllowlist = currentSettings.groupInviteAllowlist;
-      runtime.log?.(
-        `[tlon] Using groupInviteAllowlist from settings store: ${effectiveGroupInviteAllowlist.join(", ")}`,
-      );
-    }
-    if (currentSettings.ownerShip) {
-      effectiveOwnerShip = normalizeShip(currentSettings.ownerShip);
-      runtime.log?.(`[tlon] Using ownerShip from settings store: ${effectiveOwnerShip}`);
-    }
-    if (currentSettings.pendingApprovals?.length) {
-      pendingApprovals = currentSettings.pendingApprovals;
-      runtime.log?.(`[tlon] Loaded ${pendingApprovals.length} pending approval(s) from settings`);
-    }
+    ({
+      effectiveDmAllowlist,
+      effectiveShowModelSig,
+      effectiveAutoAcceptDmInvites,
+      effectiveAutoAcceptGroupInvites,
+      effectiveGroupInviteAllowlist,
+      effectiveAutoDiscoverChannels,
+      effectiveOwnerShip,
+      pendingApprovals,
+      currentSettings,
+    } = applyTlonSettingsOverrides({
+      account,
+      currentSettings,
+      log: (message) => runtime.log?.(message),
+    }));
   } catch (err) {
     runtime.log?.(`[tlon] Settings store not available, using file config: ${String(err)}`);
   }
@@ -355,24 +253,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
   // Merge manual config with auto-discovered channels
   if (account.groupChannels.length > 0) {
-    for (const ch of account.groupChannels) {
-      if (!groupChannels.includes(ch)) {
-        groupChannels.push(ch);
-      }
-    }
+    groupChannels = mergeUniqueStrings(groupChannels, account.groupChannels);
     runtime.log?.(
       `[tlon] Added ${account.groupChannels.length} manual groupChannels to monitoring`,
     );
   }
 
   // Also merge settings store groupChannels (may have been set via tlon settings command)
-  if (currentSettings.groupChannels?.length) {
-    for (const ch of currentSettings.groupChannels) {
-      if (!groupChannels.includes(ch)) {
-        groupChannels.push(ch);
-      }
-    }
-  }
+  groupChannels = mergeUniqueStrings(groupChannels, currentSettings.groupChannels);
 
   if (groupChannels.length > 0) {
     runtime.log?.(
@@ -1245,9 +1133,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
       }
 
-      // Resolve quoted content only after the sender passed channel authorization.
-      const citedContent = await resolveAllCites(content.content);
-      const messageText = citedContent + rawText;
+      const messageText = await resolveAuthorizedMessageText({
+        rawText,
+        content: content.content,
+        authorizedForCites: true,
+        resolveAllCites,
+      });
 
       const parsed = parseChannelNest(nest);
       await processMessage({
@@ -1370,8 +1261,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       if (!rawText.trim()) {
         return;
       }
-      const citedContent = await resolveAllCites(essay.content);
-      const resolvedMessageText = citedContent + rawText;
 
       // Check if this is the owner sending an approval response
       const messageText = rawText;
@@ -1394,6 +1283,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
       // Owner is always allowed to DM (bypass allowlist)
       if (isOwner(senderShip)) {
+        const resolvedMessageText = await resolveAuthorizedMessageText({
+          rawText,
+          content: essay.content,
+          authorizedForCites: true,
+          resolveAllCites,
+        });
         runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);
         await processMessage({
           messageId: messageId ?? "",
@@ -1429,9 +1324,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
 
       await processMessage({
+        messageText: await resolveAuthorizedMessageText({
+          rawText,
+          content: essay.content,
+          authorizedForCites: true,
+          resolveAllCites,
+        }),
         messageId: messageId ?? "",
         senderShip,
-        messageText: resolvedMessageText,
         messageContent: essay.content, // Pass raw content for media extraction
         isGroup: false,
         timestamp: essay.sent || Date.now(),

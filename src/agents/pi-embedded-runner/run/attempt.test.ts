@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
+import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
@@ -161,6 +163,42 @@ describe("composeSystemPromptWithHookContext", () => {
         appendSystemContext: "  append only  ",
       }),
     ).toBe("append only");
+  });
+
+  it("keeps hook-composed system prompt stable when bootstrap warnings only change the user prompt", () => {
+    const baseSystemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "AGENTS.md", content: "Follow AGENTS guidance." }],
+      toolNames: ["read"],
+    });
+    const composedSystemPrompt = composeSystemPromptWithHookContext({
+      baseSystemPrompt,
+      appendSystemContext: "hook system context",
+    });
+    const turns = [
+      {
+        systemPrompt: composedSystemPrompt,
+        prompt: appendBootstrapPromptWarning("hello", ["AGENTS.md: 200 raw -> 0 injected"]),
+      },
+      {
+        systemPrompt: composedSystemPrompt,
+        prompt: appendBootstrapPromptWarning("hello again", []),
+      },
+      {
+        systemPrompt: composedSystemPrompt,
+        prompt: appendBootstrapPromptWarning("hello once more", [
+          "AGENTS.md: 200 raw -> 0 injected",
+        ]),
+      },
+    ];
+
+    expect(turns[0]?.systemPrompt).toBe(turns[1]?.systemPrompt);
+    expect(turns[1]?.systemPrompt).toBe(turns[2]?.systemPrompt);
+    expect(turns[0]?.prompt.startsWith("hello")).toBe(true);
+    expect(turns[1]?.prompt).toBe("hello again");
+    expect(turns[2]?.prompt.startsWith("hello once more")).toBe(true);
+    expect(turns[0]?.prompt).toContain("[Bootstrap truncation warning]");
+    expect(turns[2]?.prompt).toContain("[Bootstrap truncation warning]");
   });
 });
 
@@ -1209,6 +1247,40 @@ describe("buildAfterTurnRuntimeContext", () => {
       model: "gpt-5.3-codex",
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
+    });
+  });
+
+  it("preserves sender and channel routing context for scoped compaction discovery", () => {
+    const legacy = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        currentChannelId: "C123",
+        currentThreadTs: "thread-9",
+        currentMessageId: "msg-42",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        senderId: "user-123",
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(legacy).toMatchObject({
+      senderId: "user-123",
+      currentChannelId: "C123",
+      currentThreadTs: "thread-9",
+      currentMessageId: "msg-42",
     });
   });
 });
