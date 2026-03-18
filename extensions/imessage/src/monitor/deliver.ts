@@ -1,6 +1,9 @@
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { deliverTextOrMediaReply } from "openclaw/plugin-sdk/reply-payload";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { chunkTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -32,14 +35,15 @@ export async function deliverReplies(params: {
   const chunkMode = resolveChunkMode(cfg, "imessage", accountId);
   for (const payload of replies) {
     const rawText = sanitizeOutboundText(payload.text ?? "");
-    const text = convertMarkdownTables(rawText, tableMode);
-    const hasMedia = Boolean(payload.mediaUrls?.length ?? payload.mediaUrl);
-    if (!hasMedia && text) {
-      sentMessageCache?.remember(scope, { text });
+    const reply = resolveSendableOutboundReplyParts(payload, {
+      text: convertMarkdownTables(rawText, tableMode),
+    });
+    if (!reply.hasMedia && reply.hasText) {
+      sentMessageCache?.remember(scope, { text: reply.text });
     }
     const delivered = await deliverTextOrMediaReply({
       payload,
-      text,
+      text: reply.text,
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         const sent = await sendMessageIMessage(target, chunk, {
