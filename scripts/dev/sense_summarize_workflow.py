@@ -86,6 +86,70 @@ def build_local_fallback_heavy_task(text: str, mode: str) -> dict:
     }
 
 
+def _as_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            items.append(item.strip())
+    return items
+
+
+def normalize_remote_result(task: str, result: dict) -> tuple[dict, bool]:
+    body = result.get("body")
+    if not isinstance(body, dict):
+        return result, False
+    remote_result = body.get("result")
+    if not isinstance(remote_result, dict):
+        return result, False
+
+    details = remote_result.get("details")
+    if not isinstance(details, dict):
+        details = {}
+
+    worker_state = details.get("worker_state")
+    structured_source = details.get("structured_source")
+
+    if worker_state == "unavailable" and structured_source == "unavailable":
+        return result, True
+
+    if worker_state == "success" and structured_source in {"json_primary", "json_retry", "heuristic_fallback"}:
+        print(
+            f"[sense-workflow] structured_source={structured_source} worker_state={worker_state}",
+            file=sys.stderr,
+        )
+
+    normalized: dict | None = None
+    if task == "analyze_text":
+        normalized = {
+            "summary": str(remote_result.get("summary") or details.get("summary") or ""),
+            "key_points": _as_string_list(remote_result.get("key_points") or details.get("key_points")),
+            "suggested_next_action": str(
+                remote_result.get("suggested_next_action") or details.get("suggested_next_action") or ""
+            ),
+        }
+    elif task == "heavy_task":
+        structured = details.get("structured") if isinstance(details.get("structured"), dict) else None
+        if structured:
+            normalized = {
+                "summary": str(structured.get("summary") or ""),
+                "key_points": _as_string_list(structured.get("key_points")),
+                "suggested_next_action": str(structured.get("suggested_next_action") or ""),
+            }
+        elif remote_result.get("mode") == "long_text_review":
+            normalized = {
+                "summary": str(details.get("review_summary") or remote_result.get("request_summary") or ""),
+                "key_points": _as_string_list(details.get("review_points")),
+                "suggested_next_action": str(details.get("recommended_next_step") or ""),
+            }
+
+    if normalized:
+        result["normalized"] = normalized
+
+    return result, False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Minimal ops workflow: offload summarize to Sense worker with local fallback."
@@ -122,10 +186,12 @@ def main() -> int:
         file=sys.stderr,
     )
     result = request_json_result("POST", url, payload, args.timeout, token=token)
+    result, should_local_fallback = normalize_remote_result(args.task, result)
     stream = sys.stdout if result.get("ok") else sys.stderr
     print(json.dumps(result, ensure_ascii=False, indent=2), file=stream)
     if result.get("ok"):
-        return 0
+        if not should_local_fallback:
+            return 0
     status = result.get("status")
     if status == 401:
         return 1

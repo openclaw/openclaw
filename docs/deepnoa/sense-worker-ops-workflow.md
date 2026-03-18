@@ -125,6 +125,29 @@ The workflow writes a short request log to stderr:
 
 The Sense adapter itself logs request / response / timeout details when invoked as a plugin tool.
 
+## Structured result adoption
+
+OpenClaw-side workflow handling now treats worker details like this:
+
+- `worker_state=success` and `structured_source=json_primary`
+  - adopt as the best result
+- `worker_state=success` and `structured_source=json_retry`
+  - adopt and log that the worker used retry parsing
+- `worker_state=success` and `structured_source=heuristic_fallback`
+  - adopt and log that the worker used heuristic structuring
+- `worker_state=unavailable` and `structured_source=unavailable`
+  - do not trust remote content
+  - switch to local fallback
+- `401 Unauthorized`
+  - do not fallback
+  - keep the unauthorized failure visible
+
+For operator workflows, a normalized top-level view is added when available:
+
+- `normalized.summary`
+- `normalized.key_points`
+- `normalized.suggested_next_action`
+
 ## Success and fallback checks
 
 - Success:
@@ -143,6 +166,9 @@ The Sense adapter itself logs request / response / timeout details when invoked 
 - `401 Unauthorized`
   - `SENSE_WORKER_TOKEN` on T550 does not match the worker-side token.
   - helper workflows do not fallback on `401`; unauthorized should stay visible to the operator.
+- debug response modes
+  - use only for validation or troubleshooting
+  - normal production runs should not set `debug_response_mode`
 - `fetch failed`
   - worker is unavailable, wrong base URL, or LAN route is down.
 - timeout
