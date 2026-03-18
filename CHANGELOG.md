@@ -133,6 +133,7 @@ Docs: https://docs.openclaw.ai
 - Agents/prompt composition: append bootstrap truncation warnings to the current-turn prompt and add regression coverage for stable system-prompt cache invariants. (#49237) Thanks @scoootscooob.
 - Gateway/auth: add regression coverage that keeps device-less trusted-proxy Control UI sessions off privileged pairing approval RPCs. Thanks @vincentkoc.
 - Plugins/runtime-api: pin extension runtime-api export seams with explicit guardrail coverage so future surface creep becomes a deliberate diff. Thanks @vincentkoc.
+- Telegram/security: add regression coverage proving pinned fallback host overrides stay bound to Telegram and delegate non-matching hostnames back to the original lookup path. Thanks @vincentkoc.
 
 ### Breaking
 
