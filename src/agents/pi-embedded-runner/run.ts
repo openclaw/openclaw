@@ -106,6 +106,15 @@ const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
 // Retry the *same* profile on transient overloaded errors before rotating or
 // surfacing the failure.  The delays are deliberately longer than the failover
 // backoff because a 529 usually resolves within seconds/minutes.
+//
+// Worst-case added latency before surfacing an error:
+//   attempt 1: ~2s, attempt 2: ~4s, attempt 3: ~8s → total ~14s (plus jitter).
+// This is a meaningful but acceptable delay — users previously had to manually
+// retry, which took longer.
+//
+// Complementary to PR #49807 which prevents overloaded errors from triggering
+// auth profile cooldown escalation.  Together they form a coherent response:
+// don't penalize the profile (49807) and do retry it with backoff (this).
 const OVERLOAD_SAME_PROFILE_RETRY_POLICY: BackoffPolicy = {
   initialMs: 2_000,
   maxMs: 30_000,
@@ -888,6 +897,44 @@ export async function runEmbeddedPiAgent(
           throw err;
         }
       };
+      const maybeRetrySameProfileOnOverload = async (options: {
+        stage: "prompt" | "assistant";
+        reason: FailoverReason | null;
+        profileId?: string;
+        logDecision: (decision: "retry_same_profile") => void;
+      }): Promise<boolean> => {
+        const { stage, reason, profileId, logDecision } = options;
+        if (
+          reason !== "overloaded" ||
+          overloadSameProfileRetries >= MAX_OVERLOAD_SAME_PROFILE_RETRIES
+        ) {
+          return false;
+        }
+        overloadSameProfileRetries += 1;
+        const delayMs = computeBackoff(
+          OVERLOAD_SAME_PROFILE_RETRY_POLICY,
+          overloadSameProfileRetries,
+        );
+        log.warn(
+          `${stage === "prompt" ? "overloaded (prompt)" : "overloaded"} — retrying same profile for ${provider}/${modelId}: ` +
+            `attempt=${overloadSameProfileRetries}/${MAX_OVERLOAD_SAME_PROFILE_RETRIES} ` +
+            `delayMs=${delayMs}`,
+        );
+        logDecision("retry_same_profile");
+        // Compatibility note: before PR #49807, overloaded errors could still
+        // mark the profile as failed. Clearing the state here keeps same-profile
+        // retry working both before and after that companion fix lands.
+        if (profileId) {
+          await markAuthProfileGood({
+            store: authStore,
+            provider,
+            profileId,
+            agentDir,
+          });
+        }
+        await sleepWithAbort(delayMs, params.abortSignal);
+        return true;
+      };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
@@ -1421,31 +1468,14 @@ export async function runEmbeddedPiAgent(
               overloadSameProfileRetries = 0;
               continue;
             }
-            // No other profile — retry the same profile on overloaded errors.
             if (
-              promptFailoverReason === "overloaded" &&
-              overloadSameProfileRetries < MAX_OVERLOAD_SAME_PROFILE_RETRIES
+              await maybeRetrySameProfileOnOverload({
+                stage: "prompt",
+                reason: promptFailoverReason,
+                profileId: lastProfileId,
+                logDecision: logPromptFailoverDecision,
+              })
             ) {
-              overloadSameProfileRetries += 1;
-              const delayMs = computeBackoff(
-                OVERLOAD_SAME_PROFILE_RETRY_POLICY,
-                overloadSameProfileRetries,
-              );
-              log.warn(
-                `overloaded (prompt) — retrying same profile for ${provider}/${modelId}: ` +
-                  `attempt=${overloadSameProfileRetries}/${MAX_OVERLOAD_SAME_PROFILE_RETRIES} ` +
-                  `delayMs=${delayMs}`,
-              );
-              logPromptFailoverDecision("retry_same_profile");
-              if (lastProfileId) {
-                await markAuthProfileGood({
-                  store: authStore,
-                  provider,
-                  profileId: lastProfileId,
-                  agentDir,
-                });
-              }
-              await sleepWithAbort(delayMs, params.abortSignal);
               continue;
             }
             const fallbackThinking = pickFallbackThinkingLevel({
@@ -1463,6 +1493,9 @@ export async function runEmbeddedPiAgent(
             // are configured so outer model fallback can continue on overload,
             // rate-limit, auth, or billing failures.
             if (fallbackConfigured && promptFailoverFailure) {
+              // Reset the same-profile retry budget before handing control to a
+              // fallback model so the next candidate gets the same treatment.
+              overloadSameProfileRetries = 0;
               const status = resolveFailoverStatus(promptFailoverReason ?? "unknown");
               logPromptFailoverDecision("fallback_model", { status });
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
@@ -1582,37 +1615,21 @@ export async function runEmbeddedPiAgent(
               continue;
             }
 
-            // No other profile available — retry the *same* profile on
-            // transient overloaded errors before giving up or falling back.
             if (
-              assistantFailoverReason === "overloaded" &&
-              overloadSameProfileRetries < MAX_OVERLOAD_SAME_PROFILE_RETRIES
+              await maybeRetrySameProfileOnOverload({
+                stage: "assistant",
+                reason: assistantFailoverReason,
+                profileId: lastProfileId,
+                logDecision: logAssistantFailoverDecision,
+              })
             ) {
-              overloadSameProfileRetries += 1;
-              const delayMs = computeBackoff(
-                OVERLOAD_SAME_PROFILE_RETRY_POLICY,
-                overloadSameProfileRetries,
-              );
-              log.warn(
-                `overloaded — retrying same profile for ${provider}/${modelId}: ` +
-                  `attempt=${overloadSameProfileRetries}/${MAX_OVERLOAD_SAME_PROFILE_RETRIES} ` +
-                  `delayMs=${delayMs}`,
-              );
-              logAssistantFailoverDecision("retry_same_profile");
-              // Un-mark the profile failure so the same profile is used on retry.
-              if (lastProfileId) {
-                await markAuthProfileGood({
-                  store: authStore,
-                  provider,
-                  profileId: lastProfileId,
-                  agentDir,
-                });
-              }
-              await sleepWithAbort(delayMs, params.abortSignal);
               continue;
             }
 
             if (fallbackConfigured) {
+              // Reset the same-profile retry budget before handing control to a
+              // fallback model so the next candidate gets the same treatment.
+              overloadSameProfileRetries = 0;
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
               // Prefer formatted error message (user-friendly) over raw errorMessage
               const message =
