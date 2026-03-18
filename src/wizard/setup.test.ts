@@ -92,6 +92,9 @@ const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true }))
 const buildPluginCompatibilityNotices = vi.hoisted(() =>
   vi.fn((): PluginCompatibilityNotice[] => []),
 );
+const formatPluginCompatibilityNotice = vi.hoisted(() =>
+  vi.fn((notice: PluginCompatibilityNotice) => `${notice.pluginId} ${notice.message}`),
+);
 
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
@@ -178,6 +181,7 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 
 vi.mock("../plugins/status.js", () => ({
   buildPluginCompatibilityNotices,
+  formatPluginCompatibilityNotice,
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
