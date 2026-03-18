@@ -128,6 +128,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "matrix",
   "mattermost",
   "memory-lancedb",
+  "msteams",
   "nextcloud-talk",
   "synology-chat",
   "talk-voice",

@@ -2,7 +2,7 @@ import {
   normalizeStringEntries,
   type BaseProbeResult,
   type MSTeamsConfig,
-} from "openclaw/plugin-sdk/msteams";
+} from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
