@@ -97,6 +97,38 @@ describe("runCronIsolatedAgentTurn — delivery failure does not mark job as err
     expect(result.status).toBe("error");
   });
 
+  it("returns status error when agent task had fatal error but delivery succeeded", async () => {
+    setupDeliveryRequested();
+
+    // Agent returns a fatal error payload, but delivery succeeds.
+    const { runWithModelFallback } =
+      (await import("../../agents/model-fallback.js")) as unknown as {
+        runWithModelFallback: ReturnType<typeof vi.fn>;
+      };
+    runWithModelFallback.mockResolvedValueOnce({
+      result: {
+        payloads: [{ text: "context window exceeded", isError: true }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      },
+      provider: "openai",
+      model: "gpt-4",
+    });
+    deliverOutboundPayloads.mockResolvedValueOnce([{ ok: true }]);
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: makeIsolatedAgentTurnJob({
+          delivery: { mode: "announce", channel: "feishu", to: "group-123" },
+        }),
+      }),
+    );
+
+    // Agent task failed — status must remain "error" even though delivery
+    // succeeded.  Fixes P1: fatal payloads must not be rewritten to success.
+    expect(result.status).toBe("error");
+    expect(result.error).toBeDefined();
+  });
+
   it("returns status error when delivery was aborted even with best-effort", async () => {
     mockRunCronFallbackPassthrough();
     setupDeliveryRequested();

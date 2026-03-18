@@ -794,6 +794,17 @@ export async function runCronIsolatedAgentTurn(params: {
     if (isAborted() && deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
+    // When the agent task itself returned a fatal error payload, always
+    // surface that error — even when delivery succeeded.  Without this
+    // guard the status override below would rewrite the run to "ok",
+    // clearing consecutiveErrors and potentially deleting one-shot jobs
+    // despite the agent task having failed.  Fixes P1 review on #49880.
+    if (hasFatalErrorPayload) {
+      return resolveRunOutcome({
+        delivered: resultWithDeliveryMeta.delivered,
+        deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
+      });
+    }
     // Agent task succeeded — return the delivery result which preserves
     // enriched summary/outputText from dispatchCronDelivery (e.g.
     // sub-agent synthesis), overriding status to reflect the agent outcome.
