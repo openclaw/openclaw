@@ -212,10 +212,12 @@ function buildTaskScript({
 }
 
 async function assertSchtasksAvailable() {
-  const res = await execSchtasks(["/Query"]);
+  // Use /FO LIST to get locale-independent structured output
+  const res = await execSchtasks(["/Query", "/FO", "LIST"]);
   if (res.code === 0) {
     return;
   }
+  // Show the actual error instead of "unknown error"
   const detail = res.stderr || res.stdout;
   throw new Error(`schtasks unavailable: ${detail || "unknown error"}`.trim());
 }
@@ -332,7 +334,8 @@ export async function restartScheduledTask({
 export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(args.env ?? (process.env as GatewayServiceEnv));
-  const res = await execSchtasks(["/Query", "/TN", taskName]);
+  // Use /FO LIST for locale-independent output
+  const res = await execSchtasks(["/Query", "/TN", taskName, "/FO", "LIST"]);
   return res.code === 0;
 }
 
