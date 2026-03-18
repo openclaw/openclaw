@@ -33,6 +33,7 @@ import { probeZalouser } from "./probe.js";
 import { writeQrDataUrlToTempFile } from "./qr-temp-file.js";
 import { getZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
+import { resolveZalouserOutboundSessionRoute } from "./session-route.js";
 import { zalouserSetupAdapter } from "./setup-core.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
 import { createZalouserPluginBase } from "./shared.js";
@@ -312,6 +313,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
   actions: zalouserMessageActions,
   messaging: {
     normalizeTarget: (raw) => normalizePrefixedTarget(raw),
+    resolveOutboundSessionRoute: (params) => resolveZalouserOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: (raw) => {
         const normalized = normalizePrefixedTarget(raw);
