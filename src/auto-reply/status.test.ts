@@ -113,6 +113,49 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Reasoning: on");
   });
 
+  it("shows the current agent's resolved voice provider in status output", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-4o-mini",
+            },
+          },
+          list: [
+            {
+              id: "storyteller",
+              voice: {
+                provider: "inworld",
+                auto: "always",
+              },
+            },
+          ],
+        },
+        messages: {
+          tts: {
+            auto: "always",
+            provider: "openai",
+          },
+        },
+      } as OpenClawConfig,
+      agent: {
+        model: "openai/gpt-4o-mini",
+      },
+      agentId: "storyteller",
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:storyteller:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Voice: always");
+    expect(normalized).toContain("provider=inworld");
+  });
+
   it("shows fast mode when enabled", () => {
     const text = buildStatusMessage({
       agent: {

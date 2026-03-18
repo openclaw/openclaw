@@ -4,6 +4,7 @@ import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
+import type { AgentVoiceConfig } from "./types.tts.js";
 
 export type AgentRuntimeAcpConfig = {
   /** ACP harness adapter id (for example codex, claude). */
@@ -87,6 +88,8 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
+  /** Per-agent voice config (provider-specific voice/model settings, auto mode, etc.) — merged on top of global messages.tts. */
+  voice?: AgentVoiceConfig;
 };
 
 export type AgentsConfig = {

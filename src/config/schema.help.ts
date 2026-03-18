@@ -224,6 +224,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional ACP session mode default for this agent (persistent or oneshot).",
   "agents.list[].runtime.acp.cwd":
     "Optional default working directory for this agent's ACP sessions.",
+  "agents.list[].voice":
+    "Optional per-agent TTS voice settings merged on top of messages.tts. Use provider-specific nested blocks (openai, elevenlabs, inworld, edge) for voice/model overrides without duplicating global TTS infrastructure.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":

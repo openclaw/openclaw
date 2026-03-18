@@ -1294,6 +1294,13 @@ scripts/sandbox-browser-setup.sh   # optional browser image
             cwd: "/workspace/openclaw",
           },
         },
+        voice: {
+          provider: "openai",
+          openai: {
+            voice: "ballad",
+            model: "gpt-4o-mini-tts",
+          },
+        },
         subagents: { allowAgents: ["*"] },
         tools: {
           profile: "coding",
@@ -1312,6 +1319,9 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
+- `voice`: optional per-agent TTS voice config merged on top of `messages.tts`.
+  Use provider-specific nested blocks like `openai`, `elevenlabs`, `inworld`, or `edge`.
+  This only changes voice identity/settings; shared TTS infrastructure still comes from `messages.tts`.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).

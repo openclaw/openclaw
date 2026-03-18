@@ -69,7 +69,9 @@ const ttsMocks = vi.hoisted(() => {
     normalizeTtsAutoMode: vi.fn((value: unknown) =>
       typeof value === "string" ? value : undefined,
     ),
-    resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+    resolveTtsConfigForAgent: vi.fn((_cfg: OpenClawConfig, _agentId?: string) => ({
+      mode: "final",
+    })),
   };
 });
 
@@ -142,7 +144,8 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
-  resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsConfigForAgent: (cfg: OpenClawConfig, agentId?: string) =>
+    ttsMocks.resolveTtsConfigForAgent(cfg, agentId),
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
@@ -231,8 +234,8 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
-    ttsMocks.resolveTtsConfig.mockClear();
-    ttsMocks.resolveTtsConfig.mockReturnValue({
+    ttsMocks.resolveTtsConfigForAgent.mockClear();
+    ttsMocks.resolveTtsConfigForAgent.mockReturnValue({
       mode: "final",
     });
   });

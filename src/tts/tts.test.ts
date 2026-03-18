@@ -1,3 +1,4 @@
+import path from "node:path";
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
@@ -65,6 +66,7 @@ const {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  resolveTtsConfigForAgent,
 } = _test;
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -132,9 +134,66 @@ function createInworldCfg(params?: { includeOpenAIFallback?: boolean }): OpenCla
   };
 }
 
+function createPerAgentVoiceCfg(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: { model: { primary: "openai/gpt-4o-mini" } },
+      list: [
+        {
+          id: "storyteller",
+          voice: {
+            provider: "inworld",
+            auto: "always",
+            mode: "all",
+            inworld: {
+              voiceId: "Ashley",
+              modelId: "inworld-tts-1.5-mini",
+            },
+          },
+        },
+        {
+          id: "announcer",
+          voice: {
+            provider: "openai",
+            openai: {
+              voice: "ballad",
+              model: "gpt-4o-mini-tts",
+              speed: 1.25,
+              instructions: "Speak warmly",
+            },
+          },
+        },
+      ],
+    },
+    messages: {
+      tts: {
+        provider: "openai",
+        openai: {
+          apiKey: "openai-key",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
+        elevenlabs: {
+          apiKey: "elevenlabs-key",
+          voiceId: "pMsXgVXv3BLzUgSXRplE",
+          modelId: "eleven_multilingual_v2",
+        },
+        inworld: {
+          apiKey: "inworld-key",
+          voiceId: "Dennis",
+          modelId: "inworld-tts-1.5-max",
+        },
+      },
+    },
+  };
+}
+
 describe("tts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    tts.setLastTtsAttempt(undefined);
+    tts.setLastTtsAttempt(undefined, "storyteller");
+    tts.setLastTtsAttempt(undefined, "announcer");
     vi.mocked(completeSimple).mockResolvedValue(
       mockAssistantMessage([{ type: "text", text: "Summary" }]),
     );
@@ -308,6 +367,87 @@ describe("tts", () => {
         const config = resolveTtsConfig(testCase.cfg);
         expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
       }
+    });
+  });
+
+  describe("resolveTtsConfigForAgent", () => {
+    it("merges provider-specific per-agent voice config including InWorld", () => {
+      const config = resolveTtsConfigForAgent(createPerAgentVoiceCfg(), "storyteller");
+
+      expect(config.provider).toBe("inworld");
+      expect(config.auto).toBe("always");
+      expect(config.mode).toBe("all");
+      expect(config.inworld.voiceId).toBe("Ashley");
+      expect(config.inworld.modelId).toBe("inworld-tts-1.5-mini");
+      expect(config.inworld.apiKey).toBe("inworld-key");
+      expect(config.openai.voice).toBe("alloy");
+    });
+
+    it("keeps provider-specific overrides scoped to the matching provider", () => {
+      const config = resolveTtsConfigForAgent(createPerAgentVoiceCfg(), "announcer");
+
+      expect(config.provider).toBe("openai");
+      expect(config.openai.voice).toBe("ballad");
+      expect(config.openai.model).toBe("gpt-4o-mini-tts");
+      expect(config.openai.speed).toBe(1.25);
+      expect(config.openai.instructions).toBe("Speak warmly");
+      expect(config.inworld.voiceId).toBe("Dennis");
+      expect(config.inworld.modelId).toBe("inworld-tts-1.5-max");
+    });
+  });
+
+  describe("resolveTtsPrefsPath", () => {
+    it("keeps the default prefs path shared even when an agent id is present", () => {
+      const config = resolveTtsConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+        messages: { tts: {} },
+      });
+
+      const globalPath = tts.resolveTtsPrefsPath(config);
+      const agentPath = tts.resolveTtsPrefsPath(config);
+
+      expect(globalPath).toContain(path.join("settings", "tts.json"));
+      expect(agentPath).toBe(globalPath);
+    });
+  });
+
+  describe("buildTtsSystemPromptHint", () => {
+    it("includes the resolved default provider for the current agent", () => {
+      const hint = tts.buildTtsSystemPromptHint(createPerAgentVoiceCfg(), "storyteller");
+
+      expect(hint).toContain("default provider: inworld");
+      expect(hint).toContain("agent-specific voice defaults");
+    });
+  });
+
+  describe("last TTS attempt status", () => {
+    it("tracks attempts per agent without leaking between agents", () => {
+      tts.setLastTtsAttempt(
+        {
+          timestamp: 1,
+          success: true,
+          textLength: 12,
+          summarized: false,
+          provider: "openai",
+        },
+        "storyteller",
+      );
+      tts.setLastTtsAttempt(
+        {
+          timestamp: 2,
+          success: false,
+          textLength: 24,
+          summarized: true,
+          error: "failed",
+        },
+        "announcer",
+      );
+
+      expect(tts.getLastTtsAttempt("storyteller")?.timestamp).toBe(1);
+      expect(tts.getLastTtsAttempt("storyteller")?.provider).toBe("openai");
+      expect(tts.getLastTtsAttempt("announcer")?.timestamp).toBe(2);
+      expect(tts.getLastTtsAttempt("announcer")?.error).toBe("failed");
+      expect(tts.getLastTtsAttempt()).toBeUndefined();
     });
   });
 
@@ -721,6 +861,37 @@ describe("tts", () => {
             expect(result.outputFormat).toBe("mp3");
             expect(result.voiceCompatible).toBe(false);
             expect(result.audioPath).toMatch(/\.mp3$/);
+          }
+        },
+      );
+    });
+
+    it("uses per-agent InWorld voice and model overrides", async () => {
+      await withMockedFetch(
+        async () => ({
+          ok: true,
+          json: async () => ({ audioContent: Buffer.from("agent-inworld").toString("base64") }),
+        }),
+        async (fetchMock) => {
+          const result = await tts.textToSpeech({
+            text: "Tell the story",
+            cfg: createPerAgentVoiceCfg(),
+            agentId: "storyteller",
+          });
+
+          expect(result.success).toBe(true);
+          expect(fetchMock).toHaveBeenCalledTimes(1);
+
+          const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+          const body = JSON.parse(init.body as string) as Record<string, unknown>;
+          expect(body).toMatchObject({
+            text: "Tell the story",
+            voiceId: "Ashley",
+            modelId: "inworld-tts-1.5-mini",
+          });
+
+          if (result.success) {
+            expect(result.provider).toBe("inworld");
           }
         },
       );

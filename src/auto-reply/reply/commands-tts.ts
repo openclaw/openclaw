@@ -7,7 +7,7 @@ import {
   isTtsEnabled,
   isTtsProviderConfigured,
   resolveTtsApiKey,
-  resolveTtsConfig,
+  resolveTtsConfigForAgent,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
   setSummarizationEnabled,
@@ -85,7 +85,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false };
   }
 
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfigForAgent(params.cfg, params.agentId);
   const prefsPath = resolveTtsPrefsPath(config);
   const action = parsed.action;
   const args = parsed.args;
@@ -123,18 +123,22 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       cfg: params.cfg,
       channel: params.command.channel,
       prefsPath,
+      agentId: params.agentId,
     });
 
     if (result.success && result.audioPath) {
       // Store last attempt for `/tts status`.
-      setLastTtsAttempt({
-        timestamp: Date.now(),
-        success: true,
-        textLength: args.length,
-        summarized: false,
-        provider: result.provider,
-        latencyMs: result.latencyMs,
-      });
+      setLastTtsAttempt(
+        {
+          timestamp: Date.now(),
+          success: true,
+          textLength: args.length,
+          summarized: false,
+          provider: result.provider,
+          latencyMs: result.latencyMs,
+        },
+        params.agentId,
+      );
       const payload: ReplyPayload = {
         mediaUrl: result.audioPath,
         audioAsVoice: result.voiceCompatible === true,
@@ -143,14 +147,17 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
 
     // Store failure details for `/tts status`.
-    setLastTtsAttempt({
-      timestamp: Date.now(),
-      success: false,
-      textLength: args.length,
-      summarized: false,
-      error: result.error,
-      latencyMs: Date.now() - start,
-    });
+    setLastTtsAttempt(
+      {
+        timestamp: Date.now(),
+        success: false,
+        textLength: args.length,
+        summarized: false,
+        error: result.error,
+        latencyMs: Date.now() - start,
+      },
+      params.agentId,
+    );
     return {
       shouldContinue: false,
       reply: { text: `❌ Error generating audio: ${result.error ?? "unknown error"}` },
@@ -260,7 +267,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     const hasKey = isTtsProviderConfigured(config, provider);
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
-    const last = getLastTtsAttempt();
+    const last = getLastTtsAttempt(params.agentId);
     const lines = [
       "📊 TTS status",
       `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,

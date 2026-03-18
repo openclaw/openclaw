@@ -191,6 +191,56 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Per-agent voice config
+
+Use `agents.list[].voice` when different agents should speak with different
+providers or voices while still sharing the same global TTS infrastructure
+(API keys, base URLs, timeouts, and fallback wiring).
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "openai",
+      openai: { apiKey: "openai_api_key", voice: "alloy" },
+      inworld: { apiKey: "inworld_key", voiceId: "Dennis" },
+    },
+  },
+  agents: {
+    list: [
+      {
+        id: "narrator",
+        voice: {
+          provider: "openai",
+          openai: {
+            voice: "ballad",
+            model: "gpt-4o-mini-tts",
+          },
+        },
+      },
+      {
+        id: "storyteller",
+        voice: {
+          provider: "inworld",
+          inworld: {
+            voiceId: "Ashley",
+            modelId: "inworld-tts-1.5-mini",
+          },
+        },
+      },
+    ],
+  },
+}
+```
+
+Notes:
+
+- `agents.list[].voice` only overrides voice identity/settings. Infrastructure
+  still comes from `messages.tts`.
+- `/tts` prefs stay shared by default. Per-agent voice config sets defaults, but
+  slash-command/runtime overrides still use the shared `prefsPath`.
+
 ### Only reply with audio after an inbound voice note
 
 ```json5
@@ -328,7 +378,7 @@ Optional allowlist (enable provider switching while keeping other knobs configur
 
 Slash commands write local overrides to `prefsPath` (default:
 `~/.openclaw/settings/tts.json`, override with `OPENCLAW_TTS_PREFS` or
-`messages.tts.prefsPath`).
+`messages.tts.prefsPath`). These overrides are shared across agents by default.
 
 Stored fields:
 

@@ -440,6 +440,47 @@ export const TtsConfigSchema = z
   .strict()
   .optional();
 
+export const AgentVoiceConfigSchema = z
+  .object({
+    provider: TtsProviderSchema.optional(),
+    auto: TtsAutoSchema.optional(),
+    enabled: z.boolean().optional(),
+    mode: TtsModeSchema.optional(),
+    openai: z
+      .object({
+        voice: z.string().optional(),
+        model: z.string().optional(),
+        speed: z.number().min(0.25).max(4).optional(),
+        instructions: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    elevenlabs: z
+      .object({
+        voiceId: z.string().optional(),
+        modelId: z.string().optional(),
+        speed: z.number().min(0.5).max(2).optional(),
+      })
+      .strict()
+      .optional(),
+    inworld: z
+      .object({
+        voiceId: z.string().optional(),
+        modelId: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    edge: z
+      .object({
+        voice: z.string().optional(),
+        lang: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 export const HumanDelaySchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("natural"), z.literal("custom")]).optional(),

@@ -25,6 +25,45 @@ export type TtsModelOverrideConfig = {
   allowSeed?: boolean;
 };
 
+/**
+ * Slim per-agent voice config. Only voice-identity fields — no infrastructure
+ * (apiKey, baseUrl, timeoutMs, prefsPath, etc.). Merged on top of the global
+ * `messages.tts` config by `resolveTtsConfigForAgent`.
+ */
+export type AgentVoiceConfig = {
+  /** TTS provider for this agent. */
+  provider?: TtsProvider;
+  /** Auto-TTS mode for this agent. */
+  auto?: TtsAutoMode;
+  /** Legacy enable/disable flag. */
+  enabled?: boolean;
+  /** Apply TTS to final replies only or all. */
+  mode?: TtsMode;
+  /** OpenAI-specific per-agent voice settings. */
+  openai?: {
+    voice?: string;
+    model?: string;
+    speed?: number;
+    instructions?: string;
+  };
+  /** ElevenLabs-specific per-agent voice settings. */
+  elevenlabs?: {
+    voiceId?: string;
+    modelId?: string;
+    speed?: number;
+  };
+  /** InWorld-specific per-agent voice settings. */
+  inworld?: {
+    voiceId?: string;
+    modelId?: string;
+  };
+  /** Edge-specific per-agent voice settings. */
+  edge?: {
+    voice?: string;
+    lang?: string;
+  };
+};
+
 export type TtsConfig = {
   /** Auto-TTS mode (preferred). */
   auto?: TtsAutoMode;

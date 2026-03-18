@@ -39,7 +39,9 @@ const ttsMocks = vi.hoisted(() => ({
     const params = paramsUnknown as { payload: unknown };
     return params.payload;
   }),
-  resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+  resolveTtsConfigForAgent: vi.fn((_cfg: OpenClawConfig, _agentId?: string) => ({
+    mode: "final",
+  })),
 }));
 
 const sessionMetaMocks = vi.hoisted(() => ({
@@ -73,7 +75,8 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
 
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-  resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+  resolveTtsConfigForAgent: (cfg: OpenClawConfig, agentId?: string) =>
+    ttsMocks.resolveTtsConfigForAgent(cfg, agentId),
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", () => ({
@@ -226,8 +229,8 @@ describe("tryDispatchAcpReply", () => {
     messageActionMocks.runMessageAction.mockReset();
     messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
     ttsMocks.maybeApplyTtsToPayload.mockClear();
-    ttsMocks.resolveTtsConfig.mockReset();
-    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.resolveTtsConfigForAgent.mockReset();
+    ttsMocks.resolveTtsConfigForAgent.mockReturnValue({ mode: "final" });
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     bindingServiceMocks.listBySession.mockReset();

@@ -10,6 +10,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -26,6 +27,7 @@ import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
@@ -245,7 +247,13 @@ type TtsStatusEntry = {
   error?: string;
 };
 
-let lastTtsAttempt: TtsStatusEntry | undefined;
+const GLOBAL_TTS_STATUS_KEY = "__global__";
+const lastTtsAttempts = new Map<string, TtsStatusEntry>();
+
+function resolveTtsStatusKey(agentId?: string): string {
+  const trimmed = agentId?.trim();
+  return trimmed ? normalizeAgentId(trimmed) : GLOBAL_TTS_STATUS_KEY;
+}
 
 export function normalizeTtsAutoMode(value: unknown): TtsAutoMode | undefined {
   if (typeof value !== "string") {
@@ -372,6 +380,65 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   };
 }
 
+/**
+ * Resolve TTS config for a specific agent by overlaying the agent's provider-aware
+ * `voice` config on top of the global resolved config. Only voice-identity
+ * fields are per-agent; infrastructure (apiKey, baseUrl, timeoutMs, etc.) stays global.
+ */
+export function resolveTtsConfigForAgent(cfg: OpenClawConfig, agentId?: string): ResolvedTtsConfig {
+  const global = resolveTtsConfig(cfg);
+  if (!agentId) {
+    return global;
+  }
+  const v = resolveAgentConfig(cfg, agentId)?.voice;
+  if (!v) {
+    return global;
+  }
+
+  const openaiVoice = v.openai;
+  const elevenlabsVoice = v.elevenlabs;
+  const inworldVoice = v.inworld;
+  const edgeVoice = v.edge;
+  return {
+    ...global,
+    auto:
+      normalizeTtsAutoMode(v.auto) ??
+      (v.enabled != null ? (v.enabled ? "always" : "off") : undefined) ??
+      global.auto,
+    mode: v.mode ?? global.mode,
+    provider: v.provider ?? global.provider,
+    providerSource: v.provider ? "config" : global.providerSource,
+    openai: {
+      ...global.openai,
+      ...(openaiVoice?.voice != null && { voice: openaiVoice.voice }),
+      ...(openaiVoice?.model != null && { model: openaiVoice.model }),
+      ...(openaiVoice?.speed != null && { speed: openaiVoice.speed }),
+      ...(openaiVoice?.instructions != null && { instructions: openaiVoice.instructions }),
+    },
+    elevenlabs: {
+      ...global.elevenlabs,
+      ...(elevenlabsVoice?.voiceId != null && { voiceId: elevenlabsVoice.voiceId }),
+      ...(elevenlabsVoice?.modelId != null && { modelId: elevenlabsVoice.modelId }),
+      ...(elevenlabsVoice?.speed != null && {
+        voiceSettings: {
+          ...global.elevenlabs.voiceSettings,
+          speed: Math.max(0.5, Math.min(2, elevenlabsVoice.speed)),
+        },
+      }),
+    },
+    inworld: {
+      ...global.inworld,
+      ...(inworldVoice?.voiceId != null && { voiceId: inworldVoice.voiceId }),
+      ...(inworldVoice?.modelId != null && { modelId: inworldVoice.modelId }),
+    },
+    edge: {
+      ...global.edge,
+      ...(edgeVoice?.voice != null && { voice: edgeVoice.voice }),
+      ...(edgeVoice?.lang != null && { lang: edgeVoice.lang }),
+    },
+  };
+}
+
 export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
   if (config.prefsPath?.trim()) {
     return resolveUserPath(config.prefsPath.trim());
@@ -410,13 +477,17 @@ export function resolveTtsAutoMode(params: {
   return params.config.auto;
 }
 
-export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefined {
-  const config = resolveTtsConfig(cfg);
+export function buildTtsSystemPromptHint(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): string | undefined {
+  const config = resolveTtsConfigForAgent(cfg, agentId);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({ config, prefsPath });
   if (autoMode === "off") {
     return undefined;
   }
+  const provider = getTtsProvider(config, prefsPath);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath) ? "on" : "off";
   const autoHint =
@@ -425,10 +496,14 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
       : autoMode === "tagged"
         ? "Only use TTS when you include [[tts]] or [[tts:text]] tags."
         : undefined;
+  const hasAgentVoiceDefaults = Boolean(agentId && resolveAgentConfig(cfg, agentId)?.voice);
   return [
-    "Voice (TTS) is enabled.",
+    `Voice (TTS) is enabled (default provider: ${provider}).`,
     autoHint,
     `Keep spoken text ≤${maxLength} chars to avoid auto-summary (summary ${summarize}).`,
+    hasAgentVoiceDefaults
+      ? "Any configured agent-specific voice defaults are applied when that provider is used."
+      : undefined,
     "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
   ]
     .filter(Boolean)
@@ -538,12 +613,17 @@ export function setSummarizationEnabled(prefsPath: string, enabled: boolean): vo
   });
 }
 
-export function getLastTtsAttempt(): TtsStatusEntry | undefined {
-  return lastTtsAttempt;
+export function getLastTtsAttempt(agentId?: string): TtsStatusEntry | undefined {
+  return lastTtsAttempts.get(resolveTtsStatusKey(agentId));
 }
 
-export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
-  lastTtsAttempt = entry;
+export function setLastTtsAttempt(entry: TtsStatusEntry | undefined, agentId?: string): void {
+  const key = resolveTtsStatusKey(agentId);
+  if (entry) {
+    lastTtsAttempts.set(key, entry);
+    return;
+  }
+  lastTtsAttempts.delete(key);
 }
 
 /** Channels that require opus audio and support voice-bubble playback */
@@ -614,6 +694,7 @@ function resolveTtsRequestSetup(params: {
   cfg: OpenClawConfig;
   prefsPath?: string;
   providerOverride?: TtsProvider;
+  agentId?: string;
 }):
   | {
       config: ResolvedTtsConfig;
@@ -622,7 +703,7 @@ function resolveTtsRequestSetup(params: {
   | {
       error: string;
     } {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfigForAgent(params.cfg, params.agentId);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   if (params.text.length > config.maxTextLength) {
     return {
@@ -644,12 +725,15 @@ export async function textToSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  /** Optional agent ID for per-agent voice overrides. */
+  agentId?: string;
 }): Promise<TtsResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
+    agentId: params.agentId,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -933,8 +1017,10 @@ export async function maybeApplyTtsToPayload(params: {
   kind?: "tool" | "block" | "final";
   inboundAudio?: boolean;
   ttsAuto?: string;
+  /** Optional agent ID for per-agent voice overrides. */
+  agentId?: string;
 }): Promise<ReplyPayload> {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfigForAgent(params.cfg, params.agentId);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
     config,
@@ -1036,17 +1122,21 @@ export async function maybeApplyTtsToPayload(params: {
     prefsPath,
     channel: params.channel,
     overrides: directives.overrides,
+    agentId: params.agentId,
   });
 
   if (result.success && result.audioPath) {
-    lastTtsAttempt = {
-      timestamp: Date.now(),
-      success: true,
-      textLength: text.length,
-      summarized: wasSummarized,
-      provider: result.provider,
-      latencyMs: result.latencyMs,
-    };
+    setLastTtsAttempt(
+      {
+        timestamp: Date.now(),
+        success: true,
+        textLength: text.length,
+        summarized: wasSummarized,
+        provider: result.provider,
+        latencyMs: result.latencyMs,
+      },
+      params.agentId,
+    );
 
     const channelId = resolveChannelId(params.channel);
     const shouldVoice =
@@ -1059,13 +1149,16 @@ export async function maybeApplyTtsToPayload(params: {
     return finalPayload;
   }
 
-  lastTtsAttempt = {
-    timestamp: Date.now(),
-    success: false,
-    textLength: text.length,
-    summarized: wasSummarized,
-    error: result.error,
-  };
+  setLastTtsAttempt(
+    {
+      timestamp: Date.now(),
+      success: false,
+      textLength: text.length,
+      summarized: wasSummarized,
+      error: result.error,
+    },
+    params.agentId,
+  );
 
   const latency = Date.now() - ttsStart;
   logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);
@@ -1084,4 +1177,5 @@ export const _test = {
   summarizeText,
   resolveOutputFormat,
   resolveEdgeOutputFormat,
+  resolveTtsConfigForAgent,
 };
