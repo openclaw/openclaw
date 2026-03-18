@@ -73,6 +73,7 @@ import { runEmbeddedAttempt } from "./run/attempt.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { resolveAuthProfileFailureReason } from "./run/resolve-profile-failure-reason.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
@@ -835,6 +836,9 @@ export async function runEmbeddedPiAgent(
       }) => {
         const { profileId, reason } = failure;
         if (!profileId || !reason || reason === "timeout" || reason === "overloaded") {
+          if (reason === "overloaded") {
+            log.warn(`auth profile ${profileId} overloaded — skipping cooldown (transient 529)`);
+          }
           return;
         }
         await markAuthProfileFailure({
@@ -846,20 +850,10 @@ export async function runEmbeddedPiAgent(
           runId: params.runId,
         });
       };
-      const resolveAuthProfileFailureReason = (
-        failoverReason: FailoverReason | null,
-      ): AuthProfileFailureReason | null => {
-        // Timeouts are transport/model-path failures, not auth health signals,
-        // so they should not persist auth-profile failure state.
-        // Overloaded errors (529) are transient server-side capacity issues —
-        // the auth profile itself is healthy.  Marking it as failed causes an
-        // exponential cooldown (60s → 5min → 25min → 1h) that makes the
-        // profile unusable long after the provider has recovered.
-        if (!failoverReason || failoverReason === "timeout" || failoverReason === "overloaded") {
-          return null;
-        }
-        return failoverReason;
-      };
+      // resolveAuthProfileFailureReason is imported from
+      // ./run/resolve-profile-failure-reason.ts — see that module for the
+      // rationale on which failover reasons are excluded from profile failure
+      // tracking (timeout, overloaded).
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
         if (reason !== "overloaded") {
           return;
