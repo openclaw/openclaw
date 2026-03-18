@@ -85,7 +85,7 @@ if [[ -f "$HASH_FILE" ]]; then
   fi
 fi
 
-npx pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
+pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
 if command -v rolldown >/dev/null 2>&1 && rolldown --version >/dev/null 2>&1; then
   rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 elif [[ -f "$ROOT_DIR/node_modules/.pnpm/node_modules/rolldown/bin/cli.mjs" ]]; then
