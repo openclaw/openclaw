@@ -120,14 +120,14 @@ describe("runMessageAction threading auto-injection", () => {
 
   it.each([
     {
-      name: "injects threadId for matching target",
+      name: "skips threadId for explicit bare target",
       target: "telegram:123",
-      expectedThreadId: "42",
+      expectedThreadId: undefined,
     },
     {
-      name: "injects threadId for prefixed group target",
+      name: "skips threadId for explicit prefixed group target",
       target: "telegram:group:123",
-      expectedThreadId: "42",
+      expectedThreadId: undefined,
     },
     {
       name: "skips threadId when target chat differs",
@@ -151,6 +151,22 @@ describe("runMessageAction threading auto-injection", () => {
     if (testCase.expectedThreadId !== undefined) {
       expect(call?.threadId).toBe(testCase.expectedThreadId);
     }
+  });
+
+  it("injects threadId when telegram target is inferred from tool context", async () => {
+    mockHandledSendAction();
+
+    const call = await runThreadingAction({
+      cfg: telegramConfig,
+      actionParams: {
+        channel: "telegram",
+        message: "hi",
+      },
+      toolContext: defaultTelegramToolContext,
+    });
+
+    expect(call?.threadId).toBe("42");
+    expect(call?.ctx?.params?.threadId).toBe("42");
   });
 
   it("uses explicit telegram threadId when provided", async () => {

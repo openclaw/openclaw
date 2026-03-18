@@ -95,7 +95,7 @@ describe("message action threading helpers", () => {
           currentChannelId: "tg:group:-100123",
         }),
       }),
-    ).toBe("thread-1");
+    ).toBeUndefined();
     expect(
       telegramPlugin?.threading?.resolveAutoThreadId?.({
         cfg,
@@ -114,6 +114,27 @@ describe("message action threading helpers", () => {
         toolContext: createToolContext({ currentChannelId: undefined }),
       }),
     ).toBeUndefined();
+    expect(
+      telegramPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
+        to: "-100123",
+        targetExplicit: true,
+        toolContext: createToolContext({
+          currentChannelId: "-100123",
+        }),
+      }),
+    ).toBeUndefined();
+    expect(
+      telegramPlugin?.threading?.resolveAutoThreadId?.({
+        cfg,
+        accountId: undefined,
+        to: "-100123",
+        toolContext: createToolContext({
+          currentChannelId: "-100123",
+        }),
+      }),
+    ).toBe("thread-1");
   });
 });
 

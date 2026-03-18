@@ -9,6 +9,8 @@ import {
 import { applyTargetToParams } from "./channel-target.js";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 
+const TARGET_INFERRED_FROM_TOOL_CONTEXT = "__targetInferredFromToolContext";
+
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -43,6 +45,7 @@ export function normalizeMessageActionInput(params: {
     const inferredTarget = toolContext?.currentChannelId?.trim();
     if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
+      normalizedArgs[TARGET_INFERRED_FROM_TOOL_CONTEXT] = true;
     }
   }
 
@@ -73,4 +76,12 @@ export function normalizeMessageActionInput(params: {
   }
 
   return normalizedArgs;
+}
+
+export function consumeTargetInferredFromToolContext(
+  args: Record<string, unknown>,
+): boolean {
+  const inferred = args[TARGET_INFERRED_FROM_TOOL_CONTEXT] === true;
+  delete args[TARGET_INFERRED_FROM_TOOL_CONTEXT];
+  return inferred;
 }

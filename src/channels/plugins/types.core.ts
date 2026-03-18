@@ -340,6 +340,7 @@ export type ChannelThreadingAdapter = {
     to: string;
     toolContext?: ChannelThreadingToolContext;
     replyToId?: string | null;
+    targetExplicit?: boolean;
   }) => string | undefined;
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;

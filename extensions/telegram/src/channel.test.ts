@@ -213,6 +213,33 @@ describe("telegramPlugin threading", () => {
     ).toBeUndefined();
   });
 
+  it("does not auto-resolve a thread for an explicit bare chat target", () => {
+    const toolContext = telegramPlugin.threading?.buildToolContext?.({
+      cfg: createCfg(),
+      accountId: "ops",
+      context: {
+        Channel: "telegram",
+        From: "telegram:123",
+        To: "telegram:-1003841603622",
+        ChatType: "group",
+        CurrentMessageId: "2284",
+        MessageThreadId: 928,
+      },
+      hasRepliedRef: { value: false },
+    });
+
+    expect(
+      telegramPlugin.threading?.resolveAutoThreadId?.({
+        cfg: createCfg(),
+        accountId: "ops",
+        to: "telegram:group:-1003841603622",
+        toolContext,
+        targetExplicit: true,
+        replyToId: undefined,
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not auto-resolve a thread when replying to a specific message", () => {
     const toolContext = telegramPlugin.threading?.buildToolContext?.({
       cfg: createCfg(),
