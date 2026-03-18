@@ -62,7 +62,9 @@ vi.mock("../plugins/web-search-providers.js", () => {
       {
         id: "tavily",
         envVars: ["TAVILY_API_KEY"],
+        credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
         getCredentialValue: getScoped("tavily"),
+        getConfiguredCredentialValue: getConfigured("tavily"),
       },
     ],
   };
