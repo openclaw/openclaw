@@ -81,10 +81,7 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import {
-  sanitizeToolCallInputs,
-  sanitizeToolUseResultPairing,
-} from "../../session-transcript-repair.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
@@ -651,6 +648,112 @@ function isToolCallBlockType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
+const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
+const REPLAY_TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+type ReplayToolCallBlock = {
+  type?: unknown;
+  id?: unknown;
+  name?: unknown;
+  input?: unknown;
+  arguments?: unknown;
+};
+
+function isReplayToolCallBlock(block: unknown): block is ReplayToolCallBlock {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  return isToolCallBlockType((block as { type?: unknown }).type);
+}
+
+function replayToolCallHasInput(block: ReplayToolCallBlock): boolean {
+  const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
+  const hasArguments =
+    "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
+  return hasInput || hasArguments;
+}
+
+function replayToolCallNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function replayToolCallHasName(
+  block: ReplayToolCallBlock,
+  allowedToolNames?: Set<string>,
+): block is ReplayToolCallBlock & { name: string } {
+  if (!replayToolCallNonEmptyString(block.name)) {
+    return false;
+  }
+  const trimmed = block.name.trim();
+  if (trimmed.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS || !REPLAY_TOOL_CALL_NAME_RE.test(trimmed)) {
+    return false;
+  }
+  if (!allowedToolNames || allowedToolNames.size === 0) {
+    return true;
+  }
+  return allowedToolNames.has(trimmed.toLowerCase());
+}
+
+function sanitizeReplayToolCallInputs(
+  messages: AgentMessage[],
+  allowedToolNames?: Set<string>,
+): AgentMessage[] {
+  let changed = false;
+  const out: AgentMessage[] = [];
+
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || message.role !== "assistant") {
+      out.push(message);
+      continue;
+    }
+    if (!Array.isArray(message.content)) {
+      out.push(message);
+      continue;
+    }
+
+    const nextContent: typeof message.content = [];
+    let messageChanged = false;
+
+    for (const block of message.content) {
+      if (!isReplayToolCallBlock(block)) {
+        nextContent.push(block);
+        continue;
+      }
+
+      if (
+        !replayToolCallHasInput(block) ||
+        !replayToolCallNonEmptyString(block.id) ||
+        !replayToolCallHasName(block, allowedToolNames)
+      ) {
+        changed = true;
+        messageChanged = true;
+        continue;
+      }
+
+      const trimmedName = block.name.trim();
+      if (block.name !== trimmedName) {
+        nextContent.push({ ...(block as object), name: trimmedName } as typeof block);
+        changed = true;
+        messageChanged = true;
+        continue;
+      }
+      nextContent.push(block);
+    }
+
+    if (messageChanged) {
+      changed = true;
+      if (nextContent.length > 0) {
+        out.push({ ...message, content: nextContent });
+      }
+      continue;
+    }
+
+    out.push(message);
+  }
+
+  return changed ? out : messages;
+}
+
 function normalizeToolCallIdsInMessage(message: unknown): void {
   if (!message || typeof message !== "object") {
     return;
@@ -809,9 +912,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     if (!Array.isArray(messages)) {
       return baseFn(model, context, options);
     }
-    const sanitized = sanitizeToolCallInputs(messages as AgentMessage[], {
-      allowedToolNames,
-    });
+    const sanitized = sanitizeReplayToolCallInputs(messages as AgentMessage[], allowedToolNames);
     if (sanitized === messages) {
       return baseFn(model, context, options);
     }

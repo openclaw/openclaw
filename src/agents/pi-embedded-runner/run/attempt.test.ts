@@ -835,6 +835,49 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toBe(messages);
   });
+
+  it("preserves sessions_spawn attachment payloads on replay", async () => {
+    const attachmentContent = "INLINE_ATTACHMENT_PAYLOAD";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "  SESSIONS_SPAWN  ",
+            input: {
+              task: "inspect attachment",
+              attachments: [{ name: "snapshot.txt", content: attachmentContent }],
+            },
+          },
+        ],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["sessions_spawn"]),
+    );
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<Record<string, unknown>> }>;
+    };
+    const toolCall = seenContext.messages[0]?.content?.[0] as {
+      name?: string;
+      input?: { attachments?: Array<{ content?: string }> };
+    };
+    expect(toolCall.name).toBe("SESSIONS_SPAWN");
+    expect(toolCall.input?.attachments?.[0]?.content).toBe(attachmentContent);
+  });
 });
 
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
