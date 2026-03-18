@@ -199,12 +199,24 @@ const resolvePluginSdkAliasFile = (params: {
 const resolvePluginSdkAlias = (): string | null =>
   resolvePluginSdkAliasFile({ srcFile: "root-alias.cjs", distFile: "root-alias.cjs" });
 
+function shouldUseNativePluginLoader(aliasMap: Record<string, string>): boolean {
+  const aliasTargets = Object.values(aliasMap);
+  if (aliasTargets.length === 0) {
+    return true;
+  }
+  return aliasTargets.every((target) => {
+    const normalized = target.replace(/\\/g, "/");
+    return normalized.includes("/dist/") && normalized.endsWith(".js");
+  });
+}
+
 function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
   return {
     interopDefault: true,
-    // Prefer Node's native sync ESM loader for built dist/*.js modules so
-    // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
-    tryNative: true,
+    // Native ESM works well for built dist/*.js modules, but source-checkout
+    // aliases target .ts entrypoints whose internal relative ".js" imports must
+    // stay on Jiti's TS-aware resolver.
+    tryNative: shouldUseNativePluginLoader(aliasMap),
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
     ...(Object.keys(aliasMap).length > 0
       ? {
