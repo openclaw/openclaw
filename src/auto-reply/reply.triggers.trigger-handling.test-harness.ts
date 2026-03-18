@@ -101,7 +101,7 @@ export function getWebSessionMocks(): AnyMocks {
   return webSessionMocks;
 }
 
-vi.mock("../web/session.js", () => webSessionMocks);
+vi.mock("../../extensions/whatsapp/runtime-api.js", () => webSessionMocks);
 
 export const MAIN_SESSION_KEY = "agent:main:main";
 

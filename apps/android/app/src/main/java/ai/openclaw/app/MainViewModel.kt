@@ -2,205 +2,268 @@ package ai.openclaw.app
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
-import ai.openclaw.app.gateway.GatewayEndpoint
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.viewModelScope
+import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.voice.VoiceConversationEntry
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
-  private val runtime: NodeRuntime = (app as NodeApp).runtime
+  private val nodeApp = app as NodeApp
+  private val prefs = nodeApp.prefs
+  private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
+  private var foreground = true
 
-  val canvas: CanvasController = runtime.canvas
-  val canvasCurrentUrl: StateFlow<String?> = runtime.canvas.currentUrl
-  val canvasA2uiHydrated: StateFlow<Boolean> = runtime.canvasA2uiHydrated
-  val canvasRehydratePending: StateFlow<Boolean> = runtime.canvasRehydratePending
-  val canvasRehydrateErrorText: StateFlow<String?> = runtime.canvasRehydrateErrorText
-  val camera: CameraCaptureManager = runtime.camera
-  val sms: SmsManager = runtime.sms
+  private fun ensureRuntime(): NodeRuntime {
+    runtimeRef.value?.let { return it }
+    val runtime = nodeApp.ensureRuntime()
+    runtime.setForeground(foreground)
+    runtimeRef.value = runtime
+    return runtime
+  }
 
-  val gateways: StateFlow<List<GatewayEndpoint>> = runtime.gateways
-  val discoveryStatusText: StateFlow<String> = runtime.discoveryStatusText
+  private fun <T> runtimeState(
+    initial: T,
+    selector: (NodeRuntime) -> StateFlow<T>,
+  ): StateFlow<T> =
+    runtimeRef
+      .flatMapLatest { runtime -> runtime?.let(selector) ?: flowOf(initial) }
+      .stateIn(viewModelScope, SharingStarted.Eagerly, initial)
 
-  val isConnected: StateFlow<Boolean> = runtime.isConnected
-  val isNodeConnected: StateFlow<Boolean> = runtime.nodeConnected
-  val statusText: StateFlow<String> = runtime.statusText
-  val serverName: StateFlow<String?> = runtime.serverName
-  val remoteAddress: StateFlow<String?> = runtime.remoteAddress
-  val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtime.pendingGatewayTrust
-  val isForeground: StateFlow<Boolean> = runtime.isForeground
-  val seamColorArgb: StateFlow<Long> = runtime.seamColorArgb
-  val mainSessionKey: StateFlow<String> = runtime.mainSessionKey
+  val runtimeInitialized: StateFlow<Boolean> =
+    runtimeRef
+      .flatMapLatest { runtime -> flowOf(runtime != null) }
+      .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-  val cameraHud: StateFlow<CameraHudState?> = runtime.cameraHud
-  val cameraFlashToken: StateFlow<Long> = runtime.cameraFlashToken
+  val canvasCurrentUrl: StateFlow<String?> = runtimeState(initial = null) { it.canvas.currentUrl }
+  val canvasA2uiHydrated: StateFlow<Boolean> = runtimeState(initial = false) { it.canvasA2uiHydrated }
+  val canvasRehydratePending: StateFlow<Boolean> = runtimeState(initial = false) { it.canvasRehydratePending }
+  val canvasRehydrateErrorText: StateFlow<String?> = runtimeState(initial = null) { it.canvasRehydrateErrorText }
 
-  val instanceId: StateFlow<String> = runtime.instanceId
-  val displayName: StateFlow<String> = runtime.displayName
-  val cameraEnabled: StateFlow<Boolean> = runtime.cameraEnabled
-  val locationMode: StateFlow<LocationMode> = runtime.locationMode
-  val locationPreciseEnabled: StateFlow<Boolean> = runtime.locationPreciseEnabled
-  val preventSleep: StateFlow<Boolean> = runtime.preventSleep
-  val micEnabled: StateFlow<Boolean> = runtime.micEnabled
-  val micCooldown: StateFlow<Boolean> = runtime.micCooldown
-  val micStatusText: StateFlow<String> = runtime.micStatusText
-  val micLiveTranscript: StateFlow<String?> = runtime.micLiveTranscript
-  val micIsListening: StateFlow<Boolean> = runtime.micIsListening
-  val micQueuedMessages: StateFlow<List<String>> = runtime.micQueuedMessages
-  val micConversation: StateFlow<List<VoiceConversationEntry>> = runtime.micConversation
-  val micInputLevel: StateFlow<Float> = runtime.micInputLevel
-  val micIsSending: StateFlow<Boolean> = runtime.micIsSending
-  val speakerEnabled: StateFlow<Boolean> = runtime.speakerEnabled
-  val manualEnabled: StateFlow<Boolean> = runtime.manualEnabled
-  val manualHost: StateFlow<String> = runtime.manualHost
-  val manualPort: StateFlow<Int> = runtime.manualPort
-  val manualTls: StateFlow<Boolean> = runtime.manualTls
-  val gatewayToken: StateFlow<String> = runtime.gatewayToken
-  val onboardingCompleted: StateFlow<Boolean> = runtime.onboardingCompleted
-  val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
+  val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
+  val discoveryStatusText: StateFlow<String> = runtimeState(initial = "Searching…") { it.discoveryStatusText }
 
-  val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
-  val chatSessionId: StateFlow<String?> = runtime.chatSessionId
-  val chatMessages = runtime.chatMessages
-  val chatError: StateFlow<String?> = runtime.chatError
-  val chatHealthOk: StateFlow<Boolean> = runtime.chatHealthOk
-  val chatThinkingLevel: StateFlow<String> = runtime.chatThinkingLevel
-  val chatStreamingAssistantText: StateFlow<String?> = runtime.chatStreamingAssistantText
-  val chatPendingToolCalls = runtime.chatPendingToolCalls
-  val chatSessions = runtime.chatSessions
-  val pendingRunCount: StateFlow<Int> = runtime.pendingRunCount
+  val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
+  val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
+  val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
+  val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
+  val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
+  val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
+  val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
+  val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
+
+  val cameraHud: StateFlow<CameraHudState?> = runtimeState(initial = null) { it.cameraHud }
+  val cameraFlashToken: StateFlow<Long> = runtimeState(initial = 0L) { it.cameraFlashToken }
+
+  val instanceId: StateFlow<String> = prefs.instanceId
+  val displayName: StateFlow<String> = prefs.displayName
+  val cameraEnabled: StateFlow<Boolean> = prefs.cameraEnabled
+  val locationMode: StateFlow<LocationMode> = prefs.locationMode
+  val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
+  val preventSleep: StateFlow<Boolean> = prefs.preventSleep
+  val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
+  val manualHost: StateFlow<String> = prefs.manualHost
+  val manualPort: StateFlow<Int> = prefs.manualPort
+  val manualTls: StateFlow<Boolean> = prefs.manualTls
+  val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
+  val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
+  val micEnabled: StateFlow<Boolean> = prefs.talkEnabled
+
+  val micCooldown: StateFlow<Boolean> = runtimeState(initial = false) { it.micCooldown }
+  val micStatusText: StateFlow<String> = runtimeState(initial = "Mic off") { it.micStatusText }
+  val micLiveTranscript: StateFlow<String?> = runtimeState(initial = null) { it.micLiveTranscript }
+  val micIsListening: StateFlow<Boolean> = runtimeState(initial = false) { it.micIsListening }
+  val micQueuedMessages: StateFlow<List<String>> = runtimeState(initial = emptyList()) { it.micQueuedMessages }
+  val micConversation: StateFlow<List<VoiceConversationEntry>> = runtimeState(initial = emptyList()) { it.micConversation }
+  val micInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.micInputLevel }
+  val micIsSending: StateFlow<Boolean> = runtimeState(initial = false) { it.micIsSending }
+
+  val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
+  val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
+  val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
+  val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chatError }
+  val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHealthOk }
+  val chatThinkingLevel: StateFlow<String> = runtimeState(initial = "off") { it.chatThinkingLevel }
+  val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
+  val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
+  val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
+  val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
+
+  init {
+    if (prefs.onboardingCompleted.value) {
+      ensureRuntime()
+    }
+  }
+
+  val canvas: CanvasController
+    get() = ensureRuntime().canvas
+
+  val camera: CameraCaptureManager
+    get() = ensureRuntime().camera
+
+  val sms: SmsManager
+    get() = ensureRuntime().sms
+
+  fun attachRuntimeUi(owner: LifecycleOwner, permissionRequester: PermissionRequester) {
+    val runtime = runtimeRef.value ?: return
+    runtime.camera.attachLifecycleOwner(owner)
+    runtime.camera.attachPermissionRequester(permissionRequester)
+    runtime.sms.attachPermissionRequester(permissionRequester)
+  }
 
   fun setForeground(value: Boolean) {
-    runtime.setForeground(value)
+    foreground = value
+    runtimeRef.value?.setForeground(value)
   }
 
   fun setDisplayName(value: String) {
-    runtime.setDisplayName(value)
+    prefs.setDisplayName(value)
   }
 
   fun setCameraEnabled(value: Boolean) {
-    runtime.setCameraEnabled(value)
+    prefs.setCameraEnabled(value)
   }
 
   fun setLocationMode(mode: LocationMode) {
-    runtime.setLocationMode(mode)
+    prefs.setLocationMode(mode)
   }
 
   fun setLocationPreciseEnabled(value: Boolean) {
-    runtime.setLocationPreciseEnabled(value)
+    prefs.setLocationPreciseEnabled(value)
   }
 
   fun setPreventSleep(value: Boolean) {
-    runtime.setPreventSleep(value)
+    prefs.setPreventSleep(value)
   }
 
   fun setManualEnabled(value: Boolean) {
-    runtime.setManualEnabled(value)
+    prefs.setManualEnabled(value)
   }
 
   fun setManualHost(value: String) {
-    runtime.setManualHost(value)
+    prefs.setManualHost(value)
   }
 
   fun setManualPort(value: Int) {
-    runtime.setManualPort(value)
+    prefs.setManualPort(value)
   }
 
   fun setManualTls(value: Boolean) {
-    runtime.setManualTls(value)
+    prefs.setManualTls(value)
   }
 
   fun setGatewayToken(value: String) {
-    runtime.setGatewayToken(value)
+    prefs.setGatewayToken(value)
   }
 
   fun setGatewayBootstrapToken(value: String) {
-    runtime.setGatewayBootstrapToken(value)
+    prefs.setGatewayBootstrapToken(value)
   }
 
   fun setGatewayPassword(value: String) {
-    runtime.setGatewayPassword(value)
+    prefs.setGatewayPassword(value)
   }
 
   fun setOnboardingCompleted(value: Boolean) {
-    runtime.setOnboardingCompleted(value)
+    if (value) {
+      ensureRuntime()
+    }
+    prefs.setOnboardingCompleted(value)
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
-    runtime.setCanvasDebugStatusEnabled(value)
+    prefs.setCanvasDebugStatusEnabled(value)
   }
 
   fun setVoiceScreenActive(active: Boolean) {
-    runtime.setVoiceScreenActive(active)
+    ensureRuntime().setVoiceScreenActive(active)
   }
 
   fun setMicEnabled(enabled: Boolean) {
-    runtime.setMicEnabled(enabled)
+    ensureRuntime().setMicEnabled(enabled)
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {
-    runtime.setSpeakerEnabled(enabled)
+    ensureRuntime().setSpeakerEnabled(enabled)
   }
 
   fun refreshGatewayConnection() {
-    runtime.refreshGatewayConnection()
+    ensureRuntime().refreshGatewayConnection()
   }
 
   fun connect(endpoint: GatewayEndpoint) {
-    runtime.connect(endpoint)
+    ensureRuntime().connect(endpoint)
   }
 
   fun connectManual() {
-    runtime.connectManual()
+    ensureRuntime().connectManual()
   }
 
   fun disconnect() {
-    runtime.disconnect()
+    runtimeRef.value?.disconnect()
   }
 
   fun acceptGatewayTrustPrompt() {
-    runtime.acceptGatewayTrustPrompt()
+    runtimeRef.value?.acceptGatewayTrustPrompt()
   }
 
   fun declineGatewayTrustPrompt() {
-    runtime.declineGatewayTrustPrompt()
+    runtimeRef.value?.declineGatewayTrustPrompt()
   }
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
-    runtime.handleCanvasA2UIActionFromWebView(payloadJson)
+    ensureRuntime().handleCanvasA2UIActionFromWebView(payloadJson)
   }
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
-    runtime.requestCanvasRehydrate(source = source, force = true)
+    ensureRuntime().requestCanvasRehydrate(source = source, force = true)
+  }
+
+  fun refreshHomeCanvasOverviewIfConnected() {
+    ensureRuntime().refreshHomeCanvasOverviewIfConnected()
   }
 
   fun loadChat(sessionKey: String) {
-    runtime.loadChat(sessionKey)
+    ensureRuntime().loadChat(sessionKey)
   }
 
   fun refreshChat() {
-    runtime.refreshChat()
+    ensureRuntime().refreshChat()
   }
 
   fun refreshChatSessions(limit: Int? = null) {
-    runtime.refreshChatSessions(limit = limit)
+    ensureRuntime().refreshChatSessions(limit = limit)
   }
 
   fun setChatThinkingLevel(level: String) {
-    runtime.setChatThinkingLevel(level)
+    ensureRuntime().setChatThinkingLevel(level)
   }
 
   fun switchChatSession(sessionKey: String) {
-    runtime.switchChatSession(sessionKey)
+    ensureRuntime().switchChatSession(sessionKey)
   }
 
   fun abortChat() {
-    runtime.abortChat()
+    ensureRuntime().abortChat()
   }
 
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
-    runtime.sendChat(message = message, thinking = thinking, attachments = attachments)
+    ensureRuntime().sendChat(message = message, thinking = thinking, attachments = attachments)
   }
 }

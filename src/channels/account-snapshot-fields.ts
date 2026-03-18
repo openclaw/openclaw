@@ -1,3 +1,4 @@
+import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
 // Read-only status commands project a safe subset of account fields into snapshots
@@ -203,7 +204,7 @@ export function projectSafeChannelAccountSnapshotFields(
       : {}),
     ...projectCredentialSnapshotFields(account),
     ...(readTrimmedString(record, "baseUrl")
-      ? { baseUrl: readTrimmedString(record, "baseUrl") }
+      ? { baseUrl: stripUrlUserInfo(readTrimmedString(record, "baseUrl")!) }
       : {}),
     ...(readBoolean(record, "allowUnmentionedGroups") !== undefined
       ? { allowUnmentionedGroups: readBoolean(record, "allowUnmentionedGroups") }

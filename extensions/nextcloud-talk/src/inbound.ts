@@ -14,7 +14,7 @@ import {
   type OutboundReplyPayload,
   type OpenClawConfig,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk/nextcloud-talk";
+} from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
   normalizeNextcloudTalkAllowlist,
@@ -114,7 +114,6 @@ export async function handleNextcloudTalkInbound(params: {
   const roomMatch = resolveNextcloudTalkRoomMatch({
     rooms: account.config.rooms,
     roomToken,
-    roomName,
   });
   const roomConfig = roomMatch.roomConfig;
   if (isGroup && !roomMatch.allowed) {

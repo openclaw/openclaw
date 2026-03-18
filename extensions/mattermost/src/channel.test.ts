@@ -17,6 +17,10 @@ import {
   withMockedGlobalFetch,
 } from "./mattermost/reactions.test-helpers.js";
 
+function getDescribedActions(cfg: OpenClawConfig): string[] {
+  return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
+}
+
 describe("mattermostPlugin", () => {
   beforeEach(() => {
     sendMessageMattermostMock.mockReset();
@@ -132,7 +136,7 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
+      const actions = getDescribedActions(cfg);
       expect(actions).toContain("react");
       expect(actions).toContain("send");
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "react" })).toBe(true);
@@ -148,7 +152,7 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
+      const actions = getDescribedActions(cfg);
       expect(actions).toEqual([]);
     });
 
@@ -164,12 +168,12 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
+      const actions = getDescribedActions(cfg);
       expect(actions).not.toContain("react");
       expect(actions).toContain("send");
     });
 
-    it("respects per-account actions.reactions in listActions", () => {
+    it("respects per-account actions.reactions in message discovery", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {
@@ -187,7 +191,7 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
+      const actions = getDescribedActions(cfg);
       expect(actions).toContain("react");
     });
 
@@ -352,6 +356,53 @@ describe("mattermostPlugin", () => {
         expect.objectContaining({
           cfg,
           accountId: "default",
+        }),
+      );
+    });
+
+    it("uses threadId as fallback when replyToId is absent (sendText)", async () => {
+      const sendText = mattermostPlugin.outbound?.sendText;
+      if (!sendText) {
+        return;
+      }
+
+      await sendText({
+        to: "channel:CHAN1",
+        text: "hello",
+        accountId: "default",
+        threadId: "post-root",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "hello",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
+        }),
+      );
+    });
+
+    it("uses threadId as fallback when replyToId is absent (sendMedia)", async () => {
+      const sendMedia = mattermostPlugin.outbound?.sendMedia;
+      if (!sendMedia) {
+        return;
+      }
+
+      await sendMedia({
+        to: "channel:CHAN1",
+        text: "caption",
+        mediaUrl: "https://example.com/image.png",
+        accountId: "default",
+        threadId: "post-root",
+      } as any);
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "caption",
+        expect.objectContaining({
+          accountId: "default",
+          replyToId: "post-root",
         }),
       );
     });
