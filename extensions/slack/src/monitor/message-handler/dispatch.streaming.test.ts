@@ -3,6 +3,7 @@ import {
   isSlackStreamingEnabled,
   resolveSlackDeliveryThreadTs,
   resolveSlackStreamingThreadHint,
+  resolveTrackedSlackBlockReplyThreadTs,
 } from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
@@ -87,5 +88,25 @@ describe("slack block delivery thread reuse", () => {
         allowUsedReplyThreadTs: true,
       }),
     ).toBe("3000.3");
+  });
+
+  it("refreshes the cached block thread when a delivered block uses an explicit thread", () => {
+    expect(
+      resolveTrackedSlackBlockReplyThreadTs({
+        deliveredThreadTs: "reply-tag.1",
+        usedBlockReplyThreadTs: "3000.1",
+        trackBlockReplyThreadTs: true,
+      }),
+    ).toBe("reply-tag.1");
+  });
+
+  it("keeps the cached block thread when the delivery should not retarget block reuse", () => {
+    expect(
+      resolveTrackedSlackBlockReplyThreadTs({
+        deliveredThreadTs: "reply-tag.1",
+        usedBlockReplyThreadTs: "3000.1",
+        trackBlockReplyThreadTs: false,
+      }),
+    ).toBe("3000.1");
   });
 });

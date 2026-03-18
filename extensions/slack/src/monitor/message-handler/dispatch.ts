@@ -75,6 +75,17 @@ export function resolveSlackDeliveryThreadTs(params: {
   );
 }
 
+export function resolveTrackedSlackBlockReplyThreadTs(params: {
+  deliveredThreadTs?: string;
+  usedBlockReplyThreadTs?: string;
+  trackBlockReplyThreadTs?: boolean;
+}): string | undefined {
+  if (params.trackBlockReplyThreadTs && params.deliveredThreadTs) {
+    return params.deliveredThreadTs;
+  }
+  return params.usedBlockReplyThreadTs;
+}
+
 function shouldUseStreaming(params: {
   streamingEnabled: boolean;
   threadTs: string | undefined;
@@ -278,10 +289,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     // Record the thread ts only after confirmed delivery success.
     if (effectiveReplyThreadTs) {
       usedReplyThreadTs ??= effectiveReplyThreadTs;
-      if (options?.trackBlockReplyThreadTs) {
-        usedBlockReplyThreadTs ??= effectiveReplyThreadTs;
-      }
     }
+    usedBlockReplyThreadTs = resolveTrackedSlackBlockReplyThreadTs({
+      deliveredThreadTs: effectiveReplyThreadTs,
+      usedBlockReplyThreadTs,
+      trackBlockReplyThreadTs: options?.trackBlockReplyThreadTs,
+    });
     replyPlan.markSent();
   };
 
