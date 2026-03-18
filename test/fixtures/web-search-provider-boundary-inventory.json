@@ -2,7 +2,7 @@
   {
     "provider": "shared",
     "file": "src/commands/onboard-search.ts",
-    "line": 9,
+    "line": 10,
     "reason": "imports bundled web search registry into core onboarding flow"
   },
   {
@@ -14,7 +14,13 @@
   {
     "provider": "shared",
     "file": "src/plugins/contracts/loader.contract.test.ts",
-    "line": 11,
+    "line": 5,
+    "reason": "imports bundled web search registry outside allowed generic plumbing"
+  },
+  {
+    "provider": "shared",
+    "file": "src/plugins/contracts/registry.contract.test.ts",
+    "line": 3,
     "reason": "imports bundled web search registry outside allowed generic plumbing"
   },
   {
