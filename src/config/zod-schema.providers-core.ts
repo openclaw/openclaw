@@ -44,7 +44,19 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
-const DiscordIdSchema = z.union([z.string(), z.number()]).transform((value) => String(value));
+const DiscordIdSchema = z
+  .union([z.string(), z.number()])
+  .superRefine((value, ctx) => {
+    if (typeof value === "number" && !Number.isSafeInteger(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Discord IDs that exceed Number.MAX_SAFE_INTEGER lose precision when unquoted. " +
+          "Wrap this ID in quotes in your config file.",
+      });
+    }
+  })
+  .transform((value) => String(value));
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);

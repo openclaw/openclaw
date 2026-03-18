@@ -96,11 +96,11 @@ describe("config discord", () => {
     }
   });
 
-  it("coerces large numeric discord IDs to strings", () => {
+  it("rejects large numeric discord IDs that exceed MAX_SAFE_INTEGER", () => {
     // Discord snowflake IDs can exceed Number.MAX_SAFE_INTEGER (2^53-1).
-    // When JSON-parsed without quotes they become numbers; the schema should
-    // still accept them and coerce to string. Use Number() to avoid the
-    // lint rule that flags precision-losing literals.
+    // When JSON-parsed without quotes they become numbers and lose precision,
+    // resulting in a silently wrong ID. The schema must reject these so the
+    // user gets a clear error telling them to quote the value.
     const largeId = Number("1234567890123456789");
     const res = validateConfigObject({
       channels: {
@@ -110,11 +110,9 @@ describe("config discord", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      // The coerced value will reflect JS number precision loss, but the
-      // validation no longer rejects the input outright.
-      expect(typeof res.config.channels?.discord?.allowFrom?.[0]).toBe("string");
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.message.includes("lose precision"))).toBe(true);
     }
   });
 });
