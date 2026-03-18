@@ -796,6 +796,14 @@ export function registerPluginsCli(program: Command) {
           ),
         ),
       );
+      lines.push(
+        ...formatInspectSection(
+          "LSP servers",
+          inspect.lspServers.map((entry) =>
+            entry.hasStdioTransport ? entry.name : `${entry.name} (unsupported transport)`,
+          ),
+        ),
+      );
       if (inspect.httpRouteCount > 0) {
         lines.push(...formatInspectSection("HTTP routes", [String(inspect.httpRouteCount)]));
       }
