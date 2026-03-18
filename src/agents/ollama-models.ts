@@ -26,9 +26,12 @@ export type OllamaTagsResponse = {
   models?: OllamaTagModel[];
 };
 
-export type OllamaModelWithContext = OllamaTagModel & {
+export type OllamaModelMetadata = {
   contextWindow?: number;
+  supportsVision?: boolean;
 };
+
+export type OllamaModelWithContext = OllamaTagModel & OllamaModelMetadata;
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 
@@ -48,10 +51,33 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   return trimmed.replace(/\/v1$/i, "");
 }
 
-export async function queryOllamaContextWindow(
+type OllamaShowResponse = {
+  model_info?: Record<string, unknown>;
+  details?: { families?: string[] };
+  projectors?: string[];
+};
+
+function detectVisionFromShowResponse(data: OllamaShowResponse): boolean {
+  if (data.projectors && data.projectors.length > 0) {
+    return true;
+  }
+  if (data.details?.families?.some((f) => /clip|vision/i.test(f))) {
+    return true;
+  }
+  if (data.model_info) {
+    for (const key of Object.keys(data.model_info)) {
+      if (/clip\.|vision_encoder|vision_tower|mmproj/i.test(key)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export async function queryOllamaModelMetadata(
   apiBase: string,
   modelName: string,
-): Promise<number | undefined> {
+): Promise<OllamaModelMetadata> {
   try {
     const response = await fetch(`${apiBase}/api/show`, {
       method: "POST",
@@ -60,24 +86,38 @@ export async function queryOllamaContextWindow(
       signal: AbortSignal.timeout(3000),
     });
     if (!response.ok) {
-      return undefined;
+      return {};
     }
-    const data = (await response.json()) as { model_info?: Record<string, unknown> };
-    if (!data.model_info) {
-      return undefined;
-    }
-    for (const [key, value] of Object.entries(data.model_info)) {
-      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
-        const contextWindow = Math.floor(value);
-        if (contextWindow > 0) {
-          return contextWindow;
+    const data = (await response.json()) as OllamaShowResponse;
+    const result: OllamaModelMetadata = {};
+    if (data.model_info) {
+      for (const [key, value] of Object.entries(data.model_info)) {
+        if (
+          key.endsWith(".context_length") &&
+          typeof value === "number" &&
+          Number.isFinite(value)
+        ) {
+          const contextWindow = Math.floor(value);
+          if (contextWindow > 0) {
+            result.contextWindow = contextWindow;
+            break;
+          }
         }
       }
     }
-    return undefined;
+    result.supportsVision = detectVisionFromShowResponse(data);
+    return result;
   } catch {
-    return undefined;
+    return {};
   }
+}
+
+export async function queryOllamaContextWindow(
+  apiBase: string,
+  modelName: string,
+): Promise<number | undefined> {
+  const metadata = await queryOllamaModelMetadata(apiBase, modelName);
+  return metadata.contextWindow;
 }
 
 export async function enrichOllamaModelsWithContext(
@@ -90,31 +130,42 @@ export async function enrichOllamaModelsWithContext(
   for (let index = 0; index < models.length; index += concurrency) {
     const batch = models.slice(index, index + concurrency);
     const batchResults = await Promise.all(
-      batch.map(async (model) => ({
-        ...model,
-        contextWindow: await queryOllamaContextWindow(apiBase, model.name),
-      })),
+      batch.map(async (model) => {
+        const metadata = await queryOllamaModelMetadata(apiBase, model.name);
+        return {
+          ...model,
+          contextWindow: metadata.contextWindow,
+          supportsVision: metadata.supportsVision,
+        };
+      }),
     );
     enriched.push(...batchResults);
   }
   return enriched;
 }
 
-/** Heuristic: treat models with "r1", "reasoning", or "think" in the name as reasoning models. */
+/** Heuristic: treat models with reasoning-related keywords in the name as reasoning models. */
 export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
+  return /r1|reasoning|think|reason|qwq|o1[^a-z]/i.test(modelId);
+}
+
+/** Heuristic: treat models with vision-related keywords in the name as vision models. */
+export function isVisionModelHeuristic(modelId: string): boolean {
+  return /vision|llava|bakllava|moondream|minicpm-v|cogvlm|internvl|glm-4v/i.test(modelId);
 }
 
 /** Build a ModelDefinitionConfig for an Ollama model with default values. */
 export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
+  supportsVision?: boolean,
 ): ModelDefinitionConfig {
+  const vision = supportsVision ?? isVisionModelHeuristic(modelId);
   return {
     id: modelId,
     name: modelId,
     reasoning: isReasoningModelHeuristic(modelId),
-    input: ["text"],
+    input: vision ? ["text", "image"] : ["text"],
     cost: OLLAMA_DEFAULT_COST,
     contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,

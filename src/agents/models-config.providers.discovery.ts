@@ -7,6 +7,7 @@ import {
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
   isReasoningModelHeuristic,
+  isVisionModelHeuristic,
   resolveOllamaApiBase,
   type OllamaTagsResponse,
 } from "./ollama-models.js";
@@ -70,15 +71,18 @@ async function discoverOllamaModels(
     const discovered = await enrichOllamaModelsWithContext(apiBase, modelsToInspect, {
       concurrency: OLLAMA_SHOW_CONCURRENCY,
     });
-    return discovered.map((model) => ({
-      id: model.name,
-      name: model.name,
-      reasoning: isReasoningModelHeuristic(model.name),
-      input: ["text"],
-      cost: OLLAMA_DEFAULT_COST,
-      contextWindow: model.contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-    }));
+    return discovered.map((model) => {
+      const vision = model.supportsVision ?? isVisionModelHeuristic(model.name);
+      return {
+        id: model.name,
+        name: model.name,
+        reasoning: isReasoningModelHeuristic(model.name),
+        input: vision ? ["text", "image"] : ["text"],
+        cost: OLLAMA_DEFAULT_COST,
+        contextWindow: model.contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+      };
+    });
   } catch (error) {
     if (!opts?.quiet) {
       log.warn(`Failed to discover Ollama models: ${String(error)}`);
