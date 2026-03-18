@@ -199,5 +199,6 @@ export async function runWebSearch(
 
 export const __testing = {
   resolveSearchConfig,
+  resolveSearchProvider: resolveWebSearchProviderId,
   resolveWebSearchProviderId,
 };

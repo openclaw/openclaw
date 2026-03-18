@@ -26,6 +26,8 @@ export type { StickerMetadata } from "../../extensions/telegram/api.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { parseTelegramTopicConversation } from "../acp/conversation-id.js";
+export { clearAccountEntryFields } from "../channels/plugins/config-helpers.js";
+export { resolveTelegramPollVisibility } from "../poll-params.js";
 
 export {
   PAIRING_APPROVED_MESSAGE,
@@ -37,9 +39,6 @@ export {
   migrateBaseNameToDefaultAccount,
   setAccountEnabledInConfigSection,
 } from "./channel-plugin-common.js";
-
-export { clearAccountEntryFields } from "../channels/plugins/config-helpers.js";
-export { resolveTelegramPollVisibility } from "../poll-params.js";
 
 export {
   projectCredentialSnapshotFields,
