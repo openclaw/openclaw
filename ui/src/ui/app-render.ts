@@ -111,11 +111,18 @@ function createLazy<T>(loader: () => Promise<T>): () => T | null {
       return s.mod;
     }
     if (!s.promise) {
-      s.promise = loader().then((m) => {
-        s.mod = m;
-        _pendingUpdate?.();
-        return m;
-      });
+      s.promise = loader()
+        .then((m) => {
+          s.mod = m;
+          _pendingUpdate?.();
+          return m;
+        })
+        .catch((err) => {
+          console.error("[openclaw] Failed to load lazy view module:", err);
+          s.promise = null; // reset so the view can retry on next render
+          _pendingUpdate?.();
+          return null as any;
+        });
     }
     return null;
   };
