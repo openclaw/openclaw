@@ -121,8 +121,7 @@ When loading config from Nacos instead of a local file (e.g. in Kubernetes pods 
 | `NACOS_GROUP`            | No       | Nacos group (default: `DEFAULT_GROUP`).                                |
 | `NACOS_NAMESPACE`        | No       | Nacos namespace (tenant); omit for default namespace.                  |
 
-Config is kept only in memory; hot reload is driven by Nacos long-polling. See
-[Configuration: Config source: Nacos](/gateway/configuration#config-source-nacos).
+Config is kept only in memory; hot reload is driven by Nacos long-polling. See [Configuration: Config source: Nacos](/gateway/configuration#config-source-nacos).
 
 ## Logging
 

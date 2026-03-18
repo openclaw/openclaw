@@ -633,21 +633,15 @@ You can load configuration from [Nacos](https://nacos.io/) instead of a local fi
 
 Set these environment variables:
 
-| Variable | Required | Purpose |
-| -------- | -------- | ------- |
-| `OPENCLAW_CONFIG_SOURCE` | Yes | Set to `nacos` to use Nacos; omit or set to `file` for the default file-based config. |
-| `NACOS_SERVER_ADDR` | Yes | Nacos server address (e.g. `http://nacos:8848`). |
-| `NACOS_DATA_ID` | Yes | Data ID of the config (e.g. `openclaw.json`). |
-| `NACOS_GROUP` | No | Nacos group (default: `DEFAULT_GROUP`). |
-| `NACOS_NAMESPACE` | No | Nacos namespace (tenant); omit for default namespace. |
+| Variable                 | Required | Purpose                                                                 |
+| ------------------------ | -------- | ----------------------------------------------------------------------- |
+| `OPENCLAW_CONFIG_SOURCE` | Yes      | Set to `nacos` to use Nacos; omit or set to `file` for the default file-based config. |
+| `NACOS_SERVER_ADDR`      | Yes      | Nacos server address (e.g. `http://nacos:8848`).                         |
+| `NACOS_DATA_ID`          | Yes      | Data ID of the config (e.g. `openclaw.json`).                             |
+| `NACOS_GROUP`            | No       | Nacos group (default: `DEFAULT_GROUP`).                                    |
+| `NACOS_NAMESPACE`        | No       | Nacos namespace (tenant); omit for default namespace.                    |
 
-When `OPENCLAW_CONFIG_SOURCE=nacos`, the gateway fetches the config from Nacos at
-startup. No config file is written on disk; the in-memory config is updated by
-Nacos long-polling. Hot reload is driven by Nacos (changes in Nacos are applied
-without restart). Config read RPC (`config.get`) uses the in-memory config. Config
-write RPC (`config.apply`, `config.patch`) and CLI `config set` update only the
-in-memory snapshot (no write to disk or to Nacos). To change config persistently
-when using Nacos, update the config in Nacos and rely on hot reload.
+When `OPENCLAW_CONFIG_SOURCE=nacos`, the gateway fetches the config from Nacos at startup. No config file is written on disk; the in-memory config is updated by Nacos long-polling. Hot reload is driven by Nacos (changes in Nacos are applied without restart). Config read RPC (`config.get`) uses the in-memory config. Config write RPC (`config.apply`, `config.patch`) and CLI `config set` update only the in-memory snapshot (no write to disk or to Nacos). To change config persistently when using Nacos, update the config in Nacos and rely on hot reload.
 
 See [Environment](/help/environment#config-source-nacos) for these variables in the env reference.
 
