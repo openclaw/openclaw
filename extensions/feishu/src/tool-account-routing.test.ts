@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuBitableTools } from "./bitable.js";
 import { registerFeishuDriveTools } from "./drive.js";
 import { registerFeishuPermTools } from "./perm.js";

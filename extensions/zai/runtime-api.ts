@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/zai";
+export * from "../../src/plugin-sdk/zai.js";

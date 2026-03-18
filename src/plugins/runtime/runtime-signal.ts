@@ -3,7 +3,7 @@ import {
   probeSignal,
   signalMessageActions,
   sendMessageSignal,
-} from "openclaw/plugin-sdk/signal";
+} from "../../plugin-sdk/signal.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 export function createRuntimeSignal(): PluginRuntimeChannel["signal"] {

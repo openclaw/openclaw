@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/twitch";
+export * from "../../src/plugin-sdk/twitch.js";

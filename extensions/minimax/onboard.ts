@@ -1,14 +1,14 @@
 import {
-  buildMinimaxApiModelDefinition,
-  MINIMAX_API_BASE_URL,
-  MINIMAX_CN_API_BASE_URL,
-} from "openclaw/plugin-sdk/provider-models";
-import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
   type ModelProviderConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  buildMinimaxApiModelDefinition,
+  MINIMAX_API_BASE_URL,
+  MINIMAX_CN_API_BASE_URL,
+} from "./model-definitions.js";
 
 type MinimaxApiProviderConfigParams = {
   providerId: string;

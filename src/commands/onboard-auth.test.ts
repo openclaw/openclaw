@@ -42,17 +42,17 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { ModelApi } from "../config/types.models.js";
-import {
-  MISTRAL_DEFAULT_MODEL_REF,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../plugin-sdk/provider-models.js";
 import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import {
   OPENROUTER_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
   writeOAuthCredentials,
 } from "../plugins/provider-auth-storage.js";
+import {
+  MISTRAL_DEFAULT_MODEL_REF,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "../plugins/provider-model-definitions.js";
 import { applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
 import {
   createAuthTestLifecycle,

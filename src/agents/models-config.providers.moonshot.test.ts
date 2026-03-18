@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   MOONSHOT_BASE_URL as MOONSHOT_AI_BASE_URL,
   MOONSHOT_CN_BASE_URL,
-} from "../plugin-sdk/provider-models.js";
+} from "../plugins/provider-model-definitions.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
 import { applyNativeStreamingUsageCompat } from "./models-config.providers.js";

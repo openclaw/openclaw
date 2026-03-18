@@ -1,13 +1,13 @@
 import {
-  buildZaiModelDefinition,
-  resolveZaiBaseUrl,
-  ZAI_DEFAULT_MODEL_ID,
-} from "openclaw/plugin-sdk/provider-models";
-import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithModelCatalog,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  buildZaiModelDefinition,
+  resolveZaiBaseUrl,
+  ZAI_DEFAULT_MODEL_ID,
+} from "./model-definitions.js";
 
 export const ZAI_DEFAULT_MODEL_REF = `zai/${ZAI_DEFAULT_MODEL_ID}`;
 

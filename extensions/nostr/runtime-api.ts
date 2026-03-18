@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/nostr";
+export * from "../../src/plugin-sdk/nostr.js";

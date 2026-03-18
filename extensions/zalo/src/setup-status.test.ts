@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/zalo";
 import { describe, expect, it } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 
 const zaloConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({

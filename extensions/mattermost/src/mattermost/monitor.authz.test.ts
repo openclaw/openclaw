@@ -1,5 +1,5 @@
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
+import { resolveControlCommandGate } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   authorizeMattermostCommandInvocation,

@@ -1,7 +1,7 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import plugin from "./index.js";
+import type { OpenClawPluginApi } from "./runtime-api.js";
 
 function createApi(
   registrationMode: OpenClawPluginApi["registrationMode"],

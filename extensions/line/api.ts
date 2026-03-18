@@ -1,2 +1,2 @@
-export * from "openclaw/plugin-sdk/line";
+export * from "../../src/plugin-sdk/line.js";
 export * from "./setup-api.js";

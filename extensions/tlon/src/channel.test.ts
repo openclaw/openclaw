@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/tlon";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../api.js";
 import { tlonPlugin } from "./channel.js";
 
 describe("tlonPlugin config", () => {

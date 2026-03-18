@@ -1,13 +1,13 @@
 import {
-  buildMistralModelDefinition,
-  MISTRAL_BASE_URL,
-  MISTRAL_DEFAULT_MODEL_ID,
-} from "openclaw/plugin-sdk/provider-models";
-import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  buildMistralModelDefinition,
+  MISTRAL_BASE_URL,
+  MISTRAL_DEFAULT_MODEL_ID,
+} from "./model-definitions.js";
 
 export const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;
 

@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/feishu";
+export * from "../../src/plugin-sdk/feishu.js";

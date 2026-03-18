@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/nostr";
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
@@ -6,6 +5,7 @@ import {
   createTestWizardPrompter,
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 
 const nostrConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
