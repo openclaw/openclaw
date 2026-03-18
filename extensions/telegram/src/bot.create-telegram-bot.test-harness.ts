@@ -258,20 +258,13 @@ export const telegramBotRuntimeForTest = {
     return runnerHoisted.sequentializeSpy();
   },
   apiThrottler: () => runnerHoisted.throttlerSpy(),
-  loadConfig,
 };
-export const telegramBotMessageDispatchRuntimeForTest = {
-  dispatchReplyWithBufferedBlockDispatcher,
-};
-export const telegramBotNativeCommandsRuntimeForTest = {
-  dispatchReplyWithBufferedBlockDispatcher,
-  listSkillCommandsForAgents,
-};
-export const telegramBotHandlersRuntimeForTest = {
+export const telegramBotDepsForTest = {
   loadConfig,
   resolveStorePath: resolveStorePathMock,
   readChannelAllowFromStore,
   enqueueSystemEvent: enqueueSystemEventSpy,
+  dispatchReplyWithBufferedBlockDispatcher,
   listSkillCommandsForAgents,
   wasSentByBot,
 };

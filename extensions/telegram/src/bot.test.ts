@@ -22,9 +22,7 @@ const {
   replySpy,
   sendMessageSpy,
   setMyCommandsSpy,
-  telegramBotHandlersRuntimeForTest,
-  telegramBotMessageDispatchRuntimeForTest,
-  telegramBotNativeCommandsRuntimeForTest,
+  telegramBotDepsForTest,
   telegramBotRuntimeForTest,
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
@@ -35,15 +33,14 @@ const { listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
 const { loadSessionStore } = await import("../../../src/config/sessions.js");
 const { normalizeTelegramCommandName } =
   await import("../../../src/config/telegram-custom-commands.js");
-const { createTelegramBot, setTelegramBotRuntimeForTest } = await import("./bot.js");
-const { setBotHandlersRuntimeForTest } = await import("./bot-handlers.runtime.js");
-const { setBotMessageDispatchRuntimeForTest } = await import("./bot-message-dispatch.js");
-const { setBotNativeCommandsRuntimeForTest } = await import("./bot-native-commands.js");
-
+const { createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot.js");
 setTelegramBotRuntimeForTest(telegramBotRuntimeForTest);
-setBotHandlersRuntimeForTest(telegramBotHandlersRuntimeForTest);
-setBotMessageDispatchRuntimeForTest(telegramBotMessageDispatchRuntimeForTest);
-setBotNativeCommandsRuntimeForTest(telegramBotNativeCommandsRuntimeForTest);
+const createTelegramBot = (opts: Parameters<typeof createTelegramBotBase>[0]) =>
+  createTelegramBotBase({
+    ...opts,
+    telegramDeps: telegramBotDepsForTest,
+  });
 
 const loadConfig = getLoadConfigMock();
 const readChannelAllowFromStore = getReadChannelAllowFromStoreMock();
