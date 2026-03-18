@@ -741,6 +741,53 @@ function trimWhitespaceFromToolCallNamesInMessage(
   normalizeToolCallIdsInMessage(message);
 }
 
+/**
+ * Wraps a stream function so that outbound messages are passed through
+ * `transformFn` before each provider call. If the transform returns the
+ * same array reference (no changes needed), the original context is
+ * forwarded untouched.
+ */
+function wrapStreamFnMessageTransform(
+  streamFn: StreamFn,
+  transformFn: (messages: AgentMessage[]) => unknown,
+): StreamFn {
+  const inner = streamFn;
+  return (model, context, options) => {
+    const ctx = context as unknown as { messages?: unknown };
+    const messages = ctx?.messages;
+    if (!Array.isArray(messages)) {
+      return inner(model, context, options);
+    }
+    const sanitized = transformFn(messages as AgentMessage[]);
+    if (sanitized === messages) {
+      return inner(model, context, options);
+    }
+    const nextContext = {
+      ...(context as unknown as Record<string, unknown>),
+      messages: sanitized,
+    } as unknown;
+    return inner(model, nextContext as typeof context, options);
+  };
+}
+
+/**
+ * Generic helper: wraps a StreamFn so that every stream it produces is passed
+ * through `wrapFn`. Handles the maybe-async return value that StreamFn can
+ * produce (synchronous stream OR Promise<stream>).
+ */
+function wrapStreamFnWith(
+  baseFn: StreamFn,
+  wrapFn: (stream: ReturnType<typeof streamSimple>) => ReturnType<typeof streamSimple>,
+): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) => wrapFn(stream));
+    }
+    return wrapFn(maybeStream);
+  };
+}
+
 function wrapStreamTrimToolCallNames(
   stream: ReturnType<typeof streamSimple>,
   allowedToolNames?: Set<string>,
@@ -785,15 +832,9 @@ export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
 ): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamTrimToolCallNames(stream, allowedToolNames),
-      );
-    }
-    return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames);
-  };
+  return wrapStreamFnWith(baseFn, (stream) =>
+    wrapStreamTrimToolCallNames(stream, allowedToolNames),
+  );
 }
 
 function extractBalancedJsonPrefix(raw: string): string | null {
@@ -1057,15 +1098,7 @@ function wrapStreamRepairMalformedToolCallArguments(
 }
 
 export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamRepairMalformedToolCallArguments(stream),
-      );
-    }
-    return wrapStreamRepairMalformedToolCallArguments(maybeStream);
-  };
+  return wrapStreamFnWith(baseFn, wrapStreamRepairMalformedToolCallArguments);
 }
 
 function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
@@ -1165,15 +1198,7 @@ function wrapStreamDecodeXaiToolCallArguments(
 }
 
 function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamDecodeXaiToolCallArguments(stream),
-      );
-    }
-    return wrapStreamDecodeXaiToolCallArguments(maybeStream);
-  };
+  return wrapStreamFnWith(baseFn, wrapStreamDecodeXaiToolCallArguments);
 }
 
 export async function resolvePromptBuildHookResult(params: {
@@ -2018,23 +2043,10 @@ export async function runEmbeddedAttempt(
       // call, including tool continuations. Wrap the stream function so every
       // outbound request sees sanitized messages.
       if (transcriptPolicy.dropThinkingBlocks) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        activeSession.agent.streamFn = wrapStreamFnMessageTransform(
+          activeSession.agent.streamFn,
+          (msgs) => dropThinkingBlocks(msgs) as unknown as AgentMessage[],
+        );
       }
 
       // Mistral (and other strict providers) reject tool call IDs that don't match their
@@ -2043,47 +2055,21 @@ export async function runEmbeddedAttempt(
       // tool result cycles bypass that path. Wrap streamFn so every outbound request
       // sees sanitized tool call IDs.
       if (transcriptPolicy.sanitizeToolCallIds && transcriptPolicy.toolCallIdMode) {
-        const inner = activeSession.agent.streamFn;
         const mode = transcriptPolicy.toolCallIdMode;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(messages as AgentMessage[], mode);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        activeSession.agent.streamFn = wrapStreamFnMessageTransform(
+          activeSession.agent.streamFn,
+          (msgs) => sanitizeToolCallIdsForCloudCodeAssist(msgs, mode),
+        );
       }
 
       if (
         params.model.api === "openai-responses" ||
         params.model.api === "openai-codex-responses"
       ) {
-        const inner = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) => {
-          const ctx = context as unknown as { messages?: unknown };
-          const messages = ctx?.messages;
-          if (!Array.isArray(messages)) {
-            return inner(model, context, options);
-          }
-          const sanitized = downgradeOpenAIFunctionCallReasoningPairs(messages as AgentMessage[]);
-          if (sanitized === messages) {
-            return inner(model, context, options);
-          }
-          const nextContext = {
-            ...(context as unknown as Record<string, unknown>),
-            messages: sanitized,
-          } as unknown;
-          return inner(model, nextContext as typeof context, options);
-        };
+        activeSession.agent.streamFn = wrapStreamFnMessageTransform(
+          activeSession.agent.streamFn,
+          downgradeOpenAIFunctionCallReasoningPairs,
+        );
       }
 
       const innerStreamFn = activeSession.agent.streamFn;
