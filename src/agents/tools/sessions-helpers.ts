@@ -30,7 +30,7 @@ export {
 } from "./sessions-resolution.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
+import { deriveErrorKind, sanitizeUserFacingText } from "../pi-embedded-helpers/errors.js";
 import {
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
@@ -187,6 +187,13 @@ export function extractAssistantText(message: unknown): string | undefined {
   // Gate on stopReason only — a non-error response with a stale/background errorMessage
   // should not have its content rewritten with error templates (#13935).
   const errorContext = stopReason === "error";
+  const errorMessage = (message as { errorMessage?: unknown }).errorMessage;
 
-  return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
+  if (!joined) {
+    return undefined;
+  }
+  const trimmedErrorMessage = typeof errorMessage === "string" ? errorMessage.trim() : undefined;
+  const errorSource = errorContext ? trimmedErrorMessage || joined.trim() : undefined;
+  const errorKind = errorSource ? deriveErrorKind(errorSource) : undefined;
+  return sanitizeUserFacingText(joined, { errorContext, errorKind });
 }

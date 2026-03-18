@@ -2,7 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
+import { deriveErrorKind, sanitizeUserFacingText } from "./pi-embedded-helpers/errors.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
@@ -248,7 +248,10 @@ export function extractAssistantText(msg: AssistantMessage): string {
   // Gate on stopReason only — a non-error response with an errorMessage set (e.g. from a
   // background tool failure) should not have its content rewritten (#13935).
   const errorContext = msg.stopReason === "error";
-  return sanitizeUserFacingText(extracted, { errorContext });
+  const trimmedErrorMessage = msg.errorMessage?.trim();
+  const errorSource = errorContext ? trimmedErrorMessage || extracted.trim() : undefined;
+  const errorKind = errorSource ? deriveErrorKind(errorSource) : undefined;
+  return sanitizeUserFacingText(extracted, { errorContext, errorKind });
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {
