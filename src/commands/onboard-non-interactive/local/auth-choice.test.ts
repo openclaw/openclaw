@@ -50,4 +50,36 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
     expect(applySimpleNonInteractiveApiKeyChoice).not.toHaveBeenCalled();
   });
+
+  it("applies azure-openai-api-key non-interactively with explicit Azure flags", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce({
+      key: "azure-test-key",
+      source: "flag",
+    });
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "azure-openai-api-key",
+      opts: {
+        azureOpenaiApiKey: "azure-test-key",
+        azureOpenaiBaseUrl: "https://example.openai.azure.com/openai/v1",
+        azureOpenaiModelId: "gpt-4.1",
+      },
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.auth?.profiles?.["azure-openai-responses:default"]).toMatchObject({
+      provider: "azure-openai-responses",
+      mode: "api_key",
+    });
+    const defaultsWithModel = result?.agents?.defaults as
+      | { model?: { primary?: string } }
+      | undefined;
+    expect(defaultsWithModel?.model?.primary).toBe("azure-openai-responses/gpt-4.1");
+    expect(applySimpleNonInteractiveApiKeyChoice).toHaveBeenCalledOnce();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 });

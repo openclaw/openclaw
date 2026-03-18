@@ -3,7 +3,7 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
-} from "./onboard-auth.config-shared.js";
+} from "../plugins/provider-onboarding-config.js";
 
 export const AZURE_OPENAI_PROVIDER_ID = "azure-openai-responses";
 export const AZURE_OPENAI_DEFAULT_MODEL_ID = "gpt-4.1";

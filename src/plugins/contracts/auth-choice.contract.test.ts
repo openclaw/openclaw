@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
@@ -6,11 +7,11 @@ import {
   readAuthProfilesForAgent,
   requireOpenClawAgentDir,
   setupAuthTestEnv,
-} from "../../../test/helpers/auth-wizard.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
+} from "../../commands/test-wizard-helpers.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
 import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
 import { requireProviderContractProvider, uniqueProviderContractProviders } from "./registry.js";
+import type { AuthChoice } from "../../commands/onboard-types.js";
 import { registerProviders, requireProvider } from "./testkit.js";
 
 type ResolvePluginProviders =

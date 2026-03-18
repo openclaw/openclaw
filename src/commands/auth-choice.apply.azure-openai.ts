@@ -13,7 +13,8 @@ import {
   normalizeAzureOpenAIBaseUrl,
   normalizeAzureOpenAIModelId,
 } from "./azure-openai-config.js";
-import { applyAuthProfileConfig, setAzureOpenaiApiKey } from "./onboard-auth.js";
+import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
+import { setAzureOpenaiApiKey } from "../plugins/provider-auth-storage.js";
 
 const AZURE_OPENAI_BASE_URL_PLACEHOLDER =
   "https://<resource>.openai.azure.com/openai/v1 or https://<resource>.services.ai.azure.com/openai/v1 or https://<resource>.cognitiveservices.azure.com/openai/v1";
