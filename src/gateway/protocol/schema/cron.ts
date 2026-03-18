@@ -281,6 +281,17 @@ export const CronListParamsSchema = Type.Object(
 
 export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
+const CronPreCheckSchema = Type.Object(
+  {
+    command: NonEmptyString,
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
+    outputMode: Type.Optional(
+      Type.Union([Type.Literal("prepend"), Type.Literal("replace"), Type.Literal("ignore")]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,
@@ -289,6 +300,7 @@ export const CronAddParamsSchema = Type.Object(
     sessionTarget: CronSessionTargetSchema,
     wakeMode: CronWakeModeSchema,
     payload: CronPayloadSchema,
+    preCheck: Type.Optional(CronPreCheckSchema),
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
   },
@@ -303,6 +315,7 @@ export const CronJobPatchSchema = Type.Object(
     sessionTarget: Type.Optional(CronSessionTargetSchema),
     wakeMode: Type.Optional(CronWakeModeSchema),
     payload: Type.Optional(CronPayloadPatchSchema),
+    preCheck: Type.Optional(Type.Union([CronPreCheckSchema, Type.Null()])),
     delivery: Type.Optional(CronDeliveryPatchSchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
     state: Type.Optional(Type.Partial(CronJobStateSchema)),
