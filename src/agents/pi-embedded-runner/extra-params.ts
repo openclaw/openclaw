@@ -141,12 +141,6 @@ function createDonutAnalyticsContextWrapper(
           if (threadRunId) {
             payloadObj.thread_run_id = threadRunId;
           }
-          if (sessionKey) {
-            payloadObj.session_key = sessionKey;
-          }
-          if (threadId) {
-            payloadObj.thread_id = threadId;
-          }
           if (inferredToolCallId) {
             payloadObj.tool_call_id = inferredToolCallId;
           }
