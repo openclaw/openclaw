@@ -29,6 +29,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "./runtime-api.js";
+import { resolveBlueBubblesOutboundSessionRoute } from "./session-route.js";
 import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
 import {
@@ -140,6 +141,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeBlueBubblesMessagingTarget,
+    resolveOutboundSessionRoute: (params) => resolveBlueBubblesOutboundSessionRoute(params),
     targetResolver: {
       looksLikeId: looksLikeBlueBubblesTargetId,
       hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",

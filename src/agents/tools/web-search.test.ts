@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { __testing as braveTesting } from "../../../extensions/brave/src/brave-web-search-provider.js";
+import { __testing as moonshotTesting } from "../../../extensions/moonshot/src/kimi-web-search-provider.js";
+import { __testing as perplexityTesting } from "../../../extensions/perplexity/web-search-provider.js";
+import { __testing as xaiTesting } from "../../../extensions/xai/src/grok-web-search-provider.js";
 import { withEnv } from "../../test-utils/env.js";
-import { __testing } from "./web-search.js";
-
 const {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
@@ -10,21 +12,19 @@ const {
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
-  normalizeBraveLanguageParams,
-  normalizeFreshness,
   normalizeToIsoDate,
   isoToPerplexityDate,
-  resolveGrokApiKey,
-  resolveGrokModel,
-  resolveGrokInlineCitations,
-  extractGrokContent,
-  resolveKimiApiKey,
-  resolveKimiModel,
-  resolveKimiBaseUrl,
-  extractKimiCitations,
+} = perplexityTesting;
+const {
+  normalizeBraveLanguageParams,
+  normalizeFreshness,
   resolveBraveMode,
   mapBraveLlmContextResults,
-} = __testing;
+} = braveTesting;
+const { resolveGrokApiKey, resolveGrokModel, resolveGrokInlineCitations, extractGrokContent } =
+  xaiTesting;
+const { resolveKimiApiKey, resolveKimiModel, resolveKimiBaseUrl, extractKimiCitations } =
+  moonshotTesting;
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 const moonshotApiKeyEnv = ["MOONSHOT_API", "KEY"].join("_");
