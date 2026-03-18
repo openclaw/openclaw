@@ -2,7 +2,7 @@ import type {
   ChannelDirectoryEntry,
   OpenClawConfig,
   RuntimeEnv,
-} from "openclaw/plugin-sdk/mattermost";
+} from "../runtime-api.js";
 import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,

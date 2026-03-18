@@ -1,5 +1,8 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
+import {
+  handleSlackAction,
+  type SlackActionContext,
+} from "../../../extensions/slack/runtime-api.js";
 import {
   extractSlackToolSend,
   isSlackInteractiveRepliesEnabled,
@@ -7,7 +10,9 @@ import {
   resolveSlackChannelId,
   handleSlackMessageAction,
 } from "../../plugin-sdk/slack.js";
-import type { ChannelMessageActionAdapter } from "./types.js";
+import { createLegacyMessageToolDiscoveryMethods } from "./message-tool-legacy.js";
+import { createSlackMessageToolBlocksSchema } from "./message-tool-schema.js";
+import type { ChannelMessageActionAdapter, ChannelMessageToolDiscovery } from "./types.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -19,18 +24,35 @@ export function createSlackActions(
   providerId: string,
   options?: { invoke?: SlackActionInvoke },
 ): ChannelMessageActionAdapter {
+  function describeMessageTool({
+    cfg,
+  }: Parameters<
+    NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
+  >[0]): ChannelMessageToolDiscovery {
+    const actions = listSlackMessageActions(cfg);
+    const capabilities = new Set<"blocks" | "interactive">();
+    if (actions.includes("send")) {
+      capabilities.add("blocks");
+    }
+    if (isSlackInteractiveRepliesEnabled({ cfg })) {
+      capabilities.add("interactive");
+    }
+    return {
+      actions,
+      capabilities: Array.from(capabilities),
+      schema: actions.includes("send")
+        ? {
+            properties: {
+              blocks: createSlackMessageToolBlocksSchema(),
+            },
+          }
+        : null,
+    };
+  }
+
   return {
-    listActions: ({ cfg }) => listSlackMessageActions(cfg),
-    getCapabilities: ({ cfg }) => {
-      const capabilities = new Set<"interactive" | "blocks">();
-      if (listSlackMessageActions(cfg).includes("send")) {
-        capabilities.add("blocks");
-      }
-      if (isSlackInteractiveRepliesEnabled({ cfg })) {
-        capabilities.add("interactive");
-      }
-      return Array.from(capabilities);
-    },
+    describeMessageTool,
+    ...createLegacyMessageToolDiscoveryMethods(describeMessageTool),
     extractToolSend: ({ args }) => extractSlackToolSend(args),
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({

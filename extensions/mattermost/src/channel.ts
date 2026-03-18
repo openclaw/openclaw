@@ -5,6 +5,11 @@ import {
   collectAllowlistProviderRestrictSendersWarnings,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createLegacyMessageToolDiscoveryMethods,
+  createMessageToolButtonsSchema,
+} from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelMessageToolDiscovery } from "openclaw/plugin-sdk/channel-runtime";
+import {
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   createAccountStatusSink,
@@ -16,7 +21,7 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk/mattermost";
+} from "./runtime-api.js";
 import { buildPassiveProbedChannelStatusSummary } from "../../shared/channel-status-summary.js";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
@@ -41,41 +46,51 @@ import { getMattermostRuntime } from "./runtime.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 
+function describeMattermostMessageTool({
+  cfg,
+}: Parameters<
+  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
+>[0]): ChannelMessageToolDiscovery {
+  const enabledAccounts = listMattermostAccountIds(cfg)
+    .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
+    .filter((account) => account.enabled)
+    .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
+
+  const actions: ChannelMessageActionName[] = [];
+
+  if (enabledAccounts.length > 0) {
+    actions.push("send");
+  }
+
+  const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
+  const baseReactions = actionsConfig?.reactions;
+  const hasReactionCapableAccount = enabledAccounts.some((account) => {
+    const accountActions = account.config.actions as { reactions?: boolean } | undefined;
+    return (accountActions?.reactions ?? baseReactions ?? true) !== false;
+  });
+  if (hasReactionCapableAccount) {
+    actions.push("react");
+  }
+
+  return {
+    actions,
+    capabilities: enabledAccounts.length > 0 ? ["buttons"] : [],
+    schema:
+      enabledAccounts.length > 0
+        ? {
+            properties: {
+              buttons: createMessageToolButtonsSchema(),
+            },
+          }
+        : null,
+  };
+}
+
 const mattermostMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg }) => {
-    const enabledAccounts = listMattermostAccountIds(cfg)
-      .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
-      .filter((account) => account.enabled)
-      .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
-
-    const actions: ChannelMessageActionName[] = [];
-
-    // Send (buttons) is available whenever there's at least one enabled account
-    if (enabledAccounts.length > 0) {
-      actions.push("send");
-    }
-
-    // React requires per-account reactions config check
-    const actionsConfig = cfg.channels?.mattermost?.actions as { reactions?: boolean } | undefined;
-    const baseReactions = actionsConfig?.reactions;
-    const hasReactionCapableAccount = enabledAccounts.some((account) => {
-      const accountActions = account.config.actions as { reactions?: boolean } | undefined;
-      return (accountActions?.reactions ?? baseReactions ?? true) !== false;
-    });
-    if (hasReactionCapableAccount) {
-      actions.push("react");
-    }
-
-    return actions;
-  },
+  describeMessageTool: describeMattermostMessageTool,
+  ...createLegacyMessageToolDiscoveryMethods(describeMattermostMessageTool),
   supportsAction: ({ action }) => {
     return action === "send" || action === "react";
-  },
-  getCapabilities: ({ cfg }) => {
-    const accounts = listMattermostAccountIds(cfg)
-      .map((id) => resolveMattermostAccount({ cfg, accountId: id }))
-      .filter((a) => a.enabled && a.botToken?.trim() && a.baseUrl?.trim());
-    return accounts.length > 0 ? (["buttons"] as const) : [];
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "react") {

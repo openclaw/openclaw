@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
 import { configureClient } from "@tloncorp/api";
-import type {
-  ChannelOutboundAdapter,
-  ChannelPlugin,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/tlon";
+import type { ChannelOutboundAdapter, ChannelPlugin, OpenClawConfig } from "../api.js";
+import { createLoggerBackedRuntime, createReplyPrefixOptions } from "../api.js";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import {
@@ -230,7 +227,7 @@ export async function startTlonGatewayAccount(
     accountId: account.accountId,
     ship: account.ship,
     url: account.url,
-  } as import("openclaw/plugin-sdk/tlon").ChannelAccountSnapshot);
+  } as ChannelAccountSnapshot);
   ctx.log?.info(`[${account.accountId}] starting Tlon provider for ${account.ship ?? "tlon"}`);
   return monitorTlonProvider({
     runtime: ctx.runtime,
