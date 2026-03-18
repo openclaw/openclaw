@@ -74,8 +74,8 @@ describe("provider catalog contract", () => {
 
   it("keeps codex-only missing-auth hints wired through the provider runtime", () => {
     const openaiProvider = requireProviderContractProvider("openai");
-    expectCodexMissingAuthHint((params) =>
-      openaiProvider.buildMissingAuthMessage?.(params.context),
+    expectCodexMissingAuthHint(
+      (params) => openaiProvider.buildMissingAuthMessage?.(params.context) ?? undefined,
     );
   });
 
