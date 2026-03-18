@@ -975,19 +975,42 @@ export class AcpSessionManager {
     const runtime = backend.runtime;
     const previousMeta = params.meta;
     const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
-    const resumeSessionId = resolveRuntimeResumeSessionId(previousIdentity);
-    const ensured = await withAcpRuntimeErrorBoundary({
-      run: async () =>
-        await runtime.ensureSession({
-          sessionKey: params.sessionKey,
-          agent,
-          mode,
-          ...(resumeSessionId ? { resumeSessionId } : {}),
-          cwd,
-        }),
-      fallbackCode: "ACP_SESSION_INIT_FAILED",
-      fallbackMessage: "Could not initialize ACP session runtime.",
-    });
+    const persistedResumeSessionId =
+      mode === "persistent" ? resolveRuntimeResumeSessionId(previousIdentity) : undefined;
+    const ensureSession = async (resumeSessionId?: string) =>
+      await withAcpRuntimeErrorBoundary({
+        run: async () =>
+          await runtime.ensureSession({
+            sessionKey: params.sessionKey,
+            agent,
+            mode,
+            ...(resumeSessionId ? { resumeSessionId } : {}),
+            cwd,
+          }),
+        fallbackCode: "ACP_SESSION_INIT_FAILED",
+        fallbackMessage: "Could not initialize ACP session runtime.",
+      });
+    let ensured: AcpRuntimeHandle;
+    if (persistedResumeSessionId) {
+      try {
+        ensured = await ensureSession(persistedResumeSessionId);
+      } catch (error) {
+        const acpError = toAcpRuntimeError({
+          error,
+          fallbackCode: "ACP_SESSION_INIT_FAILED",
+          fallbackMessage: "Could not initialize ACP session runtime.",
+        });
+        if (acpError.code !== "ACP_SESSION_INIT_FAILED") {
+          throw acpError;
+        }
+        logVerbose(
+          `acp-manager: resume init failed for ${params.sessionKey}; retrying without persisted ACP session id: ${acpError.message}`,
+        );
+        ensured = await ensureSession();
+      }
+    } else {
+      ensured = await ensureSession();
+    }
 
     const now = Date.now();
     const effectiveCwd = normalizeText(ensured.cwd) ?? cwd;
