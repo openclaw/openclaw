@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/signal";
+export * from "../../../src/plugin-sdk/signal.js";

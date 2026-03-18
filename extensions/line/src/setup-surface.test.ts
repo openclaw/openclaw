@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/line";
 import { describe, expect, it, vi } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
 import {
@@ -11,6 +10,7 @@ import {
   createTestWizardPrompter,
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
+import type { OpenClawConfig } from "../api.js";
 import { lineSetupAdapter, lineSetupWizard } from "./setup-surface.js";
 
 const lineConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({

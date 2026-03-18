@@ -1,14 +1,8 @@
 import {
   KIMI_CODING_BASE_URL,
   KIMI_CODING_DEFAULT_MODEL_ID as KIMI_CODING_MODEL_ID,
-  buildMinimaxApiModelDefinition,
-  buildMinimaxModelDefinition,
-  buildMistralModelDefinition,
-  buildModelStudioDefaultModelDefinition,
-  buildModelStudioModelDefinition,
-  buildMoonshotProvider,
-  buildXaiModelDefinition,
-  buildZaiModelDefinition,
+} from "../../extensions/kimi-coding/provider-catalog.js";
+import {
   DEFAULT_MINIMAX_BASE_URL,
   MINIMAX_API_BASE_URL,
   MINIMAX_API_COST,
@@ -17,32 +11,52 @@ import {
   MINIMAX_HOSTED_MODEL_ID,
   MINIMAX_HOSTED_MODEL_REF,
   MINIMAX_LM_STUDIO_COST,
+  buildMinimaxApiModelDefinition,
+  buildMinimaxModelDefinition,
+} from "../../extensions/minimax/model-definitions.js";
+import {
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_COST,
   MISTRAL_DEFAULT_MODEL_ID,
   MISTRAL_DEFAULT_MODEL_REF,
+  buildMistralModelDefinition,
+} from "../../extensions/mistral/model-definitions.js";
+import {
   MODELSTUDIO_CN_BASE_URL,
   MODELSTUDIO_DEFAULT_COST,
   MODELSTUDIO_DEFAULT_MODEL_ID,
   MODELSTUDIO_DEFAULT_MODEL_REF,
   MODELSTUDIO_GLOBAL_BASE_URL,
+  buildModelStudioDefaultModelDefinition,
+  buildModelStudioModelDefinition,
+} from "../../extensions/modelstudio/model-definitions.js";
+import { MOONSHOT_CN_BASE_URL } from "../../extensions/moonshot/onboard.js";
+import {
   MOONSHOT_BASE_URL,
-  MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
+  buildMoonshotProvider,
+} from "../../extensions/moonshot/provider-catalog.js";
+import {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
+} from "../../extensions/qianfan/provider-catalog.js";
+import {
   XAI_BASE_URL,
   XAI_DEFAULT_COST,
   XAI_DEFAULT_MODEL_ID,
   XAI_DEFAULT_MODEL_REF,
-  resolveZaiBaseUrl,
+  buildXaiModelDefinition,
+} from "../../extensions/xai/model-definitions.js";
+import {
   ZAI_CN_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_DEFAULT_COST,
   ZAI_DEFAULT_MODEL_ID,
   ZAI_GLOBAL_BASE_URL,
-} from "openclaw/plugin-sdk/provider-models";
+  buildZaiModelDefinition,
+  resolveZaiBaseUrl,
+} from "../../extensions/zai/model-definitions.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   KILOCODE_DEFAULT_CONTEXT_WINDOW,

@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
-} from "openclaw/plugin-sdk/windows-spawn";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+} from "../../plugin-sdk/windows-spawn.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 import type { EnvSanitizationOptions } from "./sanitize-env-vars.js";
 
