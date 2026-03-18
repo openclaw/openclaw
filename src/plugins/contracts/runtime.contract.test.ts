@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
 import type { ProviderRuntimeModel } from "../types.js";
 import { requireProviderContractProvider } from "./registry.js";
@@ -44,12 +44,7 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
 }
 
 describe("provider runtime contract", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ requireProviderContractProvider: requireBundledProviderContractProvider } =
-      await import("./registry.js"));
-    openAIPlugin = (await import("../../../extensions/openai/index.js")).default;
-    qwenPortalPlugin = (await import("../../../extensions/qwen-portal-auth/index.js")).default;
+  beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
     refreshQwenPortalCredentialsMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
