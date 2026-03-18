@@ -1634,6 +1634,12 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      inworld: {
+        apiKey: "inworld_base64_api_key",
+        baseUrl: "https://api.inworld.ai",
+        voiceId: "Dennis",
+        modelId: "inworld-tts-1.5-max",
+      },
     },
   },
 }
@@ -1642,9 +1648,10 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
-- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY`, `INWORLD_API_KEY`, and `OPENAI_API_KEY`.
 - `openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
 - When `openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
+- `inworld.baseUrl` overrides the InWorld API endpoint. Resolution order is config, then `INWORLD_API_BASE_URL`, then `https://api.inworld.ai`.
 
 ---
 
