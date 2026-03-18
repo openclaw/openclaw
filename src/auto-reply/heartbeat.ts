@@ -4,9 +4,10 @@ import { HEARTBEAT_TOKEN } from "./tokens.js";
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
 export const HEARTBEAT_PROMPT =
-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.";
+  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK. Final output must be either exact HEARTBEAT_OK or a user-visible conclusion, never both.";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
+export type HeartbeatReplyDisposition = "ack" | "deliver" | "malformedAck";
 
 /**
  * Check if HEARTBEAT.md content is "effectively empty" - meaning it has no actionable tasks.
@@ -58,6 +59,24 @@ export function resolveHeartbeatPrompt(raw?: string): string {
 }
 
 export type StripHeartbeatMode = "heartbeat" | "message";
+
+function stripLeadingHeartbeatResponsePrefix(
+  text: string,
+  responsePrefix: string | undefined,
+): string {
+  const normalizedPrefix = responsePrefix?.trim();
+  if (!normalizedPrefix) {
+    return text;
+  }
+
+  // Require a boundary after the configured prefix so short prefixes like "Hi"
+  // do not strip the beginning of normal words like "History".
+  const prefixPattern = new RegExp(
+    `^${escapeRegExp(normalizedPrefix)}(?=$|\\s|[\\p{P}\\p{S}])\\s*`,
+    "iu",
+  );
+  return text.replace(prefixPattern, "");
+}
 
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();
@@ -168,4 +187,63 @@ export function stripHeartbeatToken(
   }
 
   return { shouldSkip: false, text: rest, didStrip: true };
+}
+
+export function resolveHeartbeatReplyDisposition(params: {
+  text?: string;
+  responsePrefix?: string;
+  hasMedia?: boolean;
+  hasReasoning?: boolean;
+}): {
+  disposition: HeartbeatReplyDisposition;
+  text: string;
+  hadToken: boolean;
+} {
+  const rawText = typeof params.text === "string" ? params.text : "";
+  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, params.responsePrefix);
+  const stripped = stripHeartbeatToken(textForStrip, { mode: "message" });
+  const normalized = textForStrip.trim();
+  const hasMedia = params.hasMedia === true;
+  const hasReasoning = params.hasReasoning === true;
+  const normalizedMarkup = normalized
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/^[*`~_]+/, "")
+    .replace(/[*`~_]+$/, "");
+  const hadToken =
+    normalized.includes(HEARTBEAT_TOKEN) || normalizedMarkup.includes(HEARTBEAT_TOKEN);
+  const strippedRemainder = stripped.text.trim();
+  const isSymbolOnlyRemainder =
+    Boolean(strippedRemainder) && !/[\p{L}\p{N}]/u.test(strippedRemainder);
+
+  if (!hadToken) {
+    return {
+      disposition: "deliver",
+      text: rawText.trim(),
+      hadToken: false,
+    };
+  }
+
+  if (
+    !hasMedia &&
+    !hasReasoning &&
+    stripped.didStrip &&
+    (!strippedRemainder || isSymbolOnlyRemainder)
+  ) {
+    return {
+      disposition: "ack",
+      text: "",
+      hadToken: true,
+    };
+  }
+
+  let finalText = stripped.didStrip ? stripped.text.trim() : rawText.trim();
+  if (params.responsePrefix && finalText && !finalText.startsWith(params.responsePrefix)) {
+    finalText = `${params.responsePrefix} ${finalText}`;
+  }
+  return {
+    disposition: "malformedAck",
+    text: finalText,
+    hadToken: true,
+  };
 }

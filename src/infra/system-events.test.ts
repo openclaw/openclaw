@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { isCronSystemEvent } from "./heartbeat-runner.js";
 import {
+  consumeSystemEventSnapshot,
   drainSystemEventEntries,
   enqueueSystemEvent,
   hasSystemEvents,
@@ -11,6 +12,7 @@ import {
   peekSystemEventEntries,
   peekSystemEvents,
   resetSystemEventsForTest,
+  restoreSystemEventSnapshot,
 } from "./system-events.js";
 
 const cfg = {} as unknown as OpenClawConfig;
@@ -95,6 +97,41 @@ describe("system events (session routing)", () => {
     expect(hasSystemEvents(key)).toBe(false);
 
     expect(enqueueSystemEvent("Node connected", { sessionKey: key })).toBe(true);
+  });
+
+  it("consumes only the peeked snapshot and preserves newer tail events", () => {
+    const key = "agent:main:test-snapshot-consume";
+    enqueueSystemEvent("Cron: first", { sessionKey: key, contextKey: "cron:first" });
+    enqueueSystemEvent("Cron: second", { sessionKey: key, contextKey: "cron:second" });
+
+    const snapshot = peekSystemEventEntries(key);
+    enqueueSystemEvent("Cron: third", { sessionKey: key, contextKey: "cron:third" });
+
+    expect(consumeSystemEventSnapshot(key, snapshot).map((entry) => entry.text)).toEqual([
+      "Cron: first",
+      "Cron: second",
+    ]);
+    expect(peekSystemEvents(key)).toEqual(["Cron: third"]);
+  });
+
+  it("restores a drained snapshot ahead of newer tail events", () => {
+    const key = "agent:main:test-snapshot-restore";
+    enqueueSystemEvent("Cron: first", { sessionKey: key, contextKey: "cron:first" });
+    enqueueSystemEvent("Cron: second", { sessionKey: key, contextKey: "cron:second" });
+
+    const snapshot = peekSystemEventEntries(key);
+    expect(drainSystemEventEntries(key).map((entry) => entry.text)).toEqual([
+      "Cron: first",
+      "Cron: second",
+    ]);
+
+    enqueueSystemEvent("Cron: third", { sessionKey: key, contextKey: "cron:third" });
+
+    expect(restoreSystemEventSnapshot(key, snapshot).map((entry) => entry.text)).toEqual([
+      "Cron: first",
+      "Cron: second",
+    ]);
+    expect(peekSystemEvents(key)).toEqual(["Cron: first", "Cron: second", "Cron: third"]);
   });
 
   it("keeps only the newest 20 queued events", () => {
