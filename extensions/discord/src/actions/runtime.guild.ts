@@ -6,8 +6,8 @@ import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
-} from "../../../../src/agents/tools/common.js";
-import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
+  type DiscordActionConfig,
+} from "openclaw/plugin-sdk/discord-core";
 import { getPresence } from "../monitor/presence-cache.js";
 import {
   addRoleDiscord,

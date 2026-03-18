@@ -4,8 +4,8 @@ import {
   jsonResult,
   readReactionParams,
   readStringParam,
-} from "../../../src/agents/tools/common.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/whatsapp-core";
 import { resolveAuthorizedWhatsAppOutboundTarget } from "./action-runtime-target-auth.js";
 import { sendReactionWhatsApp } from "./send.js";
 

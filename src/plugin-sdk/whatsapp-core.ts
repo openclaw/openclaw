@@ -1,4 +1,5 @@
 export type { ChannelPlugin } from "./channel-plugin-common.js";
+export type { OpenClawConfig } from "../config/config.js";
 export {
   DEFAULT_ACCOUNT_ID,
   buildChannelConfigSchema,
@@ -14,5 +15,13 @@ export {
   resolveWhatsAppGroupToolPolicy,
 } from "../channels/plugins/group-mentions.js";
 export { resolveWhatsAppGroupIntroHint } from "../channels/plugins/whatsapp-shared.js";
+export {
+  ToolAuthorizationError,
+  createActionGate,
+  jsonResult,
+  readReactionParams,
+  readStringParam,
+} from "../agents/tools/common.js";
 export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";
 export { normalizeE164 } from "../utils.js";
+export { resolveWhatsAppOutboundTarget } from "../whatsapp/resolve-outbound-target.js";

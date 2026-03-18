@@ -1,5 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { withNormalizedTimestamp } from "../../../src/agents/date-time.js";
 import {
   createActionGate,
   imageResultFromFile,
@@ -7,8 +6,9 @@ import {
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "../../../src/agents/tools/common.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+  type OpenClawConfig,
+  withNormalizedTimestamp,
+} from "openclaw/plugin-sdk/slack-core";
 import { resolveSlackAccount } from "./accounts.js";
 import {
   deleteSlackMessage,

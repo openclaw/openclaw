@@ -1,6 +1,8 @@
-import { ToolAuthorizationError } from "../../../src/agents/tools/common.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { resolveWhatsAppOutboundTarget } from "../../../src/whatsapp/resolve-outbound-target.js";
+import {
+  ToolAuthorizationError,
+  resolveWhatsAppOutboundTarget,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/whatsapp-core";
 import { resolveWhatsAppAccount } from "./accounts.js";
 
 export function resolveAuthorizedWhatsAppOutboundTarget(params: {

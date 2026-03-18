@@ -210,6 +210,10 @@
       "types": "./dist/plugin-sdk/line.d.ts",
       "default": "./dist/plugin-sdk/line.js"
     },
+    "./plugin-sdk/line-core": {
+      "types": "./dist/plugin-sdk/line-core.d.ts",
+      "default": "./dist/plugin-sdk/line-core.js"
+    },
     "./plugin-sdk/msteams": {
       "types": "./dist/plugin-sdk/msteams.d.ts",
       "default": "./dist/plugin-sdk/msteams.js"
