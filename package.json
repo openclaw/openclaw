@@ -494,6 +494,10 @@
       "types": "./dist/plugin-sdk/request-url.d.ts",
       "default": "./dist/plugin-sdk/request-url.js"
     },
+    "./plugin-sdk/webhook-path": {
+      "types": "./dist/plugin-sdk/webhook-path.d.ts",
+      "default": "./dist/plugin-sdk/webhook-path.js"
+    },
     "./plugin-sdk/runtime-store": {
       "types": "./dist/plugin-sdk/runtime-store.d.ts",
       "default": "./dist/plugin-sdk/runtime-store.js"
@@ -521,6 +525,10 @@
     "./plugin-sdk/secret-input-schema": {
       "types": "./dist/plugin-sdk/secret-input-schema.d.ts",
       "default": "./dist/plugin-sdk/secret-input-schema.js"
+    },
+    "./plugin-sdk/secret-input-runtime": {
+      "types": "./dist/plugin-sdk/secret-input-runtime.d.ts",
+      "default": "./dist/plugin-sdk/secret-input-runtime.js"
     },
     "./cli-entry": "./openclaw.mjs"
   },

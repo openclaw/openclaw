@@ -113,11 +113,13 @@
   "media-understanding",
   "google",
   "request-url",
+  "webhook-path",
   "runtime-store",
   "web-media",
   "speech",
   "state-paths",
   "temp-path",
   "tool-send",
-  "secret-input-schema"
+  "secret-input-schema",
+  "secret-input-runtime"
 ]

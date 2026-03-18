@@ -8,6 +8,16 @@
     "extensions": [
       "./index.ts"
     ],
-    "setupEntry": "./setup-entry.ts"
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "telegram",
+      "label": "Telegram",
+      "selectionLabel": "Telegram (Bot API)",
+      "detailLabel": "Telegram Bot",
+      "docsPath": "/channels/telegram",
+      "docsLabel": "telegram",
+      "blurb": "simplest way to get started — register a bot with @BotFather and get going.",
+      "systemImage": "paperplane"
+    }
   }
 }

@@ -8,6 +8,16 @@
     "extensions": [
       "./index.ts"
     ],
-    "setupEntry": "./setup-entry.ts"
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "whatsapp",
+      "label": "WhatsApp",
+      "selectionLabel": "WhatsApp (QR link)",
+      "detailLabel": "WhatsApp Web",
+      "docsPath": "/channels/whatsapp",
+      "docsLabel": "whatsapp",
+      "blurb": "works with your own number; recommend a separate phone + eSIM.",
+      "systemImage": "message"
+    }
   }
 }

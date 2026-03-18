@@ -8,6 +8,16 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "discord",
+      "label": "Discord",
+      "selectionLabel": "Discord (Bot API)",
+      "detailLabel": "Discord Bot",
+      "docsPath": "/channels/discord",
+      "docsLabel": "discord",
+      "blurb": "very well supported right now.",
+      "systemImage": "bubble.left.and.bubble.right"
+    },
     "release": {
       "publishToNpm": true
     }
