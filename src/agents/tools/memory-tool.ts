@@ -229,12 +229,17 @@ function clampResultsByInjectedChars(
 function buildMemorySearchUnavailableResult(error: string | undefined) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
   const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
+  const isTimeoutError = /memory_search timed out/i.test(reason);
   const warning = isQuotaError
     ? "Memory search is unavailable because the embedding provider quota is exhausted."
-    : "Memory search is unavailable due to an embedding/provider error.";
+    : isTimeoutError
+      ? "Memory search timed out."
+      : "Memory search is unavailable due to an embedding/provider error.";
   const action = isQuotaError
     ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+    : isTimeoutError
+      ? "Retry memory_search. If this persists, check embedding provider latency."
+      : "Check embedding provider configuration and retry memory_search.";
   return {
     results: [],
     disabled: true,

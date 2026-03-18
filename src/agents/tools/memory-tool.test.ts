@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, it, vi } from "vitest";
 import {
   resetMemoryToolMockState,
   setMemorySearchImpl,
@@ -53,9 +53,11 @@ describe("memory_search unavailable payloads", () => {
       await vi.advanceTimersByTimeAsync(31_000);
 
       const result = await resultPromise;
-      const details = result.details as { disabled?: boolean; error?: string };
-      expect(details.disabled).toBe(true);
-      expect(details.error).toContain("timed out");
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out",
+        warning: "Memory search timed out.",
+        action: "Retry memory_search. If this persists, check embedding provider latency.",
+      });
     } finally {
       vi.useRealTimers();
     }
