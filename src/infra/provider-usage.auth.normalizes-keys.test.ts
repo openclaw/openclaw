@@ -7,7 +7,9 @@ import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 const resolveProviderUsageAuthWithPluginMock = vi.fn(async () => null);
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageAuthWithPlugin: (...args: unknown[]) =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // @ts-ignore - Mock function forwarding with variable arguments
+  resolveProviderUsageAuthWithPlugin: (...args: any[]) =>
     resolveProviderUsageAuthWithPluginMock(...args),
 }));
 
