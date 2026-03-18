@@ -1,13 +1,12 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
+  deliverFormattedTextWithAttachments,
   dispatchInboundReplyWithBase,
-  formatTextWithAttachmentLinks,
   issuePairingChallenge,
   logInboundDrop,
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithCommandGate,
-  resolveOutboundMediaUrls,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -38,16 +37,16 @@ async function deliverNextcloudTalkReply(params: {
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }): Promise<void> {
   const { payload, roomToken, accountId, statusSink } = params;
-  const combined = formatTextWithAttachmentLinks(payload.text, resolveOutboundMediaUrls(payload));
-  if (!combined) {
-    return;
-  }
-
-  await sendMessageNextcloudTalk(roomToken, combined, {
-    accountId,
-    replyTo: payload.replyToId,
+  await deliverFormattedTextWithAttachments({
+    payload,
+    send: async ({ text, replyToId }) => {
+      await sendMessageNextcloudTalk(roomToken, text, {
+        accountId,
+        replyTo: replyToId,
+      });
+      statusSink?.({ lastOutboundAt: Date.now() });
+    },
   });
-  statusSink?.({ lastOutboundAt: Date.now() });
 }
 
 export async function handleNextcloudTalkInbound(params: {

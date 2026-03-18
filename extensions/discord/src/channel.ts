@@ -7,8 +7,10 @@ import {
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createAttachedChannelResultAdapter,
   createChannelDirectoryAdapter,
   createPairingPrefixStripper,
+  createTopLevelChannelReplyToModeResolver,
   createRuntimeDirectoryLiveAdapter,
   createTextPairingAdapter,
   normalizeMessageChannel,
@@ -323,7 +325,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     stripPatterns: () => ["<@!?\\d+>"],
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) => cfg.channels?.discord?.replyToMode ?? "off",
+    resolveReplyToMode: createTopLevelChannelReplyToModeResolver("discord"),
   },
   agentPrompt: {
     messageToolHints: () => [
@@ -420,50 +422,51 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     textChunkLimit: 2000,
     pollMaxOptions: 10,
     resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
-    sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
-      const send =
-        resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
-        getDiscordRuntime().channel.discord.sendMessageDiscord;
-      const result = await send(to, text, {
-        verbose: false,
+    ...createAttachedChannelResultAdapter({
+      channel: "discord",
+      sendText: async ({ cfg, to, text, accountId, deps, replyToId, silent }) => {
+        const send =
+          resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
+          getDiscordRuntime().channel.discord.sendMessageDiscord;
+        return await send(to, text, {
+          verbose: false,
+          cfg,
+          replyTo: replyToId ?? undefined,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
+        });
+      },
+      sendMedia: async ({
         cfg,
-        replyTo: replyToId ?? undefined,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
-      });
-      return { channel: "discord", ...result };
-    },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaLocalRoots,
-      accountId,
-      deps,
-      replyToId,
-      silent,
-    }) => {
-      const send =
-        resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
-        getDiscordRuntime().channel.discord.sendMessageDiscord;
-      const result = await send(to, text, {
-        verbose: false,
-        cfg,
+        to,
+        text,
         mediaUrl,
         mediaLocalRoots,
-        replyTo: replyToId ?? undefined,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
-      });
-      return { channel: "discord", ...result };
-    },
-    sendPoll: async ({ cfg, to, poll, accountId, silent }) =>
-      await getDiscordRuntime().channel.discord.sendPollDiscord(to, poll, {
-        cfg,
-        accountId: accountId ?? undefined,
-        silent: silent ?? undefined,
-      }),
+        accountId,
+        deps,
+        replyToId,
+        silent,
+      }) => {
+        const send =
+          resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
+          getDiscordRuntime().channel.discord.sendMessageDiscord;
+        return await send(to, text, {
+          verbose: false,
+          cfg,
+          mediaUrl,
+          mediaLocalRoots,
+          replyTo: replyToId ?? undefined,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
+        });
+      },
+      sendPoll: async ({ cfg, to, poll, accountId, silent }) =>
+        await getDiscordRuntime().channel.discord.sendPollDiscord(to, poll, {
+          cfg,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
+        }),
+    }),
   },
   bindings: {
     compileConfiguredBinding: ({ conversationId }) =>

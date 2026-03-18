@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 
 const hoisted = vi.hoisted(() => ({
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "1555@s.whatsapp.net" })),
+  sendReactionWhatsApp: vi.fn(async () => undefined),
 }));
 
 vi.mock("../../../src/globals.js", () => ({
@@ -11,6 +12,7 @@ vi.mock("../../../src/globals.js", () => ({
 
 vi.mock("./send.js", () => ({
   sendPollWhatsApp: hoisted.sendPollWhatsApp,
+  sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
 }));
 
 import { whatsappOutbound } from "./outbound-adapter.js";
@@ -36,6 +38,10 @@ describe("whatsappOutbound sendPoll", () => {
       accountId: "work",
       cfg,
     });
-    expect(result).toEqual({ messageId: "poll-1", toJid: "1555@s.whatsapp.net" });
+    expect(result).toEqual({
+      channel: "whatsapp",
+      messageId: "poll-1",
+      toJid: "1555@s.whatsapp.net",
+    });
   });
 });

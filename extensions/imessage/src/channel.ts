@@ -1,5 +1,8 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  createAttachedChannelResultAdapter,
+  resolveOutboundSendDep,
+} from "openclaw/plugin-sdk/channel-runtime";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type RoutePeer } from "openclaw/plugin-sdk/routing";
@@ -160,34 +163,33 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
-      const result = await (
-        await loadIMessageChannelRuntime()
-      ).sendIMessageOutbound({
-        cfg,
-        to,
-        text,
-        accountId: accountId ?? undefined,
-        deps,
-        replyToId: replyToId ?? undefined,
-      });
-      return { channel: "imessage", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
-      const result = await (
-        await loadIMessageChannelRuntime()
-      ).sendIMessageOutbound({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId: accountId ?? undefined,
-        deps,
-        replyToId: replyToId ?? undefined,
-      });
-      return { channel: "imessage", ...result };
-    },
+    ...createAttachedChannelResultAdapter({
+      channel: "imessage",
+      sendText: async ({ cfg, to, text, accountId, deps, replyToId }) =>
+        await (
+          await loadIMessageChannelRuntime()
+        ).sendIMessageOutbound({
+          cfg,
+          to,
+          text,
+          accountId: accountId ?? undefined,
+          deps,
+          replyToId: replyToId ?? undefined,
+        }),
+      sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) =>
+        await (
+          await loadIMessageChannelRuntime()
+        ).sendIMessageOutbound({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+          mediaLocalRoots,
+          accountId: accountId ?? undefined,
+          deps,
+          replyToId: replyToId ?? undefined,
+        }),
+    }),
   },
   status: {
     defaultRuntime: {

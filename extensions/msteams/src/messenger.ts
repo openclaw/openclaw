@@ -5,6 +5,7 @@ import {
   type MarkdownTableMode,
   type MSTeamsReplyStyle,
   type ReplyPayload,
+  resolveOutboundMediaUrls,
   SILENT_REPLY_TOKEN,
   sleep,
 } from "../runtime-api.js";
@@ -216,7 +217,7 @@ export function renderReplyPayloadsToMessages(
     });
 
   for (const payload of replies) {
-    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList = resolveOutboundMediaUrls(payload);
     const text = getMSTeamsRuntime().channel.text.convertMarkdownTables(
       payload.text ?? "",
       tableMode,

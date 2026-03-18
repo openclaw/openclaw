@@ -1,4 +1,8 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveOutboundMediaUrls,
+  sendMediaWithLeadingCaption,
+} from "openclaw/plugin-sdk/reply-payload";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -52,11 +56,7 @@ export async function deliverWebReply(params: {
     convertMarkdownTables(replyResult.text || "", tableMode),
   );
   const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
-  const mediaList = replyResult.mediaUrls?.length
-    ? replyResult.mediaUrls
-    : replyResult.mediaUrl
-      ? [replyResult.mediaUrl]
-      : [];
+  const mediaList = resolveOutboundMediaUrls(replyResult);
 
   const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
     let lastErr: unknown;
@@ -114,9 +114,11 @@ export async function deliverWebReply(params: {
   const remainingText = [...textChunks];
 
   // Media (with optional caption on first item)
-  for (const [index, mediaUrl] of mediaList.entries()) {
-    const caption = index === 0 ? remainingText.shift() || undefined : undefined;
-    try {
+  const leadingCaption = remainingText.shift() || "";
+  await sendMediaWithLeadingCaption({
+    mediaUrls: mediaList,
+    caption: leadingCaption,
+    send: async ({ mediaUrl, caption }) => {
       const media = await loadWebMedia(mediaUrl, {
         maxBytes: maxMediaBytes,
         localRoots: params.mediaLocalRoots,
@@ -189,21 +191,24 @@ export async function deliverWebReply(params: {
         },
         "auto-reply sent (media)",
       );
-    } catch (err) {
-      whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(err)}`);
-      replyLogger.warn({ err, mediaUrl }, "failed to send web media reply");
-      if (index === 0) {
-        const warning =
-          err instanceof Error ? `⚠️ Media failed: ${err.message}` : "⚠️ Media failed.";
-        const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
-        const fallbackText = fallbackTextParts.join("\n");
-        if (fallbackText) {
-          whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
-          await msg.reply(fallbackText);
-        }
+    },
+    onError: async ({ error, mediaUrl, caption, isFirst }) => {
+      whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(error)}`);
+      replyLogger.warn({ err: error, mediaUrl }, "failed to send web media reply");
+      if (!isFirst) {
+        return;
       }
-    }
-  }
+      const warning =
+        error instanceof Error ? `⚠️ Media failed: ${error.message}` : "⚠️ Media failed.";
+      const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
+      const fallbackText = fallbackTextParts.join("\n");
+      if (!fallbackText) {
+        return;
+      }
+      whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
+      await msg.reply(fallbackText);
+    },
+  });
 
   // Remaining text chunks after media
   for (const chunk of remainingText) {

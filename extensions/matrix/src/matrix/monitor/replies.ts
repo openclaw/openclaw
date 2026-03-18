@@ -1,4 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import { deliverTextOrMediaReply } from "openclaw/plugin-sdk/reply-payload";
 import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "../../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { sendMessageMatrix } from "../send.js";
@@ -60,45 +61,34 @@ export async function deliverMatrixReplies(params: {
       Boolean(id) && (params.replyToMode === "all" || !hasReplied);
     const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
 
-    if (mediaList.length === 0) {
-      let sentTextChunk = false;
-      for (const chunk of core.channel.text.chunkMarkdownTextWithMode(
-        text,
-        chunkLimit,
-        chunkMode,
-      )) {
-        const trimmed = chunk.trim();
-        if (!trimmed) {
-          continue;
-        }
+    const delivered = await deliverTextOrMediaReply({
+      payload: reply,
+      text,
+      chunkText: (value) =>
+        core.channel.text
+          .chunkMarkdownTextWithMode(value, chunkLimit, chunkMode)
+          .map((chunk) => chunk.trim())
+          .filter(Boolean),
+      sendText: async (trimmed) => {
         await sendMessageMatrix(params.roomId, trimmed, {
           client: params.client,
           replyToId: replyToIdForReply,
           threadId: params.threadId,
           accountId: params.accountId,
         });
-        sentTextChunk = true;
-      }
-      if (replyToIdForReply && !hasReplied && sentTextChunk) {
-        hasReplied = true;
-      }
-      continue;
-    }
-
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const caption = first ? text : "";
-      await sendMessageMatrix(params.roomId, caption, {
-        client: params.client,
-        mediaUrl,
-        replyToId: replyToIdForReply,
-        threadId: params.threadId,
-        audioAsVoice: reply.audioAsVoice,
-        accountId: params.accountId,
-      });
-      first = false;
-    }
-    if (replyToIdForReply && !hasReplied) {
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        await sendMessageMatrix(params.roomId, caption ?? "", {
+          client: params.client,
+          mediaUrl,
+          replyToId: replyToIdForReply,
+          threadId: params.threadId,
+          audioAsVoice: reply.audioAsVoice,
+          accountId: params.accountId,
+        });
+      },
+    });
+    if (replyToIdForReply && !hasReplied && delivered !== "empty") {
       hasReplied = true;
     }
   }

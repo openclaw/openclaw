@@ -6,6 +6,7 @@ import {
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createAttachedChannelResultAdapter,
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-runtime";
@@ -174,23 +175,21 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     chunker: (text, limit) => getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
-    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
-      const result = await sendMessageNextcloudTalk(to, text, {
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-        cfg: cfg as CoreConfig,
-      });
-      return { channel: "nextcloud-talk", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) => {
-      const messageWithMedia = mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text;
-      const result = await sendMessageNextcloudTalk(to, messageWithMedia, {
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-        cfg: cfg as CoreConfig,
-      });
-      return { channel: "nextcloud-talk", ...result };
-    },
+    ...createAttachedChannelResultAdapter({
+      channel: "nextcloud-talk",
+      sendText: async ({ cfg, to, text, accountId, replyToId }) =>
+        await sendMessageNextcloudTalk(to, text, {
+          accountId: accountId ?? undefined,
+          replyTo: replyToId ?? undefined,
+          cfg: cfg as CoreConfig,
+        }),
+      sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
+        await sendMessageNextcloudTalk(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
+          accountId: accountId ?? undefined,
+          replyTo: replyToId ?? undefined,
+          cfg: cfg as CoreConfig,
+        }),
+    }),
   },
   status: {
     defaultRuntime: {

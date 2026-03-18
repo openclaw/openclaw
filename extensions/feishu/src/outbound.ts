@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
@@ -81,128 +82,124 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({
-    cfg,
-    to,
-    text,
-    accountId,
-    replyToId,
-    threadId,
-    mediaLocalRoots,
-    identity,
-  }) => {
-    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
-    // Scheme A compatibility shim:
-    // when upstream accidentally returns a local image path as plain text,
-    // auto-upload and send as Feishu image message instead of leaking path text.
-    const localImagePath = normalizePossibleLocalImagePath(text);
-    if (localImagePath) {
-      try {
-        const result = await sendMediaFeishu({
-          cfg,
-          to,
-          mediaUrl: localImagePath,
-          accountId: accountId ?? undefined,
-          replyToMessageId,
-          mediaLocalRoots,
-        });
-        return { channel: "feishu", ...result };
-      } catch (err) {
-        console.error(`[feishu] local image path auto-send failed:`, err);
-        // fall through to plain text as last resort
-      }
-    }
-
-    const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
-    const renderMode = account.config?.renderMode ?? "auto";
-    const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
-    if (useCard) {
-      const header = identity
-        ? {
-            title: identity.emoji
-              ? `${identity.emoji} ${identity.name ?? ""}`.trim()
-              : (identity.name ?? ""),
-            template: "blue" as const,
-          }
-        : undefined;
-      const result = await sendStructuredCardFeishu({
-        cfg,
-        to,
-        text,
-        replyToMessageId,
-        replyInThread: threadId != null && !replyToId,
-        accountId: accountId ?? undefined,
-        header: header?.title ? header : undefined,
-      });
-      return { channel: "feishu", ...result };
-    }
-    const result = await sendOutboundText({
+  ...createAttachedChannelResultAdapter({
+    channel: "feishu",
+    sendText: async ({
       cfg,
       to,
       text,
-      accountId: accountId ?? undefined,
-      replyToMessageId,
-    });
-    return { channel: "feishu", ...result };
-  },
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    accountId,
-    mediaLocalRoots,
-    replyToId,
-    threadId,
-  }) => {
-    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
-    // Send text first if provided
-    if (text?.trim()) {
-      await sendOutboundText({
+      accountId,
+      replyToId,
+      threadId,
+      mediaLocalRoots,
+      identity,
+    }) => {
+      const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+      // Scheme A compatibility shim:
+      // when upstream accidentally returns a local image path as plain text,
+      // auto-upload and send as Feishu image message instead of leaking path text.
+      const localImagePath = normalizePossibleLocalImagePath(text);
+      if (localImagePath) {
+        try {
+          return await sendMediaFeishu({
+            cfg,
+            to,
+            mediaUrl: localImagePath,
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+            mediaLocalRoots,
+          });
+        } catch (err) {
+          console.error(`[feishu] local image path auto-send failed:`, err);
+          // fall through to plain text as last resort
+        }
+      }
+
+      const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
+      const renderMode = account.config?.renderMode ?? "auto";
+      const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+      if (useCard) {
+        const header = identity
+          ? {
+              title: identity.emoji
+                ? `${identity.emoji} ${identity.name ?? ""}`.trim()
+                : (identity.name ?? ""),
+              template: "blue" as const,
+            }
+          : undefined;
+        return await sendStructuredCardFeishu({
+          cfg,
+          to,
+          text,
+          replyToMessageId,
+          replyInThread: threadId != null && !replyToId,
+          accountId: accountId ?? undefined,
+          header: header?.title ? header : undefined,
+        });
+      }
+      return await sendOutboundText({
         cfg,
         to,
         text,
         accountId: accountId ?? undefined,
         replyToMessageId,
       });
-    }
-
-    // Upload and send media if URL or local path provided
-    if (mediaUrl) {
-      try {
-        const result = await sendMediaFeishu({
-          cfg,
-          to,
-          mediaUrl,
-          accountId: accountId ?? undefined,
-          mediaLocalRoots,
-          replyToMessageId,
-        });
-        return { channel: "feishu", ...result };
-      } catch (err) {
-        // Log the error for debugging
-        console.error(`[feishu] sendMediaFeishu failed:`, err);
-        // Fallback to URL link if upload fails
-        const fallbackText = `📎 ${mediaUrl}`;
-        const result = await sendOutboundText({
-          cfg,
-          to,
-          text: fallbackText,
-          accountId: accountId ?? undefined,
-          replyToMessageId,
-        });
-        return { channel: "feishu", ...result };
-      }
-    }
-
-    // No media URL, just return text result
-    const result = await sendOutboundText({
+    },
+    sendMedia: async ({
       cfg,
       to,
-      text: text ?? "",
-      accountId: accountId ?? undefined,
-      replyToMessageId,
-    });
-    return { channel: "feishu", ...result };
-  },
+      text,
+      mediaUrl,
+      accountId,
+      mediaLocalRoots,
+      replyToId,
+      threadId,
+    }) => {
+      const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+      // Send text first if provided
+      if (text?.trim()) {
+        await sendOutboundText({
+          cfg,
+          to,
+          text,
+          accountId: accountId ?? undefined,
+          replyToMessageId,
+        });
+      }
+
+      // Upload and send media if URL or local path provided
+      if (mediaUrl) {
+        try {
+          return await sendMediaFeishu({
+            cfg,
+            to,
+            mediaUrl,
+            accountId: accountId ?? undefined,
+            mediaLocalRoots,
+            replyToMessageId,
+          });
+        } catch (err) {
+          // Log the error for debugging
+          console.error(`[feishu] sendMediaFeishu failed:`, err);
+          // Fallback to URL link if upload fails
+          return await sendOutboundText({
+            cfg,
+            to,
+            text: `📎 ${mediaUrl}`,
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+          });
+        }
+      }
+
+      // No media URL, just return text result
+      return await sendOutboundText({
+        cfg,
+        to,
+        text: text ?? "",
+        accountId: accountId ?? undefined,
+        replyToMessageId,
+      });
+    },
+  }),
 };

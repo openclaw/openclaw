@@ -1,9 +1,12 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
+  attachChannelToResult,
+  createAttachedChannelResultAdapter,
   createPairingPrefixStripper,
   createTextPairingAdapter,
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-runtime";
+import { attachChannelToResults } from "openclaw/plugin-sdk/channel-send-result";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/core";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
@@ -223,9 +226,9 @@ async function sendFormattedSignalText(ctx: {
       textMode: "plain",
       textStyles: chunk.styles,
     });
-    results.push({ channel: "signal" as const, ...result });
+    results.push(result);
   }
-  return results;
+  return attachChannelToResults("signal", results);
 }
 
 async function sendFormattedSignalMedia(ctx: {
@@ -264,7 +267,7 @@ async function sendFormattedSignalMedia(ctx: {
     textMode: "plain",
     textStyles: formatted.styles,
   });
-  return { channel: "signal" as const, ...result };
+  return attachChannelToResult("signal", result);
 }
 
 export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
@@ -340,28 +343,27 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         deps,
         abortSignal,
       }),
-    sendText: async ({ cfg, to, text, accountId, deps }) => {
-      const result = await sendSignalOutbound({
-        cfg,
-        to,
-        text,
-        accountId: accountId ?? undefined,
-        deps,
-      });
-      return { channel: "signal", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) => {
-      const result = await sendSignalOutbound({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId: accountId ?? undefined,
-        deps,
-      });
-      return { channel: "signal", ...result };
-    },
+    ...createAttachedChannelResultAdapter({
+      channel: "signal",
+      sendText: async ({ cfg, to, text, accountId, deps }) =>
+        await sendSignalOutbound({
+          cfg,
+          to,
+          text,
+          accountId: accountId ?? undefined,
+          deps,
+        }),
+      sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps }) =>
+        await sendSignalOutbound({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+          mediaLocalRoots,
+          accountId: accountId ?? undefined,
+          deps,
+        }),
+    }),
   },
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
