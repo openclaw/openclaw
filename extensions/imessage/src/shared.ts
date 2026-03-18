@@ -1,8 +1,8 @@
 import {
   collectAllowlistProviderRestrictSendersWarnings,
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
+  createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
+  formatTrimmedAllowFromEntries,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
@@ -29,19 +29,15 @@ export const imessageSetupWizard = createIMessageSetupWizardProxy(
   async () => (await loadIMessageChannelRuntime()).imessageSetupWizard,
 );
 
-export const imessageConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveIMessageAccount({ cfg, accountId }),
-  resolveAllowFrom: (account: ResolvedIMessageAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) => allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-  resolveDefaultTo: (account: ResolvedIMessageAccount) => account.config.defaultTo,
-});
-
-export const imessageConfigBase = createScopedChannelConfigBase<ResolvedIMessageAccount>({
+export const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
   sectionKey: IMESSAGE_CHANNEL,
   listAccountIds: listIMessageAccountIds,
   resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
   defaultAccountId: resolveDefaultIMessageAccountId,
   clearBaseFields: ["cliPath", "dbPath", "service", "region", "name"],
+  resolveAllowFrom: (account: ResolvedIMessageAccount) => account.config.allowFrom,
+  formatAllowFrom: (allowFrom) => formatTrimmedAllowFromEntries(allowFrom),
+  resolveDefaultTo: (account: ResolvedIMessageAccount) => account.config.defaultTo,
 });
 
 export const imessageResolveDmPolicy = createScopedDmSecurityResolver<ResolvedIMessageAccount>({
@@ -97,7 +93,7 @@ export function createIMessagePluginBase(params: {
     reload: { configPrefixes: ["channels.imessage"] },
     configSchema: buildChannelConfigSchema(IMessageConfigSchema),
     config: {
-      ...imessageConfigBase,
+      ...imessageConfigAdapter,
       isConfigured: (account) => account.configured,
       describeAccount: (account) => ({
         accountId: account.accountId,
@@ -105,7 +101,6 @@ export function createIMessagePluginBase(params: {
         enabled: account.enabled,
         configured: account.configured,
       }),
-      ...imessageConfigAccessors,
     },
     security: {
       resolveDmPolicy: imessageResolveDmPolicy,
