@@ -206,6 +206,10 @@ function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+    // Map .js imports to .ts so jiti can resolve TypeScript source files in
+    // extensions that use the standard ESM convention of importing with .js
+    // extensions (e.g. `from "./manager.js"` → `./manager.ts`).
+    extensionAlias: { ".js": [".js", ".ts"], ".mjs": [".mjs", ".mts"] },
     ...(Object.keys(aliasMap).length > 0
       ? {
           alias: aliasMap,

@@ -1,7 +1,7 @@
 import {
   DiscordVoiceManager as DiscordVoiceManagerImpl,
   DiscordVoiceReadyListener as DiscordVoiceReadyListenerImpl,
-} from "./manager.js";
+} from "./manager.ts";
 
 export class DiscordVoiceManager extends DiscordVoiceManagerImpl {}
 
