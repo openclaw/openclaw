@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { channelTestPrefixes } from "../vitest.channel-paths.mjs";
+import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
 import {
   loadTestRunnerBehavior,
   loadUnitTimingManifest,
@@ -16,10 +17,11 @@ const pnpm = "pnpm";
 const behaviorManifest = loadTestRunnerBehavior();
 const existingFiles = (entries) =>
   entries.map((entry) => entry.file).filter((file) => fs.existsSync(file));
-const unitBehaviorIsolatedFiles = existingFiles(behaviorManifest.unit.isolated);
-const unitSingletonIsolatedFiles = existingFiles(behaviorManifest.unit.singletonIsolated);
-const unitThreadSingletonFiles = existingFiles(behaviorManifest.unit.threadSingleton);
-const unitVmForkSingletonFiles = existingFiles(behaviorManifest.unit.vmForkSingleton);
+const existingUnitConfigFiles = (entries) => existingFiles(entries).filter(isUnitConfigTestFile);
+const unitBehaviorIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.isolated);
+const unitSingletonIsolatedFiles = existingUnitConfigFiles(behaviorManifest.unit.singletonIsolated);
+const unitThreadSingletonFiles = existingUnitConfigFiles(behaviorManifest.unit.threadSingleton);
+const unitVmForkSingletonFiles = existingUnitConfigFiles(behaviorManifest.unit.vmForkSingleton);
 const unitBehaviorOverrideSet = new Set([
   ...unitBehaviorIsolatedFiles,
   ...unitSingletonIsolatedFiles,
@@ -237,10 +239,7 @@ const parseEnvNumber = (name, fallback) => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
-  if (file.endsWith(".live.test.ts") || file.endsWith(".e2e.test.ts")) {
-    return false;
-  }
-  return inferTarget(file).owner !== "gateway";
+  return isUnitConfigTestFile(file);
 });
 const defaultHeavyUnitFileLimit =
   testProfile === "serial" ? 0 : testProfile === "low" ? 20 : highMemLocalHost ? 80 : 60;
@@ -730,10 +729,12 @@ const runOnce = (entry, extraArgs = []) =>
 
 const run = async (entry, extraArgs = []) => {
   const explicitFilterCount = countExplicitEntryFilters(entry.args);
-  // Wrapper-generated singleton/small-file lanes should not ask Vitest to shard
-  // into more buckets than there are explicit test filters.
+  // Vitest requires the shard count to stay strictly below the number of
+  // resolved test files, so explicit-filter lanes need a `< fileCount` cap.
   const effectiveShardCount =
-    explicitFilterCount === null ? shardCount : Math.min(shardCount, explicitFilterCount);
+    explicitFilterCount === null
+      ? shardCount
+      : Math.min(shardCount, Math.max(1, explicitFilterCount - 1));
 
   if (effectiveShardCount <= 1) {
     if (shardIndexOverride !== null && shardIndexOverride > effectiveShardCount) {
