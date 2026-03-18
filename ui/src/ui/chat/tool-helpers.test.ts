@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import {
+  buildToolSidebarContent,
+  formatToolOutputForSidebar,
+  formatToolPayloadForSidebar,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
 
 describe("tool-helpers", () => {
   describe("formatToolOutputForSidebar", () => {
@@ -136,6 +141,52 @@ describe("tool-helpers", () => {
 
       expect(result.length).toBe(101); // 100 + ellipsis
       expect(result.endsWith("…")).toBe(true);
+    });
+  });
+
+  describe("formatToolPayloadForSidebar", () => {
+    it("formats structured arguments as JSON", () => {
+      const result = formatToolPayloadForSidebar({ agentId: "research", count: 2 });
+
+      expect(result).toBe(`\`\`\`json
+{
+  "agentId": "research",
+  "count": 2
+}
+\`\`\``);
+    });
+
+    it("returns null for undefined arguments", () => {
+      expect(formatToolPayloadForSidebar(undefined)).toBeNull();
+    });
+  });
+
+  describe("buildToolSidebarContent", () => {
+    it("includes arguments and output when both are present", () => {
+      const result = buildToolSidebarContent({
+        title: "Session Spawn",
+        detail: "sessions_spawn research",
+        args: { agentId: "research" },
+        output: '{"status":"ok"}',
+      });
+
+      expect(result).toContain("## Session Spawn");
+      expect(result).toContain("**Command:** `sessions_spawn research`");
+      expect(result).toContain("**Arguments**");
+      expect(result).toContain('"agentId": "research"');
+      expect(result).toContain("**Output**");
+      expect(result).toContain('"status": "ok"');
+    });
+
+    it("shows completion text when output is absent", () => {
+      const result = buildToolSidebarContent({
+        title: "Session Spawn",
+        args: { agentId: "research" },
+      });
+
+      expect(result).toContain("**Arguments**");
+      expect(result).toContain('"agentId": "research"');
+      expect(result).toContain("*No output - tool completed successfully.*");
     });
   });
 });
