@@ -55,6 +55,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastStreamedAssistantCleaned: undefined,
     emittedAssistantUpdate: false,
     lastStreamedReasoning: undefined,
+    lastStreamedReasoningRaw: undefined,
     lastBlockReplyText: undefined,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
@@ -131,6 +132,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
+    state.lastStreamedReasoningRaw = undefined;
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
@@ -561,21 +563,26 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!trimmed) {
       return;
     }
-    if (trimmed === state.lastStreamedReasoning) {
+    const formatted = formatReasoningMessage(trimmed);
+    if (!formatted) {
       return;
     }
-    // Compute raw delta: new text since the last emitted reasoning.
+    if (formatted === state.lastStreamedReasoning) {
+      return;
+    }
+    // Compute raw delta: new incremental text only, without decoration.
     // Guard against non-prefix changes (e.g. trim/format altering earlier content).
-    const prior = state.lastStreamedReasoning ?? "";
-    const delta = trimmed.startsWith(prior) ? trimmed.slice(prior.length) : trimmed;
-    state.lastStreamedReasoning = trimmed;
+    const priorRaw = state.lastStreamedReasoningRaw ?? "";
+    const delta = trimmed.startsWith(priorRaw) ? trimmed.slice(priorRaw.length) : trimmed;
+    state.lastStreamedReasoning = formatted;
+    state.lastStreamedReasoningRaw = trimmed;
 
-    // Broadcast thinking event to WebSocket clients: plain incremental delta, no decoration.
+    // Broadcast thinking event to WebSocket clients: formatted text, plain incremental delta.
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
       data: {
-        text: trimmed,
+        text: formatted,
         delta,
       },
     });
