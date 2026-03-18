@@ -749,12 +749,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     ): Promise<QmdQueryResult[]> => {
       try {
         if (mcporterEnabled) {
-          const tool: "search" | "vector_search" | "deep_search" =
+          const tool: "search" | "vector_search" | "query" =
             qmdSearchCommand === "search"
               ? "search"
               : qmdSearchCommand === "vsearch"
                 ? "vector_search"
-                : "deep_search";
+                : "query";
           const minScore = opts?.minScore ?? 0;
           if (collectionNames.length > 1) {
             return await this.runMcporterAcrossCollections({
@@ -1234,6 +1234,31 @@ export class QmdMemoryManager implements MemorySearchManager {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
           // Allow future searches to retry daemon start on transient failures.
           delete g.__openclawMcporterDaemonStart;
+          return;
+        }
+
+        // Validate that the QMD MCP server exposes the expected tools.
+        try {
+          const expectedTools = ["search", "vector_search", "query"];
+          const listResult = await this.runMcporter(["list", mcporter.serverName], {
+            timeoutMs: 10_000,
+          });
+          const actualTools = listResult.stdout
+            .split("\n")
+            .map((l) => l.trim())
+            .filter(Boolean);
+          const missing = expectedTools.filter((t) => !actualTools.some((a) => a.includes(t)));
+          if (missing.length > 0) {
+            log.warn(
+              `mcporter bridge tool mismatch for server "${mcporter.serverName}": ` +
+                `expected tools [${expectedTools.join(", ")}], ` +
+                `actual tools [${actualTools.join(", ")}], ` +
+                `missing [${missing.join(", ")}]`,
+            );
+          }
+        } catch {
+          // Non-fatal: capability validation is best-effort.
+          log.warn("mcporter tool capability validation failed; continuing anyway");
         }
       })();
     }
@@ -1263,7 +1288,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runQmdSearchViaMcporter(params: {
     mcporter: ResolvedQmdMcporterConfig;
-    tool: "search" | "vector_search" | "deep_search";
+    tool: "search" | "vector_search" | "query";
     query: string;
     limit: number;
     minScore: number;
@@ -1997,7 +2022,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async runMcporterAcrossCollections(params: {
-    tool: "search" | "vector_search" | "deep_search";
+    tool: "search" | "vector_search" | "query";
     query: string;
     limit: number;
     minScore: number;
