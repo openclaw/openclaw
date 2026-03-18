@@ -55,14 +55,14 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.
-  - Add focused helper regressions for pure routing/normalization seams.
+  - Add focused helper regressions for pure routing/normalization boundaries.
   - Also keep the embedded runner integration suites healthy:
     `src/agents/pi-embedded-runner/compact.hooks.test.ts`,
     `src/agents/pi-embedded-runner/run.overflow-compaction.test.ts`, and
     `src/agents/pi-embedded-runner/run.overflow-compaction.loop.test.ts`.
   - Those suites verify that scoped ids and compaction behavior still flow
     through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
-    sufficient substitute for those seams.
+    sufficient substitute for those integration paths.
 - Pool note:
   - OpenClaw uses Vitest `vmForks` on Node 22, 23, and 24 for faster unit shards.
   - On Node 25+, OpenClaw automatically falls back to regular `forks` until the repo is re-validated there.

@@ -122,7 +122,7 @@ describe("buildPluginStatusReport", () => {
           configSchema: false,
         },
       ],
-      diagnostics: [{ level: "warn", pluginId: "google", message: "watch this seam" }],
+      diagnostics: [{ level: "warn", pluginId: "google", message: "watch this surface" }],
       channels: [],
       channelSetups: [],
       providers: [],
@@ -175,7 +175,7 @@ describe("buildPluginStatusReport", () => {
       hasAllowedModelsConfig: true,
     });
     expect(inspect?.diagnostics).toEqual([
-      { level: "warn", pluginId: "google", message: "watch this seam" },
+      { level: "warn", pluginId: "google", message: "watch this surface" },
     ]);
   });
 
