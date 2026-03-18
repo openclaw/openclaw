@@ -1505,12 +1505,22 @@ Environment alternatives:
 
 ```json5
 {
+  plugins: {
+    entries: {
+      brave: {
+        config: {
+          webSearch: {
+            apiKey: "BRAVE_API_KEY_HERE",
+          },
+        },
+      },
+    },
+  },
   tools: {
     web: {
       search: {
         enabled: true,
         provider: "brave",
-        apiKey: "BRAVE_API_KEY_HERE",
         maxResults: 5,
       },
       fetch: {
@@ -1520,6 +1530,9 @@ Environment alternatives:
   },
 }
 ```
+
+Provider-specific web-search config now lives under `plugins.entries.<plugin>.config.webSearch.*`.
+Legacy `tools.web.search.*` provider paths still load temporarily for compatibility, but they should not be used for new configs.
 
 Notes:
 
