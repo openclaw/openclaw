@@ -734,6 +734,8 @@ export function formatAssistantErrorText(
     );
   }
 
+  // Must precede the generic invalid_request_error regex below — Anthropic thinking-block
+  // rejections are themselves invalid_request_error responses.
   if (isThinkingBlockImmutabilityError(raw)) {
     return "Session history conflict (thinking block mismatch). Use /new to start a fresh session.";
   }
