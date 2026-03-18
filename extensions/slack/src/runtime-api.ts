@@ -12,7 +12,7 @@ export { buildComputedAccountStatusSnapshot } from "../../../src/plugin-sdk/stat
 export {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
-} from "../../../src/channels/plugins/directory-config.js";
+} from "./directory-config.js";
 export {
   looksLikeSlackTargetId,
   normalizeSlackMessagingTarget,
