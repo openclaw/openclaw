@@ -16,6 +16,7 @@ import * as lineCoreSdk from "openclaw/plugin-sdk/line-core";
 import * as msteamsSdk from "openclaw/plugin-sdk/msteams";
 import * as nostrSdk from "openclaw/plugin-sdk/nostr";
 import * as ollamaSetupSdk from "openclaw/plugin-sdk/ollama-setup";
+import * as providerModelsSdk from "openclaw/plugin-sdk/provider-models";
 import * as providerSetupSdk from "openclaw/plugin-sdk/provider-setup";
 import * as replyPayloadSdk from "openclaw/plugin-sdk/reply-payload";
 import * as routingSdk from "openclaw/plugin-sdk/routing";
@@ -176,6 +177,14 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof providerSetupSdk.promptAndConfigureOpenAICompatibleSelfHostedProviderAuth).toBe(
       "function",
     );
+  });
+
+  it("exports provider model helpers from the dedicated subpath", () => {
+    expect(typeof providerModelsSdk.buildMinimaxApiModelDefinition).toBe("function");
+    expect(typeof providerModelsSdk.buildMinimaxModelDefinition).toBe("function");
+    expect(typeof providerModelsSdk.buildMoonshotProvider).toBe("function");
+    expect(typeof providerModelsSdk.resolveZaiBaseUrl).toBe("function");
+    expect(providerModelsSdk.QIANFAN_BASE_URL).toBe("https://qianfan.baidubce.com/v2");
   });
 
   it("exports shared setup helpers from the dedicated subpath", () => {

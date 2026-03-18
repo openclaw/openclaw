@@ -1,9 +1,14 @@
-import { KIMI_CODING_MODEL_REF } from "../../extensions/kimi-coding/onboard.js";
 import {
-  KIMI_DEFAULT_MODEL_ID as KIMI_CODING_MODEL_ID,
   KIMI_CODING_BASE_URL,
-} from "../../extensions/kimi-coding/provider-catalog.js";
-import {
+  KIMI_CODING_DEFAULT_MODEL_ID as KIMI_CODING_MODEL_ID,
+  buildMinimaxApiModelDefinition,
+  buildMinimaxModelDefinition,
+  buildMistralModelDefinition,
+  buildModelStudioDefaultModelDefinition,
+  buildModelStudioModelDefinition,
+  buildMoonshotProvider,
+  buildXaiModelDefinition,
+  buildZaiModelDefinition,
   DEFAULT_MINIMAX_BASE_URL,
   MINIMAX_API_BASE_URL,
   MINIMAX_API_COST,
@@ -12,48 +17,24 @@ import {
   MINIMAX_HOSTED_MODEL_ID,
   MINIMAX_HOSTED_MODEL_REF,
   MINIMAX_LM_STUDIO_COST,
-  buildMinimaxApiModelDefinition,
-  buildMinimaxModelDefinition,
-} from "../../extensions/minimax/model-definitions.js";
-import {
-  buildMistralModelDefinition,
   MISTRAL_BASE_URL,
   MISTRAL_DEFAULT_COST,
   MISTRAL_DEFAULT_MODEL_ID,
   MISTRAL_DEFAULT_MODEL_REF,
-} from "../../extensions/mistral/model-definitions.js";
-import {
   MODELSTUDIO_CN_BASE_URL,
   MODELSTUDIO_DEFAULT_COST,
   MODELSTUDIO_DEFAULT_MODEL_ID,
   MODELSTUDIO_DEFAULT_MODEL_REF,
   MODELSTUDIO_GLOBAL_BASE_URL,
-  buildModelStudioDefaultModelDefinition,
-  buildModelStudioModelDefinition,
-} from "../../extensions/modelstudio/model-definitions.js";
-import {
-  MOONSHOT_CN_BASE_URL,
-  MOONSHOT_DEFAULT_MODEL_REF,
-} from "../../extensions/moonshot/onboard.js";
-import {
-  buildMoonshotProvider,
   MOONSHOT_BASE_URL,
+  MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
-} from "../../extensions/moonshot/provider-catalog.js";
-import { QIANFAN_DEFAULT_MODEL_REF } from "../../extensions/qianfan/onboard.js";
-import {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
-} from "../../extensions/qianfan/provider-catalog.js";
-import {
   XAI_BASE_URL,
   XAI_DEFAULT_COST,
   XAI_DEFAULT_MODEL_ID,
   XAI_DEFAULT_MODEL_REF,
-  buildXaiModelDefinition,
-} from "../../extensions/xai/model-definitions.js";
-import {
-  buildZaiModelDefinition,
   resolveZaiBaseUrl,
   ZAI_CN_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
@@ -61,7 +42,7 @@ import {
   ZAI_DEFAULT_COST,
   ZAI_DEFAULT_MODEL_ID,
   ZAI_GLOBAL_BASE_URL,
-} from "../../extensions/zai/model-definitions.js";
+} from "openclaw/plugin-sdk/provider-models";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
@@ -70,6 +51,10 @@ import {
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
 } from "../providers/kilocode-shared.js";
+
+const KIMI_CODING_MODEL_REF = `kimi/${KIMI_CODING_MODEL_ID}`;
+const MOONSHOT_DEFAULT_MODEL_REF = `moonshot/${MOONSHOT_DEFAULT_MODEL_ID}`;
+const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
 
 export {
   DEFAULT_MINIMAX_BASE_URL,
