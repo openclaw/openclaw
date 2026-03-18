@@ -597,7 +597,7 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
       fields,
     };
   }
-  return {
+  const spec = {
     text: readOptionalString(obj.text),
     reusable,
     container:
@@ -616,6 +616,21 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     blocks,
     modal,
   };
+
+  // Treat an empty spec (no text, no non-empty blocks, no modal, no container) as null so
+  // callers fall back to the regular send path instead of routing through the v2 Components
+  // path where media attachments are silently dropped. An empty `{"blocks":[]}` is the most
+  // common case: the LLM passes it as a placeholder but intends a plain message send.
+  const hasContent =
+    spec.text ||
+    (spec.blocks && spec.blocks.length > 0) ||
+    spec.modal ||
+    spec.container;
+  if (!hasContent) {
+    return null;
+  }
+
+  return spec;
 }
 
 export function buildDiscordComponentCustomId(params: {

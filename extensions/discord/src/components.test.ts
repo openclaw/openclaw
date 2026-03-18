@@ -71,6 +71,15 @@ describe("discord components", () => {
       }),
     ).toThrow("filename");
   });
+
+  it("returns null for an empty spec so callers fall back to the regular send path", () => {
+    // Empty blocks array — the most common case when LLM passes {"blocks":[]} as placeholder
+    expect(readDiscordComponentSpec({ blocks: [] })).toBeNull();
+    // Completely empty object
+    expect(readDiscordComponentSpec({})).toBeNull();
+    // All fields present but all empty/falsy
+    expect(readDiscordComponentSpec({ blocks: [], text: "", container: undefined, modal: undefined })).toBeNull();
+  });
 });
 
 describe("discord component registry", () => {
