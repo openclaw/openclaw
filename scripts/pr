@@ -1406,6 +1406,16 @@ prepare_gates() {
   if printf '%s\n' "$changed_files" | rg -q '^CHANGELOG\.md$'; then
     has_changelog_update=true
   fi
+
+  local unsupported_changelog_fragments
+  unsupported_changelog_fragments=$(printf '%s\n' "$changed_files" | rg '^changelog/fragments/' || true)
+  if [ -n "$unsupported_changelog_fragments" ]; then
+    echo "Unsupported changelog fragment files detected:"
+    printf '%s\n' "$unsupported_changelog_fragments"
+    echo "Move changelog fragment content into CHANGELOG.md and remove changelog/fragments files."
+    exit 1
+  fi
+
   # Enforce workflow policy: every prepared PR must include CHANGELOG.md.
   if [ "$has_changelog_update" = "false" ]; then
     echo "Missing changelog update. Add CHANGELOG.md changes."

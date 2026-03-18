@@ -135,3 +135,6 @@ ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 docs/superpowers
+
+# Deprecated changelog fragment workflow
+changelog/fragments/
