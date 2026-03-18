@@ -9,6 +9,10 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import { emitHeartbeatEvent, resolveIndicatorType } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveHeartbeatVisibility } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveHeartbeatReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -178,10 +182,7 @@ export async function runWebHeartbeatOnce(opts: {
     );
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
 
-    if (
-      !replyPayload ||
-      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
-    ) {
+    if (!replyPayload || !hasOutboundReplyContent(replyPayload)) {
       heartbeatLogger.info(
         {
           to: redactedTo,
@@ -201,7 +202,8 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
-    const hasMedia = Boolean(replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0);
+    const reply = resolveSendableOutboundReplyParts(replyPayload);
+    const hasMedia = reply.hasMedia;
     const ackMaxChars = Math.max(
       0,
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
@@ -250,7 +252,7 @@ export async function runWebHeartbeatOnce(opts: {
       );
     }
 
-    const finalText = stripped.text || replyPayload.text || "";
+    const finalText = stripped.text || reply.text;
 
     // Check if alerts are disabled for WhatsApp
     if (!visibility.showAlerts) {
