@@ -83,7 +83,7 @@ Welcome to the lobster tank! 🦞
 
 1. **Bugs & small fixes** → Open a PR!
 2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/openclaw/openclaw/discussions) or ask in Discord first
-3. **Failing CI on `main`** → Do not open a PR that only fixes tests or CI for a failure already present on `main`. The core team tracks and fixes these; such PRs will be closed automatically.
+3. **Test/CI-only PRs for known `main` failures** → Don't open one; the core team is already tracking it and such PRs will be closed automatically. If you've spotted a *new* regression not yet shown in main CI, report it as an issue first.
 4. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
 ## Before You PR
@@ -97,7 +97,7 @@ Welcome to the lobster tank! 🦞
   - For targeted shared-surface work, use `pnpm test:contracts:channels` or `pnpm test:contracts:plugins`
   - If you changed broader runtime behavior, still run the relevant wider lanes (`pnpm test:extensions`, `pnpm test:channels`, or `pnpm test`) before asking for review
 - If you have access to Codex, run `codex review --base origin/main` locally before opening or updating your PR. Treat this as the current highest standard of AI review, even if GitHub Codex review also runs.
-- **Do not submit test-only fixes for CI failures already red on `main` CI.** If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the core team is tracking — a PR that only fixes those tests will be closed automatically. If you spot a *new* regression not yet shown in main CI, report it as an issue first.
+- **Do not submit test or CI-config fixes for failures already red on `main` CI.** If a failure is already visible in the [main branch CI runs](https://github.com/openclaw/openclaw/actions), it's a known issue the core team is tracking — a PR that only addresses those failures will be closed automatically. If you spot a *new* regression not yet shown in main CI, report it as an issue first.
 - Ensure CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
