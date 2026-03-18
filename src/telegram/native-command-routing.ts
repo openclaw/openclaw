@@ -1,8 +1,29 @@
-import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { normalizeTelegramCommandName } from "../config/telegram-custom-commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+
+function stripMatchingBotUsernameFromCommandToken(
+  commandToken: string,
+  botUsername?: string | null,
+): string {
+  const normalizedBotUsername = botUsername?.trim().toLowerCase();
+  if (!normalizedBotUsername) {
+    return commandToken;
+  }
+
+  const mentionSeparator = commandToken.indexOf("@");
+  if (mentionSeparator === -1) {
+    return commandToken;
+  }
+
+  const mentionedBotUsername = commandToken.slice(mentionSeparator + 1).trim().toLowerCase();
+  if (mentionedBotUsername !== normalizedBotUsername) {
+    return commandToken;
+  }
+
+  return commandToken.slice(0, mentionSeparator);
+}
 
 export function extractTelegramNativeCommandToken(params: {
   text?: string | null;
@@ -12,15 +33,15 @@ export function extractTelegramNativeCommandToken(params: {
   if (!trimmed || !trimmed.startsWith("/")) {
     return null;
   }
-  const normalizedBody = normalizeCommandBody(trimmed, {
-    botUsername: params.botUsername?.trim().toLowerCase(),
-  }).trim();
-  const commandMatch = normalizedBody.match(/^\/([^\s:]+)/);
-  const commandName = commandMatch?.[1]?.trim();
+
+  const commandName = trimmed.match(/^\/([^\s]+)/)?.[1]?.trim();
   if (!commandName) {
     return null;
   }
-  const normalizedName = normalizeTelegramCommandName(commandName);
+
+  const normalizedName = normalizeTelegramCommandName(
+    stripMatchingBotUsernameFromCommandToken(commandName, params.botUsername),
+  );
   return normalizedName || null;
 }
 
