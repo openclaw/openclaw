@@ -1,3 +1,4 @@
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   chunkByParagraph,
   chunkMarkdownTextWithMode,
@@ -760,11 +761,13 @@ async function deliverOutboundPayloadsCore(
       mediaUrls: params.mirror.mediaUrls,
     });
     if (mirrorText) {
+      const mirrorAgentId = params.mirror.agentId;
       await appendAssistantMessageToSessionTranscript({
-        agentId: params.mirror.agentId,
+        agentId: mirrorAgentId,
         sessionKey: params.mirror.sessionKey,
         text: mirrorText,
         idempotencyKey: params.mirror.idempotencyKey,
+        cwd: mirrorAgentId ? resolveAgentWorkspaceDir(cfg, mirrorAgentId) : undefined,
       });
     }
   }

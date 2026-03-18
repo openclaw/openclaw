@@ -67,6 +67,8 @@ export function resolveMirroredTranscriptText(params: {
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
+  /** Explicit workspace directory; avoids process.cwd() race under multi-agent workloads. */
+  cwd?: string;
 }): Promise<void> {
   if (fs.existsSync(params.sessionFile)) {
     return;
@@ -77,7 +79,7 @@ async function ensureSessionHeader(params: {
     version: CURRENT_SESSION_VERSION,
     id: params.sessionId,
     timestamp: new Date().toISOString(),
-    cwd: process.cwd(),
+    cwd: params.cwd ?? process.cwd(),
   };
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
     encoding: "utf-8",
@@ -138,6 +140,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   idempotencyKey?: string;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
+  /** Explicit workspace directory for the transcript header; avoids process.cwd() race. */
+  cwd?: string;
 }): Promise<{ ok: true; sessionFile: string } | { ok: false; reason: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -178,7 +182,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     };
   }
 
-  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId, cwd: params.cwd });
 
   if (
     params.idempotencyKey &&

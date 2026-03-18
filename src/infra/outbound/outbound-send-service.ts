@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -107,12 +108,14 @@ export async function executeSendAction(params: {
         params.ctx.mirror.mediaUrls ??
         params.mediaUrls ??
         (params.mediaUrl ? [params.mediaUrl] : undefined);
+      const mirrorAgentId = params.ctx.mirror.agentId;
       await appendAssistantMessageToSessionTranscript({
-        agentId: params.ctx.mirror.agentId,
+        agentId: mirrorAgentId,
         sessionKey: params.ctx.mirror.sessionKey,
         text: mirrorText,
         mediaUrls: mirrorMediaUrls,
         idempotencyKey: params.ctx.mirror.idempotencyKey,
+        cwd: mirrorAgentId ? resolveAgentWorkspaceDir(params.ctx.cfg, mirrorAgentId) : undefined,
       });
     },
   });
