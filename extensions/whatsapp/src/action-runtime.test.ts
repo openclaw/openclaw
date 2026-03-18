@@ -1,17 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-import { handleWhatsAppAction } from "./whatsapp-actions.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { handleWhatsAppAction, whatsAppActionRuntime } from "./action-runtime.js";
 
-const { sendReactionWhatsApp, sendPollWhatsApp } = vi.hoisted(() => ({
-  sendReactionWhatsApp: vi.fn(async () => undefined),
-  sendPollWhatsApp: vi.fn(async () => ({ messageId: "poll-1", toJid: "jid-1" })),
-}));
-
-vi.mock("../../../extensions/whatsapp/src/send.js", () => ({
-  sendReactionWhatsApp,
-  sendPollWhatsApp,
-}));
+const originalWhatsAppActionRuntime = { ...whatsAppActionRuntime };
+const sendReactionWhatsApp = vi.fn(async () => undefined);
 
 const enabledConfig = {
   channels: { whatsapp: { actions: { reactions: true } } },
@@ -20,6 +13,9 @@ const enabledConfig = {
 describe("handleWhatsAppAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.assign(whatsAppActionRuntime, originalWhatsAppActionRuntime, {
+      sendReactionWhatsApp,
+    });
   });
 
   it("adds reactions", async () => {
