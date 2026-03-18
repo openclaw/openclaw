@@ -1994,7 +1994,7 @@ export async function runEmbeddedAttempt(
         activeSession.agent,
         params.config,
         params.provider,
-        params.modelId,
+        params.model.id,
         {
           ...params.streamParams,
           fastMode: params.fastMode,
