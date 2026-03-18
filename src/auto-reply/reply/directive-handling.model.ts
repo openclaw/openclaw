@@ -1,8 +1,12 @@
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  resolveAuthStorePathForDisplay,
+} from "../../agents/auth-profiles.js";
 import {
   type ModelAliasIndex,
   modelKey,
   normalizeProviderId,
+  normalizeProviderIdForAuth,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
@@ -353,6 +357,60 @@ export async function maybeHandleModelDirectiveInfo(params: {
   return { text: lines.join("\n") };
 }
 
+function resolveStoredNumericProfileModelDirective(params: {
+  raw: string;
+  agentDir: string;
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+}): {
+  modelRaw: string;
+  profileId: string;
+  resolved: NonNullable<ReturnType<typeof resolveModelRefFromString>>;
+} | null {
+  const trimmed = params.raw.trim();
+  const lastSlash = trimmed.lastIndexOf("/");
+  const profileDelimiter = trimmed.indexOf("@", lastSlash + 1);
+  if (profileDelimiter <= 0) {
+    return null;
+  }
+
+  const profileId = trimmed.slice(profileDelimiter + 1).trim();
+  if (!/^\d{8}$/.test(profileId)) {
+    return null;
+  }
+
+  const modelRaw = trimmed.slice(0, profileDelimiter).trim();
+  if (!modelRaw) {
+    return null;
+  }
+
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const profile = store.profiles[profileId];
+  if (!profile) {
+    return null;
+  }
+
+  const resolved = resolveModelRefFromString({
+    raw: modelRaw,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  });
+  if (!resolved) {
+    return null;
+  }
+
+  if (
+    normalizeProviderIdForAuth(profile.provider) !==
+    normalizeProviderIdForAuth(resolved.ref.provider)
+  ) {
+    return null;
+  }
+
+  return { modelRaw, profileId, resolved };
+}
+
 export function resolveModelSelectionFromDirective(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
@@ -376,6 +434,16 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   const raw = params.directives.rawModelDirective.trim();
+  const storedNumericProfile =
+    params.directives.rawModelProfile === undefined
+      ? resolveStoredNumericProfileModelDirective({
+          raw,
+          agentDir: params.agentDir,
+          defaultProvider: params.defaultProvider,
+          aliasIndex: params.aliasIndex,
+        })
+      : null;
+  const modelRaw = storedNumericProfile?.modelRaw ?? raw;
   let modelSelection: ModelDirectiveSelection | undefined;
 
   if (/^[0-9]+$/.test(raw)) {
@@ -389,11 +457,13 @@ export function resolveModelSelectionFromDirective(params: {
     };
   }
 
-  const explicit = resolveModelRefFromString({
-    raw,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  });
+  const explicit =
+    storedNumericProfile?.resolved ??
+    resolveModelRefFromString({
+      raw: modelRaw,
+      defaultProvider: params.defaultProvider,
+      aliasIndex: params.aliasIndex,
+    });
   if (explicit) {
     const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
     if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
@@ -410,7 +480,7 @@ export function resolveModelSelectionFromDirective(params: {
 
   if (!modelSelection) {
     const resolved = resolveModelDirectiveSelection({
-      raw,
+      raw: modelRaw,
       defaultProvider: params.defaultProvider,
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
@@ -427,9 +497,10 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   let profileOverride: string | undefined;
-  if (modelSelection && params.directives.rawModelProfile) {
+  const rawProfile = params.directives.rawModelProfile ?? storedNumericProfile?.profileId;
+  if (modelSelection && rawProfile) {
     const profileResolved = resolveProfileOverride({
-      rawProfile: params.directives.rawModelProfile,
+      rawProfile,
       provider: modelSelection.provider,
       cfg: params.cfg,
       agentDir: params.agentDir,

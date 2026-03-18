@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -28,6 +29,15 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
 
+vi.mock("../../agents/auth-profiles.js", async () => {
+  return {
+    ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
+    resolveAuthStorePathForDisplay: vi.fn(() => "/tmp/agent/auth-profiles.json"),
+  };
+});
+
+const mockedEnsureAuthProfileStore = vi.mocked(ensureAuthProfileStore);
+
 function baseAliasIndex(): ModelAliasIndex {
   return { byAlias: new Map(), byKey: new Map() };
 }
@@ -38,6 +48,11 @@ function baseConfig(): OpenClawConfig {
     agents: { defaults: {} },
   } as unknown as OpenClawConfig;
 }
+
+beforeEach(() => {
+  mockedEnsureAuthProfileStore.mockReset();
+  mockedEnsureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} } as never);
+});
 
 function resolveModelSelectionForCommand(params: {
   command: string;
@@ -180,6 +195,99 @@ describe("/model chat UX", () => {
       model: "@cf/openai/gpt-oss-20b",
       isDefault: false,
     });
+  });
+
+  it("treats @YYYYMMDD as a profile override when that profile exists for the resolved provider", () => {
+    mockedEnsureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "20251001": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-test",
+        },
+      },
+    } as never);
+
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openai/gpt-4o@20251001",
+      allowedModelKeys: new Set(["openai/gpt-4o"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "openai",
+      model: "gpt-4o",
+      isDefault: false,
+    });
+    expect(resolved.profileOverride).toBe("20251001");
+  });
+
+  it("supports alias selections with numeric auth-profile overrides", () => {
+    mockedEnsureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "20251001": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-test",
+        },
+      },
+    } as never);
+
+    const aliasIndex: ModelAliasIndex = {
+      byAlias: new Map([["gpt", { alias: "gpt", ref: { provider: "openai", model: "gpt-4o" } }]]),
+      byKey: new Map([["openai/gpt-4o", ["gpt"]]]),
+    };
+
+    const resolved = resolveModelSelectionFromDirective({
+      directives: parseInlineDirectives("/model gpt@20251001"),
+      cfg: { commands: { text: true } } as unknown as OpenClawConfig,
+      agentDir: "/tmp/agent",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex,
+      allowedModelKeys: new Set(["openai/gpt-4o"]),
+      allowedModelCatalog: [],
+      provider: "anthropic",
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "openai",
+      model: "gpt-4o",
+      isDefault: false,
+      alias: "gpt",
+    });
+    expect(resolved.profileOverride).toBe("20251001");
+  });
+
+  it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", () => {
+    mockedEnsureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "20251001": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-test",
+        },
+      },
+    } as never);
+
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model custom/vertex-ai_claude-haiku-4-5@20251001",
+      allowedModelKeys: new Set(["custom/vertex-ai_claude-haiku-4-5@20251001"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "custom",
+      model: "vertex-ai_claude-haiku-4-5@20251001",
+      isDefault: false,
+    });
+    expect(resolved.profileOverride).toBeUndefined();
   });
 });
 

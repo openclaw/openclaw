@@ -61,9 +61,7 @@ describe("splitTrailingAuthProfile", () => {
   });
 
   it("supports auth profiles after @YYYYMMDD version suffixes", () => {
-    expect(
-      splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001@work"),
-    ).toEqual({
+    expect(splitTrailingAuthProfile("custom/vertex-ai_claude-haiku-4-5@20251001@work")).toEqual({
       model: "custom/vertex-ai_claude-haiku-4-5@20251001",
       profile: "work",
     });
