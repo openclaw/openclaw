@@ -1,4 +1,4 @@
-name: Build Unsigned iOS App (OpenClaw)
+name: Build Signed iOS App (OpenClaw)
 
 on:
   push:
@@ -13,10 +13,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 安装 pnpm（自动读取 packageManager）
+      # 安装 pnpm
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        # 不指定 version，自动使用 package.json 中的 pnpm 版本
 
       # 设置 Node.js 22
       - name: Setup Node.js
@@ -25,7 +24,7 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
 
-      # 选择 Xcode 26.3.0（满足 Swift 6.2 要求）
+      # 选择 Xcode 26.3.0
       - name: Select Xcode version
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -34,9 +33,27 @@ jobs:
       - name: Install xcodegen
         run: brew install xcodegen
 
-      # 安装 lint 工具（swiftlint, swiftformat）
       - name: Install linting tools
         run: brew install swiftlint swiftformat
+
+      # 导入证书和描述文件
+      - name: Setup certificate and provisioning profile
+        run: |
+          # 创建专用钥匙串
+          security create-keychain -p "temp123" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "temp123" build.keychain
+
+          # 导入证书
+          echo -n "${{ secrets.BUILD_CERTIFICATE_BASE64 }}" | base64 --decode > certificate.p12
+          security import certificate.p12 -k build.keychain -P "${{ secrets.P12_PASSWORD }}" -T /usr/bin/codesign
+
+          # 允许 codesign 访问钥匙串
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "temp123" build.keychain
+
+          # 安装描述文件
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles/
+          echo -n "${{ secrets.PROVISIONING_PROFILE_BASE64 }}" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
 
       - name: Prepare iOS project
         run: |
@@ -46,11 +63,21 @@ jobs:
           cd apps/ios
           xcodegen generate
 
-      - name: List schemes
+      # 动态生成最简单的 ExportOptions.plist（只指定 method）
+      - name: Create ExportOptions.plist
         run: |
-          cd apps/ios
-          xcodebuild -list -project OpenClaw.xcodeproj
+          cat <<EOF > ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>development</string>
+          </dict>
+          </plist>
+          EOF
 
+      # 编译归档（允许自动更新签名）
       - name: Build archive
         run: |
           cd apps/ios
@@ -60,20 +87,21 @@ jobs:
             -configuration Release \
             -archivePath $PWD/build/OpenClaw.xcarchive \
             -destination 'generic/platform=iOS' \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            -allowProvisioningUpdates
 
-      - name: Package IPA
+      # 导出已签名的 IPA
+      - name: Export IPA
         run: |
           cd apps/ios
-          mkdir -p build/ipa Payload
-          cp -r build/OpenClaw.xcarchive/Products/Applications/OpenClaw.app Payload/
-          cd Payload && zip -r ../build/ipa/OpenClaw.ipa * && cd ..
-          ls -la build/ipa/
+          xcodebuild -exportArchive \
+            -archivePath $PWD/build/OpenClaw.xcarchive \
+            -exportPath $PWD/build/ipa \
+            -exportOptionsPlist $PWD/../ExportOptions.plist \
+            -allowProvisioningUpdates
 
+      # 上传 IPA
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: OpenClaw-unsigned.ipa
-          path: apps/ios/build/ipa/OpenClaw.ipa
+          name: OpenClaw-signed.ipa
+          path: apps/ios/build/ipa/*.ipa
