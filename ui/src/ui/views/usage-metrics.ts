@@ -34,7 +34,8 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
 
   for (const session of sessions) {
     const usage = session.usage;
-    if (!usage?.messageCounts || usage.messageCounts.total === 0) {
+    const messageCounts = getMessageCountsWithFallback(usage);
+    if (!usage || !messageCounts || messageCounts.total === 0) {
       continue;
     }
     const start = usage.firstActivity ?? session.updatedAt;
@@ -55,8 +56,8 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
       const nextMs = Math.min(nextHour.getTime(), endMs);
       const minutes = Math.max((nextMs - cursor) / 60000, 0);
       const share = minutes / totalMinutes;
-      hourErrors[hour] += usage.messageCounts.errors * share;
-      hourMsgs[hour] += usage.messageCounts.total * share;
+      hourErrors[hour] += messageCounts.errors * share;
+      hourMsgs[hour] += messageCounts.total * share;
       cursor = nextMs + 1;
     }
   }
@@ -320,6 +321,30 @@ const mergeUsageTotals = (target: UsageTotals, source: Partial<UsageTotals>) => 
   target.missingCostEntries += source.missingCostEntries ?? 0;
 };
 
+const getMessageCountsWithFallback = (usage: UsageSessionEntry["usage"]) => {
+  if (!usage) {
+    return undefined;
+  }
+  if (usage.messageCounts) {
+    return usage.messageCounts;
+  }
+  if (!usage.dailyMessageCounts?.length) {
+    return undefined;
+  }
+  return usage.dailyMessageCounts.reduce(
+    (counts, day) => {
+      counts.total += day.total ?? 0;
+      counts.user += day.user ?? 0;
+      counts.assistant += day.assistant ?? 0;
+      counts.toolCalls += day.toolCalls ?? 0;
+      counts.toolResults += day.toolResults ?? 0;
+      counts.errors += day.errors ?? 0;
+      return counts;
+    },
+    { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+  );
+};
+
 const buildAggregatesFromSessions = (
   sessions: UsageSessionEntry[],
   fallback?: UsageAggregates | null,
@@ -376,13 +401,14 @@ const buildAggregatesFromSessions = (
     if (!usage) {
       continue;
     }
-    if (usage.messageCounts) {
-      messages.total += usage.messageCounts.total;
-      messages.user += usage.messageCounts.user;
-      messages.assistant += usage.messageCounts.assistant;
-      messages.toolCalls += usage.messageCounts.toolCalls;
-      messages.toolResults += usage.messageCounts.toolResults;
-      messages.errors += usage.messageCounts.errors;
+    const messageCounts = getMessageCountsWithFallback(usage);
+    if (messageCounts) {
+      messages.total += messageCounts.total;
+      messages.user += messageCounts.user;
+      messages.assistant += messageCounts.assistant;
+      messages.toolCalls += messageCounts.toolCalls;
+      messages.toolResults += messageCounts.toolResults;
+      messages.errors += messageCounts.errors;
     }
 
     if (usage.toolUsage) {
