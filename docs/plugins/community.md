@@ -46,9 +46,9 @@ Use this format when adding entries:
 ## Listed plugins
 
 - **Memory Core Plus** — Enhanced workspace memory with closed-loop auto-recall and auto-capture. Semantically searches past memories before each LLM turn and automatically extracts durable facts from conversations.
-  npm: `openclaw-memory-core-plus`
+  npm: `memory-core-plus`
   repo: `https://github.com/aloong-planet/openclaw-memory-core-plus`
-  install: `openclaw plugins install openclaw-memory-core-plus`
+  install: `openclaw plugins install memory-core-plus`
 
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
