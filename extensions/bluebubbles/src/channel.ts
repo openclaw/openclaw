@@ -16,6 +16,10 @@ import {
 import { bluebubblesMessageActions } from "./actions.js";
 import type { BlueBubblesProbe } from "./channel.runtime.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
+import {
+  resolveBlueBubblesGroupRequireMention,
+  resolveBlueBubblesGroupToolPolicy,
+} from "./group-policy.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "./runtime-api.js";
 import {
   buildChannelConfigSchema,
@@ -24,8 +28,6 @@ import {
   collectBlueBubblesStatusIssues,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
-  resolveBlueBubblesGroupRequireMention,
-  resolveBlueBubblesGroupToolPolicy,
 } from "./runtime-api.js";
 import { blueBubblesSetupAdapter } from "./setup-core.js";
 import { blueBubblesSetupWizard } from "./setup-surface.js";
