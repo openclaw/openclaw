@@ -135,10 +135,14 @@ Important consequences:
 ### OpenShell backend
 
 Use `backend: "openshell"` when you want OpenClaw to sandbox tools in an
-OpenShell-managed remote environment. OpenShell reuses the same core SSH
-transport and remote filesystem bridge as the generic SSH backend, and adds
-OpenShell-specific lifecycle (`sandbox create/get/delete`, `sandbox ssh-config`)
-plus the optional `mirror` workspace mode.
+OpenShell-managed remote environment. For the full setup guide, configuration
+reference, and workspace mode comparison, see the dedicated
+[OpenShell page](/gateway/openshell).
+
+OpenShell reuses the same core SSH transport and remote filesystem bridge as the
+generic SSH backend, and adds OpenShell-specific lifecycle
+(`sandbox create/get/delete`, `sandbox ssh-config`) plus the optional `mirror`
+workspace mode.
 
 ```json5
 {
@@ -458,6 +462,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 
 ## Related docs
 
+- [OpenShell](/gateway/openshell) -- managed sandbox backend setup, workspace modes, and config reference
 - [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)
 - [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) -- debugging "why is this blocked?"
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
