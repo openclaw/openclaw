@@ -4,7 +4,7 @@ import {
   createAccountListHelpers,
   normalizeResolvedSecretInputString,
   parseOptionalDelimitedEntries,
-} from "openclaw/plugin-sdk/irc";
+} from "./runtime-api.js";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
