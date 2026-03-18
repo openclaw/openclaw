@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -53,6 +53,10 @@ beforeEach(() => {
       store: { version: 1, profiles: {} },
     },
   ]);
+});
+
+afterEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
 });
 
 function setAuthProfiles(
