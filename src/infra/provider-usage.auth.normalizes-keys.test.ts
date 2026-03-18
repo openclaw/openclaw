@@ -4,11 +4,10 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 
-const resolveProviderUsageAuthWithPluginMock = vi.fn(async () => null);
+const resolveProviderUsageAuthWithPluginMock = vi.fn(async (..._args: unknown[]) => null);
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageAuthWithPlugin: (...args: unknown[]) =>
-    resolveProviderUsageAuthWithPluginMock(...args),
+  resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
 }));
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
