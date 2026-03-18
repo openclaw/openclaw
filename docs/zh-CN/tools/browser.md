@@ -152,7 +152,7 @@ OpenClaw 在调用 `/json/*` 端点和连接 CDP WebSocket 时会保留认证信
 
 ## Browserless（托管远程 CDP）
 
-[Browserless](https://browserless.io) 是一个托管的 Chromium 服务，通过 HTTPS 暴露 CDP 端点。你可以将 OpenClaw 浏览器配置文件指向 Browserless 区域端点，并使用你的 API 密钥进行认证。
+[Browserless](https://browserless.io) 是一个托管的 Chromium 服务，其 CDP 端点需要直接的 WebSocket (`wss://`) 连接。你可以将 OpenClaw 浏览器配置文件指向 Browserless 区域端点，并使用你的 API 密钥进行认证。
 
 示例：
 
