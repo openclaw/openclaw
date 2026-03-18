@@ -68,10 +68,16 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("sbt_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("GRADLE_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("gradle_opts")).toBe(true);
-    expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(true);
-    expect(isDangerousHostEnvVarName("gradle_user_home")).toBe(true);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
+    expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
+  });
+});
+
+describe("isDangerousHostEnvOverrideVarName", () => {
+  it("blocks GRADLE_USER_HOME as override-only (path redirect, not direct injection)", () => {
+    expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
   });
 });
 

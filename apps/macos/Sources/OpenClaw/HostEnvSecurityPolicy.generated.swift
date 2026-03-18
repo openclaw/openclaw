@@ -33,12 +33,12 @@ enum HostEnvSecurityPolicy {
         "GLIBC_TUNABLES",
         "MAVEN_OPTS",
         "SBT_OPTS",
-        "GRADLE_OPTS",
-        "GRADLE_USER_HOME"
+        "GRADLE_OPTS"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
         "HOME",
+        "GRADLE_USER_HOME",
         "ZDOTDIR",
         "GIT_SSH_COMMAND",
         "GIT_SSH",
