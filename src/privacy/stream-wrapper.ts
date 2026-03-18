@@ -13,6 +13,7 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from "@mariozechner/pi-ai";
+import { resolveUserPath } from "../utils.js";
 import { PrivacyDetector } from "./detector.js";
 import { PrivacyMappingStore } from "./mapping-store.js";
 import { PrivacyReplacer } from "./replacer.js";
@@ -49,8 +50,11 @@ export function createPrivacyFilterContext(
   };
   const detector = new PrivacyDetector(cfg.rules);
   const replacer = new PrivacyReplacer(sessionId);
+  const resolvedStorePath = cfg.mappings.storePath
+    ? resolveUserPath(cfg.mappings.storePath)
+    : undefined;
   const store = new PrivacyMappingStore({
-    storePath: cfg.mappings.storePath || undefined,
+    storePath: resolvedStorePath || undefined,
     salt: cfg.encryption.salt || undefined,
   });
 

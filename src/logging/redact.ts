@@ -1,7 +1,8 @@
+import { statSync } from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
-import { compileConfigRegex } from "../security/config-regex.js";
 import { resolveCustomRulesPath } from "../privacy/custom-rules.js";
 import { PrivacyDetector } from "../privacy/detector.js";
+import { compileConfigRegex } from "../security/config-regex.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { replacePatternBounded } from "./redact-bounded.js";
 
@@ -177,7 +178,54 @@ export function getDefaultRedactPatterns(): string[] {
 let cachedDetector: PrivacyDetector | undefined;
 let cachedDetectorRules: string | undefined;
 
-function resolveDetectorRulesKey(rules: string): string {
+function isBuiltInRuleset(rules: string): boolean {
+  return rules === "basic" || rules === "extended" || rules === "none";
+}
+
+function resolveDetectorRulesPath(rules: string): string {
+  if (isBuiltInRuleset(rules)) {
+    return rules;
+  }
+  return resolveCustomRulesPath(rules);
+}
+
+function resolveDetectorRulesKey(resolvedRules: string): string {
+  if (isBuiltInRuleset(resolvedRules)) {
+    return resolvedRules;
+  }
+  try {
+    const stat = statSync(resolvedRules);
+    return `${resolvedRules}:${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return resolvedRules;
+  }
+}
+
+function resolveDetectorCacheState(rules: string): { resolvedRules: string; key: string } {
+  const resolvedRules = resolveDetectorRulesPath(rules);
+  const key = resolveDetectorRulesKey(resolvedRules);
+  return { resolvedRules, key };
+}
+
+function getOrCreateCachedDetector(rules: string): PrivacyDetector {
+  const state = resolveDetectorCacheState(rules);
+  if (!cachedDetector || cachedDetectorRules !== state.key) {
+    cachedDetector = new PrivacyDetector(state.resolvedRules);
+    cachedDetectorRules = state.key;
+  }
+  return cachedDetector;
+}
+
+function clearDetectorCacheForTests(): void {
+  cachedDetector = undefined;
+  cachedDetectorRules = undefined;
+}
+
+export function __resetRedactDetectorCacheForTests(): void {
+  clearDetectorCacheForTests();
+}
+
+function getDetectorRulesOrThrow(rules: string): string {
   if (rules === "basic" || rules === "extended" || rules === "none") {
     return rules;
   }
@@ -219,13 +267,9 @@ export function redactWithPrivacyFilter(
   }
 
   try {
-    const rules = resolveDetectorRulesKey(privacyRules ?? "extended");
-    // Re-create the detector only when the ruleset changes.
-    if (!cachedDetector || cachedDetectorRules !== rules) {
-      cachedDetector = new PrivacyDetector(rules);
-      cachedDetectorRules = rules;
-    }
-    const detected = cachedDetector.detect(result);
+    const rules = getDetectorRulesOrThrow(privacyRules ?? "extended");
+    const detector = getOrCreateCachedDetector(rules);
+    const detected = detector.detect(result);
     if (detected.hasPrivacyRisk) {
       // Apply mask-style redaction (not replacement) for log output.
       const selected = selectNonOverlappingMatches(detected.matches);

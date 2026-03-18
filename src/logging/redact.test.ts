@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PrivacyDetector } from "../privacy/detector.js";
 import {
+  __resetRedactDetectorCacheForTests,
   getDefaultRedactPatterns,
   redactSensitiveText,
   redactToolDetail,
@@ -302,6 +303,50 @@ describe("redactToolDetail", () => {
       } else {
         process.env.OPENCLAW_CONFIG_PATH = prevConfigPath;
       }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes detector cache when a custom rules file is edited in place", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "redact-rules-refresh-"));
+    const rulesPath = path.join(root, "rules.json5");
+    __resetRedactDetectorCacheForTests();
+
+    const rulesJson = (type: string, pattern: string) => `{
+  extends: 'none',
+  rules: [
+    {
+      type: '${type}',
+      description: '${type}',
+      riskLevel: 'high',
+      pattern: '${pattern}',
+    },
+  ],
+}`;
+
+    try {
+      fs.writeFileSync(rulesPath, rulesJson("first", "FIRST_SECRET_[A-Z]+"));
+      const outA = redactWithPrivacyFilter(
+        "token FIRST_SECRET_ABCDE",
+        { mode: "tools", patterns: [] },
+        true,
+        rulesPath,
+      );
+      expect(outA).not.toContain("FIRST_SECRET_ABCDE");
+
+      fs.writeFileSync(rulesPath, rulesJson("second", "SECOND_SECRET_[A-Z]+"));
+      const bumped = new Date(Date.now() + 2_000);
+      fs.utimesSync(rulesPath, bumped, bumped);
+
+      const outB = redactWithPrivacyFilter(
+        "token SECOND_SECRET_XYZ",
+        { mode: "tools", patterns: [] },
+        true,
+        rulesPath,
+      );
+      expect(outB).not.toContain("SECOND_SECRET_XYZ");
+    } finally {
+      __resetRedactDetectorCacheForTests();
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

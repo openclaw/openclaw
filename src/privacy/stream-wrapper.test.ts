@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -55,6 +58,32 @@ describe("stream-wrapper integration", () => {
       timestamp: now,
     };
   }
+
+  describe("createPrivacyFilterContext", () => {
+    it("resolves tilde-prefixed mapping store paths", () => {
+      const tmpHome = mkdtempSync(join(tmpdir(), "privacy-home-"));
+      const prevOpenClawHome = process.env.OPENCLAW_HOME;
+      process.env.OPENCLAW_HOME = tmpHome;
+
+      try {
+        const ctx = createPrivacyFilterContext("tilde-store", {
+          mappings: { storePath: "~/.openclaw/privacy/custom-mappings.enc" },
+        });
+
+        filterText("email admin@company.com", ctx);
+
+        const expectedStore = join(tmpHome, ".openclaw", "privacy", "custom-mappings.enc");
+        expect(existsSync(expectedStore)).toBe(true);
+      } finally {
+        if (prevOpenClawHome === undefined) {
+          delete process.env.OPENCLAW_HOME;
+        } else {
+          process.env.OPENCLAW_HOME = prevOpenClawHome;
+        }
+        rmSync(tmpHome, { recursive: true, force: true });
+      }
+    });
+  });
 
   describe("filterText + restoreText round-trip", () => {
     it("filters and restores email addresses", () => {
