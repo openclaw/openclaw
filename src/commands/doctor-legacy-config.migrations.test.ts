@@ -297,4 +297,99 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
     );
   });
+
+  it("migrates nano-banana skill config to native image generation config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      skills: {
+        entries: {
+          "nano-banana-pro": {
+            enabled: true,
+            apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+          },
+        },
+      },
+    });
+
+    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "google/gemini-3-pro-image-preview",
+    });
+    expect(res.config.models?.providers?.google?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "GEMINI_API_KEY",
+    });
+    expect(res.config.skills?.entries).toBeUndefined();
+    expect(res.changes).toEqual([
+      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
+      "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
+      "Removed legacy skills.entries.nano-banana-pro.",
+    ]);
+  });
+
+  it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {
+    const res = normalizeCompatibilityConfigValues({
+      skills: {
+        entries: {
+          "nano-banana-pro": {
+            apiKey: "ignored-skill-api-key",
+            env: {
+              GEMINI_API_KEY: "env-gemini-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.google?.apiKey).toBe("env-gemini-key");
+    expect(res.changes).toContain(
+      "Moved skills.entries.nano-banana-pro.env.GEMINI_API_KEY → models.providers.google.apiKey.",
+    );
+  });
+
+  it("preserves explicit native config while removing legacy nano-banana skill config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "fal/fal-ai/flux/dev",
+          },
+        },
+      },
+      models: {
+        providers: {
+          google: {
+            apiKey: "existing-google-key",
+          },
+        },
+      },
+      skills: {
+        entries: {
+          "nano-banana-pro": {
+            apiKey: "legacy-gemini-key",
+          },
+          peekaboo: { enabled: true },
+        },
+      },
+    });
+
+    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "fal/fal-ai/flux/dev",
+    });
+    expect(res.config.models?.providers?.google?.apiKey).toBe("existing-google-key");
+    expect(res.config.skills?.entries).toEqual({
+      peekaboo: { enabled: true },
+    });
+    expect(res.changes).toEqual(["Removed legacy skills.entries.nano-banana-pro."]);
+  });
+
+  it("removes nano-banana from skills.allowBundled during migration", () => {
+    const res = normalizeCompatibilityConfigValues({
+      skills: {
+        allowBundled: ["peekaboo", "nano-banana-pro"],
+      },
+    });
+
+    expect(res.config.skills?.allowBundled).toEqual(["peekaboo"]);
+    expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
+  });
 });

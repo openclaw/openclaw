@@ -15,6 +15,8 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   changes: string[];
 } {
   const changes: string[] = [];
+  const NANO_BANANA_SKILL_KEY = "nano-banana-pro";
+  const NANO_BANANA_MODEL = "google/gemini-3-pro-image-preview";
   let next: OpenClawConfig = cfg;
 
   const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -471,7 +473,121 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     );
   };
 
+  const normalizeLegacyNanoBananaSkill = () => {
+    const rawSkills = next.skills;
+    if (!isRecord(rawSkills)) {
+      return;
+    }
+
+    let skillsChanged = false;
+    let skills = structuredClone(rawSkills);
+
+    if (Array.isArray(skills.allowBundled)) {
+      const allowBundled = skills.allowBundled.filter(
+        (value) => typeof value !== "string" || value.trim() !== NANO_BANANA_SKILL_KEY,
+      );
+      if (allowBundled.length !== skills.allowBundled.length) {
+        if (allowBundled.length === 0) {
+          delete skills.allowBundled;
+          changes.push(`Removed skills.allowBundled entry for ${NANO_BANANA_SKILL_KEY}.`);
+        } else {
+          skills.allowBundled = allowBundled;
+          changes.push(`Removed ${NANO_BANANA_SKILL_KEY} from skills.allowBundled.`);
+        }
+        skillsChanged = true;
+      }
+    }
+
+    const rawEntries = skills.entries;
+    if (!isRecord(rawEntries)) {
+      if (skillsChanged) {
+        next = { ...next, skills };
+      }
+      return;
+    }
+
+    const rawLegacyEntry = rawEntries[NANO_BANANA_SKILL_KEY];
+    if (!isRecord(rawLegacyEntry)) {
+      if (skillsChanged) {
+        next = { ...next, skills };
+      }
+      return;
+    }
+
+    const existingImageGenerationModel = next.agents?.defaults?.imageGenerationModel;
+    if (existingImageGenerationModel === undefined) {
+      next = {
+        ...next,
+        agents: {
+          ...next.agents,
+          defaults: {
+            ...next.agents?.defaults,
+            imageGenerationModel: {
+              primary: NANO_BANANA_MODEL,
+            },
+          },
+        },
+      };
+      changes.push(
+        `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.imageGenerationModel.primary (${NANO_BANANA_MODEL}).`,
+      );
+    }
+
+    const legacyEnv = isRecord(rawLegacyEntry.env) ? rawLegacyEntry.env : undefined;
+    const legacyEnvApiKey =
+      typeof legacyEnv?.GEMINI_API_KEY === "string" ? legacyEnv.GEMINI_API_KEY.trim() : "";
+    const legacyApiKey =
+      legacyEnvApiKey ||
+      (typeof rawLegacyEntry.apiKey === "string"
+        ? rawLegacyEntry.apiKey.trim()
+        : rawLegacyEntry.apiKey && isRecord(rawLegacyEntry.apiKey)
+          ? structuredClone(rawLegacyEntry.apiKey)
+          : undefined);
+
+    const rawModels = isRecord(next.models) ? structuredClone(next.models) : {};
+    const rawProviders = isRecord(rawModels.providers) ? { ...rawModels.providers } : {};
+    const rawGoogle = isRecord(rawProviders.google) ? { ...rawProviders.google } : {};
+    const hasGoogleApiKey = rawGoogle.apiKey !== undefined;
+    if (!hasGoogleApiKey && legacyApiKey) {
+      rawGoogle.apiKey = legacyApiKey;
+      rawProviders.google = rawGoogle;
+      rawModels.providers = rawProviders;
+      next = {
+        ...next,
+        models: rawModels as OpenClawConfig["models"],
+      };
+      changes.push(
+        `Moved skills.entries.${NANO_BANANA_SKILL_KEY}.${legacyEnvApiKey ? "env.GEMINI_API_KEY" : "apiKey"} → models.providers.google.apiKey.`,
+      );
+    }
+
+    const entries = { ...rawEntries };
+    delete entries[NANO_BANANA_SKILL_KEY];
+    if (Object.keys(entries).length === 0) {
+      delete skills.entries;
+      changes.push(`Removed legacy skills.entries.${NANO_BANANA_SKILL_KEY}.`);
+    } else {
+      skills.entries = entries;
+      changes.push(`Removed legacy skills.entries.${NANO_BANANA_SKILL_KEY}.`);
+    }
+    skillsChanged = true;
+
+    if (Object.keys(skills).length === 0) {
+      const { skills: _ignored, ...rest } = next;
+      next = rest;
+      return;
+    }
+
+    if (skillsChanged) {
+      next = {
+        ...next,
+        skills,
+      };
+    }
+  };
+
   normalizeBrowserSsrFPolicyAlias();
+  normalizeLegacyNanoBananaSkill();
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;
