@@ -5,15 +5,15 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
-  patchChannelOnboardingAdapter,
+  ensureChannelSetupPluginInstalled,
+  loadChannelSetupPluginRegistrySnapshotForChannel,
+  reloadChannelSetupPluginRegistry,
+} from "./channel-setup/plugin-install.js";
+import {
+  patchChannelSetupWizardAdapter,
   setDefaultChannelPluginRegistryForTests,
 } from "./channel-test-helpers.js";
 import { setupChannels } from "./onboard-channels.js";
-import {
-  ensureOnboardingPluginInstalled,
-  loadOnboardingPluginRegistrySnapshotForChannel,
-  reloadOnboardingPluginRegistry,
-} from "./onboarding/plugin-install.js";
 import { createExitThrowingRuntime, createWizardPrompter } from "./test-wizard-helpers.js";
 
 const catalogMocks = vi.hoisted(() => ({
@@ -96,8 +96,8 @@ function createTelegramCfg(botToken: string, enabled?: boolean): OpenClawConfig 
   } as OpenClawConfig;
 }
 
-function patchTelegramAdapter(overrides: Parameters<typeof patchChannelOnboardingAdapter>[1]) {
-  return patchChannelOnboardingAdapter("telegram", {
+function patchTelegramAdapter(overrides: Parameters<typeof patchChannelSetupWizardAdapter>[1]) {
+  return patchChannelSetupWizardAdapter("telegram", {
     ...overrides,
     getStatus:
       overrides.getStatus ??
@@ -214,17 +214,17 @@ vi.mock("./onboard-helpers.js", () => ({
   detectBinary: vi.fn(async () => false),
 }));
 
-vi.mock("./onboarding/plugin-install.js", async (importOriginal) => {
+vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...(actual as Record<string, unknown>),
-    ensureOnboardingPluginInstalled: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+    ensureChannelSetupPluginInstalled: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
       cfg,
       installed: true,
     })),
-    // Allow tests to simulate an empty plugin registry during onboarding.
-    loadOnboardingPluginRegistrySnapshotForChannel: vi.fn(() => createEmptyPluginRegistry()),
-    reloadOnboardingPluginRegistry: vi.fn(() => {}),
+    // Allow tests to simulate an empty plugin registry during setup.
+    loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(() => createEmptyPluginRegistry()),
+    reloadChannelSetupPluginRegistry: vi.fn(() => {}),
   };
 });
 
@@ -237,13 +237,13 @@ describe("setupChannels", () => {
       plugins: [],
       diagnostics: [],
     });
-    vi.mocked(ensureOnboardingPluginInstalled).mockClear();
-    vi.mocked(ensureOnboardingPluginInstalled).mockImplementation(async ({ cfg }) => ({
+    vi.mocked(ensureChannelSetupPluginInstalled).mockClear();
+    vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg,
       installed: true,
     }));
-    vi.mocked(loadOnboardingPluginRegistrySnapshotForChannel).mockClear();
-    vi.mocked(reloadOnboardingPluginRegistry).mockClear();
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
+    vi.mocked(reloadChannelSetupPluginRegistry).mockClear();
   });
   it("QuickStart uses single-select (no multiselect) and doesn't prompt for Telegram token when WhatsApp is chosen", async () => {
     const select = vi.fn(async () => "whatsapp");
@@ -277,7 +277,7 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
   });
 
-  it("continues Telegram onboarding even when plugin registry is empty (avoids 'plugin not available' block)", async () => {
+  it("continues Telegram setup when the plugin registry is empty", async () => {
     // Simulate missing registry entries (the scenario reported in #25545).
     setActivePluginRegistry(createEmptyPluginRegistry());
     // Avoid accidental env-token configuration changing the prompt path.
@@ -311,12 +311,8 @@ describe("setupChannels", () => {
       );
     });
     expect(sawHardStop).toBe(false);
-    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-      }),
-    );
-    expect(reloadOnboardingPluginRegistry).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(reloadChannelSetupPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("shows explicit dmScope config command in channel primer", async () => {
@@ -360,7 +356,7 @@ describe("setupChannels", () => {
         },
       } satisfies ChannelPluginCatalogEntry,
     ]);
-    vi.mocked(loadOnboardingPluginRegistrySnapshotForChannel).mockImplementation(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
       ({ channel }: { channel: string }) => {
         const registry = createEmptyPluginRegistry();
         if (channel === "msteams") {
@@ -422,7 +418,7 @@ describe("setupChannels", () => {
       prompter,
     );
 
-    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "msteams",
         pluginId: "@openclaw/msteams-plugin",
@@ -458,7 +454,7 @@ describe("setupChannels", () => {
       ],
       diagnostics: [],
     });
-    vi.mocked(loadOnboardingPluginRegistrySnapshotForChannel).mockImplementation(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
       ({ channel }: { channel: string }) => {
         const registry = createEmptyPluginRegistry();
         if (channel === "msteams") {
@@ -515,8 +511,8 @@ describe("setupChannels", () => {
 
     await runSetupChannels({} as OpenClawConfig, prompter);
 
-    expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
-    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "msteams",
         pluginId: "@openclaw/msteams-plugin",
@@ -560,7 +556,7 @@ describe("setupChannels", () => {
         },
       }),
     );
-    vi.mocked(loadOnboardingPluginRegistrySnapshotForChannel).mockImplementation(
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
       ({ channel }: { channel: string }) => {
         const registry = createEmptyPluginRegistry();
         if (channel === "msteams") {
@@ -657,7 +653,7 @@ describe("setupChannels", () => {
       { allowDisable: true },
     );
 
-    expect(loadOnboardingPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "msteams" }),
     );
     expect(setAccountEnabled).toHaveBeenCalledWith(

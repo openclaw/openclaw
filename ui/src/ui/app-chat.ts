@@ -10,7 +10,7 @@ import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
-import type { ModelCatalogEntry } from "./types.ts";
+import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
@@ -29,7 +29,7 @@ export type ChatHost = {
   basePath: string;
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
-  chatModelOverrides: Record<string, string | null>;
+  chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   updateComplete?: Promise<unknown>;
@@ -174,7 +174,8 @@ async function sendChatMessageNow(
   if (ok && opts?.restoreAttachments && opts.previousAttachments?.length) {
     host.chatAttachments = opts.previousAttachments;
   }
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  // Force scroll after sending to ensure viewport is at bottom for incoming stream
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
   if (ok && !host.chatRunId) {
     void flushChatQueue(host);
   }
@@ -346,10 +347,10 @@ async function dispatchSlashCommand(
     injectCommandResult(host, result.content);
   }
 
-  if (result.sessionPatch && "model" in result.sessionPatch) {
+  if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
     host.chatModelOverrides = {
       ...host.chatModelOverrides,
-      [targetSessionKey]: result.sessionPatch.model ?? null,
+      [targetSessionKey]: result.sessionPatch.modelOverride ?? null,
     };
   }
 

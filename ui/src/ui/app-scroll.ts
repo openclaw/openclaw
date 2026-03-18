@@ -30,6 +30,10 @@ type LatestChatBlock = {
   defaultMode: ChatAutoScrollMode;
 };
 
+function queryHost(host: Partial<ScrollHost>, selectors: string): Element | null {
+  return typeof host.querySelector === "function" ? host.querySelector(selectors) : null;
+}
+
 function pickLatestChatBlock(host: ScrollHost): LatestChatBlock | null {
   const threadInner = host.querySelector(".chat-thread-inner") as HTMLElement | null;
   if (!threadInner) {
@@ -142,7 +146,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
     host.chatScrollTimeout = null;
   }
   const pickScrollTarget = () => {
-    const container = host.querySelector(".chat-thread") as HTMLElement | null;
+    const container = queryHost(host, ".chat-thread") as HTMLElement | null;
     if (container) {
       const overflowY = getComputedStyle(container).overflowY;
       const canScroll =
@@ -271,7 +275,7 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
   void host.updateComplete.then(() => {
     host.logsScrollFrame = requestAnimationFrame(() => {
       host.logsScrollFrame = null;
-      const container = host.querySelector(".log-stream") as HTMLElement | null;
+      const container = queryHost(host, ".log-stream") as HTMLElement | null;
       if (!container) {
         return;
       }
@@ -363,7 +367,7 @@ export function observeTopbar(host: ScrollHost) {
   if (typeof ResizeObserver === "undefined") {
     return;
   }
-  const topbar = host.querySelector(".topbar");
+  const topbar = queryHost(host, ".topbar");
   if (!topbar) {
     return;
   }

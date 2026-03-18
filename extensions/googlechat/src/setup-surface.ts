@@ -1,19 +1,16 @@
-import type { ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
-import {
-  addWildcardAllowFrom,
-  mergeAllowFromEntries,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  splitOnboardingEntries,
-} from "../../../src/channels/plugins/onboarding/helpers.js";
 import {
   applySetupAccountConfigPatch,
+  createNestedChannelDmPolicy,
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
+  mergeAllowFromEntries,
   migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  patchNestedChannelConfigSection,
+  splitSetupEntries,
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
@@ -27,28 +24,9 @@ const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 const USE_ENV_FLAG = "__googlechatUseEnv";
 const AUTH_METHOD_FLAG = "__googlechatAuthMethod";
 
-function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
-  const allowFrom =
-    policy === "open" ? addWildcardAllowFrom(cfg.channels?.googlechat?.dm?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      googlechat: {
-        ...cfg.channels?.googlechat,
-        dm: {
-          ...cfg.channels?.googlechat?.dm,
-          policy,
-          ...(allowFrom ? { allowFrom } : {}),
-        },
-      },
-    },
-  };
-}
-
 async function promptAllowFrom(params: {
   cfg: OpenClawConfig;
-  prompter: Parameters<NonNullable<ChannelOnboardingDmPolicy["promptAllowFrom"]>>[0]["prompter"];
+  prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
 }): Promise<OpenClawConfig> {
   const current = params.cfg.channels?.googlechat?.dm?.allowFrom ?? [];
   const entry = await params.prompter.text({
@@ -57,34 +35,30 @@ async function promptAllowFrom(params: {
     initialValue: current[0] ? String(current[0]) : undefined,
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
-  const parts = splitOnboardingEntries(String(entry));
+  const parts = splitSetupEntries(String(entry));
   const unique = mergeAllowFromEntries(undefined, parts);
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      googlechat: {
-        ...params.cfg.channels?.googlechat,
-        enabled: true,
-        dm: {
-          ...params.cfg.channels?.googlechat?.dm,
-          policy: "allowlist",
-          allowFrom: unique,
-        },
-      },
+  return patchNestedChannelConfigSection({
+    cfg: params.cfg,
+    channel,
+    section: "dm",
+    enabled: true,
+    patch: {
+      policy: "allowlist",
+      allowFrom: unique,
     },
-  };
+  });
 }
 
-const googlechatDmPolicy: ChannelOnboardingDmPolicy = {
+const googlechatDmPolicy: ChannelSetupDmPolicy = createNestedChannelDmPolicy({
   label: "Google Chat",
   channel,
+  section: "dm",
   policyKey: "channels.googlechat.dm.policy",
   allowFromKey: "channels.googlechat.dm.allowFrom",
   getCurrent: (cfg) => cfg.channels?.googlechat?.dm?.policy ?? "pairing",
-  setPolicy: (cfg, policy) => setGoogleChatDmPolicy(cfg, policy),
   promptAllowFrom,
-};
+  enabled: true,
+});
 
 export { googlechatSetupAdapter } from "./setup-core.js";
 

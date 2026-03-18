@@ -21,8 +21,8 @@ export {
   setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
   setTopLevelChannelGroupPolicy,
-  splitOnboardingEntries,
-} from "../channels/plugins/onboarding/helpers.js";
+  splitSetupEntries,
+} from "../channels/plugins/setup-wizard-helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 export type {
   BaseProbeResult,
@@ -31,6 +31,11 @@ export type {
   ChannelMeta,
   ChannelOutboundAdapter,
 } from "../channels/plugins/types.js";
+export type {
+  ChannelConfiguredBindingProvider,
+  ChannelConfiguredBindingConversationRef,
+  ChannelConfiguredBindingMatch,
+} from "../channels/plugins/types.adapters.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixContext } from "../channels/reply-prefix.js";
 export { createTypingCallbacks } from "../channels/typing.js";
@@ -62,8 +67,7 @@ export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export { evaluateSenderGroupAccessForPolicy } from "./group-access.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { feishuSetupWizard } from "../../extensions/feishu/src/setup-surface.js";
-export { feishuSetupAdapter } from "../../extensions/feishu/src/setup-core.js";
+export { feishuSetupWizard, feishuSetupAdapter } from "../../extensions/feishu/setup-api.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export { readJsonFileWithFallback } from "./json-store.js";
 export { createScopedPairingAccess } from "./pairing-access.js";
@@ -76,6 +80,10 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 export { withTempDownloadPath } from "./temp-path.js";
+export {
+  buildFeishuConversationId,
+  parseFeishuConversationId,
+} from "../../extensions/feishu/src/conversation-id.js";
 export {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,

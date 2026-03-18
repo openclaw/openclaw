@@ -14,7 +14,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import {
   type HeartbeatSummary,
   resolveHeartbeatSummaryForAgent,
-} from "../infra/heartbeat-runner.js";
+} from "../infra/heartbeat-summary.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -165,18 +165,14 @@ const buildSessionSummary = (storePath: string) => {
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 
-function inspectHealthAccount(
-  plugin: ChannelPlugin,
-  cfg: OpenClawConfig,
-  accountId: string,
-): unknown {
+async function inspectHealthAccount(plugin: ChannelPlugin, cfg: OpenClawConfig, accountId: string) {
   return (
     plugin.config.inspectAccount?.(cfg, accountId) ??
-    inspectReadOnlyChannelAccount({
+    (await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    })
+    }))
   );
 }
 
@@ -206,7 +202,7 @@ async function resolveHealthAccountContext(params: {
     diagnostics.push(
       `${params.plugin.id}:${params.accountId}: failed to resolve account (${formatErrorMessage(error)}).`,
     );
-    account = inspectHealthAccount(params.plugin, params.cfg, params.accountId);
+    account = await inspectHealthAccount(params.plugin, params.cfg, params.accountId);
   }
 
   if (!account) {

@@ -1,3 +1,4 @@
+// Avoid routing a core ACP helper back through the Feishu plugin-sdk seam.
 import { buildFeishuConversationId } from "../../../../extensions/feishu/src/conversation-id.js";
 import {
   buildTelegramTopicConversationId,

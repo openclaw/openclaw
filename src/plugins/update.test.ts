@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const installPluginFromNpmSpecMock = vi.fn();
+const installPluginFromMarketplaceMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 
 vi.mock("./install.js", () => ({
@@ -11,13 +12,20 @@ vi.mock("./install.js", () => ({
   },
 }));
 
+vi.mock("./marketplace.js", () => ({
+  installPluginFromMarketplace: (...args: unknown[]) => installPluginFromMarketplaceMock(...args),
+}));
+
 vi.mock("./bundled-sources.js", () => ({
   resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSourcesMock(...args),
 }));
 
+const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } = await import("./update.js");
+
 describe("updateNpmInstalledPlugins", () => {
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
+    installPluginFromMarketplaceMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
   });
 
@@ -30,7 +38,6 @@ describe("updateNpmInstalledPlugins", () => {
       extensions: ["index.ts"],
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -65,7 +72,6 @@ describe("updateNpmInstalledPlugins", () => {
       extensions: ["index.ts"],
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -98,7 +104,6 @@ describe("updateNpmInstalledPlugins", () => {
       error: "Package not found on npm: @openclaw/missing.",
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     const result = await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -131,7 +136,6 @@ describe("updateNpmInstalledPlugins", () => {
       error: "unsupported npm spec: github:evil/evil",
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     const result = await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -166,7 +170,6 @@ describe("updateNpmInstalledPlugins", () => {
       extensions: ["index.ts"],
     });
 
-    const { updateNpmInstalledPlugins } = await import("./update.js");
     const result = await updateNpmInstalledPlugins({
       config: {
         plugins: {
@@ -213,6 +216,93 @@ describe("updateNpmInstalledPlugins", () => {
     });
     expect(result.config.plugins?.installs?.["voice-call"]).toBeUndefined();
   });
+
+  it("checks marketplace installs during dry-run updates", async () => {
+    installPluginFromMarketplaceMock.mockResolvedValue({
+      ok: true,
+      pluginId: "claude-bundle",
+      targetDir: "/tmp/claude-bundle",
+      version: "1.2.0",
+      extensions: ["index.ts"],
+      marketplaceSource: "vincentkoc/claude-marketplace",
+      marketplacePlugin: "claude-bundle",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "claude-bundle": {
+              source: "marketplace",
+              marketplaceSource: "vincentkoc/claude-marketplace",
+              marketplacePlugin: "claude-bundle",
+              installPath: "/tmp/claude-bundle",
+            },
+          },
+        },
+      },
+      pluginIds: ["claude-bundle"],
+      dryRun: true,
+    });
+
+    expect(installPluginFromMarketplaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        marketplace: "vincentkoc/claude-marketplace",
+        plugin: "claude-bundle",
+        expectedPluginId: "claude-bundle",
+        dryRun: true,
+      }),
+    );
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "claude-bundle",
+        status: "updated",
+        currentVersion: undefined,
+        nextVersion: "1.2.0",
+        message: "Would update claude-bundle: unknown -> 1.2.0.",
+      },
+    ]);
+  });
+
+  it("updates marketplace installs and preserves source metadata", async () => {
+    installPluginFromMarketplaceMock.mockResolvedValue({
+      ok: true,
+      pluginId: "claude-bundle",
+      targetDir: "/tmp/claude-bundle",
+      version: "1.3.0",
+      extensions: ["index.ts"],
+      marketplaceName: "Vincent's Claude Plugins",
+      marketplaceSource: "vincentkoc/claude-marketplace",
+      marketplacePlugin: "claude-bundle",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "claude-bundle": {
+              source: "marketplace",
+              marketplaceName: "Vincent's Claude Plugins",
+              marketplaceSource: "vincentkoc/claude-marketplace",
+              marketplacePlugin: "claude-bundle",
+              installPath: "/tmp/claude-bundle",
+            },
+          },
+        },
+      },
+      pluginIds: ["claude-bundle"],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.installs?.["claude-bundle"]).toMatchObject({
+      source: "marketplace",
+      installPath: "/tmp/claude-bundle",
+      version: "1.3.0",
+      marketplaceName: "Vincent's Claude Plugins",
+      marketplaceSource: "vincentkoc/claude-marketplace",
+      marketplacePlugin: "claude-bundle",
+    });
+  });
 });
 
 describe("syncPluginsForUpdateChannel", () => {
@@ -235,7 +325,6 @@ describe("syncPluginsForUpdateChannel", () => {
       ]),
     );
 
-    const { syncPluginsForUpdateChannel } = await import("./update.js");
     const result = await syncPluginsForUpdateChannel({
       channel: "beta",
       config: {
@@ -274,7 +363,6 @@ describe("syncPluginsForUpdateChannel", () => {
       ]),
     );
 
-    const { syncPluginsForUpdateChannel } = await import("./update.js");
     const result = await syncPluginsForUpdateChannel({
       channel: "beta",
       config: {
@@ -307,7 +395,6 @@ describe("syncPluginsForUpdateChannel", () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
 
-    const { syncPluginsForUpdateChannel } = await import("./update.js");
     await syncPluginsForUpdateChannel({
       channel: "beta",
       config: {},
@@ -339,7 +426,6 @@ describe("syncPluginsForUpdateChannel", () => {
     const previousHome = process.env.HOME;
     process.env.HOME = "/tmp/process-home";
     try {
-      const { syncPluginsForUpdateChannel } = await import("./update.js");
       const result = await syncPluginsForUpdateChannel({
         channel: "beta",
         env: {

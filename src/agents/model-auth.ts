@@ -25,7 +25,7 @@ import {
   isNonSecretApiKeyMarker,
   OLLAMA_LOCAL_AUTH_MARKER,
 } from "./model-auth-markers.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId, normalizeProviderIdForAuth } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
@@ -202,7 +202,7 @@ function resolveSyntheticLocalProviderAuth(params: {
 
   // Custom providers pointing at a local server (e.g. llama.cpp, vLLM, LocalAI)
   // typically don't require auth. Synthesize a local key so the auth resolver
-  // doesn't reject them when the user left the API key blank during onboarding.
+  // doesn't reject them when the user left the API key blank during setup.
   if (providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl)) {
     return {
       apiKey: CUSTOM_LOCAL_AUTH_MARKER,
@@ -400,7 +400,7 @@ export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
 ): EnvApiKeyResult | null {
-  const normalized = normalizeProviderId(provider);
+  const normalized = normalizeProviderIdForAuth(provider);
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -485,6 +485,56 @@ export function resolveModelAuthMode(
   }
 
   return "unknown";
+}
+
+export async function hasAvailableAuthForProvider(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  preferredProfile?: string;
+  store?: AuthProfileStore;
+  agentDir?: string;
+}): Promise<boolean> {
+  const { provider, cfg, preferredProfile } = params;
+  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+
+  const authOverride = resolveProviderAuthOverride(cfg, provider);
+  if (authOverride === "aws-sdk") {
+    return true;
+  }
+
+  const order = resolveAuthProfileOrder({
+    cfg,
+    store,
+    provider,
+    preferredProfile,
+  });
+  for (const candidate of order) {
+    try {
+      const resolved = await resolveApiKeyForProfile({
+        cfg,
+        store,
+        profileId: candidate,
+        agentDir: params.agentDir,
+      });
+      if (resolved) {
+        return true;
+      }
+    } catch (err) {
+      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+    }
+  }
+
+  if (resolveEnvApiKey(provider)) {
+    return true;
+  }
+  if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+    return true;
+  }
+
+  return authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock";
 }
 
 export async function getApiKeyForModel(params: {

@@ -17,10 +17,22 @@
     "PS4",
     "GCONV_PATH",
     "IFS",
-    "SSLKEYLOGFILE"
+    "SSLKEYLOGFILE",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "PYTHONBREAKPOINT",
+    "DOTNET_STARTUP_HOOKS",
+    "DOTNET_ADDITIONAL_DEPS",
+    "GLIBC_TUNABLES",
+    "MAVEN_OPTS",
+    "SBT_OPTS",
+    "GRADLE_OPTS",
+    "ANT_OPTS"
   ],
   "blockedOverrideKeys": [
     "HOME",
+    "GRADLE_USER_HOME",
     "ZDOTDIR",
     "GIT_SSH_COMMAND",
     "GIT_SSH",

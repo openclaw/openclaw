@@ -62,6 +62,12 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       capDrop: ["ALL"],
       env: { LANG: "C.UTF-8" },
     },
+    ssh: {
+      command: "ssh",
+      workspaceRoot: "/tmp/openclaw-sandboxes",
+      strictHostKeyChecking: true,
+      updateHostKeys: true,
+    },
     browser: {
       enabled: true,
       image: "openclaw-sandbox-browser:bookworm-slim",

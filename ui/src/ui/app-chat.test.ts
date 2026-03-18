@@ -124,7 +124,14 @@ describe("handleSendChat", () => {
     );
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.patch") {
-        return { ok: true, key: "main" };
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "openai",
+            model: "gpt-5-mini",
+          },
+        };
       }
       if (method === "chat.history") {
         return { messages: [], thinkingLevel: null };
@@ -134,7 +141,7 @@ describe("handleSendChat", () => {
           ts: 0,
           path: "",
           count: 0,
-          defaults: { model: "gpt-5", contextTokens: null },
+          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
           sessions: [],
         };
       }
@@ -157,7 +164,10 @@ describe("handleSendChat", () => {
       key: "main",
       model: "gpt-5-mini",
     });
-    expect(host.chatModelOverrides.main).toBe("gpt-5-mini");
+    expect(host.chatModelOverrides.main).toEqual({
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
+    });
   });
 
   it("re-arms bottom-follow when sending a new message", async () => {

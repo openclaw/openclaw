@@ -3,7 +3,7 @@ import {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
   expectRuntimeCfgFallback,
-} from "../../test-utils/send-config.js";
+} from "../../../test/helpers/extensions/send-config.js";
 import type { IrcClient } from "./client.js";
 import type { CoreConfig } from "./types.js";
 
