@@ -42,6 +42,51 @@ import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from ".
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
+// --- Active bot topic tracking (#40475) ---
+// Tracks group topics where the bot was @-mentioned, so that subsequent thread
+// replies can skip the mention check without responding in unrelated threads.
+// Keyed by "accountId:chatId:topicId" (scoped per account so multi-account
+// setups do not leak activation across bots), value is last-activity epoch-ms.
+const activeBotTopicTimestamps = new Map<string, number>();
+const ACTIVE_TOPIC_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_ACTIVE_TOPICS = 500;
+
+function buildTopicKey(accountId: string, chatId: string, topicId: string): string {
+  return `${accountId}:${chatId}:${topicId}`;
+}
+
+function isActiveBotTopic(accountId: string, chatId: string, topicId: string): boolean {
+  const key = buildTopicKey(accountId, chatId, topicId);
+  const ts = activeBotTopicTimestamps.get(key);
+  if (ts == null) return false;
+  if (Date.now() - ts > ACTIVE_TOPIC_TTL_MS) {
+    activeBotTopicTimestamps.delete(key);
+    return false;
+  }
+  return true;
+}
+
+function markActiveBotTopic(accountId: string, chatId: string, topicId: string): void {
+  const key = buildTopicKey(accountId, chatId, topicId);
+  activeBotTopicTimestamps.set(key, Date.now());
+  // Evict when the map exceeds the cap.
+  if (activeBotTopicTimestamps.size > MAX_ACTIVE_TOPICS) {
+    // First pass: remove expired entries.
+    const cutoff = Date.now() - ACTIVE_TOPIC_TTL_MS;
+    for (const [k, v] of activeBotTopicTimestamps) {
+      if (v < cutoff) activeBotTopicTimestamps.delete(k);
+    }
+    // Second pass: if still over limit, evict oldest entries.
+    if (activeBotTopicTimestamps.size > MAX_ACTIVE_TOPICS) {
+      const sorted = [...activeBotTopicTimestamps.entries()].sort((a, b) => a[1] - b[1]);
+      const excess = activeBotTopicTimestamps.size - MAX_ACTIVE_TOPICS;
+      for (let i = 0; i < excess; i++) {
+        activeBotTopicTimestamps.delete(sorted[i][0]);
+      }
+    }
+  }
+}
+
 // --- Permission error extraction ---
 // Extract permission grant URL from Feishu API error response.
 type PermissionError = {
@@ -1087,7 +1132,50 @@ export async function handleFeishuMessage(params: {
       groupConfig,
     }));
 
-    if (requireMention && !ctx.mentionedBot) {
+    // --- Thread follow-up mention bypass (#40475) ---
+    //
+    // In topic-scoped sessions (group_topic / group_topic_sender) a user
+    // @-mentions the bot once to start a conversation; the bot replies inside a
+    // thread.  Requiring @-mention for every subsequent reply makes topic
+    // sessions unusable.
+    //
+    // threadFollowUp controls this behavior:
+    //   "off"    — always require @-mention, even in threads (pre-feature behaviour)
+    //   "topic"  — skip @-mention for all thread replies in topic-scoped sessions
+    //   "active" — skip @-mention only in topics the bot was previously
+    //              @-mentioned in (prevents responding to unrelated human
+    //              threads) [default]
+    //
+    // Group-scoped sessions (groupSessionScope="group") are never affected
+    // regardless of this setting — threads there may be entirely unrelated to
+    // the bot.
+    const threadFollowUp: string =
+      groupConfig?.threadFollowUp ?? feishuCfg?.threadFollowUp ?? "active";
+    const isTopicScoped =
+      groupSession?.groupSessionScope === "group_topic" ||
+      groupSession?.groupSessionScope === "group_topic_sender";
+    // Use rootId when available, fall back to threadId for topic continuity
+    // (some Feishu deliveries only carry thread_id without root_id).
+    const threadAnchorId = ctx.rootId || ctx.threadId;
+    const topicId = threadAnchorId || ctx.messageId;
+
+    // Record active topics when the bot is explicitly @-mentioned so that the
+    // "active" mode can recognise follow-ups later.
+    if (isTopicScoped && ctx.mentionedBot) {
+      markActiveBotTopic(account.accountId, ctx.chatId, topicId);
+    }
+
+    let skipMentionForThread = false;
+    if (isTopicScoped && threadAnchorId && !ctx.mentionedBot) {
+      if (threadFollowUp === "topic") {
+        skipMentionForThread = true;
+      } else if (threadFollowUp === "active") {
+        skipMentionForThread = isActiveBotTopic(account.accountId, ctx.chatId, threadAnchorId);
+      }
+      // threadFollowUp === "off" → skipMentionForThread stays false
+    }
+
+    if (requireMention && !ctx.mentionedBot && !skipMentionForThread) {
       log(`feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot`);
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
@@ -1107,6 +1195,16 @@ export async function handleFeishuMessage(params: {
         });
       }
       return;
+    }
+
+    // Refresh the active topic timestamp on successful follow-ups so that
+    // long-running conversations stay alive.
+    if (skipMentionForThread) {
+      markActiveBotTopic(account.accountId, ctx.chatId, threadAnchorId!);
+      log(
+        `feishu[${account.accountId}]: thread follow-up in group ${ctx.chatId} ` +
+          `(threadFollowUp=${threadFollowUp}, rootId=${ctx.rootId}, threadId=${ctx.threadId})`,
+      );
     }
   } else {
   }
@@ -1639,7 +1737,9 @@ export async function handleFeishuMessage(params: {
         ((cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined)
           ?.strategy || "parallel";
       const activeAgentId =
-        ctx.mentionedBot || !requireMention ? normalizeAgentId(route.agentId) : null;
+        ctx.mentionedBot || !requireMention || skipMentionForThread
+          ? normalizeAgentId(route.agentId)
+          : null;
       const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => normalizeAgentId(a.id));
       const hasKnownAgents = agentIds.length > 0;
 

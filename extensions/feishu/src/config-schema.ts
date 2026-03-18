@@ -138,9 +138,27 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
+/**
+ * Thread follow-up mention policy for group chats (#40475).
+ *
+ * Controls whether the bot responds to thread replies without an explicit
+ * @-mention.  Only effective when `groupSessionScope` is `"group_topic"` or
+ * `"group_topic_sender"` — group-scoped sessions are never affected.
+ *
+ * - "off"     — always require @-mention, even inside threads (pre-feature behaviour)
+ * - "topic"   — skip @-mention for all thread replies in topic-scoped sessions
+ * - "active"  — skip @-mention only in topics where the bot was previously
+ *               @-mentioned (prevents the bot from responding in unrelated
+ *               human threads) [recommended]
+ *
+ * Default: "active"
+ */
+const ThreadFollowUpSchema = z.enum(["off", "topic", "active"]).optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    threadFollowUp: ThreadFollowUpSchema,
     tools: ToolPolicySchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
@@ -164,6 +182,7 @@ const FeishuSharedConfigShape = {
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   requireMention: z.boolean().optional(),
+  threadFollowUp: ThreadFollowUpSchema,
   groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),

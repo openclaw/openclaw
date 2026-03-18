@@ -2716,3 +2716,229 @@ describe("broadcast dispatch", () => {
     expect(sessionKey).toBe("agent:susan:feishu:group:oc-broadcast-group");
   });
 });
+
+// ---------------------------------------------------------------------------
+// threadFollowUp — thread reply mention bypass (#40475)
+// ---------------------------------------------------------------------------
+describe("handleFeishuMessage threadFollowUp", () => {
+  const mockFinalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+  const mockDispatchReplyFromConfig = vi
+    .fn()
+    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+  const mockWithReplyDispatcher = vi.fn(
+    async ({
+      run,
+      dispatcher,
+      onSettled,
+    }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
+      try {
+        return await run();
+      } finally {
+        dispatcher.markComplete();
+        try {
+          await dispatcher.waitForIdle();
+        } finally {
+          await onSettled?.();
+        }
+      }
+    },
+  );
+
+  // Each test uses a unique prefix so the module-level active-topic map
+  // does not leak state between tests.
+  let testId = 0;
+  beforeEach(() => {
+    testId++;
+    vi.clearAllMocks();
+    mockGetMessageFeishu.mockReset().mockResolvedValue(null);
+    mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
+    mockReadSessionUpdatedAt.mockReturnValue(undefined);
+    mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
+    mockResolveConfiguredAcpRoute
+      .mockReset()
+      .mockImplementation(
+        ({ route }: { route: unknown }) => ({ configuredBinding: null, route }) as any,
+      );
+    mockEnsureConfiguredAcpRouteReady.mockReset().mockResolvedValue({ ok: true });
+    mockResolveBoundConversation.mockReset().mockReturnValue(null);
+    mockTouchBinding.mockReset();
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:feishu:group:oc-tfu-group:topic:msg-root",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+    });
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        channel: {
+          routing: {
+            resolveAgentRoute:
+              mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          },
+          session: {
+            readSessionUpdatedAt:
+              mockReadSessionUpdatedAt as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+            resolveStorePath:
+              mockResolveStorePath as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: vi.fn(
+              () => ({}),
+            ) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext:
+              mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher:
+              mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
+          },
+          commands: {
+            shouldComputeCommandAuthorized: vi.fn(() => false),
+            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          },
+          media: {
+            saveMediaBuffer:
+              vi.fn() as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+          },
+          pairing: {
+            readAllowFromStore: vi.fn().mockResolvedValue([]),
+            upsertPairingRequest: vi.fn(),
+            buildPairingReply: vi.fn(),
+          },
+        },
+      }),
+    );
+  });
+
+  /** Build a group message event with unique IDs per test. */
+  function groupEvent(overrides: {
+    mentionBot?: boolean;
+    rootId?: string;
+    messageId?: string;
+    text?: string;
+  }): FeishuMessageEvent {
+    const mentions = overrides.mentionBot
+      ? [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot", tenant_key: "" }]
+      : undefined;
+    return {
+      sender: { sender_id: { open_id: "ou-sender" } },
+      message: {
+        message_id: overrides.messageId ?? `msg-tfu-${testId}`,
+        chat_id: "oc-tfu-group",
+        chat_type: "group",
+        message_type: "text",
+        root_id: overrides.rootId,
+        content: JSON.stringify({ text: overrides.text ?? "hello" }),
+        mentions,
+      },
+    };
+  }
+
+  /** Build a config with group_topic scope. */
+  function topicCfg(threadFollowUp?: string): ClawdbotConfig {
+    return {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSessionScope: "group_topic",
+          groupAllowFrom: ["oc-tfu-group"],
+          ...(threadFollowUp != null ? { threadFollowUp } : {}),
+        },
+      },
+    } as ClawdbotConfig;
+  }
+
+  /** Dispatch with botOpenId so @mention detection works. */
+  async function dispatch(cfg: ClawdbotConfig, event: FeishuMessageEvent) {
+    const runtime = createRuntimeEnv();
+    await handleFeishuMessage({
+      cfg,
+      event,
+      botOpenId: "ou-bot",
+      runtime,
+    });
+    return runtime;
+  }
+
+  it("dispatches top-level @mention in group_topic mode", async () => {
+    await dispatch(topicCfg(), groupEvent({ mentionBot: true, messageId: `msg-root-${testId}` }));
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops top-level message without @mention in group_topic mode", async () => {
+    await dispatch(topicCfg(), groupEvent({ mentionBot: false }));
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("dispatches thread reply in active bot topic (threadFollowUp=active)", async () => {
+    const rootId = `msg-root-active-${testId}`;
+    // Step 1: bot is @mentioned — marks the topic as active
+    await dispatch(topicCfg(), groupEvent({ mentionBot: true, messageId: rootId }));
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    vi.clearAllMocks();
+
+    // Step 2: follow-up reply in the same topic without @mention
+    await dispatch(
+      topicCfg(),
+      groupEvent({ mentionBot: false, rootId, messageId: `msg-followup-${testId}` }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops thread reply in unrelated human topic (threadFollowUp=active)", async () => {
+    // No prior @mention for this topic — bot was never invited
+    await dispatch(
+      topicCfg(),
+      groupEvent({
+        mentionBot: false,
+        rootId: `msg-human-${testId}`,
+        messageId: `msg-reply-${testId}`,
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("dispatches any thread reply when threadFollowUp=topic", async () => {
+    // Even without a prior @mention, "topic" mode allows all thread replies
+    await dispatch(
+      topicCfg("topic"),
+      groupEvent({ mentionBot: false, rootId: `msg-any-${testId}` }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops thread reply without @mention when threadFollowUp=off", async () => {
+    const rootId = `msg-root-off-${testId}`;
+    // Even after a prior @mention, "off" mode still requires mention
+    await dispatch(topicCfg("off"), groupEvent({ mentionBot: true, messageId: rootId }));
+    vi.clearAllMocks();
+
+    await dispatch(topicCfg("off"), groupEvent({ mentionBot: false, rootId }));
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("drops thread reply without @mention in group-scoped session", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSessionScope: "group",
+          groupAllowFrom: ["oc-tfu-group"],
+          threadFollowUp: "active",
+        },
+      },
+    } as ClawdbotConfig;
+
+    await dispatch(cfg, groupEvent({ mentionBot: false, rootId: `msg-group-${testId}` }));
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+});
