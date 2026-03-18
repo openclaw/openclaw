@@ -1,13 +1,15 @@
 import type { GatewayAuthChoice, GatewayBind, TailscaleMode } from "./onboard-types.js";
 
+export type GatewayExposureAuthMode = GatewayAuthChoice | "trusted-proxy";
+
 export function normalizeGatewayExposureSafety(params: {
   bind: GatewayBind;
-  authMode: GatewayAuthChoice;
+  authMode: GatewayExposureAuthMode;
   tailscaleMode: TailscaleMode;
   customBindHost?: string;
 }): {
   bind: GatewayBind;
-  authMode: GatewayAuthChoice;
+  authMode: GatewayExposureAuthMode;
   customBindHost?: string;
   adjustments: {
     bindForcedToLoopback: boolean;
