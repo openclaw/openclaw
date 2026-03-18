@@ -4,8 +4,8 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/matrix";
 import { z } from "zod";
+import { MarkdownConfigSchema, ToolPolicySchema } from "../runtime-api.js";
 import { buildSecretInputSchema } from "./secret-input.js";
 
 const matrixActionSchema = z
