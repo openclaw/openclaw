@@ -14,7 +14,21 @@ export const MODEL_APIS = [
 
 export type ModelApi = (typeof MODEL_APIS)[number];
 
-export type ModelCompatConfig = OpenAICompletionsCompat & {
+type SupportedOpenAICompatFields = Pick<
+  OpenAICompletionsCompat,
+  | "supportsStore"
+  | "supportsDeveloperRole"
+  | "supportsReasoningEffort"
+  | "supportsUsageInStreaming"
+  | "supportsStrictMode"
+  | "maxTokensField"
+  | "thinkingFormat"
+  | "requiresToolResultName"
+  | "requiresAssistantAfterToolResult"
+  | "requiresThinkingAsText"
+>;
+
+export type ModelCompatConfig = SupportedOpenAICompatFields & {
   supportsTools?: boolean;
   toolSchemaProfile?: "xai";
   nativeWebSearchTool?: boolean;
