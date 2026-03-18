@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -48,7 +49,6 @@ import {
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { logWarn } from "../../logger.js";
-import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   buildSafeExternalPrompt,

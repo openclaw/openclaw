@@ -1,10 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { hasOutboundReplyContent } from "../../../plugin-sdk/reply-payload.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,

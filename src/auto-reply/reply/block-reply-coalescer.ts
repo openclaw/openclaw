@@ -1,4 +1,4 @@
-import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 

@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
@@ -11,7 +12,6 @@ import {
   hasReplyPayloadContent,
   type InteractiveReply,
 } from "../../interactive/payload.js";
-import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
