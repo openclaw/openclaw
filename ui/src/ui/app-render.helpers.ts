@@ -309,8 +309,9 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   const groupMatch = key.match(/^agent:[^:]+:([^:]+):group:(.+)$/);
   if (groupMatch) {
     const channel = groupMatch[1];
+    const identifier = groupMatch[2];
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
-    return { prefix: "", fallbackName: `${channelLabel} Group` };
+    return { prefix: "", fallbackName: `${channelLabel} Group · ${identifier}` };
   }
 
   // ── Channel-prefixed legacy keys (e.g. "bluebubbles:g-…") ──
