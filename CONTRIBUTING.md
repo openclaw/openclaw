@@ -116,6 +116,18 @@ If a review bot leaves review conversations on your PR, you are expected to hand
 
 This applies to both human-authored and AI-assisted PRs.
 
+### Reliability reports (recommended)
+
+For reliability bugs and operational regressions, include a compact failure trace in your issue/PR description:
+
+- Trigger / Context
+- Symptom
+- Probable Root Cause
+- Applied Fix
+- Verification Step
+
+Template and example: [`docs/help/failure-summary.md`](docs/help/failure-summary.md)
+
 ## Control UI Decorators
 
 The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support
