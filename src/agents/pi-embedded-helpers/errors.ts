@@ -853,7 +853,6 @@ function isGenericProviderError(raw: string): boolean {
   const lower = raw.toLowerCase();
   return (
     lower.includes("an unknown error occurred") ||
-    lower.includes("an error occurred") ||
     lower.includes("internal server error") ||
     lower.includes("service unavailable")
   );
