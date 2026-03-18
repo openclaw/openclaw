@@ -225,7 +225,7 @@ Notes:
 Some hosted browser services expose a **direct WebSocket** endpoint rather than
 the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
 
-- **HTTP(S) endpoints** (e.g. Browserless) — OpenClaw calls `/json/version` to
+- **HTTP(S) endpoints** — OpenClaw calls `/json/version` to
   discover the WebSocket debugger URL, then connects.
 - **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
   skipping `/json/version`. Use this for services like
