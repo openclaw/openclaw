@@ -2,14 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin } from "../types.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
+type ResolvePluginProviders = typeof import("../providers.js").resolvePluginProviders;
 
-const resolvePluginProvidersMock = vi.fn();
+const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
+
+vi.mock("../providers.js", () => ({
+  resolvePluginProviders: (params?: { onlyPluginIds?: string[] }) =>
+    resolvePluginProvidersMock(params as never),
+}));
 
 let buildProviderPluginMethodChoice: typeof import("../provider-wizard.js").buildProviderPluginMethodChoice;
-let providerContractPluginIds: typeof import("./registry.js").providerContractPluginIds;
 let resolveProviderModelPickerEntries: typeof import("../provider-wizard.js").resolveProviderModelPickerEntries;
 let resolveProviderPluginChoice: typeof import("../provider-wizard.js").resolveProviderPluginChoice;
 let resolveProviderWizardOptions: typeof import("../provider-wizard.js").resolveProviderWizardOptions;
+let providerContractPluginIds: typeof import("./registry.js").providerContractPluginIds;
 let uniqueProviderContractProviders: typeof import("./registry.js").uniqueProviderContractProviders;
 
 function resolveExpectedWizardChoiceValues(providers: ProviderPlugin[]) {
@@ -71,14 +77,16 @@ function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
 describe("provider wizard contract", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.doUnmock("../providers.js");
+    const actualProviders =
+      await vi.importActual<typeof import("../providers.js")>("../providers.js");
+    resolvePluginProvidersMock.mockReset();
+    resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) =>
+      actualProviders.resolvePluginProviders(params as never),
+    );
     ({ providerContractPluginIds, uniqueProviderContractProviders } =
       await import("./registry.js"));
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue(uniqueProviderContractProviders);
-    vi.doMock("../providers.js", () => ({
-      resolvePluginProviders: (...args: unknown[]) => resolvePluginProvidersMock(...args),
-    }));
     ({
       buildProviderPluginMethodChoice,
       resolveProviderModelPickerEntries,
