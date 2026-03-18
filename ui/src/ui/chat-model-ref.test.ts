@@ -54,6 +54,12 @@ describe("chat-model-ref helpers", () => {
     );
   });
 
+  it("preserves same-provider prefixes for native slash-containing model ids", () => {
+    expect(resolveServerChatModelValue("openrouter/auto", "openrouter", catalog)).toBe(
+      "openrouter/openrouter/auto",
+    );
+  });
+
   it("keeps bare server aliases when the current provider does not own that catalog model", () => {
     const ambiguousCatalog: ModelCatalogEntry[] = [
       { id: "glm-5", name: "GLM-5", provider: "zai" },

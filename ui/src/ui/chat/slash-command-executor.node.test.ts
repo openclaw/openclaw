@@ -361,6 +361,38 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+  it("keeps same-provider slash model ids aligned with picker values after /model", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            modelProvider: "openrouter",
+            model: "openrouter/auto",
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "openrouter/auto",
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "openrouter/auto",
+    });
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openrouter/openrouter/auto",
+    });
+  });
+
   it("resolves the legacy main alias for /usage", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {

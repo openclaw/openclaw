@@ -28,14 +28,7 @@ export function buildResolvedChatModelValue(model: string, provider?: string | n
   if (!trimmedProvider) {
     return trimmedModel;
   }
-  const separator = trimmedModel.indexOf("/");
-  if (separator <= 0) {
-    return buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
-  }
-  const embeddedProvider = trimmedModel.slice(0, separator).trim();
-  return embeddedProvider.toLowerCase() === trimmedProvider.toLowerCase()
-    ? trimmedModel
-    : buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
+  return buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
 }
 
 export function createChatModelOverride(value: string): ChatModelOverride | null {
