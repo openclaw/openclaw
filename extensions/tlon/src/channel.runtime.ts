@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { configureClient } from "@tloncorp/api";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
 import type {
   ChannelAccountSnapshot,
@@ -16,6 +15,7 @@ import {
   parseTlonTarget,
   resolveTlonOutboundTarget,
 } from "./targets.js";
+import { loadTlonApi } from "./tlon-api.js";
 import { resolveTlonAccount } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
 import { ssrfPolicyFromAllowPrivateNetwork } from "./urbit/context.js";
@@ -164,8 +164,9 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId, threadId }) => {
     const { account, parsed } = resolveOutboundContext({ cfg, accountId, to });
+    const { configureClient } = await loadTlonApi();
 
-    configureClient({
+    await configureClient({
       shipUrl: account.url,
       shipName: account.ship.replace(/^~/, ""),
       verbose: false,

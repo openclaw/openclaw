@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import Ajv from "ajv";
+import AjvPkg from "ajv";
 import {
   formatXHighModelHint,
   normalizeThinkLevel,
@@ -214,7 +214,13 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         // oxlint-disable-next-line typescript/no-explicit-any
         const schema = (params as any).schema as unknown;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-          const ajv = new Ajv.default({ allErrors: true, strict: false });
+          const Ajv = AjvPkg as unknown as new (opts?: object) => {
+            compile: (schema: unknown) => {
+              errors?: Array<{ instancePath?: string; message?: string }>;
+              (value: unknown): boolean;
+            };
+          };
+          const ajv = new Ajv({ allErrors: true, strict: false });
           // oxlint-disable-next-line typescript/no-explicit-any
           const validate = ajv.compile(schema as any);
           const ok = validate(parsed);
