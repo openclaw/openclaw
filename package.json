@@ -210,6 +210,14 @@
       "types": "./dist/plugin-sdk/whatsapp.d.ts",
       "default": "./dist/plugin-sdk/whatsapp.js"
     },
+    "./plugin-sdk/whatsapp-action-runtime": {
+      "types": "./dist/plugin-sdk/whatsapp-action-runtime.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-action-runtime.js"
+    },
+    "./plugin-sdk/whatsapp-login-qr": {
+      "types": "./dist/plugin-sdk/whatsapp-login-qr.d.ts",
+      "default": "./dist/plugin-sdk/whatsapp-login-qr.js"
+    },
     "./plugin-sdk/whatsapp-core": {
       "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
       "default": "./dist/plugin-sdk/whatsapp-core.js"
