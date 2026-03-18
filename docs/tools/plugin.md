@@ -570,7 +570,8 @@ Native OpenClaw plugins can register capabilities and surfaces:
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
 
-Native OpenClaw plugins run **in‑process** with the Gateway, so treat them as trusted code.
+Native OpenClaw plugins run in-process with the Gateway (see
+[Execution model](#execution-model) for trust implications).
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 
 Think of these registrations as **capability claims**. A plugin is not supposed
@@ -1609,7 +1610,7 @@ openclaw plugins install ./extensions/voice-call # relative path ok
 openclaw plugins install ./plugin.tgz           # install from a local tarball
 openclaw plugins install ./plugin.zip           # install from a local zip
 openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
-openclaw plugins install @openclaw/voice-call # install from npm
+openclaw plugins install @openclaw/voice-call   # install from npm
 openclaw plugins install @openclaw/voice-call --pin # store exact resolved name@version
 openclaw plugins update <id>
 openclaw plugins update --all
@@ -1618,14 +1619,11 @@ openclaw plugins disable <id>
 openclaw plugins doctor
 ```
 
-`openclaw plugins list` shows the top-level format as `openclaw` or `bundle`.
-Verbose list/inspect output also shows bundle subtype (`codex`, `claude`, or
-`cursor`) plus detected bundle capabilities.
+See [`openclaw plugins` CLI reference](/cli/plugins) for full details on each
+command (install rules, inspect output, marketplace installs, uninstall).
 
-`plugins update` only works for npm installs tracked under `plugins.installs`.
-If stored integrity metadata changes between updates, OpenClaw warns and asks for confirmation (use global `--yes` to bypass prompts).
-
-Plugins may also register their own top‑level commands (example: `openclaw voicecall`).
+Plugins may also register their own top-level commands (example:
+`openclaw voicecall`).
 
 ## Plugin API (overview)
 
@@ -2433,7 +2431,7 @@ See [Voice Call](/plugins/voice-call) and `extensions/voice-call/README.md` for 
 
 ## Safety notes
 
-Plugins run in-process with the Gateway. Treat them as trusted code:
+Plugins run in-process with the Gateway (see [Execution model](#execution-model)):
 
 - Only install plugins you trust.
 - Prefer `plugins.allow` allowlists.
