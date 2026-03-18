@@ -87,6 +87,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     concurrency: number;
     pollIntervalMs: number;
     timeoutMs: number;
+    timeoutOverrideMs?: number;
   };
   protected batchFailureCount = 0;
   protected batchFailureLastError?: string;

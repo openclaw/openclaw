@@ -132,11 +132,21 @@ describe("memory embedding batches", () => {
   it("uses configured remote batch timeout for builtin embedding batches", async () => {
     const managerSmall = fx.getManagerSmall();
     const manager = managerSmall as unknown as {
-      batch: { timeoutMs: number };
+      batch: { timeoutOverrideMs?: number };
       resolveEmbeddingTimeout: (kind: "query" | "batch") => number;
     };
-    manager.batch.timeoutMs = 987_000;
+    manager.batch.timeoutOverrideMs = 987_000;
     expect(manager.resolveEmbeddingTimeout("batch")).toBe(987_000);
+  });
+
+  it("keeps 120s remote batch timeout when override is not explicitly configured", async () => {
+    const managerSmall = fx.getManagerSmall();
+    const manager = managerSmall as unknown as {
+      batch: { timeoutOverrideMs?: number };
+      resolveEmbeddingTimeout: (kind: "query" | "batch") => number;
+    };
+    manager.batch.timeoutOverrideMs = undefined;
+    expect(manager.resolveEmbeddingTimeout("batch")).toBe(120_000);
   });
 
   it("skips empty chunks so embeddings input stays valid", async () => {

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
-import { resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentConfig, resolveAgentDir } from "../agents/agent-scope.js";
 import { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { type OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -112,6 +112,7 @@ export abstract class MemoryManagerSyncOps {
     concurrency: number;
     pollIntervalMs: number;
     timeoutMs: number;
+    timeoutOverrideMs?: number;
   };
   protected readonly sources: Set<MemorySource> = new Set();
   protected providerKey: string | null = null;
@@ -1070,8 +1071,21 @@ export abstract class MemoryManagerSyncOps {
     concurrency: number;
     pollIntervalMs: number;
     timeoutMs: number;
+    timeoutOverrideMs?: number;
   } {
     const batch = this.settings.remote?.batch;
+    const defaultsTimeoutMinutes =
+      this.cfg.agents?.defaults?.memorySearch?.remote?.batch?.timeoutMinutes;
+    const overrideTimeoutMinutes = resolveAgentConfig(this.cfg, this.agentId)?.memorySearch?.remote
+      ?.batch?.timeoutMinutes;
+    const configuredTimeoutMinutes =
+      typeof overrideTimeoutMinutes === "number" ? overrideTimeoutMinutes : defaultsTimeoutMinutes;
+    const timeoutOverrideMs =
+      typeof configuredTimeoutMinutes === "number" &&
+      Number.isFinite(configuredTimeoutMinutes) &&
+      configuredTimeoutMinutes > 0
+        ? Math.floor(configuredTimeoutMinutes * 60 * 1000)
+        : undefined;
     const enabled = Boolean(
       batch?.enabled &&
       this.provider &&
@@ -1085,6 +1099,7 @@ export abstract class MemoryManagerSyncOps {
       concurrency: Math.max(1, batch?.concurrency ?? 2),
       pollIntervalMs: batch?.pollIntervalMs ?? 2000,
       timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
+      timeoutOverrideMs,
     };
   }
 
