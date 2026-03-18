@@ -116,8 +116,35 @@
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
+- Every commit series must start from a feature or bug fix goal. Refactors, test additions, and doc updates are valid only as part of landing that goal — never as standalone busywork.
 - PR submission template (canonical): `.github/pull_request_template.md`
 - Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
+
+## Pipeline Discipline
+
+The automated pipeline must maximize feature throughput, not commit volume. These rules override any implicit tendency toward speculative cleanup.
+
+### No speculative refactoring
+- Do **not** initiate refactors (`refactor:` commits) unless they are **required** to land a specific feature or fix a specific bug. "Centralize X", "extract Y helper", "normalize Z defaults" are not valid standalone goals.
+- If a refactor is needed to unblock a feature, include it in the same PR/commit series as that feature — never as an orphan commit.
+- If you believe a refactor is genuinely necessary, stop and describe the problem + proposed change to the operator before executing. Wait for approval.
+
+### Batch gate failures
+- When a change fails `pnpm check`, `pnpm test`, or CI: read **all** failures at once (lint, type, test, format), then fix them in a **single** commit. Do not fix one lint rule per commit.
+- Before committing a fix for a gate failure, re-run the full check locally to confirm no new failures were introduced. One round-trip, not a fix→fail→fix→fail chain.
+
+### Pre-flight impact check
+- Before modifying any shared module (anything imported by 3+ other files), list its downstream consumers: `git grep -l 'from.*<module>' -- '*.ts'`.
+- After the change, verify the build still passes (`pnpm tsgo`) **before** committing. If it doesn't, fix all breakage in the same commit.
+- This applies especially to: `src/config/`, `src/infra/`, `src/agents/`, `src/gateway/`, `src/channels/`, and `src/routing/`.
+
+### Feature-first commit discipline
+- Every commit must trace back to user-visible value: a feature, a bug fix, or a prerequisite explicitly required by one. "Housekeeping" commits (allowlist fixtures, refresh baselines, format imports) should be batched into the commit that necessitated them, not shipped standalone.
+- Test-only and docs-only commits are fine when they add coverage for existing behavior or document a shipped feature.
+
+### Commit budgeting
+- Before starting work, estimate the number of commits needed. A typical bug fix should be 1–3 commits. A feature should be 1–5 commits. If you find yourself at >5 commits for a single task, stop and reassess whether you're chasing regressions from your own changes.
+- If a change causes a cascade of 3+ follow-up fixes, revert the original change and take a different approach.
 
 ## Shorthand Commands
 
