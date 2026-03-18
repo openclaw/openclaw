@@ -61,44 +61,41 @@ marketplace source with `--marketplace`.
 
 ## Available plugins (official)
 
-- Microsoft Teams is plugin-only as of 2026.1.15; install `@openclaw/msteams` if you use Teams.
-- Memory (Core) — bundled memory search plugin (enabled by default via `plugins.slots.memory`)
-- Memory (LanceDB) — bundled long-term memory plugin (auto-recall/capture; set `plugins.slots.memory = "memory-lancedb"`)
-- [Voice Call](/plugins/voice-call) — `@openclaw/voice-call`
-- [Zalo Personal](/plugins/zalouser) — `@openclaw/zalouser`
-- [Matrix](/channels/matrix) — `@openclaw/matrix`
-- [Nostr](/channels/nostr) — `@openclaw/nostr`
-- [Zalo](/channels/zalo) — `@openclaw/zalo`
-- [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
-- Anthropic provider runtime — bundled as `anthropic` (enabled by default)
-- BytePlus provider catalog — bundled as `byteplus` (enabled by default)
-- Cloudflare AI Gateway provider catalog — bundled as `cloudflare-ai-gateway` (enabled by default)
-- Google web search + Gemini CLI OAuth — bundled as `google` (web search auto-loads it; provider auth stays opt-in)
-- GitHub Copilot provider runtime — bundled as `github-copilot` (enabled by default)
-- Hugging Face provider catalog — bundled as `huggingface` (enabled by default)
-- Kilo Gateway provider runtime — bundled as `kilocode` (enabled by default)
-- Kimi Coding provider catalog — bundled as `kimi-coding` (enabled by default)
-- MiniMax provider catalog + usage + OAuth — bundled as `minimax` (enabled by default; owns `minimax` and `minimax-portal`)
-- Mistral provider capabilities — bundled as `mistral` (enabled by default)
-- Model Studio provider catalog — bundled as `modelstudio` (enabled by default)
-- Moonshot provider runtime — bundled as `moonshot` (enabled by default)
-- NVIDIA provider catalog — bundled as `nvidia` (enabled by default)
-- ElevenLabs speech provider — bundled as `elevenlabs` (enabled by default)
-- Microsoft speech provider — bundled as `microsoft` (enabled by default; legacy `edge` input maps here)
-- OpenAI provider runtime — bundled as `openai` (enabled by default; owns both `openai` and `openai-codex`)
-- OpenCode Go provider capabilities — bundled as `opencode-go` (enabled by default)
-- OpenCode Zen provider capabilities — bundled as `opencode` (enabled by default)
-- OpenRouter provider runtime — bundled as `openrouter` (enabled by default)
-- Qianfan provider catalog — bundled as `qianfan` (enabled by default)
-- Qwen OAuth (provider auth + catalog) — bundled as `qwen-portal-auth` (enabled by default)
-- Synthetic provider catalog — bundled as `synthetic` (enabled by default)
-- Together provider catalog — bundled as `together` (enabled by default)
-- Venice provider catalog — bundled as `venice` (enabled by default)
-- Vercel AI Gateway provider catalog — bundled as `vercel-ai-gateway` (enabled by default)
-- Volcengine provider catalog — bundled as `volcengine` (enabled by default)
-- Xiaomi provider catalog + usage — bundled as `xiaomi` (enabled by default)
-- Z.AI provider runtime — bundled as `zai` (enabled by default)
-- Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
+### Installable plugins
+
+These are published to npm and installed with `openclaw plugins install`:
+
+| Plugin          | Package                | Docs                               |
+| --------------- | ---------------------- | ---------------------------------- |
+| Matrix          | `@openclaw/matrix`     | [Matrix](/channels/matrix)         |
+| Microsoft Teams | `@openclaw/msteams`    | [MS Teams](/channels/msteams)      |
+| Nostr           | `@openclaw/nostr`      | [Nostr](/channels/nostr)           |
+| Voice Call      | `@openclaw/voice-call` | [Voice Call](/plugins/voice-call)  |
+| Zalo            | `@openclaw/zalo`       | [Zalo](/channels/zalo)             |
+| Zalo Personal   | `@openclaw/zalouser`   | [Zalo Personal](/plugins/zalouser) |
+
+Microsoft Teams is plugin-only as of 2026.1.15.
+
+### Bundled plugins
+
+These ship with OpenClaw and are enabled by default unless noted.
+
+**Memory:**
+
+- `memory-core` -- bundled memory search (default via `plugins.slots.memory`)
+- `memory-lancedb` -- long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
+
+**Model providers** (all enabled by default):
+
+`anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`, `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`, `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`, `qianfan`, `qwen-portal-auth`, `synthetic`, `together`, `venice`, `vercel-ai-gateway`, `volcengine`, `xiaomi`, `zai`
+
+**Speech providers** (enabled by default):
+
+`elevenlabs`, `microsoft`
+
+**Other bundled:**
+
+- `copilot-proxy` -- VS Code Copilot Proxy bridge (disabled by default)
 
 ## Compatible bundles
 
@@ -251,66 +248,14 @@ Default plugin ids:
 If a plugin exports `id`, OpenClaw uses it but warns when it does not match the
 configured id.
 
-## Plugin inspection
-
-Use `openclaw plugins inspect <id>` for deep plugin introspection. This is the
-canonical command for understanding a plugin's shape and registration behavior.
+## Inspection
 
 ```bash
-openclaw plugins inspect openai
-openclaw plugins inspect openai --json
-```
-
-The inspect report shows:
-
-- identity, load status, source, and root
-- plugin shape (plain-capability, hybrid-capability, hook-only, non-capability)
-- capability mode and registered capabilities
-- hooks (typed and custom), tools, commands, services
-- channel registration
-- config policy flags
-- diagnostics
-- whether the plugin uses the legacy `before_agent_start` hook
-- install metadata
-
-Summary commands remain summary-focused:
-
-- `plugins list` -- compact inventory
-- `plugins status` -- operational summary
-- `doctor` -- issue-focused diagnostics
-- `plugins inspect` -- deep detail
-
-## Control UI (schema and labels)
-
-The Control UI uses `config.schema` (JSON Schema + `uiHints`) to render better forms.
-
-OpenClaw augments `uiHints` at runtime based on discovered plugins:
-
-- Adds per-plugin labels for `plugins.entries.<id>` / `.enabled` / `.config`
-- Merges optional plugin-provided config field hints under:
-  `plugins.entries.<id>.config.<field>`
-
-If you want your plugin config fields to show good labels/placeholders (and mark secrets as sensitive),
-provide `uiHints` alongside your JSON Schema in the plugin manifest.
-
-Example:
-
-```json
-{
-  "id": "my-plugin",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "apiKey": { "type": "string" },
-      "region": { "type": "string" }
-    }
-  },
-  "uiHints": {
-    "apiKey": { "label": "API Key", "sensitive": true },
-    "region": { "label": "Region", "placeholder": "us-east-1" }
-  }
-}
+openclaw plugins inspect openai        # deep detail on one plugin
+openclaw plugins inspect openai --json # machine-readable
+openclaw plugins list                  # compact inventory
+openclaw plugins status                # operational summary
+openclaw plugins doctor                # issue-focused diagnostics
 ```
 
 ## CLI
