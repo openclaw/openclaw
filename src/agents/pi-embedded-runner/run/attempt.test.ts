@@ -1249,4 +1249,38 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
   });
+
+  it("preserves sender and channel routing context for scoped compaction discovery", () => {
+    const legacy = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionKey: "agent:main:session:abc",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "acct-1",
+        currentChannelId: "C123",
+        currentThreadTs: "thread-9",
+        currentMessageId: "msg-42",
+        authProfileId: "openai:p1",
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        senderIsOwner: true,
+        senderId: "user-123",
+        provider: "openai-codex",
+        modelId: "gpt-5.3-codex",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+        extraSystemPrompt: "extra",
+        ownerNumbers: ["+15555550123"],
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+    });
+
+    expect(legacy).toMatchObject({
+      senderId: "user-123",
+      currentChannelId: "C123",
+      currentThreadTs: "thread-9",
+      currentMessageId: "msg-42",
+    });
+  });
 });
