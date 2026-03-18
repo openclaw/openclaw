@@ -7,6 +7,7 @@ import {
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
   patchTopLevelChannelConfigSection,
+  promptParsedAllowFromForAccount,
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
@@ -71,22 +72,19 @@ async function promptNostrAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
 }): Promise<OpenClawConfig> {
-  const existing = params.cfg.channels?.nostr?.allowFrom ?? [];
-  await params.prompter.note(NOSTR_ALLOW_FROM_HELP_LINES.join("\n"), "Nostr allowlist");
-  const entry = await params.prompter.text({
+  return await promptParsedAllowFromForAccount({
+    cfg: params.cfg,
+    defaultAccountId: DEFAULT_ACCOUNT_ID,
+    prompter: params.prompter,
+    noteTitle: "Nostr allowlist",
+    noteLines: NOSTR_ALLOW_FROM_HELP_LINES,
     message: "Nostr allowFrom",
     placeholder: "npub1..., 0123abcd...",
-    initialValue: existing[0] ? String(existing[0]) : undefined,
-    validate: (value) => {
-      const raw = String(value ?? "").trim();
-      if (!raw) {
-        return "Required";
-      }
-      return parseNostrAllowFrom(raw).error;
-    },
+    parseEntries: parseNostrAllowFrom,
+    getExistingAllowFrom: ({ cfg }) => cfg.channels?.nostr?.allowFrom ?? [],
+    mergeEntries: ({ existing, parsed }) => mergeAllowFromEntries(existing, parsed),
+    applyAllowFrom: ({ cfg, allowFrom }) => setNostrAllowFrom(cfg, allowFrom),
   });
-  const parsed = parseNostrAllowFrom(String(entry));
-  return setNostrAllowFrom(params.cfg, mergeAllowFromEntries(existing, parsed.entries));
 }
 
 const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({

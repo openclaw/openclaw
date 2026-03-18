@@ -110,6 +110,54 @@ describe("createScopedChannelConfigBase", () => {
       }).channels,
     ).toBeUndefined();
   });
+
+  it("can force default account config into accounts.default", () => {
+    const base = createScopedChannelConfigBase({
+      sectionKey: "demo",
+      listAccountIds: () => ["default", "alt"],
+      resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "default" }),
+      defaultAccountId: () => "default",
+      clearBaseFields: [],
+      allowTopLevel: false,
+    });
+
+    expect(
+      base.setAccountEnabled!({
+        cfg: {
+          channels: {
+            demo: {
+              token: "secret",
+            },
+          },
+        },
+        accountId: "default",
+        enabled: true,
+      }).channels?.demo,
+    ).toEqual({
+      token: "secret",
+      accounts: {
+        default: { enabled: true },
+      },
+    });
+    expect(
+      base.deleteAccount!({
+        cfg: {
+          channels: {
+            demo: {
+              token: "secret",
+              accounts: {
+                default: { enabled: true },
+              },
+            },
+          },
+        },
+        accountId: "default",
+      }).channels?.demo,
+    ).toEqual({
+      token: "secret",
+      accounts: undefined,
+    });
+  });
 });
 
 describe("createScopedDmSecurityResolver", () => {
