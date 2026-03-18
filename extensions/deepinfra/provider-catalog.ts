@@ -1,13 +1,11 @@
 import {
-    DEEPINFRA_BASE_URL,
-} from "../providers/deepinfra-shared.ts";
+  type ModelProviderConfig,
+  discoverDeepInfraModels,
+  buildDeepInfraStaticCatalog,
+  DEEPINFRA_BASE_URL,
+} from "openclaw/plugin-sdk/provider-models";
 
-import {
-    discoverDeepInfraModels,
-    buildStaticCatalog
- } from "./deepinfra-models.js";
-
-export async function buildDeepInfraProviderWithDiscovery(): Promise<ProviderConfig> {
+export async function buildDeepInfraProviderWithDiscovery(): Promise<ModelProviderConfig> {
   const models = await discoverDeepInfraModels();
   return {
     baseUrl: DEEPINFRA_BASE_URL,
@@ -16,10 +14,10 @@ export async function buildDeepInfraProviderWithDiscovery(): Promise<ProviderCon
   };
 }
 
-export function buildDeepInfraStaticProvider(): ProviderConfig {
+export function buildDeepInfraStaticProvider(): ModelProviderConfig {
   return {
     baseUrl: DEEPINFRA_BASE_URL,
     api: "openai-completions",
-    models: buildStaticCatalog(),
+    models: buildDeepInfraStaticCatalog(),
   };
 }

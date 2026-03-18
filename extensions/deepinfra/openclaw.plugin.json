@@ -1,0 +1,28 @@
+{
+  "id": "deepinfra",
+  "providers": ["deepinfra"],
+  "providerAuthEnvVars": {
+    "deepinfra": ["DEEPINFRA_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "deepinfra",
+      "method": "api-key",
+      "choiceId": "deepinfra-api-key",
+      "choiceLabel": "DeepInfra API key",
+      "choiceHint": "Unified API for open source models",
+      "groupId": "deepinfra",
+      "groupLabel": "DeepInfra",
+      "groupHint": "Unified API for open source models",
+      "optionKey": "deepinfraApiKey",
+      "cliFlag": "--deepinfra-api-key",
+      "cliOption": "--deepinfra-api-key <key>",
+      "cliDescription": "DeepInfra API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

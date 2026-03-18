@@ -2,20 +2,23 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  applyDeepInfraProviderConfig,
+  applyDeepInfraConfig,
+} from "../../extensions/deepinfra/onboard.js";
 import { resolveApiKeyForProvider, resolveEnvApiKey } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
   DEEPINFRA_BASE_URL,
+  DEEPINFRA_DEFAULT_CONTEXT_WINDOW,
+  DEEPINFRA_DEFAULT_COST,
   DEEPINFRA_DEFAULT_MODEL_ID,
   DEEPINFRA_DEFAULT_MODEL_REF,
-  DEEPINFRA_DEFAULT_CONTEXT_WINDOW,
   DEEPINFRA_DEFAULT_MAX_TOKENS,
-  DEEPINFRA_DEFAULT_COST,
   DEEPINFRA_MODEL_CATALOG,
 } from "../providers/deepinfra-shared.js";
 import { captureEnv } from "../test-utils/env.js";
-import { applyDeepInfraProviderConfig, applyDeepInfraConfig } from "./onboard-auth.config-core.js";
 
 const emptyCfg: OpenClawConfig = {};
 const DEEPINFRA_MODEL_IDS = DEEPINFRA_MODEL_CATALOG.map((m) => m.id);

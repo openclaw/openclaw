@@ -269,8 +269,10 @@ importers:
 
   extensions/copilot-proxy: {}
 
-  extensions/deepgram: {}
+  extensions/deepinfra: {}  
 
+  extensions/deepgram: {}
+  
   extensions/diagnostics-otel:
     dependencies:
       '@opentelemetry/api':

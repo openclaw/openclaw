@@ -4,6 +4,7 @@ import {
   buildAnthropicVertexProvider,
   buildKimiCodingProvider,
   buildKilocodeProvider,
+  buildDeepInfraStaticProvider,
   buildModelStudioProvider,
   buildNvidiaProvider,
   QIANFAN_BASE_URL,
@@ -24,6 +25,7 @@ import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 export {
   buildKimiCodingProvider,
   buildKilocodeProvider,
+  buildDeepInfraStaticProvider,
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_ID,
   buildModelStudioProvider,

@@ -15,6 +15,11 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
         params.context.modelId.startsWith(prefix),
       );
     }
+    if (params.context.provider === "deepinfra") {
+      return ["anthropic/", "moonshot/", "moonshotai/", "zai/", "zai-org/"].some((prefix) =>
+        params.context.modelId.startsWith(prefix),
+      );
+    }
     return undefined;
   },
 }));

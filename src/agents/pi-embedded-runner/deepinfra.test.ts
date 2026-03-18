@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isCacheTtlEligibleProvider } from "./cache-ttl.ts";
+import { isCacheTtlEligibleProvider } from "./cache-ttl.js";
 
 describe("deepinfra cache-ttl eligibility", () => {
   it("is eligible when model starts with zai", () => {
