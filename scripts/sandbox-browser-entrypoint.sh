@@ -38,7 +38,7 @@ mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}" "$
 # Build Xtigervnc args. It replaces both Xvfb and x11vnc in a single process
 # and supports Extended Clipboard (UTF-8) since TigerVNC v1.10.0.
 TIGERVNC_ARGS=( :1 -geometry 1280x800 -depth 24 -rfbport "${VNC_PORT}"
-  -AlwaysShared -AcceptSetDesktopSize -SendCutText -AcceptCutText )
+  -localhost -AlwaysShared -AcceptSetDesktopSize -SendCutText -AcceptCutText )
 
 if [[ -n "${NOVNC_PASSWORD}" ]]; then
   NOVNC_PASSWD_FILE="${HOME}/.vnc/passwd"
