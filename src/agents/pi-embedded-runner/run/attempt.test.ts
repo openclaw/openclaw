@@ -875,8 +875,57 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       name?: string;
       input?: { attachments?: Array<{ content?: string }> };
     };
-    expect(toolCall.name).toBe("SESSIONS_SPAWN");
+    expect(toolCall.name).toBe("sessions_spawn");
     expect(toolCall.input?.attachments?.[0]?.content).toBe(attachmentContent);
+  });
+
+  it("preserves allowlisted tool names that contain punctuation", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "admin.export", input: { scope: "all" } }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["admin.export"]),
+    );
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toBe(messages);
+  });
+
+  it("canonicalizes mixed-case allowlisted tool names on replay", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "readfile", arguments: {} }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["ReadFile"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<{ name?: string }> }>;
+    };
+    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("ReadFile");
   });
 
   it("drops orphaned tool results after replay sanitization removes a tool-call turn", async () => {

@@ -649,7 +649,6 @@ function isToolCallBlockType(type: unknown): boolean {
 }
 
 const REPLAY_TOOL_CALL_NAME_MAX_CHARS = 64;
-const REPLAY_TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
 
 type ReplayToolCallBlock = {
   type?: unknown;
@@ -677,21 +676,21 @@ function replayToolCallNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function replayToolCallHasName(
-  block: ReplayToolCallBlock,
+function resolveReplayAllowedToolName(
+  rawName: string,
   allowedToolNames?: Set<string>,
-): block is ReplayToolCallBlock & { name: string } {
-  if (!replayToolCallNonEmptyString(block.name)) {
-    return false;
-  }
-  const trimmed = block.name.trim();
-  if (trimmed.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS || !REPLAY_TOOL_CALL_NAME_RE.test(trimmed)) {
-    return false;
+): string | null {
+  const trimmed = rawName.trim();
+  if (!trimmed || trimmed.length > REPLAY_TOOL_CALL_NAME_MAX_CHARS || /\s/.test(trimmed)) {
+    return null;
   }
   if (!allowedToolNames || allowedToolNames.size === 0) {
-    return true;
+    return trimmed;
   }
-  return allowedToolNames.has(trimmed.toLowerCase());
+  return (
+    resolveExactAllowedToolName(trimmed, allowedToolNames) ??
+    resolveStructuredAllowedToolName(trimmed, allowedToolNames)
+  );
 }
 
 function sanitizeReplayToolCallInputs(
@@ -723,16 +722,22 @@ function sanitizeReplayToolCallInputs(
       if (
         !replayToolCallHasInput(block) ||
         !replayToolCallNonEmptyString(block.id) ||
-        !replayToolCallHasName(block, allowedToolNames)
+        !replayToolCallNonEmptyString(block.name)
       ) {
         changed = true;
         messageChanged = true;
         continue;
       }
 
-      const trimmedName = block.name.trim();
-      if (block.name !== trimmedName) {
-        nextContent.push({ ...(block as object), name: trimmedName } as typeof block);
+      const resolvedName = resolveReplayAllowedToolName(block.name, allowedToolNames);
+      if (!resolvedName) {
+        changed = true;
+        messageChanged = true;
+        continue;
+      }
+
+      if (block.name !== resolvedName) {
+        nextContent.push({ ...(block as object), name: resolvedName } as typeof block);
         changed = true;
         messageChanged = true;
         continue;
