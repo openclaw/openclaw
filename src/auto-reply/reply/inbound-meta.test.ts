@@ -85,6 +85,39 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["flags"]).toBeUndefined();
   });
 
+  it("hashes chat_id when redactPII=true", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:1657377165",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      { redactPII: true },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["chat_id"]).toMatch(/^telegram:[a-f0-9]{12}$/);
+    expect(payload["chat_id"]).not.toContain("1657377165");
+  });
+
+  it("preserves chat_id when redactPII=false", () => {
+    const prompt = buildInboundMetaSystemPrompt(
+      {
+        OriginatingTo: "telegram:1657377165",
+        OriginatingChannel: "telegram",
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+      } as TemplateContext,
+      { redactPII: false },
+    );
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["chat_id"]).toBe("telegram:1657377165");
+  });
+
   it("omits sender_id when blank", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "458",
@@ -330,5 +363,258 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
+  });
+
+  describe("redactPII", () => {
+    it("omits e164 and hashes SenderId", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderE164: "+15551234567",
+          SenderId: "user-123",
+          SenderUsername: "alice",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender"]).toMatch(/^user_[a-f0-9]{12}$/);
+      expect(conversationInfo["sender"]).not.toBe("user-123");
+      expect(conversationInfo["sender_id"]).toMatch(/^user_[a-f0-9]{12}$/);
+
+      const senderInfo = parseSenderInfoPayload(text);
+      expect(senderInfo["e164"]).toBeUndefined();
+      expect(senderInfo["id"]).toMatch(/^user_[a-f0-9]{12}$/);
+      expect(senderInfo["username"]).toBeUndefined();
+    });
+
+    it("hashes phone-like SenderId on WhatsApp/Signal", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "+15551234567",
+          SenderName: "Alice",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender_id"]).toMatch(/^user_[a-f0-9]{12}$/);
+      expect(conversationInfo["sender_id"]).not.toContain("15551234567");
+      expect(conversationInfo["sender"]).toMatch(/^user_[a-f0-9]{12}$/);
+    });
+
+    it("replaces sender identity with stable pseudonymous labels when redactPII=true", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderName: "Tyler",
+          SenderE164: "+15551234567",
+          SenderId: "user-123",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender"]).toMatch(/^user_[a-f0-9]{12}$/);
+      expect(conversationInfo["sender"]).not.toBe("Tyler");
+
+      const senderInfo = parseSenderInfoPayload(text);
+      expect(senderInfo["label"]).toMatch(/^user_[a-f0-9]{12}$/);
+      expect(senderInfo["name"]).toBeUndefined();
+      expect(senderInfo["e164"]).toBeUndefined();
+    });
+
+    it("preserves e164 when redactPII=false", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderE164: "+15551234567",
+          SenderId: "user-123",
+        } as TemplateContext,
+        { redactPII: false },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender"]).toBe("+15551234567");
+
+      const senderInfo = parseSenderInfoPayload(text);
+      expect(senderInfo["e164"]).toBe("+15551234567");
+    });
+
+    it("preserves e164 when no options passed", () => {
+      const text = buildInboundUserContextPrefix({
+        ChatType: "group",
+        SenderE164: "+15551234567",
+        SenderId: "user-123",
+      } as TemplateContext);
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["sender"]).toBe("+15551234567");
+
+      const senderInfo = parseSenderInfoPayload(text);
+      expect(senderInfo["e164"]).toBe("+15551234567");
+    });
+
+    it("omits human-readable group labels when redactPII=true", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          ConversationLabel: "ops-room",
+          GroupSubject: "Release Squad",
+          GroupChannel: "alerts",
+          GroupSpace: "guild-123",
+          ThreadLabel: "Incident thread",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["conversation_label"]).toBeUndefined();
+      expect(conversationInfo["group_subject"]).toBeUndefined();
+      expect(conversationInfo["group_channel"]).toBeUndefined();
+      expect(conversationInfo["group_space"]).toBeUndefined();
+      expect(conversationInfo["thread_label"]).toBeUndefined();
+    });
+
+    it("omits forwarded profile fields when redactPII=true", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ForwardedFrom: "Alice",
+          ForwardedFromUsername: "alice",
+          ForwardedFromTitle: "CEO",
+          ForwardedFromSignature: "Alice Smith",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("alice");
+      expect(text).not.toContain("CEO");
+      expect(text).not.toContain("Alice Smith");
+      expect(text).toMatch(/participant_[a-f0-9]{12}/);
+    });
+
+    it("redacts phone-like and named senders in InboundHistory", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          InboundHistory: [
+            { sender: "+15559876543", timestamp: 1000, body: "hello" },
+            { sender: "Alice", timestamp: 2000, body: "hi" },
+          ],
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("+15559876543");
+      expect(text).not.toContain("Alice");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+      expect(text).toMatch(/participant_[a-f0-9]{12}/);
+    });
+
+    it("redacts synthetic user:id sender tokens in InboundHistory", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          InboundHistory: [{ sender: "user:1234567890", timestamp: 1000, body: "hello" }],
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("user:1234567890");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
+    it("redacts phone-like ReplyToSender", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ReplyToBody: "some message",
+          ReplyToSender: "+15559876543",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("+15559876543");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
+    it("redacts bare phone-number ReplyToSender without plus prefix", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ReplyToBody: "some message",
+          ReplyToSender: "15559876543",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("15559876543");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
+    it("redacts phone-like ForwardedFrom", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ForwardedFrom: "+15559876543",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("+15559876543");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
+    it("redacts synthetic user:id ForwardedFrom", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ForwardedFrom: "user:1234567890",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("user:1234567890");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
+    it("redacts synthetic user:id ReplyToSender", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ReplyToBody: "some message",
+          ReplyToSender: "user:1234567890",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("user:1234567890");
+      expect(text).toMatch(/user_[a-f0-9]{12}/);
+    });
+
+    it("redacts non-phone ReplyToSender into a pseudonymous label", () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          SenderId: "user-1",
+          ReplyToBody: "some message",
+          ReplyToSender: "Bob",
+        } as TemplateContext,
+        { redactPII: true },
+      );
+
+      expect(text).not.toContain("Bob");
+      expect(text).toMatch(/participant_[a-f0-9]{12}/);
+    });
   });
 });
