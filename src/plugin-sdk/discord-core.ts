@@ -1,4 +1,5 @@
 export type { ChannelPlugin } from "./channel-plugin-common.js";
+export type { DiscordActionConfig } from "../config/types.js";
 export { buildChannelConfigSchema, getChatChannelMeta } from "./channel-plugin-common.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DiscordActionConfig } from "../config/types.js";
