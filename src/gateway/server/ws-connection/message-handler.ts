@@ -63,6 +63,7 @@ import {
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
+import { getPreauthHandshakeTimeoutMsFromEnv } from "../../handshake-timeouts.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import {
   isLocalishHost,
@@ -430,6 +431,30 @@ export function attachGatewayWsMessageHandler(params: {
           modelIdentifier: connectParams.client.modelIdentifier,
           instanceId: connectParams.client.instanceId,
         };
+        const connectAuthStartedAt = Date.now();
+        const connectAuthTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+        const connectAuthTimer = setTimeout(() => {
+          if (isClosed() || getClient()) {
+            return;
+          }
+          setHandshakeState("failed");
+          setCloseCause("connect-auth-timeout", {
+            ...clientMeta,
+            handshakeMs: Date.now() - connectAuthStartedAt,
+            endpoint,
+          });
+          logWsControl.warn(
+            `connect auth timeout conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"}`,
+          );
+          close(1008, "connect auth timeout");
+        }, connectAuthTimeoutMs);
+        connectAuthTimer.unref?.();
+        const clearConnectAuthTimer = () => clearTimeout(connectAuthTimer);
+
+        // Clear the pre-auth challenge timer once the client has sent a valid
+        // connect request. The connect auth timer above still bounds stalled
+        // async auth work before the client is registered.
+        clearHandshakeTimer();
         const markHandshakeFailure = (cause: string, meta?: Record<string, unknown>) => {
           setHandshakeState("failed");
           setCloseCause(cause, { ...meta, ...clientMeta });
@@ -1287,7 +1312,7 @@ export function attachGatewayWsMessageHandler(params: {
           canvasHostUrl && canvasCapability
             ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
             : canvasHostUrl;
-        clearHandshakeTimer();
+        clearConnectAuthTimer();
         const nextClient: GatewayWsClient = {
           socket,
           connect: connectParams,
