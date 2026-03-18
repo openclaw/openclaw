@@ -1,4 +1,4 @@
-import { discordMessageActions } from "../../../extensions/discord/src/channel-actions.js";
+import { discordMessageActions } from "../../../extensions/discord/runtime-api.js";
 import {
   getThreadBindingManager,
   resolveThreadBindingIdleTimeoutMs,
@@ -8,124 +8,72 @@ import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
   unbindThreadBindingsBySessionKey,
-} from "../../../extensions/discord/src/monitor/thread-bindings.js";
+} from "../../../extensions/discord/runtime-api.js";
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeSurface,
+} from "../../shared/lazy-runtime.js";
 import { createDiscordTypingLease } from "./runtime-discord-typing.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
-type RuntimeDiscordOps = typeof import("./runtime-discord-ops.runtime.js").runtimeDiscordOps;
+const loadRuntimeDiscordOps = createLazyRuntimeSurface(
+  () => import("./runtime-discord-ops.runtime.js"),
+  ({ runtimeDiscordOps }) => runtimeDiscordOps,
+);
 
-let runtimeDiscordOpsPromise: Promise<RuntimeDiscordOps> | null = null;
+const bindDiscordRuntimeMethod = createLazyRuntimeMethodBinder(loadRuntimeDiscordOps);
 
-function loadRuntimeDiscordOps() {
-  runtimeDiscordOpsPromise ??= import("./runtime-discord-ops.runtime.js").then(
-    ({ runtimeDiscordOps }) => runtimeDiscordOps,
-  );
-  return runtimeDiscordOpsPromise;
-}
-
-const auditChannelPermissionsLazy: PluginRuntimeChannel["discord"]["auditChannelPermissions"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.auditChannelPermissions(...args);
-  };
-
-const listDirectoryGroupsLiveLazy: PluginRuntimeChannel["discord"]["listDirectoryGroupsLive"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.listDirectoryGroupsLive(...args);
-  };
-
-const listDirectoryPeersLiveLazy: PluginRuntimeChannel["discord"]["listDirectoryPeersLive"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.listDirectoryPeersLive(...args);
-  };
-
-const probeDiscordLazy: PluginRuntimeChannel["discord"]["probeDiscord"] = async (...args) => {
-  const runtimeDiscordOps = await loadRuntimeDiscordOps();
-  return runtimeDiscordOps.probeDiscord(...args);
-};
-
-const resolveChannelAllowlistLazy: PluginRuntimeChannel["discord"]["resolveChannelAllowlist"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.resolveChannelAllowlist(...args);
-  };
-
-const resolveUserAllowlistLazy: PluginRuntimeChannel["discord"]["resolveUserAllowlist"] = async (
-  ...args
-) => {
-  const runtimeDiscordOps = await loadRuntimeDiscordOps();
-  return runtimeDiscordOps.resolveUserAllowlist(...args);
-};
-
-const sendComponentMessageLazy: PluginRuntimeChannel["discord"]["sendComponentMessage"] = async (
-  ...args
-) => {
-  const runtimeDiscordOps = await loadRuntimeDiscordOps();
-  return runtimeDiscordOps.sendComponentMessage(...args);
-};
-
-const sendMessageDiscordLazy: PluginRuntimeChannel["discord"]["sendMessageDiscord"] = async (
-  ...args
-) => {
-  const runtimeDiscordOps = await loadRuntimeDiscordOps();
-  return runtimeDiscordOps.sendMessageDiscord(...args);
-};
-
-const sendPollDiscordLazy: PluginRuntimeChannel["discord"]["sendPollDiscord"] = async (...args) => {
-  const runtimeDiscordOps = await loadRuntimeDiscordOps();
-  return runtimeDiscordOps.sendPollDiscord(...args);
-};
-
-const monitorDiscordProviderLazy: PluginRuntimeChannel["discord"]["monitorDiscordProvider"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.monitorDiscordProvider(...args);
-  };
-
-const sendTypingDiscordLazy: PluginRuntimeChannel["discord"]["typing"]["pulse"] = async (
-  ...args
-) => {
-  const runtimeDiscordOps = await loadRuntimeDiscordOps();
-  return runtimeDiscordOps.typing.pulse(...args);
-};
-
-const editMessageDiscordLazy: PluginRuntimeChannel["discord"]["conversationActions"]["editMessage"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.conversationActions.editMessage(...args);
-  };
-
-const deleteMessageDiscordLazy: PluginRuntimeChannel["discord"]["conversationActions"]["deleteMessage"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.conversationActions.deleteMessage(...args);
-  };
-
-const pinMessageDiscordLazy: PluginRuntimeChannel["discord"]["conversationActions"]["pinMessage"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.conversationActions.pinMessage(...args);
-  };
-
-const unpinMessageDiscordLazy: PluginRuntimeChannel["discord"]["conversationActions"]["unpinMessage"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.conversationActions.unpinMessage(...args);
-  };
-
-const createThreadDiscordLazy: PluginRuntimeChannel["discord"]["conversationActions"]["createThread"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.conversationActions.createThread(...args);
-  };
-
-const editChannelDiscordLazy: PluginRuntimeChannel["discord"]["conversationActions"]["editChannel"] =
-  async (...args) => {
-    const runtimeDiscordOps = await loadRuntimeDiscordOps();
-    return runtimeDiscordOps.conversationActions.editChannel(...args);
-  };
+const auditChannelPermissionsLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.auditChannelPermissions,
+);
+const listDirectoryGroupsLiveLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.listDirectoryGroupsLive,
+);
+const listDirectoryPeersLiveLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.listDirectoryPeersLive,
+);
+const probeDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.probeDiscord,
+);
+const resolveChannelAllowlistLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.resolveChannelAllowlist,
+);
+const resolveUserAllowlistLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.resolveUserAllowlist,
+);
+const sendComponentMessageLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.sendComponentMessage,
+);
+const sendMessageDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.sendMessageDiscord,
+);
+const sendPollDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.sendPollDiscord,
+);
+const monitorDiscordProviderLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.monitorDiscordProvider,
+);
+const sendTypingDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.typing.pulse,
+);
+const editMessageDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.conversationActions.editMessage,
+);
+const deleteMessageDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.conversationActions.deleteMessage,
+);
+const pinMessageDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.conversationActions.pinMessage,
+);
+const unpinMessageDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.conversationActions.unpinMessage,
+);
+const createThreadDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.conversationActions.createThread,
+);
+const editChannelDiscordLazy = bindDiscordRuntimeMethod(
+  (runtimeDiscordOps) => runtimeDiscordOps.conversationActions.editChannel,
+);
 
 export function createRuntimeDiscord(): PluginRuntimeChannel["discord"] {
   return {

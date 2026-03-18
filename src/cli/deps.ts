@@ -1,4 +1,5 @@
 import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
 
 /**
@@ -24,10 +25,11 @@ function createLazySender(
   channelId: string,
   loader: () => Promise<RuntimeSendModule>,
 ): (...args: unknown[]) => Promise<unknown> {
+  const loadRuntimeSend = createLazyRuntimeSurface(loader, ({ runtimeSend }) => runtimeSend);
   return async (...args: unknown[]) => {
     let cached = senderCache.get(channelId);
     if (!cached) {
-      cached = loader().then(({ runtimeSend }) => runtimeSend);
+      cached = loadRuntimeSend();
       senderCache.set(channelId, cached);
     }
     const runtimeSend = await cached;
