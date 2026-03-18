@@ -54,7 +54,9 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      if (typeof value === "number" && Number.isFinite(value)) {
+      // Ignore zero/default values — LLMs often send pollDurationHours: 0
+      // or pollOptionIndex: 0 as empty defaults, not as intentional poll fields.
+      if (typeof value === "number" && Number.isFinite(value) && value > 0) {
         return true;
       }
       if (typeof value === "string") {

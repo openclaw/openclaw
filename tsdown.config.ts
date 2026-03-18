@@ -130,6 +130,9 @@ function buildCoreDistEntries(): Record<string, string> {
     "line/accounts": "src/line/accounts.ts",
     "line/send": "src/line/send.ts",
     "line/template-messages": "src/line/template-messages.ts",
+    // Plugin runtime module resolved by resolvePluginRuntimeModulePath() at
+    // {packageRoot}/dist/plugins/runtime/index.js — must be a concrete entry.
+    "plugins/runtime/index": "src/plugins/runtime/index.ts",
   };
 }
 

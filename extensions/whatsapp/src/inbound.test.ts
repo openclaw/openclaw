@@ -193,6 +193,164 @@ describe("web inbound helpers", () => {
     ).toBe("<media:audio>");
   });
 
+  it("returns poll placeholder for pollCreationMessage", () => {
+    const result = extractMediaPlaceholder({
+      pollCreationMessage: {
+        name: "What should we eat?",
+        options: [{ optionName: "Pizza" }, { optionName: "Sushi" }, { optionName: "Tacos" }],
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:poll>\nWhat should we eat?\n1. Pizza\n2. Sushi\n3. Tacos");
+  });
+
+  it("returns poll placeholder for pollCreationMessageV2", () => {
+    const result = extractMediaPlaceholder({
+      pollCreationMessageV2: {
+        name: "Best color?",
+        options: [{ optionName: "Red" }, { optionName: "Blue" }],
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:poll>\nBest color?\n1. Red\n2. Blue");
+  });
+
+  it("returns poll placeholder for pollCreationMessageV3", () => {
+    const result = extractMediaPlaceholder({
+      pollCreationMessageV3: {
+        name: "Pick one",
+        options: [{ optionName: "A" }, { optionName: "B" }],
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:poll>\nPick one\n1. A\n2. B");
+  });
+
+  it("handles poll with no options gracefully", () => {
+    const result = extractMediaPlaceholder({
+      pollCreationMessage: {
+        name: "Empty poll",
+        options: [],
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:poll>\nEmpty poll");
+  });
+
+  it("handles poll with missing name", () => {
+    const result = extractMediaPlaceholder({
+      pollCreationMessage: {
+        options: [{ optionName: "Yes" }, { optionName: "No" }],
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:poll>\nPoll\n1. Yes\n2. No");
+  });
+
+  it("trims whitespace in poll question and options", () => {
+    const result = extractMediaPlaceholder({
+      pollCreationMessage: {
+        name: "  Spaces  ",
+        options: [{ optionName: "  Option A  " }, { optionName: "  Option B  " }],
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:poll>\nSpaces\n1. Option A\n2. Option B");
+  });
+
+  it("returns poll-vote placeholder for pollUpdateMessage", () => {
+    const result = extractMediaPlaceholder({
+      pollUpdateMessage: {
+        pollCreationMessageKey: { id: "abc123" },
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:poll-vote>");
+  });
+
+  it("returns reaction placeholder with emoji", () => {
+    const result = extractMediaPlaceholder({
+      reactionMessage: { text: "😮" },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<reaction:😮>");
+  });
+
+  it("returns reaction-removed placeholder for empty reaction", () => {
+    const result = extractMediaPlaceholder({
+      reactionMessage: { text: "" },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<reaction:removed>");
+  });
+
+  it("returns reaction-removed placeholder for null reaction text", () => {
+    const result = extractMediaPlaceholder({
+      reactionMessage: {},
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<reaction:removed>");
+  });
+
+  it("returns event placeholder with name and description", () => {
+    const result = extractMediaPlaceholder({
+      eventMessage: {
+        name: "Salsa Night",
+        description: "Dancing at Habima",
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:event>\nSalsa Night\nDancing at Habima");
+  });
+
+  it("returns event placeholder for canceled event", () => {
+    const result = extractMediaPlaceholder({
+      eventMessage: {
+        name: "Yacht Trip",
+        isCanceled: true,
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:event> [CANCELED]\nYacht Trip");
+  });
+
+  it("returns event placeholder with default name", () => {
+    const result = extractMediaPlaceholder({
+      eventMessage: {},
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:event>\nEvent");
+  });
+
+  it("returns event-rsvp going placeholder", () => {
+    const result = extractMediaPlaceholder({
+      eventResponseMessage: { response: 1 },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<event-rsvp:going>");
+  });
+
+  it("returns event-rsvp not-going placeholder", () => {
+    const result = extractMediaPlaceholder({
+      eventResponseMessage: { response: 2 },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<event-rsvp:not-going>");
+  });
+
+  it("returns event-rsvp with extra guests", () => {
+    const result = extractMediaPlaceholder({
+      eventResponseMessage: { response: 1, extraGuestCount: 3 },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<event-rsvp:going +3>");
+  });
+
+  it("returns event-rsvp encrypted for encEventResponseMessage", () => {
+    const result = extractMediaPlaceholder({
+      encEventResponseMessage: {},
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<event-rsvp:encrypted>");
+  });
+
+  it("returns encrypted-update placeholder for secretEncryptedMessage", () => {
+    const result = extractMediaPlaceholder({
+      secretEncryptedMessage: {},
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(result).toBe("<media:encrypted-update>");
+  });
+
+  it("returns undefined for unrecognized message types", () => {
+    const result = extractMediaPlaceholder(
+      {} as unknown as import("@whiskeysockets/baileys").proto.IMessage,
+    );
+    expect(result).toBeUndefined();
+  });
+
   it("extracts WhatsApp location messages", () => {
     const location = extractLocationData({
       locationMessage: {

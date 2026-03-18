@@ -23,8 +23,11 @@ describe("poll params", () => {
     },
   );
 
-  it("treats finite numeric poll params as poll creation intent", () => {
-    expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(true);
+  it("treats finite positive numeric poll params as poll creation intent", () => {
+    // Zero is treated as a default/empty value, not intentional poll creation.
+    // LLMs often send pollDurationHours: 0 as a default alongside action: "send".
+    expect(hasPollCreationParams({ pollDurationHours: 0 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationHours: 1 })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(true);
     expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(true);

@@ -130,9 +130,10 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
         explicitToken,
       })
     : explicitToken;
+  // Treat zero/negative as "use default" — LLMs often send timeoutMs: 0 as an empty default.
   const timeoutMs =
-    typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-      ? Math.max(1, Math.floor(opts.timeoutMs))
+    typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? Math.max(1_000, Math.floor(opts.timeoutMs))
       : 30_000;
   return { url: validatedOverride?.url, token, timeoutMs };
 }

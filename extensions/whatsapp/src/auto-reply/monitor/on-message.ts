@@ -2,6 +2,11 @@ import type { getReplyFromConfig } from "../../../../../src/auto-reply/reply.js"
 import type { MsgContext } from "../../../../../src/auto-reply/templating.js";
 import { loadConfig } from "../../../../../src/config/config.js";
 import { logVerbose } from "../../../../../src/globals.js";
+import { fireAndForgetHook } from "../../../../../src/hooks/fire-and-forget.js";
+import {
+  createInternalHookEvent,
+  triggerInternalHook,
+} from "../../../../../src/hooks/internal-hooks.js";
 import { resolveAgentRoute } from "../../../../../src/routing/resolve-route.js";
 import { buildGroupHistoryKey } from "../../../../../src/routing/session-key.js";
 import { normalizeE164 } from "../../../../../src/utils.js";
@@ -139,7 +144,34 @@ export function createWebOnMessageHandler(params: {
         logVerbose,
         replyLogger: params.replyLogger,
       });
+
       if (!gating.shouldProcess) {
+        // Fire internal hooks for gated group messages so hook handlers
+        // (e.g. message-logger) see every group message even when
+        // requireMention causes the auto-reply pipeline to skip it.
+        // Messages that pass gating fire the hook later in dispatch-from-config.
+        fireAndForgetHook(
+          triggerInternalHook(
+            createInternalHookEvent("message", "received", route.sessionKey, {
+              from: msg.from,
+              content: msg.body,
+              timestamp: msg.timestamp,
+              channelId: "whatsapp",
+              accountId: route.accountId,
+              conversationId,
+              messageId: msg.id,
+              metadata: {
+                to: msg.to,
+                provider: "whatsapp",
+                surface: "whatsapp",
+                senderId: msg.senderJid?.trim() || msg.senderE164,
+                senderName: msg.senderName,
+                senderE164: msg.senderE164,
+              },
+            }),
+          ),
+          "on-message: message:received internal hook (gated group msg) failed",
+        );
         return;
       }
     } else {
