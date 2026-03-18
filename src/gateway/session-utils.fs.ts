@@ -476,6 +476,7 @@ const LAST_MSG_MAX_LINES = 20;
 function readLastMessagePreviewFromOpenTranscript(params: {
   fd: number;
   size: number;
+  role?: string;
 }): string | null {
   const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
   const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
@@ -486,12 +487,13 @@ function readLastMessagePreviewFromOpenTranscript(params: {
   const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
   const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
 
+  const acceptedRoles = params.role ? [params.role] : ["user", "assistant"];
   for (let i = tailLines.length - 1; i >= 0; i--) {
     const line = tailLines[i];
     try {
       const parsed = JSON.parse(line);
       const msg = parsed?.message as TranscriptMessage | undefined;
-      if (msg?.role !== "user" && msg?.role !== "assistant") {
+      if (!msg?.role || !acceptedRoles.includes(msg.role)) {
         continue;
       }
       const text = extractTextFromContent(msg.content);
@@ -523,6 +525,31 @@ export function readLastMessagePreviewFromTranscript(
       return null;
     }
     return readLastMessagePreviewFromOpenTranscript({ fd, size });
+  });
+}
+
+/**
+ * Reads the last assistant message text from a session transcript.
+ * Used to capture continuity context when a session is reset by a scheduled policy (daily/idle).
+ */
+export function readLastAssistantMessageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): string | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const stat = fs.fstatSync(fd);
+    const size = stat.size;
+    if (size === 0) {
+      return null;
+    }
+    return readLastMessagePreviewFromOpenTranscript({ fd, size, role: "assistant" });
   });
 }
 
