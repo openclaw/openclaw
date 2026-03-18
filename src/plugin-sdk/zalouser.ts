@@ -1,6 +1,11 @@
 // Narrow plugin-sdk surface for the bundled zalouser plugin.
 // Keep this list additive and scoped to symbols used under extensions/zalouser.
 
+import {
+  createOptionalChannelSetupAdapter,
+  createOptionalChannelSetupWizard,
+} from "./optional-channel-setup.js";
+
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
 export { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
@@ -53,8 +58,6 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { formatAllowFromLowercase } from "./allow-from.js";
 export { resolveSenderCommandAuthorization } from "./command-auth.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
-export { zalouserSetupAdapter } from "../../extensions/zalouser/api.js";
-export { zalouserSetupWizard } from "../../extensions/zalouser/api.js";
 export {
   evaluateGroupRouteAccessForPolicy,
   resolveSenderScopedGroupPolicy,
@@ -73,3 +76,17 @@ export {
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildBaseAccountStatusSnapshot } from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
+
+export const zalouserSetupAdapter = createOptionalChannelSetupAdapter({
+  channel: "zalouser",
+  label: "Zalo Personal",
+  npmSpec: "@openclaw/zalouser",
+  docsPath: "/channels/zalouser",
+});
+
+export const zalouserSetupWizard = createOptionalChannelSetupWizard({
+  channel: "zalouser",
+  label: "Zalo Personal",
+  npmSpec: "@openclaw/zalouser",
+  docsPath: "/channels/zalouser",
+});
