@@ -70,15 +70,6 @@ function createMockSock(): MockSock {
   };
 }
 
-function getPairingStoreMocks() {
-  const readChannelAllowFromStore = (...args: unknown[]) => readAllowFromStoreMock(...args);
-  const upsertChannelPairingRequest = (...args: unknown[]) => upsertPairingRequestMock(...args);
-  return {
-    readChannelAllowFromStore,
-    upsertChannelPairingRequest,
-  };
-}
-
 const sock: MockSock = createMockSock();
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
@@ -102,7 +93,28 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", () => getPairingStoreMocks());
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: async (
+      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
+    ) =>
+      await actual.readStoreAllowFromForDmPolicy({
+        ...params,
+        readStore: async (provider, accountId) =>
+          (await readAllowFromStoreMock(provider, accountId)) as string[],
+      }),
+  };
+});
 
 vi.mock("./session.js", () => ({
   createWaSocket: vi.fn().mockResolvedValue(sock),
