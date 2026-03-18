@@ -1,1 +1,1 @@
-export { normalizeGoogleModelId, parseGeminiAuth } from "openclaw/plugin-sdk/google";
+export * from "../../src/plugin-sdk/google.js";
