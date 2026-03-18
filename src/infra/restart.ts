@@ -482,30 +482,45 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   pendingRestartReason = reason;
   pendingRestartTimer = setTimeout(
     () => {
-      void (async () => {
-        const beforeRestartHooks = pendingBeforeRestartHooks;
-        pendingBeforeRestartHooks = [];
-        pendingRestartTimer = null;
-        pendingRestartDueAt = 0;
-        pendingRestartReason = undefined;
-        for (const hook of beforeRestartHooks) {
-          try {
-            await hook();
-          } catch (err) {
-            restartLog.warn(`restart preflight hook failed: ${String(err)}`);
-          }
-        }
-        const pendingCheck = preRestartCheck;
-        if (!pendingCheck) {
-          emitGatewayRestart();
+      const beforeRestartHooks = pendingBeforeRestartHooks;
+      pendingBeforeRestartHooks = [];
+      pendingRestartTimer = null;
+      pendingRestartDueAt = 0;
+      pendingRestartReason = undefined;
+
+      let restartTriggered = false;
+      const triggerRestart = () => {
+        if (restartTriggered) {
           return;
         }
-        const cfg = loadConfig();
-        deferGatewayRestartUntilIdle({
-          getPendingCount: pendingCheck,
-          maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
-        });
-      })();
+        restartTriggered = true;
+        void (async () => {
+          for (const hook of beforeRestartHooks) {
+            try {
+              await hook();
+            } catch (err) {
+              restartLog.warn(`restart preflight hook failed: ${String(err)}`);
+            }
+          }
+          emitGatewayRestart();
+        })();
+      };
+
+      const pendingCheck = preRestartCheck;
+      if (!pendingCheck) {
+        triggerRestart();
+        return;
+      }
+      const cfg = loadConfig();
+      deferGatewayRestartUntilIdle({
+        getPendingCount: pendingCheck,
+        maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
+        hooks: {
+          onReady: triggerRestart,
+          onTimeout: () => triggerRestart(),
+          onCheckError: () => triggerRestart(),
+        },
+      });
     },
     Math.max(0, requestedDueAt - nowMs),
   );
