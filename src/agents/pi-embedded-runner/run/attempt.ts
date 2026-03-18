@@ -1969,6 +1969,112 @@ export async function runEmbeddedAttempt(
         sessionAgentId,
       );
 
+      // Local GGUF Runtime Injection
+      if (params.provider === "local-gguf") {
+        try {
+          const providerConfig = params.config?.models?.providers?.["local-gguf"];
+
+          if (providerConfig?.baseUrl?.startsWith("file://")) {
+            const basePath = providerConfig.baseUrl.slice(7);
+            const path = await import("node:path");
+            const modelPath = path.join(basePath, params.modelId);
+
+            const { LocalGgufModelManager } = await import("../../local-gguf-manager.js");
+            if (typeof providerConfig.maxCachedModels === "number") {
+              LocalGgufModelManager.getInstance().configure({
+                maxCachedModels: providerConfig.maxCachedModels,
+              });
+            }
+            const model = await LocalGgufModelManager.getInstance().getModel(modelPath);
+
+            const nodeLlama = (await import("node-llama-cpp")) as unknown as Record<
+              string,
+              Function
+            >;
+            const LlamaChatSession = nodeLlama.LlamaChatSession;
+
+            const context = await (model as Record<string, Function>).createContext();
+            const session = new (LlamaChatSession as unknown as new (
+              opts: Record<string, unknown>,
+            ) => Record<string, Function>)({
+              contextSequence: (context as Record<string, Function>).getSequence(),
+            });
+
+            type MsgContent = string | Array<{ text?: string }>;
+            type Msg = { role: string; content: MsgContent };
+
+            activeSession.agent.streamFn = async function* (
+              _model: unknown,
+              ctx: { messages: Msg[] },
+            ) {
+              const lastMsg = ctx.messages[ctx.messages.length - 1];
+              const history = ctx.messages.slice(0, -1);
+
+              session.setChatHistory(
+                history.map((m: Msg) => ({
+                  role: m.role,
+                  content:
+                    typeof m.content === "string"
+                      ? m.content
+                      : m.content.map((c: { text?: string }) => c.text || "").join(""),
+                })),
+              );
+
+              const promptText =
+                typeof lastMsg.content === "string"
+                  ? lastMsg.content
+                  : lastMsg.content.map((c: { text?: string }) => c.text || "").join("");
+
+              const tokenQueue: string[] = [];
+              let promptDone = false;
+              let tokenResolve: (() => void) | null = null;
+
+              const promptPromise = session
+                .prompt(promptText, {
+                  onToken: (token: unknown) => {
+                    const text =
+                      typeof token === "string"
+                        ? token
+                        : (context as Record<string, Function>).decode(token);
+                    if (typeof text === "string" && text.length > 0) {
+                      tokenQueue.push(text);
+                      if (tokenResolve) {
+                        const resolve = tokenResolve;
+                        tokenResolve = null;
+                        resolve();
+                      }
+                    }
+                  },
+                })
+                .then(() => {
+                  promptDone = true;
+                  if (tokenResolve) {
+                    const resolve = tokenResolve;
+                    tokenResolve = null;
+                    resolve();
+                  }
+                });
+
+              while (!promptDone || tokenQueue.length > 0) {
+                if (tokenQueue.length === 0 && !promptDone) {
+                  await new Promise<void>((r) => {
+                    tokenResolve = r;
+                  });
+                }
+                while (tokenQueue.length > 0) {
+                  yield { type: "text-delta" as const, text: tokenQueue.shift()! };
+                }
+              }
+
+              await promptPromise;
+            } as unknown as typeof activeSession.agent.streamFn;
+          }
+        } catch (error: unknown) {
+          log.error("Failed to initialize local-gguf provider", error as Record<string, unknown>);
+          throw error;
+        }
+      }
+
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
           messages: activeSession.messages,

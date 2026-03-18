@@ -7,6 +7,7 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   deepgram: ["DEEPGRAM_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   litellm: ["LITELLM_API_KEY"],
+  "local-gguf": ["MODEL_PATH"],
 } as const;
 
 const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {

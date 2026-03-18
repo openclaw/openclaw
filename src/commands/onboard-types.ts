@@ -51,6 +51,7 @@ export type BuiltInAuthChoice =
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
   | "custom-api-key"
+  | "local-gguf"
   | "skip";
 export type AuthChoice = BuiltInAuthChoice | (string & {});
 
@@ -81,6 +82,7 @@ export type BuiltInAuthChoiceGroupId =
   | "xai"
   | "volcengine"
   | "byteplus"
+  | "local"
   | "custom";
 export type AuthChoiceGroupId = BuiltInAuthChoiceGroupId | (string & {});
 export type GatewayAuthChoice = "token" | "password";

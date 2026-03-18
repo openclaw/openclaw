@@ -5,6 +5,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
+import { applyAuthChoiceLocalGguf } from "./auth-choice.apply.local-gguf.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
@@ -43,6 +44,7 @@ export async function applyAuthChoice(
     applyAuthChoiceLoadedPluginProvider,
     applyAuthChoiceOAuth,
     applyAuthChoiceApiProviders,
+    applyAuthChoiceLocalGguf,
   ];
 
   for (const handler of handlers) {

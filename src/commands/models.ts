@@ -28,6 +28,10 @@ export {
   modelsImageFallbacksRemoveCommand,
 } from "./models/image-fallbacks.js";
 export { modelsListCommand, modelsStatusCommand } from "./models/list.js";
+export {
+  modelsLocalGgufConfigCommand,
+  modelsLocalGgufUnloadCommand,
+} from "./models/local-gguf-manage.js";
 export { modelsScanCommand } from "./models/scan.js";
 export { modelsSetCommand } from "./models/set.js";
 export { modelsSetImageCommand } from "./models/set-image.js";

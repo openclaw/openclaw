@@ -9,6 +9,7 @@ import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import { resolveImplicitLocalGgufProvider } from "./local-gguf-provider.js";
 import { normalizeGoogleModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 export { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
@@ -787,6 +788,22 @@ export async function resolveImplicitProviders(
     resolveProviderApiKey,
     resolveProviderAuth,
   };
+
+  // Local GGUF provider (file:// mode for direct model loading)
+  try {
+    const config = params.config;
+    if (config) {
+      const localGgufProvider = await resolveImplicitLocalGgufProvider({
+        config,
+        env,
+      });
+      if (localGgufProvider) {
+        providers["local-gguf"] = localGgufProvider;
+      }
+    }
+  } catch {
+    // Local GGUF resolution failed, skip
+  }
 
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "simple"));
   mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "profile"));

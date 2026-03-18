@@ -36,6 +36,14 @@ export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     groupHint: "Unified LLM gateway (100+ providers)",
   },
   {
+    value: "local-gguf",
+    label: "Local GGUF",
+    hint: "Load .gguf model files directly via node-llama-cpp",
+    groupId: "local",
+    groupLabel: "Local",
+    groupHint: "Local model files",
+  },
+  {
     value: "custom-api-key",
     label: "Custom Provider",
     hint: "Any OpenAI or Anthropic compatible endpoint",
