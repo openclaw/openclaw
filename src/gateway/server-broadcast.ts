@@ -54,11 +54,44 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   return required.some((scope) => scopes.includes(scope));
 }
 
+/**
+ * Derive a stable identity key for a client that persists across WebSocket
+ * reconnects.  The browser control UI keeps `lastSeq` across its built-in
+ * auto-reconnect, so the server must continue the sequence rather than
+ * restarting at 1 — otherwise the backward jump is silently ignored and
+ * events missed during the outage become invisible.
+ *
+ * Key composition: `client.id` (e.g. "openclaw-control-ui") is always
+ * present; `client.instanceId` disambiguates multiple tabs/windows of the
+ * same client type.  Falls back to the ephemeral `connId` when neither is
+ * available (nodes, CLI clients without instanceId).
+ */
+function seqKey(c: GatewayWsClient): string {
+  const inst = c.connect.client.instanceId;
+  return inst ? `${c.connect.client.id}::${inst}` : c.connId;
+}
+
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
-  // Per-client seq counter. Incremented when an event is sent *or* intentionally
-  // dropped via dropIfSlow, so the client sees a seq gap and can trigger onGap.
+  // Seq counters keyed by a stable client identity (survives reconnects).
+  // Incremented when an event is sent *or* intentionally dropped via
+  // dropIfSlow, so the client sees a seq gap and can trigger onGap.
   // Only scope filtering (client never subscribed) skips without advancing seq.
-  const clientSeqs = new WeakMap<GatewayWsClient, number>();
+  const seqByIdentity = new Map<string, number>();
+
+  // Fast-path cache: avoids recomputing seqKey() on every iteration.
+  // Populated on first use per GatewayWsClient and auto-cleaned on GC.
+  const keyCache = new WeakMap<GatewayWsClient, string>();
+
+  function advanceSeq(c: GatewayWsClient): number {
+    let key = keyCache.get(c);
+    if (key === undefined) {
+      key = seqKey(c);
+      keyCache.set(c, key);
+    }
+    const next = (seqByIdentity.get(key) ?? 0) + 1;
+    seqByIdentity.set(key, next);
+    return next;
+  }
 
   const broadcastInternal = (
     event: string,
@@ -92,8 +125,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         // This is intentional: dropIfSlow events (e.g. exec.approval.requested)
         // are stateful, and the UI relies on gap detection to surface stale state.
         if (!isTargeted) {
-          const prev = clientSeqs.get(c) ?? 0;
-          clientSeqs.set(c, prev + 1);
+          advanceSeq(c);
         }
         continue;
       }
@@ -108,13 +140,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       // Assign per-client seq only for non-targeted (broadcast) events.
       // Use a local variable + spread to avoid mutating a shared object,
       // which would silently break if the loop body ever became async.
-      const clientSeq = !isTargeted
-        ? (() => {
-            const prev = clientSeqs.get(c) ?? 0;
-            clientSeqs.set(c, prev + 1);
-            return prev + 1;
-          })()
-        : undefined;
+      const clientSeq = !isTargeted ? advanceSeq(c) : undefined;
       if (clientSeq !== undefined) {
         minSeq = Math.min(minSeq, clientSeq);
         maxSeq = Math.max(maxSeq, clientSeq);
