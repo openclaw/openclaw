@@ -25,7 +25,7 @@ function collectPluginSdkPackageExports(): string[] {
     }
     subpaths.push(key.slice("./plugin-sdk/".length));
   }
-  return subpaths.sort();
+  return subpaths.toSorted();
 }
 
 function collectPluginSdkSourceNames(): string[] {
@@ -35,7 +35,7 @@ function collectPluginSdkSourceNames(): string[] {
       (entry) => entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts"),
     )
     .map((entry) => entry.name.slice(0, -".ts".length))
-    .sort();
+    .toSorted();
 }
 
 function collectTextFiles(rootRelativeDir: string): string[] {
@@ -92,7 +92,7 @@ function collectPluginSdkSubpathReferences() {
 
 describe("plugin-sdk package contract guardrails", () => {
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
-    expect(collectPluginSdkPackageExports()).toEqual([...pluginSdkEntrypoints].sort());
+    expect(collectPluginSdkPackageExports()).toEqual([...pluginSdkEntrypoints].toSorted());
   });
 
   it("keeps repo openclaw/plugin-sdk/<name> references on exported built subpaths", () => {
@@ -135,7 +135,7 @@ describe("plugin-sdk package contract guardrails", () => {
       failures.push(
         `src/plugin-sdk/${sourceName}.ts is referenced as openclaw/plugin-sdk/${sourceName} in ${matchingRefs
           .map((reference) => reference.file)
-          .sort()
+          .toSorted()
           .join(", ")}, but ${sourceName} is not exported as a public plugin-sdk subpath`,
       );
     }
