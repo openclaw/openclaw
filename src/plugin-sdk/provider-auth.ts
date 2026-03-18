@@ -36,9 +36,6 @@ export {
   validateAnthropicSetupToken,
 } from "../plugins/provider-auth-token.js";
 export { applyAuthProfileConfig, buildApiKeyCredential } from "../plugins/provider-auth-helpers.js";
-export { githubCopilotLoginCommand } from "../providers/github-copilot-auth.js";
-export { loginChutes } from "../commands/chutes-oauth.js";
-export { loginOpenAICodexOAuth } from "../plugins/provider-openai-codex-oauth.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export { coerceSecretRef } from "../config/types.secrets.js";
 export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
