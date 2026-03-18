@@ -8,6 +8,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
   vi.doUnmock("node:fs/promises");
 });
 
@@ -304,6 +305,48 @@ describe("ensurePrivateSessionsDir", () => {
     }
   });
 
+  it("materializes missing custom managed parents before the final recursive mkdir", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-custom-managed-parent-pin-"));
+    const customRoot = path.join(tempDir, "custom-root");
+    const sessionsDir = path.join(customRoot, "feeds", "main");
+    const outsideRoot = path.join(tempDir, "outside-root");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const realMkdir = fsPromises.mkdir.bind(fsPromises);
+
+    fs.mkdirSync(outsideRoot, { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        session: {
+          store: path.join(customRoot, "feeds", "{agentId}", "sessions.json"),
+        },
+      }),
+    );
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+
+    vi.spyOn(fsPromises, "mkdir").mockImplementation(async (filePath, options) => {
+      const resolved = path.resolve(String(filePath));
+      if (resolved === sessionsDir && !fs.existsSync(customRoot)) {
+        fs.symlinkSync(outsideRoot, customRoot, "dir");
+      }
+      return await realMkdir(filePath, options);
+    });
+
+    try {
+      const { ensurePrivateSessionsDir } = await import("./paths.js");
+
+      await expect(ensurePrivateSessionsDir(sessionsDir)).resolves.toBe(path.resolve(sessionsDir));
+      expect(fs.existsSync(path.join(customRoot, "feeds", "main"))).toBe(true);
+      expect(fs.existsSync(path.join(outsideRoot, "feeds", "main"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces chmod permission failures for managed session dirs on POSIX", async () => {
     if (process.platform === "win32") {
       return;
@@ -593,6 +636,51 @@ describe("isManagedSessionsDir", () => {
       expect(
         isManagedSessionTranscriptPath(path.join(customSessionsDir, "sess-1.jsonl"), env),
       ).toBe(true);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats symlink-alias configured template roots outside agents/<id>/sessions as managed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-managed-template-alias-"));
+    try {
+      const stateDir = path.join(tempDir, "state");
+      const realRoot = path.join(tempDir, "real-root");
+      const aliasRoot = path.join(tempDir, "alias-root");
+      const realSessionsDir = path.join(realRoot, "feeds", "main");
+      const configPath = path.join(tempDir, "openclaw.json");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.mkdirSync(realSessionsDir, { recursive: true });
+      fs.symlinkSync(realRoot, aliasRoot, "dir");
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          session: {
+            store: path.join(aliasRoot, "feeds", "{agentId}", "sessions.json"),
+          },
+        }),
+      );
+
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+      } as NodeJS.ProcessEnv;
+
+      const { isManagedSessionStorePath, isManagedSessionTranscriptPath, isManagedSessionsDir } =
+        await import("./paths.js");
+
+      expect(isManagedSessionsDir(realSessionsDir, env)).toBe(true);
+      expect(isManagedSessionStorePath(path.join(realSessionsDir, "sessions.json"), env)).toBe(
+        true,
+      );
+      expect(isManagedSessionTranscriptPath(path.join(realSessionsDir, "sess-1.jsonl"), env)).toBe(
+        true,
+      );
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

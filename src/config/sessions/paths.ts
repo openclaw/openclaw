@@ -34,6 +34,8 @@ const QUIET_CONFIG_IO_LOGGER = {
   error: () => undefined,
 };
 
+const AGENT_ID_TEMPLATE_SENTINEL = "__openclaw_agent_id__";
+
 function resolveAgentSessionsDir(
   agentId?: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -59,46 +61,47 @@ function resolveManagedSessionsSafetyChain(sessionsDir: string): string[] {
   return [path.dirname(resolved), resolved];
 }
 
-async function ensureManagedSessionsParentChain(
-  sessionsDir: string,
-): Promise<PinnedStateRootIdentity | undefined> {
-  const resolved = path.resolve(sessionsDir);
-  const agentDir = path.dirname(resolved);
-  const agentsDir = path.dirname(agentDir);
-  if (
-    path.basename(resolved).toLowerCase() !== "sessions" ||
-    path.basename(agentsDir).toLowerCase() !== "agents"
-  ) {
-    return undefined;
-  }
+async function ensureStrictDirectoryChain(targetDir: string): Promise<PinnedStateRootIdentity> {
+  const resolved = path.resolve(targetDir);
+  const pendingDirs: string[] = [];
+  let anchorDir = resolved;
 
-  const stateDir = path.dirname(agentsDir);
-  let pinnedStateRootIdentity: PinnedStateRootIdentity | undefined;
-  try {
-    const stat = await fsPromises.stat(stateDir);
-    if (!stat.isDirectory()) {
-      throw new Error(`Session transcripts dir must be a directory: ${stateDir}`);
-    }
-    pinnedStateRootIdentity = await capturePinnedStateRootIdentity(stateDir);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      throw err;
-    }
-    await fsPromises.mkdir(stateDir, { recursive: true });
-    pinnedStateRootIdentity = {
-      path: stateDir,
-      stat: await verifyDirectoryIdentity(stateDir),
-      strictDirectoryIdentity: true,
-    };
-  }
-
-  for (const dirPath of [agentsDir, agentDir]) {
-    await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
+  while (true) {
     try {
-      await verifyDirectoryIdentity(dirPath);
-      await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
-      continue;
+      const stat = await verifyDirectoryIdentity(anchorDir);
+      const pinnedIdentity: PinnedStateRootIdentity = {
+        path: anchorDir,
+        stat,
+        strictDirectoryIdentity: true,
+      };
+
+      for (const dirPath of pendingDirs.toReversed()) {
+        await assertPinnedStateRootIdentity(pinnedIdentity);
+        try {
+          await verifyDirectoryIdentity(dirPath);
+          await assertPinnedStateRootIdentity(pinnedIdentity);
+          continue;
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== "ENOENT") {
+            throw err;
+          }
+        }
+
+        try {
+          await fsPromises.mkdir(dirPath);
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code !== "EEXIST") {
+            throw err;
+          }
+        }
+        await assertPinnedStateRootIdentity(pinnedIdentity);
+        await verifyDirectoryIdentity(dirPath);
+        await assertPinnedStateRootIdentity(pinnedIdentity);
+      }
+
+      return pinnedIdentity;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
@@ -106,20 +109,90 @@ async function ensureManagedSessionsParentChain(
       }
     }
 
+    const parent = path.dirname(anchorDir);
+    if (parent === anchorDir) {
+      throw new Error(`Session transcripts dir must be a directory: ${resolved}`);
+    }
+    pendingDirs.push(anchorDir);
+    anchorDir = parent;
+  }
+}
+
+async function ensureManagedSessionsParentChain(
+  sessionsDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+): Promise<PinnedStateRootIdentity | undefined> {
+  const resolved = path.resolve(sessionsDir);
+  const agentDir = path.dirname(resolved);
+  const agentsDir = path.dirname(agentDir);
+  if (
+    path.basename(resolved).toLowerCase() === "sessions" &&
+    path.basename(agentsDir).toLowerCase() === "agents"
+  ) {
+    const stateDir = path.dirname(agentsDir);
+    let pinnedStateRootIdentity: PinnedStateRootIdentity | undefined;
     try {
-      await fsPromises.mkdir(dirPath);
+      const stat = await fsPromises.stat(stateDir);
+      if (!stat.isDirectory()) {
+        throw new Error(`Session transcripts dir must be a directory: ${stateDir}`);
+      }
+      pinnedStateRootIdentity = await capturePinnedStateRootIdentity(stateDir);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") {
+      if (code !== "ENOENT") {
         throw err;
       }
+      await fsPromises.mkdir(stateDir, { recursive: true });
+      pinnedStateRootIdentity = {
+        path: stateDir,
+        stat: await verifyDirectoryIdentity(stateDir),
+        strictDirectoryIdentity: true,
+      };
     }
-    await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
-    await verifyDirectoryIdentity(dirPath);
-    await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
+
+    for (const dirPath of [agentsDir, agentDir]) {
+      await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
+      try {
+        await verifyDirectoryIdentity(dirPath);
+        await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
+        continue;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") {
+          throw err;
+        }
+      }
+
+      try {
+        await fsPromises.mkdir(dirPath);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "EEXIST") {
+          throw err;
+        }
+      }
+      await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
+      await verifyDirectoryIdentity(dirPath);
+      await assertPinnedStateRootIdentity(pinnedStateRootIdentity);
+    }
+
+    return pinnedStateRootIdentity;
   }
 
-  return pinnedStateRootIdentity;
+  const configuredManagedSessionsDir = resolveConfiguredManagedSessionsDirCandidate(
+    resolved,
+    env,
+    homedir,
+  );
+  if (
+    configuredManagedSessionsDir &&
+    matchesManagedSessionsDirCandidate(resolved, configuredManagedSessionsDir)
+  ) {
+    return await ensureStrictDirectoryChain(path.dirname(resolved));
+  }
+
+  return undefined;
 }
 
 async function verifyDirectoryIdentity(dirPath: string): Promise<fs.Stats> {
@@ -743,7 +816,28 @@ function extractAgentIdFromConfiguredSessionsTemplate(
   candidateSessionsDir: string,
   configuredSessionsDirTemplate: string,
 ): string | undefined {
-  const templateParts = configuredSessionsDirTemplate.split("{agentId}");
+  const comparableTemplate = resolveComparableConfiguredPathTemplate(configuredSessionsDirTemplate);
+  const comparableCandidate = resolveComparableManagedPath(candidateSessionsDir);
+  const compareCaseInsensitively = shouldCompareManagedPathsCaseInsensitively(
+    comparableTemplate.replaceAll(AGENT_ID_TEMPLATE_SENTINEL, "openclaw-agent-id-probe"),
+  );
+  return extractAgentIdFromNormalizedConfiguredSessionsTemplate(
+    normalizeManagedPathForComparison(comparableCandidate, compareCaseInsensitively),
+    normalizeManagedPathForComparison(comparableTemplate, compareCaseInsensitively),
+  );
+}
+
+function resolveComparableConfiguredPathTemplate(configuredTemplate: string): string {
+  return resolveComparableManagedPath(
+    configuredTemplate.replaceAll("{agentId}", AGENT_ID_TEMPLATE_SENTINEL),
+  );
+}
+
+function extractAgentIdFromNormalizedConfiguredSessionsTemplate(
+  normalizedCandidateSessionsDir: string,
+  normalizedConfiguredSessionsDirTemplate: string,
+): string | undefined {
+  const templateParts = normalizedConfiguredSessionsDirTemplate.split(AGENT_ID_TEMPLATE_SENTINEL);
   if (templateParts.length < 2) {
     return undefined;
   }
@@ -752,25 +846,25 @@ function extractAgentIdFromConfiguredSessionsTemplate(
   let extractedAgentId: string | undefined;
   for (let index = 0; index < templateParts.length; index++) {
     const part = templateParts[index];
-    if (!candidateSessionsDir.startsWith(part, cursor)) {
+    if (!normalizedCandidateSessionsDir.startsWith(part, cursor)) {
       return undefined;
     }
     cursor += part.length;
 
     if (index === templateParts.length - 1) {
-      return cursor === candidateSessionsDir.length ? extractedAgentId : undefined;
+      return cursor === normalizedCandidateSessionsDir.length ? extractedAgentId : undefined;
     }
 
     const nextPart = templateParts[index + 1];
     const nextPartIndex =
       nextPart.length === 0
-        ? candidateSessionsDir.length
-        : candidateSessionsDir.indexOf(nextPart, cursor);
+        ? normalizedCandidateSessionsDir.length
+        : normalizedCandidateSessionsDir.indexOf(nextPart, cursor);
     if (nextPartIndex < 0) {
       return undefined;
     }
 
-    const currentCapture = candidateSessionsDir.slice(cursor, nextPartIndex);
+    const currentCapture = normalizedCandidateSessionsDir.slice(cursor, nextPartIndex);
     if (!currentCapture) {
       return undefined;
     }
