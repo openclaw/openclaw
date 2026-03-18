@@ -17,6 +17,12 @@ export type CompactionSafeguardRuntimeValue = {
   recentTurnsPreserve?: number;
   qualityGuardEnabled?: boolean;
   qualityGuardMaxRetries?: number;
+  /**
+   * Id of a registered compaction provider plugin.
+   * When set and found in the compaction provider registry, the provider's
+   * `summarize()` is called instead of the built-in `summarizeInStages()`.
+   */
+  provider?: string;
 };
 
 const registry = createSessionManagerRuntimeRegistry<CompactionSafeguardRuntimeValue>();

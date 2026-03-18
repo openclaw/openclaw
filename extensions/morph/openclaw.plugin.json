@@ -1,0 +1,74 @@
+{
+  "id": "morph",
+  "uiHints": {
+    "apiKey": {
+      "label": "Morph API Key",
+      "sensitive": true,
+      "placeholder": "morph-...",
+      "help": "API key for Morph services (or use ${MORPH_API_KEY})"
+    },
+    "apiUrl": {
+      "label": "API Base URL",
+      "placeholder": "https://api.morphllm.com",
+      "help": "Morph API base URL (default: https://api.morphllm.com)",
+      "advanced": true
+    },
+    "compressionRatio": {
+      "label": "Compression Ratio",
+      "placeholder": "0.3",
+      "help": "Target compression ratio for compaction (0.05 to 1.0, default: 0.3)",
+      "advanced": true
+    },
+    "codebaseSearch.enabled": {
+      "label": "Enable Codebase Search",
+      "help": "Enable AI-powered codebase search tool"
+    },
+    "codebaseSearch.timeout": {
+      "label": "Search Timeout (ms)",
+      "placeholder": "60000",
+      "help": "Timeout in milliseconds for codebase search requests",
+      "advanced": true
+    },
+    "codebaseSearch.excludes": {
+      "label": "Search Excludes",
+      "help": "Glob patterns to exclude from codebase search",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string"
+      },
+      "apiUrl": {
+        "type": "string"
+      },
+      "compressionRatio": {
+        "type": "number",
+        "minimum": 0.05,
+        "maximum": 1.0
+      },
+      "codebaseSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "timeout": {
+            "type": "number",
+            "minimum": 1000
+          },
+          "excludes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

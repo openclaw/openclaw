@@ -10,6 +10,7 @@ import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./commands.js";
+import { registerCompactionProvider } from "./compaction-provider.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
@@ -979,6 +980,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           });
         }
       },
+      registerCompactionProvider:
+        registrationMode === "full" ? (provider) => registerCompactionProvider(provider) : () => {},
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>
         registrationMode === "full"

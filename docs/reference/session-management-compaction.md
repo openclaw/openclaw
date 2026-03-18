@@ -256,6 +256,31 @@ Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.t
 
 ---
 
+## Morph compaction provider
+
+OpenClaw supports Morph as an alternative compaction provider via the bundled `morph` plugin. When `agents.defaults.compaction.provider` is set to `"morph"` and the plugin is enabled, compaction calls the Morph `/v1/compact` API instead of running LLM summarization.
+
+Core config (`agents.defaults.compaction`):
+
+- `provider`: Id of a registered compaction provider plugin (e.g. `"morph"`). Leave unset for default LLM summarization.
+
+Plugin config (`plugins.entries.morph.config`):
+
+- `apiKey`: Morph API key. Also accepted via the `MORPH_API_KEY` environment variable.
+- `apiUrl`: Morph API base URL. Default: `https://api.morphllm.com`.
+- `compressionRatio`: target compression ratio (0.05-1.0). Default: `0.3`.
+
+Behavior:
+
+- Morph compaction is invoked via the compaction provider registry, checked by the `session_before_compact` extension hook.
+- The client retries on HTTP 429/503 with exponential backoff (up to 4 attempts).
+- If the Morph API fails for any reason, OpenClaw falls back to the default LLM compaction path automatically.
+- Setting a `provider` forces `mode: "safeguard"`.
+
+Source: `extensions/morph/src/compaction/client.ts`, `src/agents/pi-extensions/compaction-safeguard.ts`.
+
+---
+
 ## User-visible surfaces
 
 You can observe compaction and session state via:

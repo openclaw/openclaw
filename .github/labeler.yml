@@ -214,6 +214,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-lancedb/**"
+"extensions: morph":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/morph/**"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:

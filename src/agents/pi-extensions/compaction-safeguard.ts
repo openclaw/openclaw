@@ -6,6 +6,7 @@ import { extractSections } from "../../auto-reply/reply/post-compaction-context.
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory/query-expansion.js";
+import { getCompactionProvider } from "../../plugins/compaction-provider.js";
 import {
   BASE_CHUNK_RATIO,
   type CompactionSummarizationInstructions,
@@ -58,6 +59,68 @@ const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
+
+/**
+ * Unified summarization function that delegates to a registered compaction
+ * provider plugin (if configured) or falls back to the built-in
+ * summarizeInStages pipeline.
+ */
+async function summarizeMessages(params: {
+  messages: AgentMessage[];
+  providerId?: string;
+  model: NonNullable<Parameters<typeof summarizeInStages>[0]["model"]>;
+  apiKey: string;
+  signal: AbortSignal;
+  reserveTokens: number;
+  maxChunkTokens: number;
+  contextWindow: number;
+  customInstructions?: string;
+  summarizationInstructions?: CompactionSummarizationInstructions;
+  previousSummary?: string;
+}): Promise<string> {
+  if (params.providerId) {
+    const provider = getCompactionProvider(params.providerId);
+    if (provider) {
+      try {
+        const result = await provider.summarize({
+          messages: params.messages,
+          signal: params.signal,
+          previousSummary: params.previousSummary,
+        });
+        if (typeof result === "string" && result.trim()) {
+          return result;
+        }
+        log.warn(
+          `Compaction provider "${params.providerId}" returned empty result, falling back to LLM.`,
+        );
+      } catch (err) {
+        // Abort/timeout errors should not fall through — the caller requested cancellation.
+        if (
+          err instanceof DOMException &&
+          (err.name === "AbortError" || err.name === "TimeoutError")
+        ) {
+          throw err;
+        }
+        log.warn(
+          `Compaction provider "${params.providerId}" failed, falling back to LLM: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        // Fall through to LLM summarization below
+      }
+    }
+  }
+  return summarizeInStages({
+    messages: params.messages,
+    model: params.model,
+    apiKey: params.apiKey,
+    signal: params.signal,
+    reserveTokens: params.reserveTokens,
+    maxChunkTokens: params.maxChunkTokens,
+    contextWindow: params.contextWindow,
+    customInstructions: params.customInstructions,
+    summarizationInstructions: params.summarizationInstructions,
+    previousSummary: params.previousSummary,
+  });
+}
 
 type ToolFailure = {
   toolCallId: string;
@@ -749,6 +812,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       identifierInstructions: runtime?.identifierInstructions,
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
+    const providerId = runtime?.provider;
+
+    // Model and API key are always required: even when a plugin provides
+    // compaction, the LLM path is used as a fallback when it fails.
     const model = ctx.model ?? runtime?.model;
     if (!model) {
       // Log warning once per session when both models are missing (diagnostic for future issues).
@@ -830,8 +897,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
                     SUMMARIZATION_OVERHEAD_TOKENS,
                 );
-                droppedSummary = await summarizeInStages({
+                droppedSummary = await summarizeMessages({
                   messages: pruned.droppedMessagesList,
+                  providerId,
                   model,
                   apiKey,
                   signal,
@@ -897,8 +965,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         try {
           const historySummary =
             messagesToSummarize.length > 0
-              ? await summarizeInStages({
+              ? await summarizeMessages({
                   messages: messagesToSummarize,
+                  providerId,
                   model,
                   apiKey,
                   signal,
@@ -913,8 +982,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
-            const prefixSummary = await summarizeInStages({
+            const prefixSummary = await summarizeMessages({
               messages: turnPrefixMessages,
+              providerId,
               model,
               apiKey,
               signal,

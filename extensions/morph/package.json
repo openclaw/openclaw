@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/morph",
+  "version": "2026.3.9",
+  "private": true,
+  "description": "OpenClaw Morph plugin for fast compaction and AI-powered codebase search",
+  "type": "module",
+  "dependencies": {
+    "@morphllm/morphsdk": "^0.2.143",
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

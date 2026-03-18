@@ -524,6 +524,7 @@ Important trust note:
 - Microsoft Teams is plugin-only as of 2026.1.15; install `@openclaw/msteams` if you use Teams.
 - Memory (Core) — bundled memory search plugin (enabled by default via `plugins.slots.memory`)
 - Memory (LanceDB) — bundled long-term memory plugin (auto-recall/capture; set `plugins.slots.memory = "memory-lancedb"`)
+- Morph — bundled fast compaction (33k tok/s) and AI-powered codebase search. Set `compaction.provider = "morph"` and configure API key via `MORPH_API_KEY` env var or plugin config. See [Compaction](/concepts/compaction).
 - [Voice Call](/plugins/voice-call) — `@openclaw/voice-call`
 - [Zalo Personal](/plugins/zalouser) — `@openclaw/zalouser`
 - [Matrix](/channels/matrix) — `@openclaw/matrix`

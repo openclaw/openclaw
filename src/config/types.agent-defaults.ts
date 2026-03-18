@@ -342,6 +342,12 @@ export type AgentCompactionConfig = {
   model?: string;
   /** Maximum time in seconds for a single compaction operation (default: 900). */
   timeoutSeconds?: number;
+  /**
+   * Id of a registered compaction provider plugin.
+   * When set, the provider's summarize() is called instead of
+   * the built-in summarizeInStages(). Falls back to built-in on failure.
+   */
+  provider?: string;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
