@@ -262,6 +262,22 @@ describe("model-selection", () => {
     it.each(["", "  ", "/", "anthropic/", "/model"])("returns null for invalid ref %j", (raw) => {
       expect(parseModelRef(raw, "anthropic")).toBeNull();
     });
+
+    it("does not crash when parsing non-Anthropic provider model refs (#49519)", () => {
+      // Regression: normalizeAnthropicModelId previously referenced a module-level
+      // ANTHROPIC_MODEL_ALIASES constant that could trigger a TDZ ReferenceError
+      // when the bundled module initialization order differed from source order.
+      // The call path: parseModelRef -> normalizeModelRef -> normalizeProviderModelId
+      // must be safe for every provider, including openai-codex-responses models.
+      expect(parseModelRef("azure-foundry-codex/gpt-5.3-codex", "anthropic")).toEqual({
+        provider: "azure-foundry-codex",
+        model: "gpt-5.3-codex",
+      });
+      expect(parseModelRef("openai/gpt-5.3-codex", "openai")).toEqual({
+        provider: "openai",
+        model: "gpt-5.3-codex",
+      });
+    });
   });
 
   describe("inferUniqueProviderFromConfiguredModels", () => {

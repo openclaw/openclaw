@@ -92,7 +92,7 @@ function normalizeAnthropicModelId(model: string): string {
   }
   const lower = trimmed.toLowerCase();
   // Keep alias resolution local so bundled startup paths cannot trip a TDZ on
-  // a module-level alias table while config parsing is still initializing.
+  // a module-level alias table while config parsing is still initializing (#45520, #49519).
   switch (lower) {
     case "opus-4.6":
       return "claude-opus-4-6";
