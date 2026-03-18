@@ -66,6 +66,9 @@ export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+export const mockedMarkAuthProfileFailure = vi.fn(async () => {});
+export const mockedMarkAuthProfileGood = vi.fn(async () => {});
+export const mockedMarkAuthProfileUsed = vi.fn(async () => {});
 export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
 export const mockedTruncateOversizedToolResultsInSession = vi.fn<
   () => Promise<MockTruncateOversizedToolResultsResult>
@@ -120,6 +123,7 @@ export const mockedLog: {
 };
 
 export const mockedClassifyFailoverReason = vi.fn(() => null);
+export const mockedIsFailoverAssistantError = vi.fn(() => false);
 export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
   const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
   return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
@@ -173,6 +177,12 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedPrepareProviderRuntimeAuth.mockReset();
   mockedPrepareProviderRuntimeAuth.mockResolvedValue(undefined);
   mockedRunEmbeddedAttempt.mockReset();
+  mockedMarkAuthProfileFailure.mockReset();
+  mockedMarkAuthProfileFailure.mockResolvedValue(undefined);
+  mockedMarkAuthProfileGood.mockReset();
+  mockedMarkAuthProfileGood.mockResolvedValue(undefined);
+  mockedMarkAuthProfileUsed.mockReset();
+  mockedMarkAuthProfileUsed.mockResolvedValue(undefined);
   mockedSessionLikelyHasOversizedToolResults.mockReset();
   mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
   mockedTruncateOversizedToolResultsInSession.mockReset();
@@ -205,6 +215,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
 
   mockedClassifyFailoverReason.mockReset();
   mockedClassifyFailoverReason.mockReturnValue(null);
+  mockedIsFailoverAssistantError.mockReset();
+  mockedIsFailoverAssistantError.mockReturnValue(false);
   mockedExtractObservedOverflowTokenCount.mockReset();
   mockedExtractObservedOverflowTokenCount.mockImplementation((msg?: string) => {
     const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
@@ -250,9 +262,9 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../auth-profiles.js", () => ({
     isProfileInCooldown: vi.fn(() => false),
-    markAuthProfileFailure: vi.fn(async () => {}),
-    markAuthProfileGood: vi.fn(async () => {}),
-    markAuthProfileUsed: vi.fn(async () => {}),
+    markAuthProfileFailure: mockedMarkAuthProfileFailure,
+    markAuthProfileGood: mockedMarkAuthProfileGood,
+    markAuthProfileUsed: mockedMarkAuthProfileUsed,
     resolveProfilesUnavailableReason: vi.fn(() => undefined),
   }));
 
@@ -290,7 +302,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isBillingAssistantError: vi.fn(() => false),
     isCompactionFailureError: mockedIsCompactionFailureError,
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
-    isFailoverAssistantError: vi.fn(() => false),
+    isFailoverAssistantError: mockedIsFailoverAssistantError,
     isFailoverErrorMessage: vi.fn(() => false),
     parseImageSizeError: vi.fn(() => null),
     parseImageDimensionError: vi.fn(() => null),
